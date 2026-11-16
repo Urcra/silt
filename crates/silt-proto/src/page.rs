@@ -224,6 +224,37 @@ mod tests {
     }
 
     #[test]
+    fn an_update_merges_nested_objects_and_a_null_removes_one_field() {
+        let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+        let docs = silt_log::page::Documents::from([(
+            "games/g1".to_owned(),
+            json!({"title": "Chess", "score": {"ann": 3, "ben": 1}, "board": {"a1": "rook", "a2": "pawn"}}),
+        )]);
+        let rules = Rules::of(None).expect("none");
+        let update = vec![PageWrite::Update {
+            path: "games/g1".into(),
+            fields: json!({"score": {"ben": 2}, "board": {"a2": null}, "turn": "ann"}),
+        }];
+        let ops = page_ops(artifact, &docs, update, &rules, "me", Level::Comment).expect("written");
+        let silt_log::PageOp::Patched { fields, .. } = &ops[0] else { panic!("{ops:?}") };
+        let patched: Value = serde_json::from_str(fields).expect("json");
+        assert_eq!(patched, json!({"score": {"ann": 3, "ben": 2}, "board": {"a1": "rook"}, "turn": "ann"}));
+    }
+
+    #[test]
+    fn a_patch_growing_a_document_past_its_bound_is_refused() {
+        let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+        let half = "x".repeat(silt_log::page::DOC_BYTES / 2);
+        let docs = silt_log::page::Documents::from([("notes/n1".to_owned(), json!({"a": half}))]);
+        let rules = Rules::of(None).expect("none");
+        let grow = vec![PageWrite::Update { path: "notes/n1".into(), fields: json!({"b": half}) }];
+        let refused = page_ops(artifact, &docs, grow, &rules, "me", Level::Comment).expect_err("past 64 KiB");
+        assert!(refused.contains("64 KiB"), "{refused}");
+        let small = vec![PageWrite::Update { path: "notes/n1".into(), fields: json!({"b": 1}) }];
+        assert!(page_ops(artifact, &docs, small, &rules, "me", Level::Comment).is_ok());
+    }
+
+    #[test]
     fn everyone_reads_and_each_writes_their_own() {
         let config = json!({"rules": [
             {"path": "votes", "read": "read", "write": "owner"},
@@ -420,6 +451,28 @@ impl PageWrite {
             Self::Set { path, .. } | Self::Update { path, .. } | Self::Delete { path } => path,
         }
     }
+}
+
+/// `given` merged into `was`: objects in both merge, a `null` removes a
+/// field, and anything else takes `given`'s value.
+fn deep_merged(
+    mut was: serde_json::Map<String, serde_json::Value>,
+    given: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    for (field, value) in given {
+        match (was.get_mut(field), value) {
+            (_, serde_json::Value::Null) => {
+                was.remove(field);
+            }
+            (Some(serde_json::Value::Object(inner)), serde_json::Value::Object(more)) => {
+                *inner = deep_merged(std::mem::take(inner), more);
+            }
+            _ => {
+                was.insert(field.clone(), value.clone());
+            }
+        }
+    }
+    was
 }
 
 /// What `request` reads from `docs` for someone at `level` whose id is
@@ -770,8 +823,20 @@ pub fn page_ops(
                     return Err("an update's fields are an object".into());
                 };
                 let doc = after.entry(path.clone()).or_insert_with(|| serde_json::json!({}));
+                // Nested objects merge too. The log keeps a patch of whole top-level fields, so every replica folds
+                // it alike; each field is merged here, against the document as it stands.
+                let mut merged = serde_json::Map::new();
+                for (field, value) in object {
+                    let now = match (doc.get(field), value) {
+                        (Some(serde_json::Value::Object(was)), serde_json::Value::Object(given)) => {
+                            serde_json::Value::Object(deep_merged(was.clone(), given))
+                        }
+                        _ => value.clone(),
+                    };
+                    merged.insert(field.clone(), now);
+                }
                 if let Some(target) = doc.as_object_mut() {
-                    for (field, value) in object {
+                    for (field, value) in &merged {
                         if value.is_null() {
                             target.remove(field);
                         } else {
@@ -779,7 +844,10 @@ pub fn page_ops(
                         }
                     }
                 }
-                silt_log::PageOp::Patched { artifact, path, fields: fields.to_string() }
+                if doc.to_string().len() > silt_log::page::DOC_BYTES {
+                    return Err("a document is at most 64 KiB".into());
+                }
+                silt_log::PageOp::Patched { artifact, path, fields: serde_json::Value::Object(merged).to_string() }
             }
             PageWrite::Delete { .. } => {
                 after.remove(&path);

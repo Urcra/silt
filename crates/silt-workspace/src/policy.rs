@@ -103,6 +103,10 @@ pub struct Policy {
     /// only.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub home_locked: bool,
+    /// The page connectors its artifacts' pages may call, by name; any
+    /// when unset (ADR 0080).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connectors: Option<BTreeSet<String>>,
 }
 
 impl Policy {
@@ -132,6 +136,10 @@ impl Policy {
             sandbox: self.sandbox || other.sandbox,
             isolated: self.isolated || other.isolated,
             home_locked: self.home_locked || other.home_locked,
+            connectors: match (&self.connectors, &other.connectors) {
+                (Some(mine), Some(theirs)) => Some(mine.intersection(theirs).cloned().collect()),
+                (one, other) => one.clone().or_else(|| other.clone()),
+            },
         }
     }
 }
@@ -203,6 +211,7 @@ pub enum Broken {
     Home,
     Move { project: String, servers: Vec<String>, to: Option<String> },
     WaitingForPolicy,
+    Connector { connector: String, allowed: Vec<String> },
 }
 
 /// A start or a change the rules refuse, saying which rule and whose.
@@ -252,6 +261,12 @@ impl Refusal {
                 )
             }
             Broken::WaitingForPolicy => format!("{workspace} is waiting for {source}; signing in to it fetches it"),
+            Broken::Connector { connector, allowed } if allowed.is_empty() => {
+                format!("pages in {workspace} may not call {connector}: {source} {allows} no connector")
+            }
+            Broken::Connector { connector, allowed } => {
+                format!("pages in {workspace} may not call {connector}: {source} {allows} {}", allowed.join(", "))
+            }
         }
     }
 }
@@ -348,6 +363,17 @@ impl Rules<'_> {
         })
     }
 
+    /// Whether a page here may call page connector `connector`.
+    pub fn check_connector(&self, connector: &str) -> Result<(), Refusal> {
+        self.check(|policy| {
+            policy
+                .connectors
+                .as_ref()
+                .filter(|allowed| !allowed.contains(connector))
+                .map(|allowed| Broken::Connector { connector: connector.to_owned(), allowed: allowed.iter().cloned().collect() })
+        })
+    }
+
     /// Whether a project's home may be set apart from the workspace's server.
     pub fn check_home(&self) -> Result<(), Refusal> {
         self.check(|policy| policy.home_locked.then_some(Broken::Home))
@@ -372,6 +398,28 @@ pub fn check_move(project: &str, servers: &[String], workspace: &str, to: Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_workspace_or_its_org_may_name_the_connectors_its_pages_call() {
+        let local =
+            Policy { connectors: Some(BTreeSet::from(["tracker".to_owned(), "calendar".to_owned()])), ..Policy::default() };
+        let org = OrgPolicy {
+            org: "acme".into(),
+            server: "https://silt.example".into(),
+            policy: Policy { connectors: Some(BTreeSet::from(["tracker".to_owned()])), ..Policy::default() },
+        };
+        let rules = Rules { workspace: "Work", local: &local, org: Some(Ok(&org)) };
+        assert!(rules.check_connector("tracker").is_ok());
+        let refused = rules.check_connector("calendar").expect_err("the org's list leaves it out");
+        assert!(
+            refused.message().contains("may not call calendar") && refused.message().contains("tracker"),
+            "{}",
+            refused.message()
+        );
+        assert_eq!(rules.effective().connectors, Some(BTreeSet::from(["tracker".to_owned()])));
+        let open = Rules { workspace: "Personal", local: &Policy::default(), org: None };
+        assert!(open.check_connector("anything").is_ok(), "unset allows any");
+    }
 
     fn keys(keys: &[&str]) -> Option<BTreeSet<AgentKey>> {
         Some(keys.iter().map(|key| AgentKey::new(*key)).collect())

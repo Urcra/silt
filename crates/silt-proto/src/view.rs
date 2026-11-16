@@ -651,6 +651,20 @@ pub enum CommentLocation {
         excerpt: String,
         outdated: bool,
     },
+    /// Where the commented cell of a sheet is now, and what it holds;
+    /// `outdated` once its row or column is gone.
+    Cell {
+        artifact: String,
+        sheet: u16,
+        address: String,
+        excerpt: String,
+        outdated: bool,
+    },
+    /// The element of a page the comment is on, by its anchor (ADR 0085).
+    Element {
+        artifact: String,
+        anchor: String,
+    },
     Unknown,
 }
 
@@ -788,6 +802,10 @@ pub enum CommentOn {
     Anchored { anchor: String },
     /// Characters `start..end` of a doc's text as it stands (ADR 0077).
     Doc { artifact: String, start: usize, end: usize },
+    /// A sheet's cell, by its address as the sheet stands, `B3`.
+    Cell { artifact: String, sheet: u16, address: String },
+    /// An element of an HTML artifact's page, by its anchor (ADR 0085).
+    Element { artifact: String, anchor: String },
 }
 
 /// Where a pending review comment's lines are held, as the daemon anchored

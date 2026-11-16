@@ -209,6 +209,18 @@ impl silt_mcp::Backend for DaemonTools {
                 }
                 return Ok(out);
             }
+            "silt_artifact_data" if arguments.get("op").and_then(Value::as_str) == Some("add_asset") => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs adds files to its artifacts")?;
+                let artifact = text_arg(arguments, "id")?;
+                let path = text_arg(arguments, "path")?;
+                let (name, media_type, data) = asset_from(&self.checkout, &path)?;
+                let asked = silt_proto::page::AssetRequest::Add { name, media_type, data };
+                let added: Value = ask_daemon(&Request::Scoped {
+                    token,
+                    asking: Box::new(Request::PageAssets { thread: String::new(), artifact, asked }),
+                })?;
+                return Ok(serde_json::to_string_pretty(&added).unwrap_or_default());
+            }
             "silt_artifact_data" => {
                 let token = self.token.clone().ok_or("only an agent the web UI runs reaches its artifacts' data")?;
                 let artifact = text_arg(arguments, "id")?;
@@ -239,7 +251,12 @@ impl silt_mcp::Backend for DaemonTools {
                     .map(|topic| (topic.to_owned(), arguments.get("data").cloned().unwrap_or(Value::Null)));
                 let heard: Value = ask_daemon(&Request::Scoped {
                     token,
-                    asking: Box::new(Request::RoomAgent { thread: String::new(), artifact, emit }),
+                    asking: Box::new(Request::RoomAgent {
+                        thread: String::new(),
+                        artifact,
+                        emit,
+                        presence: arguments.get("presence").cloned().filter(|presence| !presence.is_null()),
+                    }),
                 })?;
                 return Ok(serde_json::to_string_pretty(&heard).unwrap_or_default());
             }
@@ -274,6 +291,34 @@ impl silt_mcp::Backend for DaemonTools {
                         asking: Box::new(Request::SheetData { thread: String::new(), artifact: artifact.clone(), asked }),
                     })
                 };
+                // Rows by number from 1 and columns by letter, as the person sees them.
+                let place = |value: &Value| -> Result<usize, String> {
+                    match value {
+                        Value::Number(row) => row
+                            .as_u64()
+                            .and_then(|row| usize::try_from(row).ok())
+                            .and_then(|row| row.checked_sub(1))
+                            .ok_or_else(|| "rows count from 1".to_owned()),
+                        Value::String(letter) => silt_sheet::parse_address(&format!("{letter}1"))
+                            .map(|(_, column)| column)
+                            .ok_or_else(|| format!("{letter} isn't a column")),
+                        _ => Err("give a row's number or a column's letter".into()),
+                    }
+                };
+                for (key, insert) in [("insert", true), ("remove", false)] {
+                    let Some(asked) = arguments.get(key).and_then(Value::as_object) else { continue };
+                    let count = asked.get("count").and_then(Value::as_u64).map_or(1, |count| count as usize);
+                    let (axis, at) = match (asked.get("rows"), asked.get("columns")) {
+                        (Some(row), None) => (silt_proto::edited::AxisName::Rows, place(row)?),
+                        (None, Some(column)) => (silt_proto::edited::AxisName::Columns, place(column)?),
+                        _ => return Err(format!("{key} takes rows (a row's number) or columns (a column's letter)")),
+                    };
+                    ask(if insert {
+                        silt_proto::edited::SheetRequest::Insert { sheet, axis, at, count }
+                    } else {
+                        silt_proto::edited::SheetRequest::Remove { sheet, axis, at, count }
+                    })?;
+                }
                 if let Some(set) = arguments.get("set").and_then(Value::as_object) {
                     let cells = set
                         .iter()
@@ -281,13 +326,35 @@ impl silt_mcp::Backend for DaemonTools {
                         .collect();
                     ask(silt_proto::edited::SheetRequest::Set { sheet, cells, ids: Default::default() })?;
                 }
+                if let Some(format) = arguments.get("format").and_then(Value::as_object) {
+                    let name = format.get("name").and_then(Value::as_str).map(str::to_owned);
+                    let (mut widths, mut formats) = (std::collections::BTreeMap::new(), std::collections::BTreeMap::new());
+                    for (letter, column) in format.get("columns").and_then(Value::as_object).into_iter().flatten() {
+                        if let Some(width) = column.get("width") {
+                            widths.insert(letter.clone(), width.as_u64().and_then(|width| u16::try_from(width).ok()));
+                        }
+                        if let Some(shown) = column.get("format") {
+                            formats.insert(letter.clone(), shown.as_str().map(str::to_owned));
+                        }
+                    }
+                    let cells = format
+                        .get("cells")
+                        .and_then(Value::as_object)
+                        .into_iter()
+                        .flatten()
+                        .map(|(address, shown)| (address.clone(), shown.as_str().map(str::to_owned)))
+                        .collect();
+                    ask(silt_proto::edited::SheetRequest::Format { sheet, name, widths, formats, cells })?;
+                }
                 let range = arguments.get("read").and_then(Value::as_str).map(str::to_owned);
                 let read = ask(silt_proto::edited::SheetRequest::Read { sheet, range: range.clone() })?;
                 return Ok(match range {
                     Some(_) => serde_json::to_string(&read["values"]).unwrap_or_default(),
                     None => {
                         let count = read["sheets"].as_u64().unwrap_or(1);
-                        let heading = if count > 1 { format!("Sheet {} of {count}\n", sheet + 1) } else { String::new() };
+                        let name = read["names"][usize::from(sheet)].as_str().unwrap_or_default();
+                        let heading =
+                            if count > 1 { format!("{name}, sheet {} of {count}\n", sheet + 1) } else { format!("{name}\n") };
                         format!("{heading}{}", sheet_text(&read))
                     }
                 });
@@ -507,14 +574,42 @@ HTML out: it shows as text.\n";
 const SHEET_GUIDE: &str = "A sheet is a grid with formulas that people edit with you. Give its first cells as `content`, \
 {\"rows\": [[\"Task\", \"Hours\"], [\"Design\", 3]]}, header row first; after that, write cells with \
 silt_artifact_sheet. Use formulas (=SUM(B2:B9)) rather than computed numbers, so the sheet stays right as people \
-change it, and keep one table per sheet with one header row. A cell has no number format of its own: show a share \
-or an amount with TEXT, =TEXT(C10/C9,\"0%\") or =TEXT(B2,\"#,##0.00\"), in the cell itself rather than a unit in the next.\n";
+change it, and keep one table per sheet with one header row. Show a share or an amount with the column's number format, \
+silt_artifact_sheet's format {\"columns\": {\"C\": {\"format\": \"0%\"}}}, rather than a unit in the next cell.\n";
 const WHITEBOARD_GUIDE: &str = "A whiteboard is notes, arrows, sections and strokes people arrange together, live. Give its first items as \
 `content`: {\"items\": [{\"id\": \"goal\", \"type\": \"block\", \"x\": 0, \"y\": 0, \"w\": 160, \"h\": 100, \"text\": \"Ship M30\", \
 \"color\": \"yellow\"}, {\"id\": \"a1\", \"type\": \"arrow\", \"from\": \"goal\", \"to\": \"risk\", \"label\": \"blocked by\"}]}. Types: block \
 (a note; colour yellow, blue, green, pink or gray), arrow (from and to item ids, an optional label), section (a labelled \
 frame, x, y, w, h, text), stroke (points). After that, add or move items with silt_artifact_data at items/<id>, \
 and say something to the people there with silt_artifact_room. Lay items on a grid, 40 px apart, one idea per note.\n";
+
+/// A file in the checkout, by `path` within it, as a page's asset: its name,
+/// its media type by its extension, and its bytes as base64, at most 20 MiB.
+fn asset_from(checkout: &std::path::Path, path: &str) -> Result<(String, String, String), String> {
+    use base64::Engine as _;
+    let root = checkout.canonicalize().map_err(|error| format!("the checkout can't be read: {error}"))?;
+    let file = root.join(path).canonicalize().map_err(|_| format!("there's no file {path} in the checkout"))?;
+    if !file.starts_with(&root) {
+        return Err(format!("{path} isn't in the checkout"));
+    }
+    let extension = file.extension().and_then(|extension| extension.to_str()).unwrap_or_default().to_ascii_lowercase();
+    let media_type = match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        other => return Err(format!("a page's file is a PNG, JPEG, GIF, WebP, SVG or PDF, not .{other}")),
+    };
+    let size = std::fs::metadata(&file).map_err(|error| error.to_string())?.len();
+    if size > 20 << 20 {
+        return Err(format!("{path} is over 20 MiB"));
+    }
+    let bytes = std::fs::read(&file).map_err(|error| error.to_string())?;
+    let name = file.file_name().and_then(|name| name.to_str()).unwrap_or("file").to_owned();
+    Ok((name, media_type.to_owned(), base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
 
 /// What `silt_artifact_guide` answers: the design guidance for `kind`, the
 /// design system that applies and the others there are (ADR 0071).
@@ -816,6 +911,20 @@ pub fn serve_page_tools(file: &std::path::Path) -> Result<(), Exn<CliError>> {
 mod tests {
     use super::*;
     use silt_daemon::protocol::DesignSystemView;
+
+    #[test]
+    fn an_asset_is_a_picture_or_a_pdf_within_the_checkout() {
+        let dir = tempfile::tempdir().expect("dir");
+        let checkout = dir.path().join("repo");
+        std::fs::create_dir_all(checkout.join("docs")).expect("mkdir");
+        std::fs::write(checkout.join("docs/plan.png"), b"\x89PNG").expect("write");
+        std::fs::write(checkout.join("run.sh"), b"echo").expect("write");
+        std::fs::write(dir.path().join("secret.png"), b"\x89PNG").expect("write");
+        let (name, media_type, data) = asset_from(&checkout, "docs/plan.png").expect("a picture");
+        assert_eq!((name.as_str(), media_type.as_str(), data.as_str()), ("plan.png", "image/png", "iVBORw=="));
+        assert!(asset_from(&checkout, "run.sh").is_err(), "only pictures and PDFs");
+        assert!(asset_from(&checkout, "../secret.png").is_err(), "nothing outside the checkout");
+    }
 
     fn system(name: &str, source: DesignSource, readme: Option<&str>) -> DesignSystemView {
         DesignSystemView {

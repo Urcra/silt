@@ -257,6 +257,9 @@ impl Core {
                 artifact,
                 asked: serde_json::from_value(asked).map_err(|error| format!("that isn't a connector call: {error}"))?,
             },
+            RemoteCommand::StopSample { relay } => {
+                Request::StopSample { thread, artifact: String::new(), ask: control_ask(relay) }
+            }
             RemoteCommand::Sample { question, images, model, tools } => Request::Sample {
                 thread,
                 artifact: None,

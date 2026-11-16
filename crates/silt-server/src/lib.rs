@@ -341,6 +341,7 @@ impl Server {
             .route("/v1/visibility", put(set_visibility))
             .route("/v1/search", get(search))
             .route("/v1/rooms", get(rooms::device_socket))
+            .route("/v1/rooms/mux", get(rooms::device_mux))
             .route("/v1/rooms/agent", post(rooms::agent))
             .route("/v1/in-flight", get(in_flight))
             .route("/v1/device", delete(logout_device))

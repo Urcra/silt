@@ -27,6 +27,9 @@ pub const QUEUED: usize = 256;
 pub const NAME_BYTES: usize = 64;
 /// How long presence lasts without a refresh, in milliseconds.
 pub const PRESENCE_MS: i64 = 15_000;
+/// The most rooms one daemon's shared socket to a server carries.
+pub const MUX_ROOMS: usize = 64;
+
 /// The moments a room keeps for the thread's agent.
 pub const KEPT: usize = 100;
 
@@ -63,9 +66,22 @@ pub enum Sent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Heard {
-    Moment { topic: String, data: Value, from: PeerInfo },
-    Peers { peers: Vec<PeerPresence> },
-    Refused { reason: String },
+    Moment {
+        topic: String,
+        data: Value,
+        from: PeerInfo,
+    },
+    /// Everyone here, as someone comes or goes.
+    Peers {
+        peers: Vec<PeerPresence>,
+    },
+    /// One peer's new presence; the rest are as they were.
+    Presence {
+        peer: PeerPresence,
+    },
+    Refused {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -173,8 +189,10 @@ impl Hub {
                     return refuse("rate_limited");
                 }
                 from.presence.push_back(now_ms);
-                from.state = state;
-                self.peers_of(key, now_ms)
+                from.state = state.clone();
+                // Only what changed, as presence comes up to 20 times a second from each peer.
+                let changed = PeerPresence { info: from.info.clone(), state };
+                room.peers.keys().map(|other| (other.clone(), Heard::Presence { peer: changed.clone() })).collect()
             }
             Sent::Emit { topic, data } => {
                 if topic.is_empty() || topic.len() > 64 || data.to_string().len() > MESSAGE_BYTES {
@@ -257,6 +275,10 @@ mod tests {
         assert_eq!(heard[0].0, "bob");
         let presence = hub.sent(&key(), "bob", Sent::Presence { state: json!({"cursor": [3, 4]}) }, 2);
         assert_eq!(presence.len(), 2);
+        assert!(
+            presence.iter().all(|(_, heard)| matches!(heard, Heard::Presence { peer } if peer.info.peer == "bob" && peer.state == json!({"cursor": [3, 4]}))),
+            "only bob's, to both: {presence:?}"
+        );
         assert_eq!(hub.present(&key(), 2 + PRESENCE_MS + 1).iter().filter(|peer| !peer.state.is_null()).count(), 0, "it lapses");
         assert_eq!(hub.kept(&key()).len(), 1, "kept for the agent");
         hub.leave(&key(), "ann", 3);

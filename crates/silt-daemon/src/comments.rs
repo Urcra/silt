@@ -83,6 +83,18 @@ impl Core {
                 silt_proto::edited::doc_comment_target(&self.doc_crdt(thread, artifact), artifact, start, end)
                     .map_err(CoreError::Invalid)?
             }
+            CommentOn::Cell { artifact, sheet, address } => {
+                let artifact = self.edited_artifact(thread, &artifact, "sheet")?;
+                silt_proto::edited::cell_comment_target(&self.sheet_cells(thread, artifact, sheet), artifact, sheet, &address)
+                    .map_err(CoreError::Invalid)?
+            }
+            CommentOn::Element { artifact, anchor } => {
+                let artifact = self.edited_artifact(thread, &artifact, "html")?;
+                CommentTarget::Element {
+                    artifact,
+                    anchor: silt_proto::artifact::element_anchor(&anchor).map_err(CoreError::Invalid)?,
+                }
+            }
         };
         let by = match self.own_user(thread) {
             user if user.is_empty() => "you".to_owned(),
@@ -313,6 +325,7 @@ impl Core {
         let entries = self.history_entries(thread);
         let places = Places::new(family, thread, base, hide_git);
         let mut docs = std::collections::HashMap::new();
+        let mut sheets = std::collections::HashMap::new();
         Ok(family
             .comments(thread)
             .into_iter()
@@ -327,6 +340,14 @@ impl Core {
                     CommentTarget::Page { artifact, start, end } => {
                         let doc = docs.entry(artifact).or_insert_with(|| family.doc_crdt(thread, artifact));
                         silt_proto::edited::doc_comment_location(doc, artifact, &start, &end)
+                    }
+                    CommentTarget::Cell { artifact, sheet, row, column } => {
+                        let cells =
+                            sheets.entry((artifact, sheet)).or_insert_with(|| family.sheet_cells(thread, artifact, sheet));
+                        silt_proto::edited::cell_comment_location(cells, artifact, sheet, &row, &column)
+                    }
+                    CommentTarget::Element { artifact, anchor } => {
+                        CommentLocation::Element { artifact: artifact.to_string(), anchor }
                     }
                 };
                 CommentView {

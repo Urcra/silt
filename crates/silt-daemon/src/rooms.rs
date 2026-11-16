@@ -32,6 +32,7 @@ impl Core {
         thread: &str,
         artifact: &str,
         emit: Option<(String, serde_json::Value)>,
+        presence: Option<serde_json::Value>,
     ) -> Result<(Deliveries, serde_json::Value), CoreError> {
         let thread_id = self.find_thread(thread)?;
         let key = RoomKey { thread: thread_id.to_string(), artifact: artifact.to_owned(), name: String::new() };
@@ -40,8 +41,12 @@ impl Core {
         if !self.rooms.present(&key, crate::core::now_ms()).iter().any(|present| present.info.peer == peer) {
             deliveries.extend(self.room_join(key.clone(), peer.clone(), true)?);
         }
-        if let Some((topic, data)) = emit {
-            let sent = self.room_send(&key, &peer, Sent::Emit { topic, data });
+        let said = emit
+            .map(|(topic, data)| Sent::Emit { topic, data })
+            .into_iter()
+            .chain(presence.map(|state| Sent::Presence { state }));
+        for sent in said {
+            let sent = self.room_send(&key, &peer, sent);
             if let Some((_, Heard::Refused { reason })) = sent.iter().find(|(to, _)| *to == peer) {
                 return Err(CoreError::Invalid(format!("the room refused it: {reason}")));
             }

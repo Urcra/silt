@@ -259,7 +259,7 @@ export type CommentLocation = { "at": "entry", index: number, excerpt: string, }
  * Where they are in the base the comments were asked against, when
  * they're there: a diff shows a comment on deleted lines beside them.
  */
-before: LineSpan | null, } | { "at": "doc", artifact: string, start: number, end: number, excerpt: string, outdated: boolean, } | { "at": "unknown" };
+before: LineSpan | null, } | { "at": "doc", artifact: string, start: number, end: number, excerpt: string, outdated: boolean, } | { "at": "cell", artifact: string, sheet: number, address: string, excerpt: string, outdated: boolean, } | { "at": "element", artifact: string, anchor: string, } | { "at": "unknown" };
 
 export type LineSpan = { start: number, end: number, };
 
@@ -268,7 +268,7 @@ export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", pat
  * The lines are numbered as a diff with git's rewrites left out
  * shows them (ADR 0069).
  */
-hide_git?: boolean, } | { "on": "anchored", anchor: string, } | { "on": "doc", artifact: string, start: number, end: number, };
+hide_git?: boolean, } | { "on": "anchored", anchor: string, } | { "on": "doc", artifact: string, start: number, end: number, } | { "on": "cell", artifact: string, sheet: number, address: string, } | { "on": "element", artifact: string, anchor: string, };
 
 export type PendingAnchor = { anchor: string, };
 
@@ -676,6 +676,11 @@ url: string | null,
  * it names, so no secret is kept in the file.
  */
 header_env: { [key in string]: string }, 
+/**
+ * Headers sent to an HTTP server whose values this machine's keyring
+ * keeps, set in Settings; the file names them only.
+ */
+header_secret: Array<string>, 
 /**
  * The environment variables a stdio server gets beyond the few every
  * program needs ([`BASE_ENV`]), by name; nothing else of the daemon's
@@ -1144,7 +1149,12 @@ isolated?: boolean,
  * Projects keep the workspace's server: no other, and not this machine
  * only.
  */
-home_locked?: boolean, };
+home_locked?: boolean, 
+/**
+ * The page connectors its artifacts' pages may call, by name; any
+ * when unset (ADR 0080).
+ */
+connectors?: Array<string> | null, };
 
 export type OrgPolicy = { org: string, server: string, policy: Policy, };
 

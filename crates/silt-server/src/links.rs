@@ -431,9 +431,13 @@ async fn read_content(State(server): State<Server>, Path(token): Path<String>) -
     if pausing(&server) {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
+    let mut found_in = None;
     let found = match opened(&server, &token).await {
         Ok(Some(opened)) => {
-            opened.artifact.as_ref().and_then(|(id, version)| linked_artifact(&opened.log, opened.thread, id, *version))
+            let found =
+                opened.artifact.as_ref().and_then(|(id, version)| linked_artifact(&opened.log, opened.thread, id, *version));
+            found_in = Some((opened.log, opened.thread));
+            found
         }
         Ok(None) => None,
         Err(error) => {
@@ -453,13 +457,17 @@ async fn read_content(State(server): State<Server>, Path(token): Path<String>) -
     };
     let vendor =
         (artifact.kind == "html" && server.config().artifact_proxy).then(|| format!("{}/vendor/", server.config().public_url()));
+    let frozen = match (&found_in, artifact.kind.as_str()) {
+        (Some((log, thread)), "html") => frozen_documents(log, *thread, &artifact),
+        _ => None,
+    };
     if artifact.kind == "html" {
         let css = match artifact.style.as_deref().and_then(|style| style.parse().ok()) {
             Some(style) => server.shared.blobs.get(style).await.ok(),
             None => None,
         };
         let css = css.map(|css| String::from_utf8_lossy(&css).into_owned());
-        bytes = framed(&String::from_utf8_lossy(&bytes), css.as_deref(), vendor.as_deref()).into_bytes();
+        bytes = framed(&String::from_utf8_lossy(&bytes), css.as_deref(), vendor.as_deref(), frozen.as_deref()).into_bytes();
     }
     let policy = format!("sandbox allow-scripts; {}", silt_design::frame::policy(vendor.as_deref()));
     let media_type = if artifact.media_type.starts_with("text/") {
@@ -485,9 +493,27 @@ async fn read_content(State(server): State<Server>, Path(token): Path<String>) -
 /// An HTML version as a link's frame gets it: its design system's CSS
 /// after its doctype, as every surface composes it, with the policy sent as
 /// a header rather than a `<meta>` (ADR 0071).
-fn framed(html: &str, css: Option<&str>, vendor: Option<&str>) -> String {
+fn framed(html: &str, css: Option<&str>, vendor: Option<&str>, frozen: Option<&str>) -> String {
     use silt_design::frame::{FrameParts, compose};
-    compose(html, &FrameParts { style: css, probe: false, vendor, policy_meta: false, ..FrameParts::default() })
+    compose(html, &FrameParts { style: css, probe: false, vendor, policy_meta: false, frozen, ..FrameParts::default() })
+}
+
+/// The page documents a link's reader may read, as a JSON object, where
+/// the version declares `db`: as they stood where the link is, under the
+/// rules the version declares, read as nobody in particular (ADR 0072).
+fn frozen_documents(log: &[Delta], thread: ThreadId, artifact: &ArtifactView) -> Option<String> {
+    use silt_proto::page::{ANOTHER, Level, Rules};
+    let config = artifact.capabilities.as_ref()?.get("db")?;
+    let rules = Rules::of(Some(config)).ok()?;
+    let id: silt_types::ArtifactId = artifact.id.parse().ok()?;
+    let mut graph = silt_crdt::CausalGraph::new();
+    for delta in log {
+        let _ = graph.add(delta.span, &delta.parents);
+    }
+    let docs = silt_log::page_documents_in(log, &graph, thread, id);
+    let readable: serde_json::Map<String, serde_json::Value> =
+        docs.into_iter().filter(|(path, _)| rules.may_read(path, ANOTHER, Level::Read)).collect();
+    serde_json::to_string(&readable).ok()
 }
 
 /// A CDN file an artifact's frame loads through this server, when its
@@ -588,7 +614,7 @@ mod tests {
 
     #[test]
     fn a_design_systems_css_goes_after_the_doctype_and_cant_close_its_element() {
-        let styled = |html: &str| framed(html, Some(":root { --bg: #fff; }</style>"), None);
+        let styled = |html: &str| framed(html, Some(":root { --bg: #fff; }</style>"), None, None);
         let stub = format!("<script>{}</script>", silt_design::frame::OFFLINE_STUB);
         assert_eq!(
             styled("<!DOCTYPE html><p>hi</p>"),

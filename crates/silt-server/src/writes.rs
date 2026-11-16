@@ -182,6 +182,22 @@ async fn add_comment(
             let (artifact, doc) = browse::seen_doc(&server, browser.user, &id, &artifact).await?;
             silt_proto::edited::doc_comment_target(&doc, artifact, start, end).map_err(bad_request)?
         }
+        CommentOn::Cell { artifact, sheet, address } => {
+            let (artifact, cells) = browse::seen_sheet(&server, browser.user, &id, &artifact, sheet).await?;
+            silt_proto::edited::cell_comment_target(&cells, artifact, sheet, &address).map_err(bad_request)?
+        }
+        CommentOn::Element { artifact, anchor } => {
+            let html = seen
+                .entries
+                .iter()
+                .filter_map(|(_, entry)| entry.artifact.as_ref())
+                .any(|view| view.id == artifact && view.kind == "html");
+            let id: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+            if !html {
+                return Err(bad_request(format!("this thread has no page {artifact}")));
+            }
+            CommentTarget::Element { artifact: id, anchor: silt_proto::artifact::element_anchor(&anchor).map_err(bad_request)? }
+        }
         CommentOn::Lines { .. } | CommentOn::Anchored { .. } => {
             return Err(bad_request("comment on code from a machine with the thread checked out"));
         }

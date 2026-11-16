@@ -139,6 +139,9 @@ pub fn comment_location(location: &CommentLocation) -> String {
         CommentLocation::Entry { index, excerpt } => format!("entry {index} ({})", clip(excerpt, 60)),
         CommentLocation::Doc { artifact, outdated: true, .. } => format!("doc {artifact} (outdated: the text was deleted)"),
         CommentLocation::Doc { artifact, excerpt, .. } => format!("doc {artifact} (\"{}\")", clip(excerpt, 60)),
+        CommentLocation::Cell { artifact, outdated: true, .. } => format!("sheet {artifact} (outdated: the cell was taken out)"),
+        CommentLocation::Cell { artifact, sheet, address, .. } => format!("sheet {artifact}, sheet {} {address}", sheet + 1),
+        CommentLocation::Element { artifact, anchor } => format!("page {artifact}, {}", clip(anchor, 60)),
         CommentLocation::Unknown => "an unknown place".into(),
     }
 }

@@ -95,6 +95,9 @@ pub(crate) struct AcpRun {
     said_at: Option<Instant>,
     /// Tool calls the agent started and hasn't finished.
     calls_running: HashSet<String>,
+    /// The docs and sheets the agent wrote this turn, each kept as a version
+    /// when the turn ends (ADR 0077).
+    pub(crate) edited: std::collections::BTreeSet<String>,
     /// What each call is, as a person names it: its command, or its
     /// subagent's description, by the call.
     labels: HashMap<String, String>,
@@ -609,6 +612,7 @@ impl Core {
                 own_turn: false,
                 said_at: None,
                 calls_running: HashSet::new(),
+                edited: std::collections::BTreeSet::new(),
                 labels: HashMap::new(),
                 woke_by: Vec::new(),
                 background: HashMap::new(),
@@ -1387,6 +1391,16 @@ impl Core {
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::stop(reason.as_str())).await?;
                 self.guide_written(thread, &reason).await?;
+                // What the agent wrote in a doc or a sheet this turn is kept as
+                // a version, so the person can go back to before the next one.
+                let edited = std::mem::take(&mut self.acp.get_mut(&thread).expect("caller checked").edited);
+                for id in edited {
+                    if let Err(error) =
+                        self.save_edited_version(&thread.to_string(), &id, Some("After the agent's turn".into())).await
+                    {
+                        tracing::warn!(%thread, artifact = %id, "keeping the agent's edits as a version failed: {error}");
+                    }
+                }
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.own_turn = false;
                 // An agent that puts its plan to the person itself asks when it is

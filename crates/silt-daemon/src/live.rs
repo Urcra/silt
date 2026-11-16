@@ -63,6 +63,19 @@ impl Core {
         if deltas.iter().any(|delta| delta.thread != thread || delta.author != Author::User) {
             return Err(CoreError::Invalid("the browser can only add a person's edits to this thread".into()));
         }
+        // Of a page's data, only a doc's text, typed by someone who may edit it (ADR 0077).
+        for delta in &deltas {
+            match &delta.op {
+                silt_log::Op::Page(silt_log::PageOp::Text { artifact, .. }) => {
+                    let artifact = self.edited_artifact(thread, &artifact.to_string(), "doc")?;
+                    self.may_edit(thread, artifact)?;
+                }
+                silt_log::Op::Page(_) => {
+                    return Err(CoreError::Invalid("the browser edits a page's data through its own requests".into()));
+                }
+                _ => {}
+            }
+        }
         let family_id = self.threads[&thread].family;
         self.ensure_projected(family_id, Path::new("/")).await?;
         let repo = self.family_repo(family_id)?;

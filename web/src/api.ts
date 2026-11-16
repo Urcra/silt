@@ -131,7 +131,18 @@ async function requestBlob(path: string): Promise<Blob> {
 }
 
 /** A sheet as its viewer shows it (ADR 0077). */
-export type SheetView = { rows: string[]; columns: string[]; raw: string[][]; values: string[][]; sheets?: number }
+export type SheetView = {
+  rows: string[]
+  columns: string[]
+  raw: string[][]
+  values: string[][]
+  sheets?: number
+  names?: string[]
+  widths?: (number | null)[]
+  formats?: (string | null)[]
+  /** Cells' own number formats by address, `B3`, which go before their column's. */
+  cell_formats?: Record<string, string>
+}
 
 /** The search form's fields, as typed; `since` is a date. */
 export interface SearchForm {
@@ -206,6 +217,9 @@ export const api = {
   setPageConnectors: (connectors: PageConnector[]) => request<unknown>('PUT', '/api/page-connectors', connectors),
   importPageConnectors: () => request<PageConnector[]>('POST', '/api/page-connectors/import'),
   connectorTools: (name: string) => request<ConnectorTool[]>('GET', `/api/page-connectors/${encodeURIComponent(name)}/tools`),
+  /** Keeps a header's value for an HTTP connector in this computer's keyring, or forgets it with `null`. */
+  setConnectorSecret: (name: string, header: string, value: string | null) =>
+    request<unknown>('PUT', `/api/page-connectors/${encodeURIComponent(name)}/secret`, { header, value }),
   /** A doc's text, or edits of it (ADR 0077). */
   docData: (
     id: string,
@@ -227,6 +241,9 @@ export const api = {
   /** A doc or a deck printed to a PDF by this computer's headless browser, from the page drawn of it. */
   artifactPdf: (id: string, artifact: string, html: string) => request<ArtifactContent>('POST', `${thread(id)}/artifacts/${artifact}/pdf`, { html }),
   /** A page's answer to the agent's call of a tool it gave its question. */
+  /** Stops a page's question while this machine's agent answers it. */
+  sampleStop: (id: string, artifact: string, ask: string) =>
+    request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/stop`),
   sampleToolResult: (id: string, artifact: string, ask: string, call: number, result: { ok: boolean; value?: unknown; error?: string }) =>
     request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/tools/${call}`, result),
   /** What the agent has said so far of a page's question in the hosted app, which a device answers. */

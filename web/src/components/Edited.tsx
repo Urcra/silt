@@ -8,11 +8,15 @@ import { offlineHtml, textOf } from '../artifacts'
 import { useTopic } from '../bus'
 import { lineDiff } from '../lineDiff'
 import { keys, message } from '../query'
+import { printInBrowser } from '../printing'
+import { LiveReplica } from '../replica'
 import { hosted } from '../served'
-import { columnName, rebaseDraft, splice } from '../typed'
+import { columnName, csvOf, rebaseDraft, splice } from '../typed'
 import { Button, Icon, IconButton, Input, Menu, Textarea, cx, toast } from '../ui'
 import { CommentThread } from './CommentThread'
-import { Markdown } from './Markdown'
+import { DocMarkdown } from './DocMarkdown'
+import { RichDoc } from './RichDoc'
+import { findAcross, renderedExcerpt } from '../textFind'
 
 /** Characters, as the doc counts them, in the first `units` UTF-16 units of `text`. */
 function characters(text: string, units: number): number {
@@ -108,7 +112,7 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
   const queries = useQueryClient()
   const key = ['doc', thread, artifact]
   const doc = useQuery({ queryKey: key, queryFn: () => api.docData(thread, artifact, { op: 'read' }), refetchInterval: 5_000 })
-  const [view, setView] = useState<'write' | 'read' | 'compare'>('read')
+  const [view, setView] = useState<'write' | 'read' | 'rich' | 'compare'>('read')
   const [comparing, setComparing] = useState<ArtifactView | null>(null)
   const [saving, setSaving] = useState<string | null>(null)
   const [draft, setDraft] = useState<string | null>(null)
@@ -183,13 +187,94 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
     }
     if (latest.current !== null) void send()
   }
+  // On this machine the doc is typed into the browser's replica, a delta a keystroke, with no request per pause; the
+  // hosted app, and a replica that couldn't open, send edits as before.
+  const live = useRef<LiveReplica | null>(null)
+  useEffect(() => {
+    if (hosted()) return
+    let gone = false
+    void LiveReplica.open(thread).then(
+      (replica) => {
+        if (!gone && replica.writable) live.current = replica
+      },
+      () => undefined,
+    )
+    return () => {
+      gone = true
+      live.current = null
+    }
+  }, [thread])
+  // What the editor showed when this burst of typing began, and whether the replica was set to it.
+  const burst = useRef<{ base: string; begun: boolean } | null>(null)
+  const typing = useRef<Promise<void>>(Promise.resolve())
+  const typeLive = (replica: LiveReplica) => {
+    typing.current = typing.current
+      .then(async () => {
+        const text = latest.current
+        const begun = burst.current
+        if (text === null || !begun) return
+        let shown = text
+        if (!begun.begun) {
+          // The replica takes in what arrived since, and the typing moves onto it.
+          await replica.sync()
+          const now = replica.pageShow(artifact)
+          begun.begun = true
+          if (now !== begun.base) {
+            shown = rebaseDraft(begun.base, text, now)
+            latest.current = shown
+            setDraft(shown)
+          }
+        }
+        await replica.pageEdit(artifact, shown)
+        if (latest.current !== shown) return
+        latest.current = null
+        burst.current = null
+        await queries.invalidateQueries({ queryKey: key })
+        if (latest.current === null) setDraft(null)
+      })
+      .catch((failure: unknown) => {
+        toast(message(failure), 'danger')
+        latest.current = null
+        burst.current = null
+        setDraft(null)
+      })
+  }
   const typed = (text: string) => {
     latest.current = text
     setDraft(text)
+    const replica = live.current
+    if (replica) {
+      burst.current ??= { base: doc.data?.text ?? '', begun: false }
+      return typeLive(replica)
+    }
     if (pending.current !== null) window.clearTimeout(pending.current)
     pending.current = window.setTimeout(() => void send(), 400)
   }
   const text = draft ?? doc.data?.text ?? ''
+  // The text that open comments are on, highlighted where the read view shows it.
+  const reading = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const article = reading.current
+    const registry = typeof CSS !== 'undefined' ? (CSS as unknown as { highlights?: Map<string, unknown> }).highlights : undefined
+    if (view !== 'read' || !article || !registry || typeof Highlight === 'undefined') return
+    const nodes: Text[] = []
+    const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT)
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node as Text)
+    const texts = nodes.map((node) => node.data)
+    const ranges = commentsHere.flatMap((comment) => {
+      if (comment.resolved || comment.location.at !== 'doc' || comment.location.outdated) return []
+      const found = findAcross(texts, renderedExcerpt(comment.location.excerpt))
+      if (!found) return []
+      const range = document.createRange()
+      range.setStart(nodes[found.start[0]], found.start[1])
+      range.setEnd(nodes[found.end[0]], found.end[1])
+      return [range]
+    })
+    registry.set('silt-doc-comments', new Highlight(...ranges))
+    return () => {
+      registry.delete('silt-doc-comments')
+    }
+  }, [view, text, commentsHere])
   const saveVersion = async () => {
     try {
       const saved = await api.saveVersion(thread, artifact, saving ?? '')
@@ -204,7 +289,7 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
   const page = async () => {
     const { renderToStaticMarkup } = await import('react-dom/server')
     const shown = versions.at(-1)
-    const rendered = renderToStaticMarkup(<Markdown text={text} />)
+    const rendered = renderToStaticMarkup(<DocMarkdown text={text} />)
     return shown ? offlineHtml(shown, { media_type: 'text/markdown', data: '' }, rendered) : rendered
   }
   const pdf = async () => {
@@ -223,6 +308,9 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
       <div className="flex shrink-0 items-center gap-1 border-b border-line-subtle px-2 py-1">
         <Button size="sm" variant={view === 'read' ? 'secondary' : 'ghost'} aria-pressed={view === 'read'} onClick={() => setView('read')}>
           Read
+        </Button>
+        <Button size="sm" variant={view === 'rich' ? 'secondary' : 'ghost'} aria-pressed={view === 'rich'} onClick={() => setView('rich')}>
+          Rich text
         </Button>
         <Button size="sm" variant={view === 'write' ? 'secondary' : 'ghost'} aria-pressed={view === 'write'} onClick={() => setView('write')}>
           Edit
@@ -251,7 +339,9 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
           items={[
             { label: 'Markdown', onSelect: () => saveFile(text, 'text/markdown', `${named}.md`) },
             { label: 'HTML', onSelect: () => void page().then((html) => saveFile(html, 'text/html', `${named}.html`)) },
-            ...(hosted() ? [] : [{ label: 'PDF', hint: 'printed on this computer', onSelect: () => void pdf() }]),
+            hosted()
+              ? { label: 'PDF', hint: "through this browser's print dialog", onSelect: () => void page().then(printInBrowser) }
+              : { label: 'PDF', hint: 'printed on this computer', onSelect: () => void pdf() },
           ]}
         />
         {view === 'write' && (
@@ -296,6 +386,13 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
       )}
       {view === 'compare' && comparing ? (
         <DocCompare thread={thread} version={comparing} text={text} />
+      ) : view === 'rich' ? (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <article className="mx-auto max-w-3xl px-6 pt-6 pb-10">
+            <RichDoc text={text} onChange={typed} editable />
+          </article>
+          <DocComments thread={thread} comments={commentsHere} onShow={show} onChanged={refreshComments} />
+        </div>
       ) : view === 'write' ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-auto">
           <textarea
@@ -311,8 +408,8 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
-          <article className="mx-auto max-w-3xl px-6 pt-6 pb-10">
-            <Markdown text={text} />
+          <article ref={reading} className="mx-auto max-w-3xl px-6 pt-6 pb-10">
+            <DocMarkdown text={text} />
           </article>
           <DocComments thread={thread} comments={commentsHere} onShow={show} onChanged={refreshComments} />
         </div>
@@ -334,6 +431,29 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
   })
   const [editing, setEditing] = useState<{ row: number; column: number; raw: string } | null>(null)
   const [selected, setSelected] = useState<{ row: number; column: number }>({ row: 0, column: 0 })
+  const [renaming, setRenaming] = useState<string | null>(null)
+  // Comments on this sheet's cells, by where each cell is now (ADR 0082).
+  const comments = useQuery({ queryKey: keys.comments(thread), queryFn: () => api.comments(thread) })
+  const [commenting, setCommenting] = useState<string | null>(null)
+  const refreshComments = () => queries.invalidateQueries({ queryKey: keys.comments(thread) })
+  const onCells = new Map<string, CommentView[]>()
+  for (const comment of comments.data ?? []) {
+    const at = comment.location
+    if (at.at !== 'cell' || at.artifact !== artifact || at.sheet !== tab || at.outdated) continue
+    onCells.set(at.address, [...(onCells.get(at.address) ?? []), comment])
+  }
+  const addComment = async (address: string) => {
+    if (!commenting?.trim()) return
+    try {
+      await api.addComment(thread, { on: 'cell', artifact, sheet: tab, address }, commenting.trim())
+      setCommenting(null)
+      await refreshComments()
+    } catch (failure) {
+      toast(message(failure), 'danger')
+    }
+  }
+  // A column being made wider or narrower by its header's edge, until it's let go.
+  const [sizing, setSizing] = useState<{ column: number; width: number; from: number; start: number } | null>(null)
   // Only the rows near what's shown are drawn, so a sheet of thousands of rows stays quick (ADR 0077).
   const scroller = useRef<HTMLDivElement>(null)
   const [window_, setWindow] = useState({ top: 0, height: 800 })
@@ -357,6 +477,21 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
     const ids = view && view.rows[editing.row] && view.columns[editing.column] ? { [at]: [view.rows[editing.row], view.columns[editing.column]] } : {}
     await change({ op: 'set', cells: { [at]: editing.raw }, ids })
   }
+  // The sheet shown, its values as they show, a cell that a spreadsheet app would run quoted first.
+  const csv = () => {
+    if (!view) return
+    const safe = (value: string) => (/^[=+\-@\t\r]/.test(value) && Number.isNaN(Number(value)) ? `'${value}` : value)
+    const text = csvOf(
+      view.columns.map((_id, column) => columnName(column)),
+      view.values.map((row) => row.map(safe)),
+    )
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/csv' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${(view.names?.[tab] ?? title).replace(/[^A-Za-z0-9_-]+/g, '-') || 'sheet'}.csv`
+    anchor.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
   const xlsx = async () => {
     try {
       const blob = await api.sheetXlsx(thread, artifact)
@@ -374,11 +509,24 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
   const view = sheet.data
   if (!view) return null
   const shown = view.raw[selected.row]?.[selected.column] ?? ''
+  const selectedAddress = `${columnName(selected.column)}${selected.row + 1}`
+  const selectedComments = onCells.get(selectedAddress) ?? []
   const ROW = 29
   const windowed = view.rows.length > 200
   const first = windowed ? Math.max(0, Math.floor(window_.top / ROW) - 20) : 0
   const last = windowed ? Math.min(view.rows.length, Math.ceil((window_.top + window_.height) / ROW) + 20) : view.rows.length
   const drawn = view.rows.slice(first, last).map((id, at) => [id, first + at] as const)
+  const widthOf = (column: number) => (sizing?.column === column ? sizing.width : (view.widths?.[column] ?? null))
+  const sized = (column: number) => {
+    const width = widthOf(column)
+    return width ? { width, minWidth: width, maxWidth: width } : undefined
+  }
+  const rename = async () => {
+    if (renaming === null) return
+    const name = renaming.trim()
+    setRenaming(null)
+    if (name !== (view.names?.[tab] ?? '')) await change({ op: 'format', name: name === `Sheet ${tab + 1}` ? '' : name })
+  }
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="sheet">
       <div className="flex shrink-0 items-center gap-2 border-b border-line-subtle px-2 py-1">
@@ -389,22 +537,79 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
         <code className="min-w-0 flex-1 truncate font-mono text-xs text-fg-1" aria-label="the selected cell holds">
           {shown}
         </code>
+        <select
+          aria-label="number format of the selected column"
+          value={view.formats?.[selected.column] ?? ''}
+          onChange={(event) => void change({ op: 'format', formats: { [columnName(selected.column)]: event.target.value || null } })}
+          className="h-7 rounded-sm border border-line bg-surface-1 px-1 text-xs text-fg-1"
+        >
+          {NUMBER_FORMATS.map(([format, label]) => (
+            <option key={format} value={format}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="number format of the selected cell"
+          value={view.cell_formats?.[`${columnName(selected.column)}${selected.row + 1}`] ?? ''}
+          onChange={(event) =>
+            void change({ op: 'format', cells: { [`${columnName(selected.column)}${selected.row + 1}`]: event.target.value || null } })
+          }
+          className="h-7 rounded-sm border border-line bg-surface-1 px-1 text-xs text-fg-1"
+        >
+          {NUMBER_FORMATS.map(([format, label]) => (
+            <option key={format} value={format}>
+              {format === '' ? 'As its column' : label}
+            </option>
+          ))}
+        </select>
         <Button size="sm" variant="ghost" onClick={() => void change({ op: 'insert', axis: 'rows', at: selected.row })}>
           Row above
         </Button>
         <Button size="sm" variant="ghost" onClick={() => void change({ op: 'insert', axis: 'columns', at: selected.column })}>
           Column left
         </Button>
+        <Button size="sm" variant="ghost" onClick={() => setCommenting(commenting === null ? '' : null)}>
+          Comment
+        </Button>
+        <Button size="sm" variant="ghost" onClick={csv}>
+          CSV
+        </Button>
         <IconButton icon="download" label="Download as .xlsx" onClick={() => void xlsx()} />
       </div>
-      <div className="min-h-0 flex-1 overflow-auto" ref={scroller} onScroll={windowed ? measure : undefined}>
+      {/* Focusable, so the grid scrolls by keyboard too. */}
+      <div className="min-h-0 flex-1 overflow-auto" ref={scroller} onScroll={windowed ? measure : undefined} tabIndex={0} aria-label={`${title}'s cells`}>
         <table className="border-separate border-spacing-0 font-mono text-xs" role="grid" aria-label={title}>
           <thead className="sticky top-0 z-10 bg-surface-1">
             <tr>
               <th className="w-10 border-r border-b border-line" />
               {view.columns.map((id, column) => (
-                <th key={id} scope="col" className="min-w-24 border-r border-b border-line px-2 py-1 font-medium text-fg-2">
+                <th
+                  key={id}
+                  scope="col"
+                  style={sized(column)}
+                  className={cx('relative border-r border-b border-line px-2 py-1 font-medium text-fg-2', !widthOf(column) && 'min-w-24')}
+                >
                   {columnName(column)}
+                  <span
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label={`width of column ${columnName(column)}`}
+                    className="absolute inset-y-0 right-0 w-1.5 cursor-col-resize hover:bg-accent/40"
+                    onPointerDown={(event) => {
+                      event.currentTarget.setPointerCapture(event.pointerId)
+                      const start = event.currentTarget.parentElement?.getBoundingClientRect().width ?? 96
+                      setSizing({ column, width: Math.round(start), from: event.clientX, start: Math.round(start) })
+                    }}
+                    onPointerMove={(event) => {
+                      if (sizing?.column === column) setSizing({ ...sizing, width: Math.min(800, Math.max(24, Math.round(sizing.start + event.clientX - sizing.from))) })
+                    }}
+                    onPointerUp={() => {
+                      if (sizing?.column !== column) return
+                      setSizing(null)
+                      if (sizing.width !== sizing.start) void change({ op: 'format', widths: { [columnName(column)]: sizing.width } })
+                    }}
+                  />
                 </th>
               ))}
             </tr>
@@ -419,10 +624,12 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
                 {view.columns.map((columnId, column) => {
                   const active = selected.row === row && selected.column === column
                   const value = view.values[row]?.[column] ?? ''
+                  const commented = onCells.get(`${columnName(column)}${row + 1}`)
                   return (
                     <td
                       key={columnId}
-                      className={cx('h-7 border-r border-b border-line-subtle p-0', active && 'outline-2 -outline-offset-2 outline-accent')}
+                      style={sized(column)}
+                      className={cx('relative h-7 border-r border-b border-line-subtle p-0', active && 'outline-2 -outline-offset-2 outline-accent')}
                       onClick={() => setSelected({ row, column })}
                       onDoubleClick={() => setEditing({ row, column, raw: view.raw[row]?.[column] ?? '' })}
                     >
@@ -442,6 +649,12 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
                       ) : (
                         <span className={cx('block truncate px-2', /^-?[\d.,]+%?$/.test(value) ? 'text-right tabular-nums' : '', value.startsWith('#') ? 'text-danger' : 'text-fg-1')}>
                           {value}
+                          {commented && (
+                            <span
+                              aria-label={`${commented.length} comment${commented.length === 1 ? '' : 's'}`}
+                              className="absolute top-0 right-0 h-0 w-0 border-t-[6px] border-l-[6px] border-t-accent border-l-transparent"
+                            />
+                          )}
                         </span>
                       )}
                     </td>
@@ -453,22 +666,71 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
           </tbody>
         </table>
       </div>
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-line-subtle px-2 py-1" role="tablist" aria-label="sheets">
-        {Array.from({ length: view.sheets ?? 1 }, (_, at) => (
-          <button
-            key={at}
-            role="tab"
-            aria-selected={tab === at}
-            onClick={() => {
-              setTab(at)
-              setSelected({ row: 0, column: 0 })
-              setEditing(null)
-            }}
-            className={cx('rounded px-2 py-0.5 text-xs', tab === at ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}
-          >
-            Sheet {at + 1}
-          </button>
-        ))}
+      {(commenting !== null || selectedComments.length > 0) && (
+        <section aria-label={`comments on ${selectedAddress}`} data-testid="cell-comments" className="flex max-h-48 shrink-0 flex-col gap-2 overflow-auto border-t border-line-subtle px-3 py-2">
+          {selectedComments.map((comment) => (
+            <div key={comment.id} className={cx('flex flex-col gap-1', comment.resolved && 'opacity-60')}>
+              <CommentThread thread={thread} comment={comment} onChanged={refreshComments} />
+              {!comment.resolved && (
+                <Button variant="ghost" size="sm" className="self-start" onClick={() => void api.resolveComment(thread, comment.id).then(refreshComments)}>
+                  Resolve
+                </Button>
+              )}
+            </div>
+          ))}
+          {commenting !== null && (
+            <form
+              className="flex items-center gap-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void addComment(selectedAddress)
+              }}
+            >
+              <Input autoFocus aria-label={`a comment on ${selectedAddress}`} value={commenting} onChange={(event) => setCommenting(event.target.value)} placeholder={`Comment on ${selectedAddress}`} />
+              <Button size="sm" type="submit" disabled={!commenting.trim()}>
+                Add
+              </Button>
+            </form>
+          )}
+        </section>
+      )}
+      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-line-subtle px-2 py-1">
+        <div className="flex items-center gap-1" role="tablist" aria-label="sheets">
+        {Array.from({ length: view.sheets ?? 1 }, (_, at) =>
+          tab === at && renaming !== null ? (
+            <input
+              key={at}
+              autoFocus
+              aria-label="the sheet's name"
+              value={renaming}
+              maxLength={64}
+              onChange={(event) => setRenaming(event.target.value)}
+              onBlur={() => void rename()}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void rename()
+                if (event.key === 'Escape') setRenaming(null)
+              }}
+              className="w-32 rounded bg-bg px-2 py-0.5 text-xs text-fg-1 outline-1 outline-accent"
+            />
+          ) : (
+            <button
+              key={at}
+              role="tab"
+              aria-selected={tab === at}
+              title={tab === at ? 'Double-click to rename' : undefined}
+              onClick={() => {
+                setTab(at)
+                setSelected({ row: 0, column: 0 })
+                setEditing(null)
+              }}
+              onDoubleClick={() => tab === at && setRenaming(view.names?.[at] ?? `Sheet ${at + 1}`)}
+              className={cx('rounded px-2 py-0.5 text-xs', tab === at ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}
+            >
+              {view.names?.[at] ?? `Sheet ${at + 1}`}
+            </button>
+          ),
+        )}
+        </div>
         {(view.sheets ?? 1) < 16 && (
           <Button
             size="sm"
@@ -491,3 +753,22 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
     </div>
   )
 }
+
+/** The number formats a column may take, as the sheet's engine shows them (ADR 0083). */
+const NUMBER_FORMATS: [string, string][] = [
+  ['', 'General'],
+  ['0', '1234'],
+  ['0.00', '1234.10'],
+  ['#,##0', '1,234'],
+  ['#,##0.00', '1,234.10'],
+  ['0%', '12%'],
+  ['0.0%', '12.3%'],
+  ['$#,##0.00', '$1,234.10'],
+  ['€#,##0.00', '€1,234.10'],
+  ['£#,##0.00', '£1,234.10'],
+  ['yyyy-mm-dd', '2026-11-16'],
+  ['d mmm yyyy', '16 Nov 2026'],
+  ['dd/mm/yyyy', '16/11/2026'],
+  ['mm/dd/yyyy', '11/16/2026'],
+  ['mmm yyyy', 'Nov 2026'],
+]

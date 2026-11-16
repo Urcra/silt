@@ -38,9 +38,7 @@ impl Core {
                 let text = self.doc_text(thread, id);
                 let ops = silt_proto::edited::doc_ops(&text, &edits).map_err(CoreError::Invalid)?;
                 let family = self.threads[&thread].family;
-                for op in ops {
-                    self.append_page(family, thread, PageOp::Text { artifact: id, op }).await?;
-                }
+                self.append_pages(family, thread, ops.into_iter().map(|op| PageOp::Text { artifact: id, op }).collect()).await?;
                 Ok(self.doc_read(thread, id))
             }
         }
@@ -64,7 +62,9 @@ impl Core {
         match asked {
             SheetRequest::Read { sheet, range } => {
                 let book = self.sheet_book(thread, id, sheet);
-                let view = silt_proto::edited::book_view(&book.iter().collect::<Vec<_>>(), usize::from(sheet), today());
+                let metas = silt_proto::edited::metas_of(&self.page_docs(family, thread, id), book.len());
+                let view =
+                    silt_proto::edited::book_view_in(&book.iter().collect::<Vec<_>>(), &metas, usize::from(sheet), today());
                 match range {
                     Some(range) => Ok(
                         serde_json::json!({ "values": silt_proto::edited::read_range(&view, &range).map_err(CoreError::Invalid)? }),
@@ -101,9 +101,7 @@ impl Core {
                 )
                 .map_err(CoreError::Invalid)?;
                 let written = ops.len();
-                for op in ops {
-                    self.append_page(family, thread, op).await?;
-                }
+                self.append_pages(family, thread, ops).await?;
                 Ok(serde_json::json!({ "written": written }))
             }
             SheetRequest::Insert { sheet, axis, at, count } => {
@@ -120,6 +118,19 @@ impl Core {
                 let op = TextOp::Insert { pos: at.min(len), content: mark.repeat(count) };
                 self.append_page(family, thread, lines(sheet, axis.into(), op)).await?;
                 Ok(serde_json::json!({ "inserted": count }))
+            }
+            SheetRequest::Format { sheet, name, widths, formats, cells: cell_formats } => {
+                self.may_edit(thread, id)?;
+                let cells = self.sheet_cells(thread, id, sheet);
+                let asked = silt_proto::edited::Formatting {
+                    name: name.as_deref(),
+                    widths: &widths,
+                    formats: &formats,
+                    cells: &cell_formats,
+                };
+                let op = silt_proto::edited::format_op(id, sheet, &cells, asked).map_err(CoreError::Invalid)?;
+                self.append_page(family, thread, op).await?;
+                Ok(serde_json::json!({ "formatted": true }))
             }
             SheetRequest::Remove { sheet, axis, at, count } => {
                 self.may_edit(thread, id)?;
@@ -225,7 +236,7 @@ impl Core {
 
     /// Whether this machine's person may edit the doc or sheet: anyone who
     /// may comment, unless its version asks for a collaborator.
-    fn may_edit(&self, thread: ThreadId, artifact: ArtifactId) -> Result<(), CoreError> {
+    pub(crate) fn may_edit(&self, thread: ThreadId, artifact: ArtifactId) -> Result<(), CoreError> {
         let needs = match self.declared(thread, artifact, "edit").ok().and_then(|edit| edit.get("level").cloned()) {
             Some(serde_json::Value::String(level)) if level == "collaborator" => Level::Collaborator,
             _ => Level::Comment,

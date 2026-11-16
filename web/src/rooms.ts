@@ -8,8 +8,48 @@ export type PeerPresence = PeerInfo & { state: unknown }
 export type Heard =
   | { event: 'moment'; topic: string; data: unknown; from: PeerInfo }
   | { event: 'peers'; peers: PeerPresence[] }
+  | { event: 'presence'; peer: PeerPresence }
   | { event: 'refused'; reason: string }
   | { event: 'joined'; peer: string }
+
+/** How long a peer's presence holds without word from them, as the room's own. */
+export const PRESENCE_MS = 15_000
+
+/**
+ * Everyone in a room as one view knows them: the list when someone comes or goes, then each peer's presence as it
+ * changes, which lapses when they've said nothing for [`PRESENCE_MS`].
+ */
+export class PeerBook {
+  private peers = new Map<string, { peer: PeerPresence; at: number }>()
+
+  /** Takes in what was heard, and answers whether the list changed. */
+  heard(heard: Heard, now: number): boolean {
+    if (heard.event === 'peers') {
+      this.peers = new Map(heard.peers.map((peer) => [peer.peer, { peer, at: now }]))
+      return true
+    }
+    if (heard.event === 'presence') {
+      if (!this.peers.has(heard.peer.peer)) return false
+      this.peers.set(heard.peer.peer, { peer: heard.peer, at: now })
+      return true
+    }
+    if (heard.event === 'moment') {
+      const known = this.peers.get(heard.from.peer)
+      if (known) known.at = now
+    }
+    return false
+  }
+
+  /** Everyone, presence that lapsed by `now` left out. */
+  list(now: number): PeerPresence[] {
+    return [...this.peers.values()].map(({ peer, at }) => (now - at > PRESENCE_MS ? { ...peer, state: null } : peer))
+  }
+
+  /** Whether a presence still shown at `then` has lapsed by `now`. */
+  lapsed(then: number, now: number): boolean {
+    return [...this.peers.values()].some(({ peer, at }) => peer.state !== null && now - at > PRESENCE_MS && then - at <= PRESENCE_MS)
+  }
+}
 
 const TOKEN_KEY = 'silt-token'
 
@@ -24,6 +64,8 @@ export class RoomSocket {
   private socket: WebSocket
   private queue: string[] = []
   private listeners = new Set<(heard: Heard) => void>()
+  private book = new PeerBook()
+  private lapse: ReturnType<typeof setInterval>
   /** This view's own peer id, once joined. */
   me: string | null = null
 
@@ -36,8 +78,20 @@ export class RoomSocket {
     this.socket.onmessage = (message: MessageEvent<string>) => {
       const heard = JSON.parse(message.data) as Heard
       if (heard.event === 'joined') this.me = heard.peer
-      for (const listener of this.listeners) listener(heard)
+      // Listeners hear everyone whenever anyone changes, as the room sends only what changed.
+      if (this.book.heard(heard, Date.now())) this.tell({ event: 'peers', peers: this.book.list(Date.now()) })
+      else if (heard.event !== 'presence') this.tell(heard)
     }
+    let checked = Date.now()
+    this.lapse = setInterval(() => {
+      const now = Date.now()
+      if (this.book.lapsed(checked, now)) this.tell({ event: 'peers', peers: this.book.list(now) })
+      checked = now
+    }, 5000)
+  }
+
+  private tell(heard: Heard) {
+    for (const listener of this.listeners) listener(heard)
   }
 
   private send(message: unknown) {
@@ -60,6 +114,7 @@ export class RoomSocket {
   }
 
   close() {
+    clearInterval(this.lapse)
     this.listeners.clear()
     this.socket.close()
   }

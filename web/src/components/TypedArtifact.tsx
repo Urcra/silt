@@ -3,20 +3,30 @@
 // HTML at all, and every number it shows names its source.
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { type FrameTheme } from "../artifacts";
+import { api } from "../api";
+import { type FrameTheme, type InlineFiles, withFilesInlined } from "../artifacts";
+import { printInBrowser } from "../printing";
 import { hosted } from "../served";
+import { useShownTheme } from "../theme";
 import {
   type Block,
   type Source,
   canvasOf,
   chartColors,
   chartTable,
+  runs,
+  stepsOf,
+  toolValue,
+  withLive,
+  xPositions,
+  yDomain,
   csvOf,
   dataPageOf,
   deckOf,
@@ -24,8 +34,7 @@ import {
   layout,
   partDocument,
   shown,
-  slideFromHash,
-} from "../typed";
+  slideFromHash, drawnSeries, onPage, pagesOf, deckDocument } from "../typed";
 import { Button, Icon, IconButton, cx } from "../ui";
 import { Markdown } from "./Markdown";
 
@@ -56,6 +65,7 @@ export function SlidesView({
   style,
   theme,
   title,
+  files,
   onComment,
   onPrint,
 }: {
@@ -63,6 +73,8 @@ export function SlidesView({
   style: string | null;
   theme: FrameTheme;
   title: string;
+  /** The version's own files, which slides name by relative path. */
+  files?: InlineFiles;
   /** Opens the artifact's comment composer, quoting what the comment is on. */
   onComment?: (quote: string) => void;
   /** Prints the deck, a slide a page, where this computer can. */
@@ -79,17 +91,66 @@ export function SlidesView({
   const [width, height] = deck?.aspect === "4:3" ? [1024, 768] : [1280, 720];
   const { box, scale } = useFit(width, height);
   const room = useRef<HTMLDivElement>(null);
-  const go = (to: number) => setAt(Math.min(Math.max(to, 0), count - 1));
+  // The click steps shown of the slide, its `data-step` elements up to it.
+  const [step, setStep] = useState(0);
+  const go = (to: number) => {
+    setAt(Math.min(Math.max(to, 0), count - 1));
+    setStep(0);
+  };
+  const placed = useRef({ at, step, deck });
+  // A step forward, or the next slide once its steps are all shown; back, the same in reverse.
+  const forward = () => {
+    const { at, step, deck } = placed.current;
+    if (step < stepsOf(deck?.slides[at]?.html ?? "")) setStep(step + 1);
+    else if (at < count - 1) {
+      setAt(at + 1);
+      setStep(0);
+    }
+  };
+  const back = () => {
+    const { at, step, deck } = placed.current;
+    if (step > 0) setStep(step - 1);
+    else if (at > 0) {
+      setAt(at - 1);
+      setStep(stepsOf(deck?.slides[at - 1]?.html ?? ""));
+    }
+  };
+  const moves = useRef({ forward, back, go });
+  useEffect(() => {
+    placed.current = { at, step, deck };
+    moves.current = { forward, back, go };
+  });
+  // Every slide is in one frame, loaded once; it's told which to show (ADR 0076).
+  const stage = useRef<HTMLIFrameElement>(null);
+  const staged = useMemo(() => (deck ? deckDocument(deck, style, theme, { files }) : ""), [deck, style, theme, files]);
+  const tell = (moved: boolean) =>
+    stage.current?.contentWindow?.postMessage({ silt: "show", at, step, fade: deck?.transition === "fade" && moved }, "*");
+  const told = useRef(tell);
+  useEffect(() => {
+    told.current = tell;
+  });
+  useEffect(() => {
+    told.current(true);
+  }, [at, step]);
+  useEffect(() => {
+    // Keys pressed in the frame page the deck as they do outside it.
+    const heard = (event: MessageEvent) => {
+      const said = event.data as { silt?: unknown; key?: unknown } | null;
+      if (event.source !== stage.current?.contentWindow || said?.silt !== "key") return;
+      if (["ArrowRight", "PageDown", " "].includes(String(said.key))) moves.current.forward();
+      else if (["ArrowLeft", "PageUp"].includes(String(said.key))) moves.current.back();
+    };
+    window.addEventListener("message", heard);
+    return () => window.removeEventListener("message", heard);
+  }, []);
   useEffect(() => {
     const keys = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
-      if (["ArrowRight", "PageDown", " "].includes(event.key))
-        setAt((was) => Math.min(was + 1, count - 1));
-      else if (["ArrowLeft", "PageUp"].includes(event.key))
-        setAt((was) => Math.max(was - 1, 0));
-      else if (event.key === "Home") setAt(0);
-      else if (event.key === "End") setAt(count - 1);
+      if (["ArrowRight", "PageDown", " "].includes(event.key)) moves.current.forward();
+      else if (["ArrowLeft", "PageUp"].includes(event.key)) moves.current.back();
+      else if (event.key === "Home") moves.current.go(0);
+      else if (event.key === "End") moves.current.go(count - 1);
       else return;
       event.preventDefault();
     };
@@ -115,6 +176,7 @@ export function SlidesView({
       </p>
     );
   const slide = deck.slides[at];
+  const steps = stepsOf(slide.html);
   const present = async () => {
     setStarted(Date.now());
     setNow(Date.now());
@@ -139,17 +201,11 @@ export function SlidesView({
           aria-label={`slide ${at + 1} of ${count}`}
         >
           <iframe
-            key={at}
+            ref={stage}
             title={`${title}, slide ${at + 1}: ${slide.title}`}
             sandbox="allow-scripts"
-            srcDoc={partDocument(
-              slide.html,
-              deck.style,
-              width,
-              height,
-              style,
-              theme,
-            )}
+            srcDoc={staged}
+            onLoad={() => told.current(false)}
             className="absolute top-1/2 left-1/2 border-0 bg-white shadow-overlay"
             style={{
               width,
@@ -194,17 +250,18 @@ export function SlidesView({
         <IconButton
           icon="chevronLeft"
           label="Previous slide"
-          disabled={at === 0}
-          onClick={() => go(at - 1)}
+          disabled={at === 0 && step === 0}
+          onClick={back}
         />
         <span className="font-mono text-xs text-fg-2 tabular-nums">
           {at + 1} / {count}
+          {steps > 0 && ` · ${step}/${steps}`}
         </span>
         <IconButton
           icon="chevronRight"
           label="Next slide"
-          disabled={at === count - 1}
-          onClick={() => go(at + 1)}
+          disabled={at === count - 1 && step >= steps}
+          onClick={forward}
         />
         <ol
           className="flex min-w-0 flex-1 gap-1 overflow-x-auto"
@@ -235,11 +292,16 @@ export function SlidesView({
             onClick={() => onComment(`Slide ${at + 1}: ${slide.title}`)}
           />
         )}
-        {onPrint && !hosted() && (
+        {onPrint && (
           <IconButton
             icon="download"
-            label="Download as PDF"
-            onClick={() => onPrint(deckPrint(deck, width, height, style))}
+            label={hosted() ? "Print, or save as PDF" : "Download as PDF"}
+            onClick={() => {
+              const deckPage = withFilesInlined(deckPrint(deck, width, height, style), files ?? {});
+              // The hosted app has no headless browser: this browser's own print dialog saves the PDF.
+              if (hosted()) printInBrowser(deckPage);
+              else onPrint(deckPage);
+            }}
           />
         )}
         <Button
@@ -261,16 +323,52 @@ export function CanvasView({
   text,
   style,
   theme,
+  files,
   onComment,
 }: {
   text: string;
   style: string | null;
   theme: FrameTheme;
+  /** The version's own files, which boards name by relative path. */
+  files?: InlineFiles;
   /** Opens the artifact's comment composer, quoting what the comment is on. */
   onComment?: (quote: string) => void;
 }) {
   const canvas = useMemo(() => canvasOf(text), [text]);
-  const placed = useMemo(() => layout(canvas?.boards ?? []), [canvas]);
+  const pages = useMemo(() => (canvas ? pagesOf(canvas) : []), [canvas]);
+  const [page, setPage] = useState(0);
+  const shownPage = pages[Math.min(page, pages.length - 1)] ?? "";
+  const notes = useMemo(
+    () => (canvas?.notes ?? []).filter((note) => onPage(note, shownPage, pages)),
+    [canvas, shownPage, pages],
+  );
+  // How tall each board that grows says its content is, from its own frame.
+  const [grown, setGrown] = useState<Record<string, number>>({});
+  const frames = useRef(new Map<string, HTMLIFrameElement>());
+  useEffect(() => {
+    const heard = (event: MessageEvent) => {
+      const said = event.data as { silt?: unknown; height?: unknown } | null;
+      if (said?.silt !== "grown" || typeof said.height !== "number") return;
+      for (const [id, frame] of frames.current)
+        if (frame.contentWindow === event.source) {
+          const height = Math.min(Math.max(Math.round(said.height as number), 1), 8192);
+          setGrown((was) => (was[id] === height ? was : { ...was, [id]: height }));
+        }
+    };
+    window.addEventListener("message", heard);
+    return () => window.removeEventListener("message", heard);
+  }, []);
+  const placed = useMemo(
+    () =>
+      layout(
+        (canvas?.boards ?? [])
+          .filter((board) => onPage(board, shownPage, pages))
+          .map((board) =>
+            board.grow && grown[board.id] ? { ...board, height: Math.max(board.height, grown[board.id]), least: board.height } : board,
+          ),
+      ),
+    [canvas, grown, shownPage, pages],
+  );
   const box = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: 40, y: 60, scale: 0.4 });
   const drag = useRef<{ x: number; y: number; from: typeof view } | null>(null);
@@ -282,13 +380,14 @@ export function CanvasView({
   const [size, setSize] = useState({ width: 0, height: 0 });
   const extent = useMemo(
     () => ({
-      width: Math.max(1, ...placed.map((board) => board.x + board.width)),
+      width: Math.max(1, ...placed.map((board) => board.x + board.width), ...notes.map((note) => note.x + (note.w ?? NOTE_WIDTH))),
       height: Math.max(
         1,
         ...placed.map((board) => board.y + board.height + 40),
+        ...notes.map((note) => note.y + 120),
       ),
     }),
-    [placed],
+    [placed, notes],
   );
   const fit = () => {
     const element = box.current;
@@ -336,7 +435,7 @@ export function CanvasView({
     element.addEventListener("wheel", wheel, { passive: false });
     return () => element.removeEventListener("wheel", wheel);
   }, []);
-  if (!canvas || placed.length === 0)
+  if (!canvas || canvas.boards.length === 0)
     return (
       <p className="px-5 py-6 text-sm text-danger">
         This canvas's content isn't one Silt can draw.
@@ -449,7 +548,7 @@ export function CanvasView({
                   {board.name}
                 </button>
                 <span className="truncate text-fg-2">
-                  {board.width}×{board.height}
+                  {board.width}×{(board as { least?: number }).least ?? board.height}
                   {board.caption ? ` · ${board.caption}` : ""}
                 </span>
                 {placed.length > 1 && (
@@ -485,13 +584,20 @@ export function CanvasView({
                 <iframe
                   title={board.name}
                   sandbox="allow-scripts"
+                  ref={(frame) => {
+                    if (frame) frames.current.set(board.id, frame);
+                    else frames.current.delete(board.id);
+                  }}
                   srcDoc={partDocument(
-                    board.html,
+                    withFilesInlined(board.html, files ?? {}),
                     canvas.style,
                     board.width,
-                    board.height,
+                    // The least it shows, as written, so its growing doesn't load it again.
+                    (board as { least?: number }).least ?? board.height,
                     style,
                     theme,
+                    undefined,
+                    board.grow,
                   )}
                   className="pointer-events-auto block border-0 bg-white shadow-overlay"
                   style={{ width: board.width, height: board.height }}
@@ -505,8 +611,39 @@ export function CanvasView({
               )}
             </figure>
           ))}
+          {notes.map((note, at) => (
+            <p
+              key={note.id ?? at}
+              className="absolute m-0 rounded-sm p-3 whitespace-pre-wrap shadow-overlay"
+              // A sticky note's own paper and ink, which read alike on either theme's canvas.
+              style={{ left: note.x, top: note.y, width: note.w ?? NOTE_WIDTH, fontSize: 16, lineHeight: 1.4, background: "#fff3b0", color: "#3d3a2a" }}
+              data-testid="canvas-note"
+            >
+              {note.text}
+            </p>
+          ))}
         </div>
       </div>
+      {pages.length > 1 && (
+        <div role="tablist" aria-label="pages" className="absolute top-2 left-2 flex gap-1 rounded-md border border-line bg-elevated p-1 shadow-overlay">
+          {pages.map((name, at) => (
+            <button
+              key={name}
+              type="button"
+              role="tab"
+              aria-selected={name === shownPage}
+              onClick={() => {
+                moved.current = false;
+                setComparing(null);
+                setPage(at);
+              }}
+              className={cx("rounded-sm px-2 py-1 text-xs", name === shownPage ? "bg-surface-2 text-fg-1" : "text-fg-2 hover:text-fg-1")}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="absolute right-2 bottom-2 flex items-center gap-1 rounded-md border border-line bg-elevated p-1 shadow-overlay">
         <IconButton
           icon="plus"
@@ -538,6 +675,7 @@ export function CanvasView({
           shared={canvas.style}
           style={style}
           theme={theme}
+          files={files}
           onDone={() => setComparing(null)}
         />
       )}
@@ -545,18 +683,23 @@ export function CanvasView({
   );
 }
 
+/** A canvas note's width where it gives none. */
+const NOTE_WIDTH = 240;
+
 /** Two boards side by side at one scale, each whole, to tell them apart. */
 function BoardsCompared({
   boards,
   shared,
   style,
   theme,
+  files,
   onDone,
 }: {
   boards: { name: string; width: number; height: number; html: string }[];
   shared: string | undefined;
   style: string | null;
   theme: FrameTheme;
+  files?: InlineFiles;
   onDone: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -594,7 +737,7 @@ function BoardsCompared({
               <iframe
                 title={`${board.name}, compared`}
                 sandbox="allow-scripts"
-                srcDoc={partDocument(board.html, shared, board.width, board.height, style, theme)}
+                srcDoc={partDocument(withFilesInlined(board.html, files ?? {}), shared, board.width, board.height, style, theme)}
                 className="block origin-top-left border-0 bg-white"
                 style={{ width: board.width, height: board.height, transform: `scale(${scale})` }}
               />
@@ -635,6 +778,44 @@ function SourceLink({ id, sources }: { id: string; sources: Source[] }) {
   );
 }
 
+/**
+ * A chart in a doc, `<?silt chart {…}?>` (ADR 0077): a data page's chart block, checked as one, with Silt's colours
+ * for the theme shown, and no source of its own.
+ */
+export function DocChart({ json }: { json: string }) {
+  const theme = useShownTheme();
+  const parsed = (() => {
+    try {
+      return JSON.parse(json) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  })();
+  const page = parsed
+    ? dataPageOf(
+        JSON.stringify({
+          title: "",
+          sources: [{ id: "doc", name: "the doc", kind: "manual", detail: "", at: "" }],
+          blocks: [{ ...parsed, type: "chart", source: "doc" }],
+        }),
+      )
+    : null;
+  const block = page?.blocks[0];
+  if (!block || block.type !== "chart")
+    return <p className="my-2 text-xs text-danger">This chart doesn't draw: it isn't a chart block of a data page.</p>;
+  return (
+    <figure className="my-3">
+      {block.title && <figcaption className="mb-1 text-sm font-medium text-fg-1">{block.title}</figcaption>}
+      <Chart block={block} theme={theme} palette={CHART[theme]} />
+    </figure>
+  );
+}
+
+/** A series' colour: the palette's in order, and past its end a grey, so no two series share a hue (ADR 0076). */
+function seriesColor(colors: string[], series: number): string {
+  return colors[series] ?? "#8a8780";
+}
+
 function Chart({
   block,
   theme,
@@ -660,7 +841,8 @@ function Chart({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const [W, H, L, B, T, R] = [shownWidth, 260, 48, 28, 12, 12];
+  // Room for the axes' titles where the page gives them.
+  const [W, H, L, B, T, R] = [shownWidth, block.x ? 276 : 260, block.y ? 64 : 48, block.x ? 44 : 28, 12, 12];
   const values = block.series
     .flatMap((one) => one.points.map(([, y]) => y))
     .filter((y): y is number => typeof y === "number");
@@ -669,11 +851,17 @@ function Chart({
       .slice(1)
       .reduce<number>((sum, y) => sum + (typeof y === "number" ? y : 0), 0),
   );
-  const top = Math.max(0, ...(block.stacked ? stackedTotals : values));
-  const bottom = Math.min(0, ...values);
+  // Bars and areas measure from zero; a line or dots may start near their values.
+  const fromZero =
+    block.y_zero !== false || ["bar", "segmented", "area", "heatmap"].includes(block.chart) || Boolean(block.stacked);
+  const [bottom, top] = yDomain(block.stacked ? [...values, ...stackedTotals] : values, fromZero);
   const span = top - bottom || 1;
-  const sx = (index: number) =>
-    L + (W - L - R) * (rows.length === 1 ? 0.5 : index / (rows.length - 1));
+  const across = xPositions(
+    rows.map((row) => row[0]),
+    block.x_scale,
+  );
+  const order = rows.map((_row, index) => index).sort((a, b) => across[a] - across[b]);
+  const sx = (index: number) => L + (W - L - R) * (across[index] ?? 0.5);
   const sy = (value: number) => T + (H - T - B) * (1 - (value - bottom) / span);
   const ticks = [bottom, bottom + span / 2, top];
   const band = (W - L - R) / Math.max(rows.length, 1);
@@ -704,7 +892,7 @@ function Chart({
             width={Math.max(each - 2, 1)}
             height={Math.max(Math.abs(y0 - y1) - 2, 1)}
             rx={2}
-            fill={colors[s % colors.length]}
+            fill={seriesColor(colors, s)}
           />,
         );
       });
@@ -730,15 +918,18 @@ function Chart({
     );
   } else {
     block.series.forEach((_one, s) => {
-      const color = colors[s % colors.length];
+      const color = seriesColor(colors, s);
       const points = rows
         .map((row, index) => [index, row[s + 1]] as const)
         .filter(
           (point): point is readonly [number, number] =>
             typeof point[1] === "number",
         );
-      const path = points
-        .map(([index, y], at) => `${at === 0 ? "M" : "L"}${sx(index)},${sy(y)}`)
+      // A missing value breaks the line, in the order the x scale puts them.
+      const path = runs(order.map((index) => rows[index][s + 1]))
+        .map((run) =>
+          run.map(([at, y], step) => `${step === 0 ? "M" : "L"}${sx(order[at])},${sy(y)}`).join(""),
+        )
         .join("");
       if (block.chart === "line" || block.chart === "area")
         marks.push(
@@ -834,7 +1025,7 @@ function Chart({
                   ? sx(index)
                   : L + band * (index + 0.5)
               }
-              y={H - 8}
+              y={H - B + 18}
               textAnchor="middle"
               fontSize={11}
               fill="currentColor"
@@ -842,6 +1033,23 @@ function Chart({
               {String(row[0])}
             </text>
           ),
+        )}
+        {block.x && (
+          <text x={L + (W - L - R) / 2} y={H - 6} textAnchor="middle" fontSize={11} fill="currentColor">
+            {block.x}
+          </text>
+        )}
+        {block.y && (
+          <text
+            x={14}
+            y={T + (H - T - B) / 2}
+            transform={`rotate(-90 14 ${T + (H - T - B) / 2})`}
+            textAnchor="middle"
+            fontSize={11}
+            fill="currentColor"
+          >
+            {block.y}
+          </text>
         )}
         {hover !== null && (
           <g pointerEvents="none">
@@ -869,7 +1077,7 @@ function Chart({
                 x={Math.min(L + band * hover, W - 170) + 8}
                 y={T + 30 + 16 * s}
                 fontSize={11}
-                fill={colors[s % colors.length]}
+                fill={seriesColor(colors, s)}
               >
                 {one.name}: {shown(rows[hover][s + 1])}
               </text>
@@ -878,13 +1086,78 @@ function Chart({
         )}
         <desc>{columns.join(", ")}</desc>
       </svg>
+      {block.chart === "heatmap" && (
+        <div className="mt-1 flex items-center gap-2 text-xs text-fg-2" aria-label="scale">
+          <span className="tabular-nums">{shown(Number(bottom.toPrecision(3)))}</span>
+          <span
+            aria-hidden="true"
+            className="h-2 w-28 rounded-sm"
+            style={{ background: `linear-gradient(to right, color-mix(in srgb, ${colors[0]} 15%, transparent), ${colors[0]})` }}
+          />
+          <span className="tabular-nums">{shown(Number(top.toPrecision(3)))}</span>
+        </div>
+      )}
     </div>
   );
 }
 
-export function DataView({ text, theme, style }: { text: string; theme: FrameTheme; style?: string | null }) {
-  const page = useMemo(() => dataPageOf(text), [text]);
+export function DataView({
+  text,
+  theme,
+  style,
+  live,
+}: {
+  text: string;
+  theme: FrameTheme;
+  style?: string | null;
+  /** Where the page's `mcp` sources are run from: its thread and version (ADR 0084). */
+  live?: { thread: string; artifact: string; version: number };
+}) {
+  const written = useMemo(() => dataPageOf(text), [text]);
   const [tables, setTables] = useState<Set<number>>(new Set());
+  const sources = useMemo(
+    () => (written?.sources ?? []).filter((source) => source.kind === "mcp" && source.server && source.tool),
+    [written],
+  );
+  // Whether the person let the page run its sources' tools; null until known.
+  const [allowed, setAllowed] = useState<boolean | null>(null);
+  const [fetched, setFetched] = useState<Record<string, { value?: unknown; at: string; error?: string }>>({});
+  useEffect(() => {
+    if (!live || sources.length === 0) return;
+    let gone = false;
+    api.artifactGrants(live.thread, live.artifact).then(
+      (grants) => !gone && setAllowed(grants.mcp === "granted"),
+      () => !gone && setAllowed(false),
+    );
+    return () => {
+      gone = true;
+    };
+  }, [live, sources.length]);
+  const refresh = useCallback(async () => {
+    if (!live) return;
+    const answers: Record<string, { value?: unknown; at: string; error?: string }> = {};
+    for (const source of sources) {
+      const at = new Date().toISOString();
+      try {
+        // Only a tool the server says only reads runs on its own.
+        const about = (await api.pageMcp(live.thread, live.artifact, { op: "describe", server: source.server, tool: source.tool })) as { read_only?: boolean };
+        if (!about.read_only) throw new Error(`${source.server}'s ${source.tool} doesn't only read, so it doesn't run on its own`);
+        const result = await api.pageMcp(live.thread, live.artifact, { op: "call", server: source.server, tool: source.tool, input: source.input ?? {} });
+        answers[source.id] = { value: toolValue(result), at };
+      } catch (failure) {
+        answers[source.id] = { at, error: failure instanceof Error ? failure.message : String(failure) };
+      }
+    }
+    setFetched(answers);
+  }, [live, sources]);
+  useEffect(() => {
+    if (allowed) void refresh();
+  }, [allowed, refresh]);
+  const page = useMemo(() => {
+    if (!written) return null;
+    const answers = Object.fromEntries(Object.entries(fetched).flatMap(([id, got]) => (got.error === undefined ? [[id, got.value]] : [])));
+    return withLive(written, answers);
+  }, [written, fetched]);
   if (!page)
     return (
       <p className="px-5 py-6 text-sm text-danger">
@@ -906,6 +1179,42 @@ export function DataView({ text, theme, style }: { text: string; theme: FrameThe
           <h1 className="text-xl font-semibold text-balance text-fg-1">
             {page.title}
           </h1>
+          {live && sources.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-1 px-3 py-2 text-xs text-fg-2" data-testid="live-sources">
+              {allowed === false ? (
+                <>
+                  <span className="min-w-0 flex-1">
+                    Live numbers from {sources.map((source) => `${source.server}'s ${source.tool}`).join(", ")}, run on this computer.
+                  </span>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      void api.setArtifactGrant(live.thread, live.artifact, "mcp", "granted", live.version).then(() => setAllowed(true))
+                    }
+                  >
+                    Load them
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <span className="min-w-0 flex-1">
+                    {Object.keys(fetched).length === 0
+                      ? "Loading live numbers…"
+                      : sources
+                          .map((source) => {
+                            const got = fetched[source.id];
+                            if (!got) return `${source.name}: not yet`;
+                            return got.error ? `${source.name}: ${got.error}` : `${source.name}: fetched ${new Date(got.at).toLocaleTimeString()}`;
+                          })
+                          .join(" · ")}
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={() => void refresh()} disabled={!allowed}>
+                    Refresh
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
           {page.summary && (
             <p className="mt-1 text-sm text-fg-2">{page.summary}</p>
           )}
@@ -928,7 +1237,16 @@ export function DataView({ text, theme, style }: { text: string; theme: FrameThe
                   )}
                 </span>
                 {typeof block.change === "number" && (
-                  <span className="text-xs text-fg-2">
+                  <span
+                    className={cx(
+                      "text-xs",
+                      !block.better || block.change === 0
+                        ? "text-fg-2"
+                        : (block.change > 0) === (block.better === "up")
+                          ? "text-ok"
+                          : "text-danger",
+                    )}
+                  >
                     {block.change > 0 ? "▲" : block.change < 0 ? "▼" : "="}{" "}
                     {shown(Math.abs(block.change * 100))}%
                   </span>
@@ -986,13 +1304,13 @@ export function DataView({ text, theme, style }: { text: string; theme: FrameThe
               </div>
               {block.type === "chart" && !asTable && (
                 <>
-                  <Chart block={block} theme={theme} palette={colors} />
+                  <Chart block={{ ...block, series: drawnSeries(block.chart, block.series) }} theme={theme} palette={colors} />
                   {block.series.length > 1 && (
                     <ul
                       className="flex flex-wrap gap-3 text-xs text-fg-2"
                       aria-label="legend"
                     >
-                      {block.series.map((one, s) => (
+                      {drawnSeries(block.chart, block.series).map((one, s) => (
                         <li
                           key={one.name}
                           className="inline-flex items-center gap-1.5"
@@ -1000,7 +1318,7 @@ export function DataView({ text, theme, style }: { text: string; theme: FrameThe
                           <span
                             aria-hidden="true"
                             className="h-2 w-2 rounded-full"
-                            style={{ background: colors[s % colors.length] }}
+                            style={{ background: seriesColor(colors, s) }}
                           />
                           {one.name}
                         </li>

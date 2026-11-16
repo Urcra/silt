@@ -6,7 +6,7 @@
 use silt_crdt::CausalGraph;
 use silt_log::{Author, Delta, Op, PageOp};
 use silt_proto::page::{Level, PageRequest, Rules};
-use silt_types::{ArtifactId, DeltaSpan, FamilyId, ThreadId};
+use silt_types::{ArtifactId, DeltaSpan, FamilyId, Frontier, ThreadId};
 
 use crate::core::{Core, CoreError};
 
@@ -40,9 +40,7 @@ impl Core {
         let writes = request.writes(&docs).map_err(CoreError::Invalid)?;
         let ops = silt_proto::page::page_ops(artifact, &docs, writes, &rules, &me, level).map_err(CoreError::Invalid)?;
         let written = ops.len();
-        for op in ops {
-            self.append_page(family_id, thread, op).await?;
-        }
+        self.append_pages(family_id, thread, ops).await?;
         Ok(serde_json::json!({ "written": written }))
     }
 
@@ -269,6 +267,43 @@ impl Core {
         delta.check_shape().map_err(|error| CoreError::Invalid(error.to_string()))?;
         self.raw.entry(family_id).or_default().push(delta.clone());
         self.persist(family_id, std::slice::from_ref(&delta)).await
+    }
+
+    /// Appends `ops` to the thread, a delta each, each following the last:
+    /// for a family known only from its log, its graph is read once rather
+    /// than for every op, and the deltas are kept in one write.
+    pub(crate) async fn append_pages(
+        &mut self,
+        family_id: FamilyId,
+        thread: ThreadId,
+        ops: Vec<PageOp>,
+    ) -> Result<(), CoreError> {
+        if self.families.contains_key(&family_id) {
+            for op in ops {
+                self.append_page(family_id, thread, op).await?;
+            }
+            return Ok(());
+        }
+        let actor = self.thread_actor(thread);
+        let log = self.local_log(family_id);
+        let mut graph = graph_of(log);
+        let mut parents = silt_log::thread_head_in(log, &graph, thread);
+        let mut deltas = Vec::with_capacity(ops.len());
+        for op in ops {
+            let op = Op::Page(op);
+            let span = DeltaSpan::new(actor, graph.next_lamport(), op.units() as u64);
+            let delta =
+                Delta { span, parents: parents.clone(), thread, author: Author::User, time_ms: crate::core::now_ms(), op };
+            delta.check_shape().map_err(|error| CoreError::Invalid(error.to_string()))?;
+            graph.add(span, &parents).map_err(|error| CoreError::Invalid(error.to_string()))?;
+            parents = Frontier::single(span.last());
+            deltas.push(delta);
+        }
+        if deltas.is_empty() {
+            return Ok(());
+        }
+        self.raw.entry(family_id).or_default().extend(deltas.iter().cloned());
+        self.persist(family_id, &deltas).await
     }
 
     /// The thread a run's token was made for.

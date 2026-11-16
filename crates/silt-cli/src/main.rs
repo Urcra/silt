@@ -527,6 +527,9 @@ enum OrgCommand {
         /// Projects keep this server: no other, and not one machine only
         #[arg(long)]
         home_locked: bool,
+        /// The page connectors its projects' pages may call, comma-separated
+        #[arg(long)]
+        connectors: Option<String>,
     },
 }
 
@@ -817,7 +820,7 @@ fn run() -> Result<(), Exn<CliError>> {
             OrgCommand::Add { org, user, owner } => admin::org_change(OrgChange::AddMember { org, user, owner }),
             OrgCommand::Remove { org, user } => admin::org_change(OrgChange::RemoveMember { org, user }),
             OrgCommand::Default { org, visibility } => admin::org_change(OrgChange::DefaultVisibility { org, visibility }),
-            OrgCommand::Policy { org, agents, no_custom_agents, max_preset, sandbox, isolated, home_locked } => {
+            OrgCommand::Policy { org, agents, no_custom_agents, max_preset, sandbox, isolated, home_locked, connectors } => {
                 let max_preset = match max_preset.as_deref().map(|name| silt_workspace::Preset::parse(name).ok_or(name)) {
                     Some(Err(name)) => return Err(commands::fail(format!("no preset {name}"))),
                     Some(Ok(preset)) => Some(preset),
@@ -832,6 +835,8 @@ fn run() -> Result<(), Exn<CliError>> {
                     sandbox,
                     isolated,
                     home_locked,
+                    connectors: connectors
+                        .map(|list| list.split(',').map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned).collect()),
                 };
                 admin::org_change(OrgChange::Policy { org, policy })
             }

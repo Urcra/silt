@@ -298,6 +298,8 @@ pub struct Core {
     pub(crate) sampling: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Questions whose pages offered tools, by name (ADR 0072).
     pub(crate) sample_calls: HashMap<String, crate::sample::WaitingTools>,
+    /// What stops each named question running now, by thread, artifact and name.
+    pub(crate) sample_stops: HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// What changed, for browsers listening (ADR 0021).
     pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
     /// How each thread's agent stands as last stored (ADR 0022).
@@ -541,6 +543,7 @@ impl Core {
             samples: HashMap::new(),
             sampling: std::sync::Arc::default(),
             sample_calls: HashMap::new(),
+            sample_stops: HashMap::new(),
             page_clients: std::sync::Arc::default(),
             rooms: silt_proto::rooms::Hub::default(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
@@ -597,6 +600,15 @@ impl Core {
                 let _ = reply.send(to_response(self.run_page_data(&token, &artifact, asked, as_level).await));
                 return;
             }
+            if let Request::PageAssets { artifact, asked, .. } = *asking {
+                // The agent adds a file to a page it made, as its people do.
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.page_assets(&thread, &artifact, asked).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
             if let Request::PageAsset { artifact, asset, .. } = *asking {
                 let answer = match self.run_thread(&token).await {
                     Ok(thread) => self.page_asset(&thread, &artifact, &asset).await,
@@ -605,7 +617,7 @@ impl Core {
                 let _ = reply.send(to_response(answer));
                 return;
             }
-            if let Request::RoomAgent { artifact, emit, .. } = *asking {
+            if let Request::RoomAgent { artifact, emit, presence, .. } = *asking {
                 // A thread that syncs with a server meets its views in the
                 // server's room, so the agent speaks there.
                 let remote = match self.run_thread(&token).await {
@@ -617,7 +629,7 @@ impl Core {
                 if let Some((thread, remote)) = remote {
                     tokio::spawn(async move {
                         let answer = remote
-                            .room_agent(&thread, &artifact, emit)
+                            .room_agent(&thread, &artifact, emit, presence)
                             .await
                             .map_err(|error| CoreError::Invalid(error.to_string()));
                         let _ = reply.send(to_response(answer));
@@ -625,7 +637,7 @@ impl Core {
                     return;
                 }
                 let answer = match self.run_thread(&token).await {
-                    Ok(thread) => self.room_agent(&thread, &artifact, emit).map(|(deliveries, heard)| {
+                    Ok(thread) => self.room_agent(&thread, &artifact, emit, presence).map(|(deliveries, heard)| {
                         // What the agent said reaches the open views through the web server.
                         let _ = self.bus.send(crate::protocol::BusEvent::Room {
                             deliveries: serde_json::to_value(deliveries).unwrap_or_default(),
@@ -638,16 +650,30 @@ impl Core {
                 return;
             }
             if let Request::DocData { artifact, asked, .. } = *asking {
+                let writes = !matches!(asked, silt_proto::edited::DocRequest::Read);
                 let answer = match self.run_thread(&token).await {
-                    Ok(thread) => self.doc_data(&thread, &artifact, asked).await,
+                    Ok(thread) => {
+                        let answer = self.doc_data(&thread, &artifact, asked).await;
+                        if writes && answer.is_ok() {
+                            self.agent_edited(&thread, &artifact);
+                        }
+                        answer
+                    }
                     Err(error) => Err(error),
                 };
                 let _ = reply.send(to_response(answer));
                 return;
             }
             if let Request::SheetData { artifact, asked, .. } = *asking {
+                let writes = !matches!(asked, silt_proto::edited::SheetRequest::Read { .. });
                 let answer = match self.run_thread(&token).await {
-                    Ok(thread) => self.sheet_data(&thread, &artifact, asked).await,
+                    Ok(thread) => {
+                        let answer = self.sheet_data(&thread, &artifact, asked).await;
+                        if writes && answer.is_ok() {
+                            self.agent_edited(&thread, &artifact);
+                        }
+                        answer
+                    }
                     Err(error) => Err(error),
                 };
                 let _ = reply.send(to_response(answer));
@@ -762,6 +788,9 @@ impl Core {
             }
             Request::ImportPageConnectors => to_response(self.import_page_connectors()),
             Request::ConnectorTools { name } => return answer_later(reply, self.connector_tools(&name)),
+            Request::SetConnectorSecret { name, header, value } => to_response(
+                crate::connectors::set_connector_secret(&self.data_dir, &name, &header, value.as_deref()).map(|()| "saved"),
+            ),
             Request::PageMcp { thread, artifact, asked } => return answer_later(reply, self.page_mcp(&thread, &artifact, asked)),
             Request::PageFiles { thread, artifact, asked } => to_response(self.page_files(&thread, &artifact, asked)),
             Request::PageAsset { thread, artifact, asset } => to_response(self.page_asset(&thread, &artifact, &asset).await),
@@ -814,6 +843,7 @@ impl Core {
             Request::SampleToolResult { thread, artifact, ask, call, result } => {
                 to_response(self.sample_tool_result(&thread, &artifact, &ask, call, result))
             }
+            Request::StopSample { thread, artifact, ask } => to_response(self.stop_sample(&thread, &artifact, &ask)),
             Request::ArtifactGrants { thread, artifact } => match self.find_thread(&thread) {
                 Ok(thread) => {
                     let latest = self.version_view(thread, &artifact, None);
@@ -2455,6 +2485,16 @@ impl Core {
 
     /// The actor for this daemon's own deltas in one thread. Threads of a
     /// family grow concurrently, and an actor's deltas must form one chain.
+    /// Notes that the agent running in `thread` wrote `artifact`, a doc or a
+    /// sheet, this turn.
+    fn agent_edited(&mut self, thread: &str, artifact: &str) {
+        if let Ok(thread) = self.find_thread(thread)
+            && let Some(run) = self.acp.get_mut(&thread)
+        {
+            run.edited.insert(artifact.to_owned());
+        }
+    }
+
     pub(crate) fn thread_actor(&self, thread: ThreadId) -> ActorId {
         self.actor.derive(thread.0)
     }

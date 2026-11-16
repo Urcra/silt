@@ -143,8 +143,8 @@ fn show_tools() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "The artifact's id"},
-                    "op": {"type": "string", "enum": ["get", "list", "query", "set", "update", "delete", "batch", "str_replace"], "description": "What to do"},
-                    "path": {"type": "string", "description": "A document's path, for get, set, update, delete and str_replace"},
+                    "op": {"type": "string", "enum": ["get", "list", "query", "set", "update", "delete", "batch", "str_replace", "add_asset"], "description": "What to do; add_asset adds a file of the checkout to the page's assets, as its people add them, and answers its id"},
+                    "path": {"type": "string", "description": "A document's path, for get, set, update, delete and str_replace; for add_asset, a PNG, JPEG, GIF, WebP, SVG or PDF in the checkout, such as docs/diagram.png"},
                     "field": {"type": "string", "description": "For str_replace: the document's text field to edit"},
                     "old": {"type": "string", "description": "For str_replace: text that occurs once in the field"},
                     "new": {"type": "string", "description": "For str_replace: what replaces it"},
@@ -166,7 +166,8 @@ fn show_tools() -> Vec<Value> {
                 "properties": {
                     "id": {"type": "string", "description": "The artifact's id"},
                     "topic": {"type": "string", "description": "A topic to emit to, with data"},
-                    "data": {"description": "What to emit, JSON"}
+                    "data": {"description": "What to emit, JSON"},
+                    "presence": {"type": "object", "description": "Your presence, as a view's: what you're on, such as {\"status\": \"rewriting the risks\", \"item\": \"risk\"}, which the page's onPeers shows beside the people; it lapses 15 s after you last said anything"}
                 },
                 "required": ["id"]
             }
@@ -194,7 +195,10 @@ fn show_tools() -> Vec<Value> {
                     "id": {"type": "string", "description": "The sheet's id"},
                     "set": {"type": "object", "description": "Cells to write, such as {\"A1\": \"Task\", \"B7\": \"=SUM(B2:B6)\"}; \"\" clears one"},
                     "read": {"type": "string", "description": "A range whose computed values to read, such as A1:D20; leave both out to read the whole sheet"},
-                    "sheet": {"type": "integer", "minimum": 1, "maximum": 16, "description": "Which sheet, from 1; the first when left out. Writing to the one after the last adds it"}
+                    "sheet": {"type": "integer", "minimum": 1, "maximum": 16, "description": "Which sheet, from 1; the first when left out. Writing to the one after the last adds it"},
+                    "insert": {"type": "object", "description": "Rows or columns put in before one, cells and formulas below or right moving with them: {\"rows\": 4, \"count\": 2} before row 4, or {\"columns\": \"C\"}. Done before set"},
+                    "remove": {"type": "object", "description": "Rows or columns taken out, cells and all, from one: {\"rows\": 4, \"count\": 2} or {\"columns\": \"C\"}; a formula naming them shows #REF!. Ask the person first"},
+                    "format": {"type": "object", "description": "The sheet's name and its columns' widths and number formats, such as {\"name\": \"Budget\", \"columns\": {\"B\": {\"width\": 120, \"format\": \"$#,##0.00\"}, \"C\": {\"format\": \"0%\"}}, \"cells\": {\"B7\": \"0.0%\"}}, a cell's own format going before its column's. Formats: 0, 0.0, #,##0, #,##0.00, 0%, 0.0%, those after $, €, £ or ¥, and dates' yyyy-mm-dd, d mmm yyyy, mmm yyyy, dd/mm/yyyy, mm/dd/yyyy; null or \"\" clears one. Formulas still name sheets by number, Sheet2!B3"}
                 },
                 "required": ["id"]
             }
@@ -224,7 +228,7 @@ fn show_tools() -> Vec<Value> {
                         }
                     },
                     "patch": {"type": "array", "description": "With id, for slides, canvas or data: an RFC 6902 JSON Patch of the latest version's content, such as [{\"op\": \"add\", \"path\": \"/slides/-\", \"value\": {...}}]", "items": {"type": "object"}},
-                    "files": {"type": "object", "description": "For an html page: files beside it, by relative path such as data.json or css/site.css, each {content}, {base64} or {path}, or null to remove one; the page fetches them relative to itself. The last version's files are kept unless named"},
+                    "files": {"type": "object", "description": "For an html page, a deck or a canvas: files beside it, by relative path such as data.json, css/site.css or images/chart.png, each {content}, {base64} or {path}, or null to remove one; a page fetches them relative to itself, and slides and boards name them in src or href. The last version's files are kept unless named"},
                     "note": {"type": "string", "description": "What this version changed, in a few words, shown in the version menu"},
                     "description": {"type": "string", "description": "One sentence on what the artifact is, shown on its card; kept for later versions"},
                     "capabilities": {"type": "object", "description": "What the html page may use through silt.use(name), as {name: config}: db, artifact, user, downloads, comments, sample and the others silt_artifact_guide lists. Leave it out to keep the last version's; {} clears them"},

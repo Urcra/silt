@@ -264,6 +264,32 @@ fn a_polls_votes_from_two_people_both_count_and_a_fork_inherits_them() {
     assert_eq!(source["data"]["pick"], "pizza", "the source keeps its own: {source}");
     let changed = alice.web("POST", &fork_data, Some(serde_json::json!({"op": "get", "path": format!("votes/{ann}")})));
     assert_eq!(changed["data"]["pick"], "tacos");
+
+    // A read-only link's page reads the votes as they stood, and writes none (ADR 0072).
+    let mut link = serde_json::Value::Null;
+    assert!(
+        eventually(|| {
+            let body = serde_json::json!({"days": 1, "frozen": true, "artifact": {"id": id}});
+            let (status, answer) = alice.web_answer("POST", &format!("/api/threads/{thread}/links"), Some(body));
+            link = serde_json::from_str(&answer).unwrap_or_default();
+            status == "200"
+        }),
+        "a link to the poll: {link}"
+    );
+    let content = format!("{}/content", link["url"].as_str().expect("the link"));
+    let mut body = String::new();
+    assert!(
+        eventually(|| {
+            body = std::process::Command::new("curl")
+                .args(["-s", &content])
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                .unwrap_or_default();
+            body.contains("\"pick\":\"pizza\"") && body.contains("\"pick\":\"soup\"")
+        }),
+        "the link's page has both votes: {body}"
+    );
+    assert!(body.contains("'not_granted'") && !body.contains("tacos"), "its frozen db, without the fork's vote: {body}");
 }
 
 type RoomSocket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -335,13 +361,20 @@ async fn a_rooms_moments_reach_a_view_on_another_machine() {
     let mut said = Vec::new();
     for _ in 0..10 {
         said.extend(heard(&mut theirs).await);
-        if said.iter().any(|event| event["event"] == "moment" && event["topic"] == "note") {
+        let noted = said.iter().any(|event| event["event"] == "moment" && event["topic"] == "note");
+        if noted && said.iter().any(|event| event["event"] == "presence" && event["peer"]["kind"] == "agent") {
             break;
         }
     }
     let note = said.iter().find(|event| event["event"] == "moment" && event["topic"] == "note");
     let note = note.unwrap_or_else(|| panic!("bob hears the agent: {said:?}"));
     assert_eq!((&note["data"]["said"], &note["from"]["kind"]), (&"hello".into(), &"agent".into()), "{note}");
+    let present = said.iter().find(|event| event["event"] == "presence" && event["peer"]["kind"] == "agent");
+    assert_eq!(
+        present.map(|event| &event["peer"]["state"]["status"]),
+        Some(&"listening".into()),
+        "and sees what it's on: {said:?}"
+    );
     drop(mine);
     drop(theirs);
 }
@@ -478,4 +511,68 @@ fn the_hosted_app_asks_a_pages_question_of_the_persons_computer() {
         asking.join().expect("asked")
     });
     assert_eq!(answered["text"], "Sampled: Which row? [lookup: row 7]", "{answered}");
+
+    // A page that stops asking ends the run on the laptop, which waited on its tool.
+    let began = std::time::Instant::now();
+    let stopped = std::thread::scope(|scope| {
+        let asking = scope.spawn(|| {
+            browser.call("POST", &sample, Some(serde_json::json!({"ask": "h3", "input": "Which row?", "tools": tools})))
+        });
+        while !asking.is_finished() && began.elapsed() < std::time::Duration::from_secs(60) {
+            browser.call("POST", &format!("{sample}/h3/stop"), None);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        asking.join().expect("asked")
+    });
+    assert!(stopped["text"].is_null() && stopped.to_string().contains("stopped asking"), "{stopped}");
+    assert!(began.elapsed() < std::time::Duration::from_secs(60), "well before the question's own wait");
+}
+
+/// With none of the person's devices online, the hosted app lists a
+/// thread's files from the server's own fold of its deltas, and reads them
+/// where the server has their text (ADR 0078).
+#[test]
+fn the_hosted_app_reads_a_threads_files_with_no_device_online() {
+    let world = world();
+    let laptop = &world.laptop;
+    let started = laptop.web(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": laptop.repo, "agent": "v1", "prompt": "Artifact files"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    let browser = HostedBrowser::sign_in(&world.server, "owner", world._root.path().join("cookies"));
+    let mut id = String::new();
+    assert!(
+        eventually(|| {
+            let history = browser.call("GET", &format!("/threads/{thread}/history"), None);
+            let found = history["entries"]
+                .as_array()
+                .and_then(|entries| entries.iter().find_map(|entry| entry["artifact"]["id"].as_str().map(str::to_owned)));
+            found.map(|found| id = found).is_some()
+        }),
+        "the hosted app has the artifact"
+    );
+    let grant = serde_json::json!({"capability": "files", "state": "granted"});
+    browser.call("PUT", &format!("/threads/{thread}/artifacts/{id}/grants"), Some(grant));
+    laptop.silt(&["daemon", "stop"]);
+    let files = format!("/threads/{thread}/artifacts/{id}/files");
+    let mut listed = serde_json::Value::Null;
+    assert!(
+        eventually(|| {
+            listed = browser.call("POST", &files, Some(serde_json::json!({"op": "list", "recursive": true})));
+            listed["entries"].as_array().is_some_and(|entries| entries.iter().any(|entry| entry["path"] == "src/main.rs"))
+        }),
+        "the server lists the thread's files itself: {listed}"
+    );
+    let paths: Vec<&str> =
+        listed["entries"].as_array().expect("entries").iter().filter_map(|entry| entry["path"].as_str()).collect();
+    assert!(paths.iter().all(|path| path.starts_with("src/")), "only what the page declares: {paths:?}");
+    let read = browser.call("POST", &files, Some(serde_json::json!({"op": "read", "path": "src/main.rs"})));
+    assert!(
+        read["text"].as_str().is_some_and(|text| text.contains("fn main")) || read.to_string().contains("isn't on the server"),
+        "read from the mirror, or said why not: {read}"
+    );
+    let outside = browser.call("POST", &files, Some(serde_json::json!({"op": "read", "path": "README.md"})));
+    assert!(outside["text"].is_null(), "outside its globs: {outside}");
 }

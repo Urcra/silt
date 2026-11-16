@@ -25,7 +25,7 @@ pub mod view;
 /// through each server they use (ADR 0071). 13: an artifact's page data
 /// (`Op::Page`) and comments on a doc's text (ADR 0072, ADR 0077). 14:
 /// rooms that span machines through `/v1/rooms` (ADR 0081).
-pub const PROTOCOL: u32 = 14;
+pub const PROTOCOL: u32 = 15;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -1343,6 +1343,11 @@ pub enum RemoteCommand {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tools: Vec<crate::artifact::SampleTool>,
     },
+    /// Stops the page's question this device answers for the command
+    /// `relay`, ending its agent's run.
+    StopSample {
+        relay: i64,
+    },
     /// The thread's files for a page that declares `files` (ADR 0078), as
     /// the device that holds the family reads them.
     PageFiles {
@@ -1404,7 +1409,7 @@ impl Capabilities {
             | RemoteCommand::PageFiles { .. } => {
                 (self.review, "review merge requests")
             }
-            RemoteCommand::Sample { .. } => (self.sample, "ask an agent a page's question"),
+            RemoteCommand::Sample { .. } | RemoteCommand::StopSample { .. } => (self.sample, "ask an agent a page's question"),
             RemoteCommand::PageMcp { .. } => (self.page_tools, "call your page connectors"),
         };
         if allowed { Ok(()) } else { Err(needs) }

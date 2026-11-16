@@ -106,6 +106,9 @@ pub(crate) struct Browsed {
     graph: OnceLock<silt_crdt::CausalGraph>,
     /// Docs' and sheets' text for search, worked out once per change.
     texts: std::sync::Mutex<HashMap<(ThreadId, silt_types::ArtifactId), Arc<str>>>,
+    /// Each artifact's page documents, folded once per change, for the
+    /// listing and a page's reads rather than at every request.
+    documents: std::sync::Mutex<HashMap<(ThreadId, silt_types::ArtifactId), Arc<silt_log::page::Documents>>>,
 }
 
 type ThreadEntries = Arc<Vec<(DeltaId, HistoryEntry)>>;
@@ -118,7 +121,18 @@ impl Browsed {
             entries: std::sync::Mutex::default(),
             graph: OnceLock::new(),
             texts: std::sync::Mutex::default(),
+            documents: std::sync::Mutex::default(),
         }
+    }
+
+    /// `artifact`'s page documents in `thread`, as they stand.
+    fn documents(&self, thread: ThreadId, artifact: silt_types::ArtifactId) -> Arc<silt_log::page::Documents> {
+        if let Some(docs) = self.documents.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&(thread, artifact)) {
+            return Arc::clone(docs);
+        }
+        let docs = Arc::new(silt_log::page_documents_in(&self.log, self.graph(), thread, artifact));
+        self.documents.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((thread, artifact), Arc::clone(&docs));
+        docs
     }
 
     fn requests(&self) -> &[MergeRequest] {
@@ -544,7 +558,7 @@ pub(crate) async fn page_of(
     let docs = {
         let mut slot = server.room(row.family).await.ok_or_else(not_found)?;
         let browsed = slot.browsed(row.family, &viewer);
-        silt_log::page_documents_in(&browsed.log, browsed.graph(), row.id, artifact)
+        browsed.documents(row.id, artifact).as_ref().clone()
     };
     Ok(PageOf { family: row.family, thread: row.id, declared, docs, me: silt_proto::page::person_id(&readable.me), level })
 }
@@ -693,6 +707,7 @@ async fn write_version(
     let blob = server.shared.blobs.put(&bytes).await.map_err(|_| bad_request("the version couldn't be kept"))?;
     let name = format!("artifact/{artifact}/v{version}/{file}");
     let attachment = Op::Conv(silt_log::ConvOp::Attachment { session: session.clone(), name, blob });
+    let capabilities = silt_proto::artifact::with_kind_defaults(&latest.kind, latest.capabilities.clone());
     let view = ArtifactView {
         version,
         media_type: media_type.into(),
@@ -700,6 +715,7 @@ async fn write_version(
         size: bytes.len() as u64,
         note: Some(note),
         by: Some(by),
+        capabilities,
         ..latest
     };
     let line = silt_agents::acp::artifact(&view);
@@ -771,7 +787,7 @@ async fn save_edited_version(
                 silt_proto::edited::sheet_content(sheets)
             }
             _ => {
-                let docs = silt_log::page_documents_in(&browsed.log, browsed.graph(), row.id, artifact_id);
+                let docs = browsed.documents(row.id, artifact_id);
                 let items: Vec<&serde_json::Value> = docs
                     .iter()
                     .filter(|(path, _)| path.split('/').count() == 2 && path.starts_with("items/"))
@@ -914,7 +930,8 @@ async fn sheet_data(
     match asked {
         SheetRequest::Read { sheet, range } => {
             let book = book(server.clone(), sheet).await?;
-            let view = silt_proto::edited::book_view(&book.iter().collect::<Vec<_>>(), usize::from(sheet), today);
+            let metas = silt_proto::edited::metas_of(&page.docs, book.len());
+            let view = silt_proto::edited::book_view_in(&book.iter().collect::<Vec<_>>(), &metas, usize::from(sheet), today);
             match range {
                 Some(range) => {
                     Ok(Json(serde_json::json!({ "values": silt_proto::edited::read_range(&view, &range).map_err(bad_request)? })))
@@ -964,6 +981,19 @@ async fn sheet_data(
             write(lines(sheet, axis, TextOp::Insert { pos: at.min(len), content: mark.repeat(count) })).await?;
             Ok(Json(serde_json::json!({ "inserted": count })))
         }
+        SheetRequest::Format { sheet, name, widths, formats, cells: cell_formats } => {
+            may_edit(&page)?;
+            let now = cells(server.clone(), sheet).await?;
+            let asked = silt_proto::edited::Formatting {
+                name: name.as_deref(),
+                widths: &widths,
+                formats: &formats,
+                cells: &cell_formats,
+            };
+            let op = silt_proto::edited::format_op(artifact, sheet, &now, asked).map_err(bad_request)?;
+            write(op).await?;
+            Ok(Json(serde_json::json!({ "formatted": true })))
+        }
         SheetRequest::Remove { sheet, axis, at, count } => {
             may_edit(&page)?;
             let now = cells(server.clone(), sheet).await?;
@@ -997,7 +1027,8 @@ async fn sheet_xlsx(
         .await?;
         let view: silt_proto::edited::SheetView = serde_json::from_value(view).map_err(|_| not_found())?;
         count = view.sheets;
-        sheets.push((format!("Sheet{}", sheet + 1), view));
+        let name = view.names.get(usize::from(sheet)).cloned().unwrap_or_else(|| format!("Sheet{}", sheet + 1));
+        sheets.push((name, view));
         sheet += 1;
     }
     let bytes = silt_proto::edited::xlsx_book(&sheets).map_err(bad_request)?;
@@ -1038,11 +1069,11 @@ async fn artifact_listing(
         if latest.is_empty() {
             continue;
         }
-        let graph = browsed.graph();
         for (artifact, time_ms) in latest {
-            let archived = artifact.id.parse::<silt_types::ArtifactId>().is_ok_and(|id| {
-                silt_log::page_documents_in(&browsed.log, graph, row.id, id).get(ARCHIVED) == Some(&serde_json::Value::Bool(true))
-            });
+            let archived = artifact
+                .id
+                .parse::<silt_types::ArtifactId>()
+                .is_ok_and(|id| browsed.documents(row.id, id).get(ARCHIVED) == Some(&serde_json::Value::Bool(true)));
             rows.push(ArtifactListed {
                 pinned: pins.contains(&(crate::id_bytes(row.id.0).to_vec(), artifact.id.clone())),
                 thread: row.id.to_string(),
@@ -1395,7 +1426,9 @@ pub(crate) async fn serve_frame(State(server): State<Server>, Path(key): Path<St
     use axum::http::{HeaderValue, StatusCode, header};
     use axum::response::IntoResponse;
     let not_found = || (StatusCode::NOT_FOUND, "this frame's key expired or never existed").into_response();
-    let grant = server.shared.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key);
+    // The viewer's storage goes into the page once, and isn't kept with the key after (ADR 0072).
+    let grant =
+        server.shared.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner).open(&key, |grant| grant.boot = None);
     let Some(grant) = grant else {
         return not_found();
     };
@@ -1421,6 +1454,7 @@ pub(crate) async fn serve_frame(State(server): State<Server>, Path(key): Path<St
         parent: grant.parent.as_deref(),
         policy_meta: false,
         boot: grant.boot.as_deref(),
+        frozen: None,
     };
     let page = silt_design::frame::compose(&String::from_utf8_lossy(&content), &parts);
     let files = format!("{}/f/{key}/", server.config().public_url());
@@ -1717,6 +1751,31 @@ pub(crate) async fn seen_doc(
     Ok((id, silt_log::doc_crdt_in(&browsed.log, browsed.graph(), row.id, id)))
 }
 
+/// Sheet `sheet` of `artifact` in a thread `user` reads, for a comment on
+/// one of its cells.
+pub(crate) async fn seen_sheet(
+    server: &Server,
+    user: UserId,
+    selector: &str,
+    artifact: &str,
+    sheet: u16,
+) -> Result<(silt_types::ArtifactId, silt_log::page::SheetCells), ApiError> {
+    let readable = Readable::load(server, user).await?;
+    let row = readable.row(selector)?;
+    let browsed = readable.deltas.get(&row.family).ok_or_else(not_found)?;
+    let entries = browsed.entries(row.id);
+    let kind = silt_proto::view::latest_artifacts(entries.iter().map(|(_, entry)| entry))
+        .into_iter()
+        .find(|(view, _)| view.id == artifact)
+        .map(|(view, _)| view.kind)
+        .ok_or_else(|| bad_request("this thread has no such artifact"))?;
+    if kind != "sheet" {
+        return Err(bad_request("only a sheet's cells take comments"));
+    }
+    let id: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    Ok((id, silt_log::sheet_cells_in(&browsed.log, browsed.graph(), row.id, id, sheet)))
+}
+
 pub(crate) async fn seen_thread(server: &Server, user: UserId, selector: &str) -> Result<SeenThread, ApiError> {
     let readable = Readable::load(server, user).await?;
     let row = readable.row(selector)?;
@@ -1770,6 +1829,20 @@ pub(crate) async fn comments(
             .collect(),
         None => HashMap::new(),
     };
+    let on_cells: BTreeSet<(silt_types::ArtifactId, u16)> = comments
+        .iter()
+        .filter_map(|comment| match comment.target {
+            CommentTarget::Cell { artifact, sheet, .. } => Some((artifact, sheet)),
+            _ => None,
+        })
+        .collect();
+    let sheets: HashMap<_, _> = match readable.deltas.get(&row.family) {
+        Some(browsed) => on_cells
+            .into_iter()
+            .map(|(artifact, sheet)| ((artifact, sheet), silt_log::sheet_cells_in(log, browsed.graph(), row.id, artifact, sheet)))
+            .collect(),
+        None => HashMap::new(),
+    };
     Ok(Json(
         comments
             .into_iter()
@@ -1789,6 +1862,14 @@ pub(crate) async fn comments(
                     CommentTarget::Page { artifact, start, end } => docs.get(&artifact).map_or(CommentLocation::Unknown, |doc| {
                         silt_proto::edited::doc_comment_location(doc, artifact, &start, &end)
                     }),
+                    CommentTarget::Cell { artifact, sheet, row, column } => {
+                        sheets.get(&(artifact, sheet)).map_or(CommentLocation::Unknown, |cells| {
+                            silt_proto::edited::cell_comment_location(cells, artifact, sheet, &row, &column)
+                        })
+                    }
+                    CommentTarget::Element { artifact, anchor } => {
+                        CommentLocation::Element { artifact: artifact.to_string(), anchor }
+                    }
                     CommentTarget::Code { .. } => CommentLocation::Unknown,
                 },
                 replies: comment
@@ -2078,6 +2159,90 @@ async fn projects(State(server): State<Server>, Extension(browser): Extension<Br
             })
             .collect(),
     ))
+}
+
+/// Git's texts read from a family's mirror, for files the server folds.
+struct MirrorBases {
+    git_dir: std::path::PathBuf,
+}
+
+impl silt_log::BaseText for MirrorBases {
+    fn text(&mut self, oid: silt_types::GitOid) -> Option<String> {
+        let out = std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(&self.git_dir)
+            .args(["cat-file", "blob", &oid.to_string()])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8(out.stdout).ok()
+    }
+}
+
+/// A thread's files as the server folds them from the family's deltas, with
+/// git's texts from the family's mirror, for a page in the hosted app when
+/// none of the person's devices answers (ADR 0078). It reads the thread as
+/// it is now; a version's files and a file's history are a device's to read.
+pub(crate) async fn projected_files(
+    server: &Server,
+    user: UserId,
+    selector: &str,
+    config: serde_json::Value,
+    asked: silt_proto::page::FilesRequest,
+) -> Result<serde_json::Value, ApiError> {
+    use silt_log::{BaseText as _, FileView};
+    use silt_proto::page::{FilesRequest, files_allowed, list_files};
+    let readable = Readable::load(server, user).await?;
+    let row = readable.row(selector)?;
+    let (thread, family_id) = (row.id, row.family);
+    let log = readable.of(row).to_vec();
+    let git_dir = server.git_root().join(format!("{family_id}.git"));
+    tokio::task::spawn_blocking(move || {
+        let mut bases = MirrorBases { git_dir };
+        let mut family = silt_log::Family::new();
+        // A delta whose git text the mirror lacks is left out, as a device leaves out one it can't apply.
+        for delta in log {
+            let _ = family.apply(delta, &mut bases);
+        }
+        let view = family.thread_view(thread);
+        let paths = view.paths();
+        match asked {
+            FilesRequest::List { path, recursive, cursor } => {
+                let shown = paths
+                    .iter()
+                    .filter(|(_, inode)| view.tree().kind(**inode) == Some(silt_crdt::InodeKind::File))
+                    .map(|(path, _)| path.as_str())
+                    .filter(|path| files_allowed(&config, path));
+                let (entries, next) = list_files(shown, &path, recursive, cursor.as_deref());
+                Ok(serde_json::json!({ "entries": entries, "cursor": next }))
+            }
+            FilesRequest::Read { path, at: None } => {
+                if !files_allowed(&config, &path) {
+                    return Err(bad_request(format!("not_found: this page may not read {path}")));
+                }
+                let inode = *paths.get(&path).ok_or_else(|| bad_request(format!("not_found: {path} isn't in the thread")))?;
+                let text = match view.file(inode) {
+                    Some(FileView::Text(text)) => text,
+                    Some(FileView::GitText(oid)) => bases.text(oid).ok_or_else(|| {
+                        bad_request(format!("unavailable: {path}'s text isn't on the server, and none of your devices is online"))
+                    })?,
+                    _ => return Err(bad_request(format!("{path} isn't text"))),
+                };
+                if text.len() > 4 << 20 {
+                    return Err(bad_request(format!("too_large: {path} is over 4 MiB")));
+                }
+                let revision = family.thread_head(thread).to_string();
+                Ok(serde_json::json!({ "path": path, "text": text, "size": text.len(), "revision": revision }))
+            }
+            FilesRequest::Read { .. } | FilesRequest::History { .. } => Err(bad_request(
+                "unavailable: a version's files and a file's history are read by one of your devices, and none is online",
+            )),
+        }
+    })
+    .await
+    .map_err(|_| bad_request("the files couldn't be read"))?
 }
 
 #[cfg(test)]

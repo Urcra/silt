@@ -463,6 +463,12 @@ pub enum Request {
         name: String,
         input: serde_json::Value,
     },
+    /// Stops the page's question named `ask` while it runs.
+    StopSample {
+        thread: String,
+        artifact: String,
+        ask: String,
+    },
     /// The page's answer to a call of one of its tools.
     SampleToolResult {
         thread: String,
@@ -502,6 +508,9 @@ pub enum Request {
         artifact: String,
         #[serde(default)]
         emit: Option<(String, serde_json::Value)>,
+        /// The agent's presence, as a view's: what it's on, say.
+        #[serde(default)]
+        presence: Option<serde_json::Value>,
     },
     /// The MCP servers this machine lists for pages (ADR 0080).
     PageConnectors,
@@ -513,6 +522,14 @@ pub enum Request {
     /// A page connector's tools, started if it isn't running.
     ConnectorTools {
         name: String,
+    },
+    /// Keeps a header's value for an HTTP page connector in the keyring, or
+    /// forgets it.
+    SetConnectorSecret {
+        name: String,
+        header: String,
+        #[serde(default)]
+        value: Option<String>,
     },
     /// A page's call of a connector's tool, or its description (ADR 0080).
     PageMcp {

@@ -107,6 +107,17 @@ export class LiveReplica {
     return this.use((replica) => replica.show(path))
   }
 
+  /** A doc artifact's text as the replica has it, to show in the editor: later edits are made against it. */
+  pageShow(artifact: string): string {
+    return this.use((replica) => replica.page_show(artifact))
+  }
+
+  /** The editor's text of the doc is now `text`: made at once, against what it was shown, then sent to the daemon. */
+  pageEdit(artifact: string, text: string): Promise<void> {
+    const made = this.use((replica) => replica.page_edit(artifact, text, Date.now()))
+    return made.length > 1 ? api.sendDeltas(this.thread, toBase64(made)).then(() => undefined) : Promise.resolve()
+  }
+
   /**
    * The editor's text of the file is now `text`. The edits are made at once,
    * against what the editor was shown; sending them to the daemon follows.

@@ -36,6 +36,8 @@ pub(crate) struct Control {
     /// Which command answers a browser's question, by its person and the
     /// name the page gave it.
     asks: std::sync::Mutex<HashMap<(UserId, String), i64>>,
+    /// The device each such command went to, for stopping it there.
+    asked_of: std::sync::Mutex<HashMap<i64, silt_types::DeviceId>>,
     /// Calls of a page's tools a device's agent made, waiting for the page,
     /// by command, and where each one's answer goes.
     calls: std::sync::Mutex<HashMap<i64, Vec<ToolCall>>>,
@@ -77,14 +79,24 @@ impl Control {
     }
 
     /// Notes that command `id` answers `user`'s question named `ask`.
-    pub(crate) fn asked(&self, user: UserId, ask: String, id: i64) {
+    pub(crate) fn asked(&self, user: UserId, ask: String, id: i64, device: silt_types::DeviceId) {
         self.asks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((user, ask), id);
+        self.asked_of.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id, device);
+    }
+
+    /// The command answering the person's question named `ask`, and the
+    /// device it went to, while it's answered.
+    pub(crate) fn asked_on(&self, user: UserId, ask: &str) -> Option<(i64, silt_types::DeviceId)> {
+        let id = self.ask_id(user, ask)?;
+        let device = *self.asked_of.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&id)?;
+        Some((id, device))
     }
 
     /// Forgets the question, once it's answered.
     pub(crate) fn forget_ask(&self, user: UserId, ask: &str) {
         let id = self.asks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&(user, ask.to_owned()));
         if let Some(id) = id {
+            self.asked_of.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id);
             self.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id);
             self.calls.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id);
             self.answers.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(of, _), _| *of != id);
@@ -779,7 +791,7 @@ mod tests {
             ttl: Duration::from_secs(60),
         };
         let id = super::relay(&server, relay).await.expect("relays");
-        server.shared.control.asked(alice, "q1".into(), id);
+        server.shared.control.asked(alice, "q1".into(), id, device);
         let said = |device: &Device, text: &str| {
             device
                 .request(reqwest::Method::POST, &format!("/v1/control/{id}/progress"))

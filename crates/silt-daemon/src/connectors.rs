@@ -42,6 +42,10 @@ pub struct PageConnector {
     /// it names, so no secret is kept in the file.
     #[serde(default)]
     pub header_env: BTreeMap<String, String>,
+    /// Headers sent to an HTTP server whose values this machine's keyring
+    /// keeps, set in Settings; the file names them only.
+    #[serde(default)]
+    pub header_secret: Vec<String>,
     /// The environment variables a stdio server gets beyond the few every
     /// program needs ([`BASE_ENV`]), by name; nothing else of the daemon's
     /// environment reaches it.
@@ -123,6 +127,62 @@ pub(crate) fn from_claude(config: &Path) -> Vec<PageConnector> {
             (connector.command.is_some() != connector.url.is_some()).then_some(connector)
         })
         .collect()
+}
+
+/// The name a connector's header's secret has in the keyring.
+fn secret_name(connector: &str, header: &str) -> String {
+    format!("page-connector/{connector}/{}", header.to_ascii_lowercase())
+}
+
+/// An HTTP connector's headers: each from the environment variable it
+/// names, or from the keyring.
+fn header_values(
+    connector: &PageConnector,
+    env: impl Fn(&str) -> Option<String>,
+    secret: impl Fn(&str) -> Result<Option<String>, String>,
+) -> Result<Vec<(String, String)>, String> {
+    let mut values = Vec::new();
+    for (header, variable) in &connector.header_env {
+        values.push((header.clone(), env(variable).ok_or_else(|| format!("{variable} isn't set, which {header} comes from"))?));
+    }
+    for header in &connector.header_secret {
+        let kept = secret(&secret_name(&connector.name, header))?;
+        let value = kept.ok_or_else(|| {
+            format!(
+                "{}'s {header} isn't in this computer's keyring; set it in Settings › Appearance › Connectors",
+                connector.name
+            )
+        })?;
+        values.push((header.clone(), value));
+    }
+    Ok(values)
+}
+
+/// Keeps `value` in the keyring as `name`'s `header`, or forgets it, and
+/// names the header in the connector's settings, or stops naming it.
+pub(crate) fn set_connector_secret(data_dir: &Path, name: &str, header: &str, value: Option<&str>) -> Result<(), CoreError> {
+    let mut list = connectors(data_dir);
+    let connector = list
+        .iter_mut()
+        .find(|connector| connector.name == name)
+        .ok_or_else(|| CoreError::Invalid(format!("no page connector {name}")))?;
+    if connector.url.is_none() {
+        return Err(CoreError::Invalid(format!("{name} isn't an HTTP server; its program gets the variables it names")));
+    }
+    if reqwest::header::HeaderName::from_bytes(header.as_bytes()).is_err() {
+        return Err(CoreError::Invalid(format!("{header} isn't a header's name")));
+    }
+    if value
+        .is_some_and(|value| value.is_empty() || value.len() > 8 * 1024 || reqwest::header::HeaderValue::from_str(value).is_err())
+    {
+        return Err(CoreError::Invalid("a header's value is 1 to 8 KiB of text".into()));
+    }
+    silt_os::set_secret(&secret_name(name, header), value).map_err(CoreError::Invalid)?;
+    connector.header_secret.retain(|kept| !kept.eq_ignore_ascii_case(header));
+    if value.is_some() {
+        connector.header_secret.push(header.to_owned());
+    }
+    set_connectors(data_dir, &list)
 }
 
 /// Where Claude Code keeps its MCP servers for this person.
@@ -263,8 +323,8 @@ async fn start(connector: &PageConnector) -> Result<Client, String> {
     }
     let url = connector.url.clone().ok_or("the connector has no command or URL")?;
     let mut headers = reqwest::header::HeaderMap::new();
-    for (header, variable) in &connector.header_env {
-        let value = std::env::var(variable).map_err(|_| format!("{variable} isn't set, which {header} comes from"))?;
+    let values = header_values(connector, |variable| std::env::var(variable).ok(), silt_os::secret)?;
+    for (header, value) in values {
         let name = reqwest::header::HeaderName::from_bytes(header.as_bytes()).map_err(|error| error.to_string())?;
         let value = reqwest::header::HeaderValue::from_str(&value).map_err(|error| error.to_string())?;
         headers.insert(name, value);
@@ -365,6 +425,13 @@ impl Core {
         let thread = self.find_thread(thread)?;
         let id: silt_types::ArtifactId =
             artifact.parse().map_err(|_| CoreError::Invalid(format!("{artifact} isn't an artifact id")))?;
+        // The thread's workspace, and its org, may name the connectors its pages call.
+        if let Some(family) = self.threads.get(&thread).map(|record| record.family) {
+            let workspace = self.family_workspace(family);
+            self.rules(&workspace)
+                .check_connector(server)
+                .map_err(|refusal| CoreError::Invalid(format!("not_granted: {refusal}")))?;
+        }
         let config = self.declared(thread, id, "mcp")?;
         if !declared(&config, server, tool) {
             return Err(CoreError::Invalid(format!("not_granted: the page doesn't declare {server}'s {tool}")));
@@ -381,6 +448,25 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_connectors_headers_come_from_its_variables_or_the_keyring() {
+        let connector = PageConnector {
+            name: "tracker".into(),
+            url: Some("https://tracker.example/mcp".into()),
+            header_env: BTreeMap::from([("X-Team".to_owned(), "TRACKER_TEAM".to_owned())]),
+            header_secret: vec!["Authorization".into()],
+            ..PageConnector::default()
+        };
+        let env = |variable: &str| (variable == "TRACKER_TEAM").then(|| "web".to_owned());
+        let kept = |name: &str| Ok((name == "page-connector/tracker/authorization").then(|| "Bearer t".to_owned()));
+        assert_eq!(
+            header_values(&connector, env, kept).expect("both"),
+            [("X-Team".to_owned(), "web".to_owned()), ("Authorization".to_owned(), "Bearer t".to_owned())]
+        );
+        let missing = header_values(&connector, env, |_| Ok(None)).expect_err("not kept");
+        assert!(missing.contains("isn't in this computer's keyring"), "{missing}");
+    }
 
     #[test]
     fn a_page_reaches_only_tools_it_declares() {
@@ -414,6 +500,6 @@ mod tests {
         );
         let fs = imported.iter().find(|connector| connector.name == "fs").expect("fs");
         assert_eq!(fs.pass_env, ["FS_TOKEN"], "the variable's name, never its value");
-        assert!(!serde_json::to_string(&imported).expect("json").contains("secret"));
+        assert!(!serde_json::to_string(&imported).expect("json").contains("\"secret\""), "no variable's value");
     }
 }

@@ -24,6 +24,9 @@ pub fn is_type(kind: &str) -> bool {
 #[serde(deny_unknown_fields)]
 struct Deck {
     aspect: Option<String>,
+    /// How one slide gives way to the next: `none` or `fade`.
+    #[serde(default)]
+    transition: Option<String>,
     #[serde(default)]
     style: Option<String>,
     slides: Vec<Slide>,
@@ -32,6 +35,9 @@ struct Deck {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Slide {
+    /// Stays with the slide as others go in or out, so a patch can name it.
+    #[serde(default)]
+    id: Option<String>,
     title: String,
     html: String,
     #[serde(default)]
@@ -44,7 +50,29 @@ struct Canvas {
     #[serde(default)]
     style: Option<String>,
     boards: Vec<Board>,
+    /// Text on the canvas itself, between and beside boards.
+    #[serde(default)]
+    notes: Vec<Note>,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Note {
+    #[serde(default)]
+    id: Option<String>,
+    text: String,
+    x: f64,
+    y: f64,
+    #[serde(default)]
+    w: Option<f64>,
+    #[serde(default)]
+    page: Option<String>,
+}
+
+/// The longest a canvas note's text is, in characters.
+const NOTE_CHARS: usize = 2000;
+/// The longest a canvas page's name is, in characters.
+const PAGE_CHARS: usize = 64;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -59,6 +87,12 @@ struct Board {
     x: Option<f64>,
     #[serde(default)]
     y: Option<f64>,
+    /// Grows past `height` to its content, as a page that scrolls does.
+    #[serde(default)]
+    grow: Option<bool>,
+    /// The canvas page it's on, by name; the first page where none is named.
+    #[serde(default)]
+    page: Option<String>,
     html: String,
 }
 
@@ -80,12 +114,20 @@ struct Source {
     kind: String,
     detail: String,
     at: String,
+    /// An `mcp` source's connector and read-only tool, which the viewer's
+    /// computer runs on open and on Refresh (ADRs 0080, 0084).
+    #[serde(default)]
+    server: Option<String>,
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    input: Option<Value>,
 }
 
 /// What a whiteboard's items are.
 pub const WHITEBOARD_ITEMS: &[&str] = &["block", "arrow", "section", "stroke", "image"];
 const CHARTS: &[&str] = &["line", "area", "bar", "dot", "scatter", "heatmap", "segmented"];
-const SOURCE_KINDS: &[&str] = &["query", "file", "command", "agent", "manual"];
+const SOURCE_KINDS: &[&str] = &["query", "file", "command", "agent", "manual", "mcp"];
 
 /// Whether `text` is a valid `kind` version, and why not.
 pub fn validate(kind: &str, text: &str) -> Result<(), String> {
@@ -96,7 +138,18 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
             if deck.aspect.as_deref().is_some_and(|aspect| aspect != "16:9" && aspect != "4:3") {
                 return Err("a deck's aspect is 16:9 or 4:3".into());
             }
+            if deck.transition.as_deref().is_some_and(|transition| transition != "none" && transition != "fade") {
+                return Err("a deck's transition is none or fade".into());
+            }
             parts(deck.slides.len(), "slide")?;
+            let mut ids = std::collections::HashSet::new();
+            for slide in &deck.slides {
+                if let Some(id) = &slide.id
+                    && (!ids.insert(id.as_str()) || !id_ok(id))
+                {
+                    return Err(format!("slide ids are unique, 1 to 64 of A-Z, a-z, 0-9, - and _: {id}"));
+                }
+            }
             for (at, slide) in deck.slides.iter().enumerate() {
                 if slide.title.trim().is_empty() {
                     return Err(format!("slide {} has no title", at + 1));
@@ -122,8 +175,25 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
                 if board.x.is_some_and(|x| !x.is_finite()) || board.y.is_some_and(|y| !y.is_finite()) {
                     return Err(format!("board {}'s position is a number", board.id));
                 }
-                let _ = (&board.name, &board.caption);
+                let _ = (&board.name, &board.caption, board.grow);
+                page_name(board.page.as_deref(), &format!("board {}", board.id))?;
                 html(&board.html, &format!("board {}", board.id))?;
+            }
+            if canvas.notes.len() > PARTS {
+                return Err(format!("at most {PARTS} notes"));
+            }
+            for (at, note) in canvas.notes.iter().enumerate() {
+                let what = format!("note {}", at + 1);
+                if note.text.trim().is_empty() || note.text.chars().count() > NOTE_CHARS {
+                    return Err(format!("{what}'s text is 1 to {NOTE_CHARS} characters"));
+                }
+                if !note.x.is_finite() || !note.y.is_finite() || note.w.is_some_and(|w| !(1.0..=4000.0).contains(&w)) {
+                    return Err(format!("{what}'s position is a number, and its width 1 to 4000 pixels"));
+                }
+                if note.id.as_ref().is_some_and(|id| id.is_empty() || id.len() > 64) {
+                    return Err(format!("{what}'s id is 1 to 64 characters"));
+                }
+                page_name(note.page.as_deref(), &what)?;
             }
             canvas.style.as_deref().map_or(Ok(()), |style| html(style, "the canvas's style"))
         }
@@ -133,7 +203,15 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
             let mut sources = std::collections::HashSet::new();
             for source in &page.sources {
                 if !SOURCE_KINDS.contains(&source.kind.as_str()) {
-                    return Err(format!("source {}'s kind is query, file, command, agent or manual", source.id));
+                    return Err(format!("source {}'s kind is query, file, command, agent, manual or mcp", source.id));
+                }
+                let mcp = source.kind == "mcp";
+                let named = (source.server.is_some(), source.tool.is_some(), source.input.is_some());
+                if if mcp { !(named.0 && named.1) } else { named != (false, false, false) } {
+                    return Err(format!("source {}: an mcp source names its server and tool, and only it does", source.id));
+                }
+                if source.input.as_ref().is_some_and(|input| !input.is_object()) {
+                    return Err(format!("source {}'s input is an object", source.id));
                 }
                 let _ = (&source.name, &source.detail, &source.at);
                 sources.insert(source.id.as_str());
@@ -147,8 +225,8 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
         "whiteboard" => {
             let board: Value = serde_json::from_str(text).map_err(refused)?;
             let items = board.get("items").and_then(Value::as_array).ok_or("a whiteboard has items")?;
-            if items.len() > 2000 {
-                return Err("a whiteboard has at most 2,000 items".into());
+            if items.len() > crate::page::QUERY_LIMIT {
+                return Err("a whiteboard has at most 1,000 items".into());
             }
             let mut ids = std::collections::HashSet::new();
             for item in items {
@@ -190,6 +268,15 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
     }
 }
 
+fn page_name(page: Option<&str>, what: &str) -> Result<(), String> {
+    match page {
+        Some(page) if page.trim().is_empty() || page.chars().count() > PAGE_CHARS => {
+            Err(format!("{what}'s page is named in 1 to {PAGE_CHARS} characters"))
+        }
+        _ => Ok(()),
+    }
+}
+
 fn parts(count: usize, what: &str) -> Result<(), String> {
     if count == 0 {
         return Err(format!("at least one {what}"));
@@ -204,6 +291,13 @@ fn html(text: &str, what: &str) -> Result<(), String> {
     if text.len() > PART_HTML_BYTES { Err(format!("{what} is over {} KiB", PART_HTML_BYTES >> 10)) } else { Ok(()) }
 }
 
+/// Whether `text` starts as an ISO 8601 date, `2026-11-16`, as a time scale's x does.
+fn iso_date(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() >= 10
+        && bytes[..10].iter().enumerate().all(|(at, byte)| if at == 4 || at == 7 { *byte == b'-' } else { byte.is_ascii_digit() })
+}
+
 fn data_block(block: &Value, sources: &std::collections::HashSet<&str>) -> Result<(), String> {
     let kind = block.get("type").and_then(Value::as_str).ok_or("each block has a type: stat, chart, table or text")?;
     let source = || -> Result<(), String> {
@@ -216,6 +310,9 @@ fn data_block(block: &Value, sources: &std::collections::HashSet<&str>) -> Resul
             source()?;
             block.get("label").and_then(Value::as_str).ok_or("a stat has a label")?;
             block.get("value").filter(|value| value.is_number() || value.is_string()).ok_or("a stat has a value")?;
+            if block.get("better").is_some_and(|better| !matches!(better.as_str(), Some("up" | "down"))) {
+                return Err("a stat's better is up or down".into());
+            }
             Ok(())
         }
         "table" => {
@@ -237,6 +334,15 @@ fn data_block(block: &Value, sources: &std::collections::HashSet<&str>) -> Resul
             if series.is_empty() || series.len() > 12 {
                 return Err("a chart has 1 to 12 series".into());
             }
+            let scale = block.get("x_scale").map(|scale| scale.as_str().unwrap_or_default());
+            if scale.is_some_and(|scale| !["category", "number", "time"].contains(&scale)) {
+                return Err("x_scale is category, number or time".into());
+            }
+            let placed = |x: &Value| match scale {
+                Some("number") => x.is_number(),
+                Some("time") => x.as_str().is_some_and(iso_date),
+                _ => true,
+            };
             let mut points = 0;
             for one in series {
                 one.get("name").and_then(Value::as_str).ok_or("each series has a name")?;
@@ -245,6 +351,9 @@ fn data_block(block: &Value, sources: &std::collections::HashSet<&str>) -> Resul
                     let pair = point.as_array().filter(|pair| pair.len() == 2).ok_or("a point is [x, y]")?;
                     if !pair[1].is_number() && !pair[1].is_null() {
                         return Err("a point's y is a number or null".into());
+                    }
+                    if !placed(&pair[0]) {
+                        return Err("on a number or time scale, each x is a number or an ISO 8601 date".into());
                     }
                 }
                 points += data.len();
@@ -258,12 +367,50 @@ fn data_block(block: &Value, sources: &std::collections::HashSet<&str>) -> Resul
     }
 }
 
+fn id_ok(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// `patch` with each `/slides/@<id>` or `/boards/@<id>` in its paths
+/// turned into that slide's or board's place in `document`, so a patch
+/// names what it changes rather than where it stood when it was written.
+fn by_ids(document: &Value, patch: &Value) -> Result<Value, String> {
+    let place = |path: &str| -> Result<String, String> {
+        let mut segments: Vec<String> = path.split('/').map(str::to_owned).collect();
+        for at in 1..segments.len() {
+            let list = segments[at - 1].as_str();
+            let Some(id) = segments[at].strip_prefix('@').filter(|_| at == 2 && matches!(list, "slides" | "boards")) else {
+                continue;
+            };
+            let items = document.get(list).and_then(Value::as_array);
+            let index = items
+                .and_then(|items| items.iter().position(|item| item.get("id").and_then(Value::as_str) == Some(id)))
+                .ok_or_else(|| format!("there's no {} with id {id}", list.trim_end_matches('s')))?;
+            segments[at] = index.to_string();
+        }
+        Ok(segments.join("/"))
+    };
+    let Some(operations) = patch.as_array() else { return Ok(patch.clone()) };
+    let mut resolved = Vec::with_capacity(operations.len());
+    for operation in operations {
+        let mut operation = operation.clone();
+        for key in ["path", "from"] {
+            if let Some(path) = operation.get(key).and_then(Value::as_str).map(str::to_owned) {
+                operation[key] = Value::from(place(&path)?);
+            }
+        }
+        resolved.push(operation);
+    }
+    Ok(Value::Array(resolved))
+}
+
 /// `source` with RFC 6902 `patch` applied, for revising a type's content in
-/// place; nothing changes when an operation fails.
+/// place; nothing changes when an operation fails. A path may name a slide
+/// or a board by its id, `/slides/@why/html`.
 pub fn apply_patch(source: &str, patch: &Value) -> Result<String, String> {
     let mut document: Value = serde_json::from_str(source).map_err(|_| "the latest version isn't JSON".to_owned())?;
-    let patch: json_patch::Patch =
-        serde_json::from_value(patch.clone()).map_err(|error| format!("that isn't a JSON Patch: {error}"))?;
+    let patch = by_ids(&document, patch)?;
+    let patch: json_patch::Patch = serde_json::from_value(patch).map_err(|error| format!("that isn't a JSON Patch: {error}"))?;
     json_patch::patch(&mut document, &patch).map_err(|error| format!("the patch didn't apply: {error}"))?;
     serde_json::to_string_pretty(&document).map_err(|error| error.to_string())
 }
@@ -279,10 +426,11 @@ pub fn guide(kind: &str) -> Option<(Value, Value)> {
                 "additionalProperties": false,
                 "properties": {
                     "aspect": {"enum": ["16:9", "4:3"]},
+                    "transition": {"enum": ["none", "fade"], "description": "How one slide gives way to the next; none by default"},
                     "style": {"type": "string", "description": "CSS every slide shares"},
                     "slides": {"type": "array", "minItems": 1, "maxItems": PARTS, "items": {
                         "type": "object", "required": ["title", "html"], "additionalProperties": false,
-                        "properties": {"title": {"type": "string"}, "html": html, "notes": {"type": "string", "description": "What the presenter says"}}
+                        "properties": {"id": {"type": "string", "description": "Optional, unique: lets a patch name the slide, /slides/@id/html"}, "title": {"type": "string"}, "html": html, "notes": {"type": "string", "description": "What the presenter says"}}
                     }}
                 }
             }),
@@ -304,7 +452,18 @@ pub fn guide(kind: &str) -> Option<(Value, Value)> {
                             "id": {"type": "string"}, "name": {"type": "string"}, "caption": {"type": "string"},
                             "width": {"type": "integer", "minimum": 1, "maximum": 8192},
                             "height": {"type": "integer", "minimum": 1, "maximum": 8192},
+                            "grow": {"type": "boolean", "description": "Grows past height to its content, for a page that scrolls: height is then the least it shows"},
+                            "page": {"type": "string", "maxLength": PAGE_CHARS, "description": "The canvas page it's on; the first page where none is named"},
                             "x": {"type": "number"}, "y": {"type": "number"}, "html": html
+                        }
+                    }},
+                    "notes": {"type": "array", "maxItems": PARTS, "description": "Text on the canvas itself, beside the boards it explains", "items": {
+                        "type": "object", "required": ["text", "x", "y"], "additionalProperties": false,
+                        "properties": {
+                            "id": {"type": "string"}, "text": {"type": "string", "maxLength": NOTE_CHARS},
+                            "x": {"type": "number"}, "y": {"type": "number"},
+                            "w": {"type": "number", "minimum": 1, "maximum": 4000, "description": "Its width, 240 when unset"},
+                            "page": {"type": "string", "maxLength": PAGE_CHARS}
                         }
                     }}
                 }
@@ -319,20 +478,30 @@ pub fn guide(kind: &str) -> Option<(Value, Value)> {
                 let source = json!({
                     "type": "object", "required": ["id", "name", "kind", "detail", "at"], "additionalProperties": false,
                     "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "kind": {"enum": SOURCE_KINDS},
-                        "detail": {"type": "string", "description": "What was run or read"}, "at": {"type": "string", "description": "When, ISO 8601"}}
+                        "detail": {"type": "string", "description": "What was run or read"}, "at": {"type": "string", "description": "When, ISO 8601"},
+                    "server": {"type": "string", "description": "For kind mcp: the page connector, as the version's mcp declaration names it"},
+                    "tool": {"type": "string", "description": "For kind mcp: a tool of it that only reads, run on the viewer's computer on open and on Refresh"},
+                    "input": {"type": "object", "description": "For kind mcp: the tool's input"}}
                 });
                 let text = json!({"type": "object", "required": ["type", "text"], "properties": {"type": {"const": "text"}, "text": {"type": "string", "description": "Markdown"}}});
                 let stat = json!({"type": "object", "required": ["type", "label", "value", "source"], "properties": {
                     "type": {"const": "stat"}, "label": {"type": "string"}, "value": {"type": ["number", "string"]},
-                    "unit": {"type": "string"}, "change": {"type": "number", "description": "A fraction: -0.62 is down 62%"}, "source": {"type": "string"}}});
+                    "unit": {"type": "string"}, "change": {"type": "number", "description": "A fraction: -0.62 is down 62%"},
+                "better": {"enum": ["up", "down"], "description": "Which way the change is good, so it shows as good or bad"}, "source": {"type": "string"},
+                "pick": {"type": "string", "description": "With an mcp source: a JSON pointer into the tool's result, such as /open, whose value the stat shows"}}});
                 let table = json!({"type": "object", "required": ["type", "columns", "rows", "source"], "properties": {
                     "type": {"const": "table"}, "title": {"type": "string"}, "columns": {"type": "array", "items": {"type": "string"}},
-                    "rows": {"type": "array", "items": {"type": "array"}}, "source": {"type": "string"}}});
+                    "rows": {"type": "array", "items": {"type": "array"}}, "source": {"type": "string"},
+                    "pick": {"type": "string", "description": "With an mcp source: a JSON pointer to an array of rows in the tool's result"}}});
                 let series = json!({"type": "object", "required": ["name", "points"], "properties": {
-                    "name": {"type": "string"}, "points": {"type": "array", "items": {"type": "array", "minItems": 2, "maxItems": 2}}}});
+                    "name": {"type": "string"}, "points": {"type": "array", "items": {"type": "array", "minItems": 2, "maxItems": 2}},
+                    "pick": {"type": "string", "description": "With an mcp source: a JSON pointer to an array of [x, y] in the tool's result"}}});
                 let chart = json!({"type": "object", "required": ["type", "chart", "series", "source"], "properties": {
-                    "type": {"const": "chart"}, "title": {"type": "string"}, "chart": {"enum": CHARTS}, "x": {"type": "string"},
-                    "y": {"type": "string"}, "stacked": {"type": "boolean"},
+                    "type": {"const": "chart"}, "title": {"type": "string"}, "chart": {"enum": CHARTS},
+                    "x": {"type": "string", "description": "The x axis's title"}, "y": {"type": "string", "description": "The y axis's title"},
+                    "x_scale": {"enum": ["category", "number", "time"], "description": "category: x values in order; number or time: placed by value, every x a number or an ISO 8601 date"},
+                    "y_zero": {"type": "boolean", "description": "false lets a line, dot or scatter chart's y axis start near its values rather than at zero"},
+                    "stacked": {"type": "boolean"},
                     "series": {"type": "array", "minItems": 1, "maxItems": 12, "items": series}, "source": {"type": "string"}}});
                 json!({
                     "type": "object",
@@ -377,6 +546,14 @@ mod tests {
         assert!(validate("slides", r#"{"slides": []}"#).unwrap_err().contains("at least one slide"));
         assert!(validate("slides", r#"{"slides": [{"title": "a", "html": "x", "extra": 1}]}"#).is_err());
         assert!(validate("slides", r#"{"aspect": "21:9", "slides": [{"title": "a", "html": "x"}]}"#).is_err());
+        assert!(validate("slides", r#"{"transition": "fade", "slides": [{"title": "a", "html": "x"}]}"#).is_ok());
+        assert!(validate("slides", r#"{"transition": "spin", "slides": [{"title": "a", "html": "x"}]}"#).is_err());
+        let noted = r#"{"boards": [{"id": "a", "name": "A", "width": 10, "height": 10, "html": "", "page": "Flows"}], "notes": [{"text": "Why", "x": 0, "y": 20, "page": "Flows"}]}"#;
+        assert_eq!(validate("canvas", noted), Ok(()));
+        let blank = r#"{"boards": [{"id": "a", "name": "A", "width": 10, "height": 10, "html": ""}], "notes": [{"text": " ", "x": 0, "y": 0}]}"#;
+        assert!(validate("canvas", blank).unwrap_err().contains("note 1"));
+        let unnamed = r#"{"boards": [{"id": "a", "name": "A", "width": 10, "height": 10, "html": "", "page": ""}]}"#;
+        assert!(validate("canvas", unnamed).unwrap_err().contains("page"));
         let twins = r#"{"boards": [{"id": "a", "name": "A", "width": 10, "height": 10, "html": ""}, {"id": "a", "name": "B", "width": 10, "height": 10, "html": ""}]}"#;
         assert!(validate("canvas", twins).unwrap_err().contains("unique"));
         let unsourced = r#"{"title": "t", "sources": [], "blocks": [{"type": "stat", "label": "n", "value": 1, "source": "x"}]}"#;
@@ -387,12 +564,60 @@ mod tests {
     }
 
     #[test]
+    fn an_mcp_source_names_its_server_and_tool() {
+        let page = |source: &str| {
+            format!(
+                r#"{{"title": "t", "sources": [{source}], "blocks": [{{"type": "stat", "label": "Open", "value": 0, "pick": "/open", "source": "s"}}]}}"#
+            )
+        };
+        let mcp = r#"{"id": "s", "name": "tracker", "kind": "mcp", "detail": "open issues", "at": "", "server": "tracker", "tool": "count_issues", "input": {"state": "open"}}"#;
+        assert!(validate("data", &page(mcp)).is_ok());
+        let half = r#"{"id": "s", "name": "tracker", "kind": "mcp", "detail": "", "at": "", "server": "tracker"}"#;
+        assert!(validate("data", &page(half)).is_err(), "no tool");
+        let manual = r#"{"id": "s", "name": "n", "kind": "manual", "detail": "", "at": "", "tool": "x"}"#;
+        assert!(validate("data", &page(manual)).is_err(), "only an mcp source names a tool");
+    }
+
+    #[test]
+    fn a_chart_on_a_number_or_time_scale_places_every_x() {
+        let page = |chart: &str| {
+            format!(
+                r#"{{"title": "t", "sources": [{{"id": "s", "name": "s", "kind": "manual", "detail": "", "at": ""}}], "blocks": [{chart}]}}"#
+            )
+        };
+        let timed = r#"{"type": "chart", "chart": "line", "x_scale": "time", "y_zero": false, "series": [{"name": "p50", "points": [["2026-11-01", 3], ["2026-11-09T10:00:00Z", null]]}], "source": "s"}"#;
+        assert!(validate("data", &page(timed)).is_ok());
+        let untimed = r#"{"type": "chart", "chart": "line", "x_scale": "time", "series": [{"name": "p50", "points": [["a1", 3]]}], "source": "s"}"#;
+        assert!(validate("data", &page(untimed)).unwrap_err().contains("ISO 8601"));
+        let scattered = r#"{"type": "chart", "chart": "scatter", "x_scale": "number", "series": [{"name": "files", "points": [[12, 3], ["13", 4]]}], "source": "s"}"#;
+        assert!(validate("data", &page(scattered)).is_err(), "a number scale's x is a number");
+        let stat = r#"{"type": "stat", "label": "p50", "value": 3, "change": -0.5, "better": "sideways", "source": "s"}"#;
+        assert!(validate("data", &page(stat)).is_err());
+    }
+
+    #[test]
     fn a_patch_adds_a_slide_or_changes_nothing() {
         let deck = r#"{"slides": [{"title": "One", "html": "<h1>1</h1>"}]}"#;
         let patch = json!([{"op": "add", "path": "/slides/-", "value": {"title": "Two", "html": "<h1>2</h1>"}}]);
         let patched = apply_patch(deck, &patch).expect("patched");
         assert_eq!(serde_json::from_str::<Value>(&patched).expect("json")["slides"][1]["title"], "Two");
         assert!(apply_patch(deck, &json!([{"op": "remove", "path": "/slides/7"}])).is_err());
+        // By id, wherever the slide stands now.
+        let named = r#"{"slides": [{"id": "open", "title": "One", "html": "1"}, {"id": "why", "title": "Why", "html": "2"}]}"#;
+        let moved = apply_patch(named, &json!([{"op": "add", "path": "/slides/0", "value": {"title": "Zero", "html": "0"}}]))
+            .expect("added");
+        let changed =
+            apply_patch(&moved, &json!([{"op": "replace", "path": "/slides/@why/html", "value": "two"}])).expect("by id");
+        assert_eq!(serde_json::from_str::<Value>(&changed).expect("json")["slides"][2]["html"], "two");
+        assert!(
+            apply_patch(&moved, &json!([{"op": "remove", "path": "/slides/@gone"}]))
+                .unwrap_err()
+                .contains("no slide with id gone")
+        );
+        assert!(
+            validate("slides", r#"{"slides": [{"id": "a", "title": "a", "html": "x"}, {"id": "a", "title": "b", "html": "y"}]}"#)
+                .is_err()
+        );
         assert!(apply_patch(deck, &json!({"op": "add"})).is_err());
     }
 }

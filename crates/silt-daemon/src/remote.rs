@@ -381,8 +381,9 @@ impl Remote {
         thread: &str,
         artifact: &str,
         emit: Option<(String, serde_json::Value)>,
+        presence: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, RemoteError> {
-        let body = serde_json::json!({ "thread": thread, "artifact": artifact, "emit": emit });
+        let body = serde_json::json!({ "thread": thread, "artifact": artifact, "emit": emit, "presence": presence });
         Ok(checked(self.request(reqwest::Method::POST, "/v1/rooms/agent").json(&body).send().await?).await?.json().await?)
     }
 
