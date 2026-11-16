@@ -13,6 +13,7 @@ import { columnName, csvOf, rebaseDraft, splice } from '../typed'
 import { Button, Icon, IconButton, Input, Menu, Textarea, cx, toast } from '../ui'
 import { CommentThread } from './CommentThread'
 import { DocMarkdown } from './DocMarkdown'
+import { findAcross, renderedExcerpt } from '../textFind'
 
 /** Characters, as the doc counts them, in the first `units` UTF-16 units of `text`. */
 function characters(text: string, units: number): number {
@@ -190,6 +191,30 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
     pending.current = window.setTimeout(() => void send(), 400)
   }
   const text = draft ?? doc.data?.text ?? ''
+  // The text that open comments are on, highlighted where the read view shows it.
+  const reading = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const article = reading.current
+    const registry = typeof CSS !== 'undefined' ? (CSS as unknown as { highlights?: Map<string, unknown> }).highlights : undefined
+    if (view !== 'read' || !article || !registry || typeof Highlight === 'undefined') return
+    const nodes: Text[] = []
+    const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT)
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node as Text)
+    const texts = nodes.map((node) => node.data)
+    const ranges = commentsHere.flatMap((comment) => {
+      if (comment.resolved || comment.location.at !== 'doc' || comment.location.outdated) return []
+      const found = findAcross(texts, renderedExcerpt(comment.location.excerpt))
+      if (!found) return []
+      const range = document.createRange()
+      range.setStart(nodes[found.start[0]], found.start[1])
+      range.setEnd(nodes[found.end[0]], found.end[1])
+      return [range]
+    })
+    registry.set('silt-doc-comments', new Highlight(...ranges))
+    return () => {
+      registry.delete('silt-doc-comments')
+    }
+  }, [view, text, commentsHere])
   const saveVersion = async () => {
     try {
       const saved = await api.saveVersion(thread, artifact, saving ?? '')
@@ -311,7 +336,7 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
-          <article className="mx-auto max-w-3xl px-6 pt-6 pb-10">
+          <article ref={reading} className="mx-auto max-w-3xl px-6 pt-6 pb-10">
             <DocMarkdown text={text} />
           </article>
           <DocComments thread={thread} comments={commentsHere} onShow={show} onChanged={refreshComments} />

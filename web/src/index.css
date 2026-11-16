@@ -132,3 +132,8 @@
     animation: none;
   }
 }
+
+/* A doc's commented text, in its read view (ADR 0082). */
+::highlight(silt-doc-comments) {
+  background-color: var(--color-accent-tint);
+}

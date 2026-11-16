@@ -1722,8 +1722,18 @@ test('a doc and a sheet are edited in place, and what was typed is kept (ADR 007
   await text.press('ControlOrMeta+End')
   await text.pressSequentially('- review\n')
   await expect(doc.getByText('Saved')).toBeVisible()
+  // A comment on the new line, which the read view highlights.
+  await text.press('ArrowLeft')
+  for (let at = 0; at < 'review'.length; at++) await text.press('Shift+ArrowLeft')
+  await doc.getByRole('button', { name: 'Comment' }).click()
+  await doc.getByLabel('comment on the selected text').fill('Who reviews?')
+  await doc.getByRole('button', { name: 'Comment', exact: true }).last().click()
+  await expect(doc.getByTestId('doc-comments')).toContainText('Who reviews?')
   await doc.getByRole('button', { name: 'Read' }).click()
-  await expect(doc.getByText('review')).toBeVisible()
+  await expect(doc.getByText('review', { exact: true })).toBeVisible()
+  await expect
+    .poll(() => page.evaluate(() => (CSS as unknown as { highlights: Map<string, { size: number }> }).highlights.get('silt-doc-comments')?.size ?? 0))
+    .toBe(1)
   // The first version against the doc now, then the doc kept as a version of its own.
   await doc.getByRole('button', { name: 'Compare with a version' }).click()
   await page.getByRole('menuitem', { name: /^v1/ }).click()
