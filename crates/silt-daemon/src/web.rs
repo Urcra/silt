@@ -152,6 +152,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/page-connectors", get(page_connectors).put(set_page_connectors))
         .route("/api/page-connectors/import", post(import_page_connectors))
         .route("/api/page-connectors/{name}/tools", get(connector_tools))
+        .route("/api/page-connectors/{name}/secret", put(set_connector_secret))
         .route("/api/threads/{id}/artifacts/{artifact}/sheet", post(sheet_data))
         .route("/api/threads/{id}/artifacts/{artifact}/sheet.xlsx", get(sheet_xlsx))
         .route(
@@ -967,6 +968,21 @@ async fn import_page_connectors(State(web): State<Web>) -> HttpResponse {
 
 async fn connector_tools(State(web): State<Web>, Path(name): Path<String>) -> HttpResponse {
     ask(&web, Request::ConnectorTools { name }).await
+}
+
+#[derive(serde::Deserialize)]
+struct ConnectorSecret {
+    header: String,
+    #[serde(default)]
+    value: Option<String>,
+}
+
+async fn set_connector_secret(
+    State(web): State<Web>,
+    Path(name): Path<String>,
+    Json(secret): Json<ConnectorSecret>,
+) -> HttpResponse {
+    ask(&web, Request::SetConnectorSecret { name, header: secret.header, value: secret.value }).await
 }
 
 /// A doc's text, or edits of it (ADR 0077).

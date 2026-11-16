@@ -215,6 +215,9 @@ export const api = {
   setPageConnectors: (connectors: PageConnector[]) => request<unknown>('PUT', '/api/page-connectors', connectors),
   importPageConnectors: () => request<PageConnector[]>('POST', '/api/page-connectors/import'),
   connectorTools: (name: string) => request<ConnectorTool[]>('GET', `/api/page-connectors/${encodeURIComponent(name)}/tools`),
+  /** Keeps a header's value for an HTTP connector in this computer's keyring, or forgets it with `null`. */
+  setConnectorSecret: (name: string, header: string, value: string | null) =>
+    request<unknown>('PUT', `/api/page-connectors/${encodeURIComponent(name)}/secret`, { header, value }),
   /** A doc's text, or edits of it (ADR 0077). */
   docData: (
     id: string,

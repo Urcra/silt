@@ -785,6 +785,9 @@ impl Core {
             }
             Request::ImportPageConnectors => to_response(self.import_page_connectors()),
             Request::ConnectorTools { name } => return answer_later(reply, self.connector_tools(&name)),
+            Request::SetConnectorSecret { name, header, value } => to_response(
+                crate::connectors::set_connector_secret(&self.data_dir, &name, &header, value.as_deref()).map(|()| "saved"),
+            ),
             Request::PageMcp { thread, artifact, asked } => return answer_later(reply, self.page_mcp(&thread, &artifact, asked)),
             Request::PageFiles { thread, artifact, asked } => to_response(self.page_files(&thread, &artifact, asked)),
             Request::PageAsset { thread, artifact, asset } => to_response(self.page_asset(&thread, &artifact, &asset).await),

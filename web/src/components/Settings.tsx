@@ -195,6 +195,16 @@ function PageConnectors() {
   const key = ['page-connectors']
   const list = useQuery({ queryKey: key, queryFn: api.pageConnectors })
   const [open, setOpen] = useState<string | null>(null)
+  // A header's value being typed, for the keyring.
+  const [secret, setSecret] = useState<{ name: string; header: string; value: string } | null>(null)
+  const keep = (name: string, header: string, value: string | null) =>
+    api.setConnectorSecret(name, header, value).then(
+      () => {
+        setSecret(null)
+        void queries.invalidateQueries({ queryKey: key })
+      },
+      (failure: unknown) => toast(message(failure), 'danger'),
+    )
   const tools = useQuery({ queryKey: ['page-connectors', open], queryFn: () => api.connectorTools(open!), enabled: open !== null, retry: false })
   const save = (next: PageConnector[]) =>
     api.setPageConnectors(next).then(
@@ -227,6 +237,52 @@ function PageConnectors() {
                 Remove
               </Button>
             </div>
+            {connector.url && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                {connector.header_secret.map((header) => (
+                  <span key={header} className="inline-flex items-center gap-1 rounded-sm border border-line px-1.5 py-0.5">
+                    <span className="font-mono">{header}</span>
+                    <span className="text-fg-3">in the keyring</span>
+                    <button type="button" className="text-fg-2 hover:text-fg-1" aria-label={`forget ${connector.name}'s ${header}`} onClick={() => void keep(connector.name, header, null)}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+                {secret?.name === connector.name ? (
+                  <form
+                    className="flex flex-wrap items-center gap-1"
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      if (secret.header.trim() && secret.value) void keep(connector.name, secret.header.trim(), secret.value)
+                    }}
+                  >
+                    <input
+                      aria-label="the header"
+                      value={secret.header}
+                      onChange={(event) => setSecret({ ...secret, header: event.target.value })}
+                      className="h-7 w-32 rounded-sm border border-line bg-surface-1 px-1.5 font-mono"
+                    />
+                    <input
+                      aria-label="its value"
+                      type="password"
+                      autoComplete="off"
+                      autoFocus
+                      value={secret.value}
+                      onChange={(event) => setSecret({ ...secret, value: event.target.value })}
+                      placeholder="Bearer …"
+                      className="h-7 w-48 rounded-sm border border-line bg-surface-1 px-1.5"
+                    />
+                    <Button size="sm" type="submit" disabled={!secret.value}>
+                      Keep in the keyring
+                    </Button>
+                  </form>
+                ) : (
+                  <Button size="sm" variant="ghost" onClick={() => setSecret({ name: connector.name, header: 'Authorization', value: '' })}>
+                    Add a secret header
+                  </Button>
+                )}
+              </div>
+            )}
             {open === connector.name && (
               <div className="mt-2 flex flex-col gap-1">
                 {tools.isPending && <span className="text-xs text-fg-3">Starting {connector.name}…</span>}

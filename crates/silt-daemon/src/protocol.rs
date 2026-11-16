@@ -517,6 +517,14 @@ pub enum Request {
     ConnectorTools {
         name: String,
     },
+    /// Keeps a header's value for an HTTP page connector in the keyring, or
+    /// forgets it.
+    SetConnectorSecret {
+        name: String,
+        header: String,
+        #[serde(default)]
+        value: Option<String>,
+    },
     /// A page's call of a connector's tool, or its description (ADR 0080).
     PageMcp {
         thread: String,

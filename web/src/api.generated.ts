@@ -677,6 +677,11 @@ url: string | null,
  */
 header_env: { [key in string]: string }, 
 /**
+ * Headers sent to an HTTP server whose values this machine's keyring
+ * keeps, set in Settings; the file names them only.
+ */
+header_secret: Array<string>, 
+/**
  * The environment variables a stdio server gets beyond the few every
  * program needs ([`BASE_ENV`]), by name; nothing else of the daemon's
  * environment reaches it.
