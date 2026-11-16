@@ -190,7 +190,14 @@ test('reconciling a diverged thread', async ({ page }) => {
 test("a new thread's project picker", async ({ page }) => {
   await shoot(page, 'new-thread', async (shown) => {
     await open(shown, '/?pick=projects')
-    await expect(shown.getByRole('dialog', { name: 'Pick a project' })).toBeVisible()
+    const picker = shown.getByRole('dialog', { name: 'Pick a project' })
+    await expect(picker).toBeVisible()
+    // The page fills in as its lists load, each on its own, after the picker opens.
+    await expect(picker.getByText('tools', { exact: true })).toBeVisible()
+    const main = shown.getByRole('main')
+    await expect(main.getByLabel('agent to start')).toHaveValue('plain')
+    await expect(main.getByText('Add a farewell')).toBeVisible()
+    await expect(main.getByText('Retry blob uploads on a 5xx')).toBeVisible()
   })
 })
 

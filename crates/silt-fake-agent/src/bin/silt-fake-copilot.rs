@@ -121,9 +121,11 @@ impl Session {
             &json!({"content": "", "toolRequests": [{"toolCallId": call, "name": "edit", "arguments": {"path": path}}]}),
         )?;
         self.event("assistant.turn_end", &json!({"turnId": "0"}))?;
-        // Like Copilot, events reach the file a little after they happen.
+        // Like Copilot, events reach the file a little after they happen:
+        // longer than the daemon waits for a transcript to catch up, so the
+        // edit lands before its tool reads as started on any machine.
         append(&path, &format!("{added}\n"))?;
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(1000));
         self.event("tool.execution_start", &json!({"toolCallId": call, "toolName": "edit"}))?;
         self.event("tool.execution_complete", &json!({"toolCallId": call, "success": true, "result": {"content": "edited"}}))?;
         self.event("assistant.turn_start", &json!({"turnId": "1"}))?;

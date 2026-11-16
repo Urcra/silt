@@ -219,8 +219,8 @@ pub struct Core {
     /// The cloud sessions started here, newest last (ADR 0040).
     pub(crate) cloud_launches: Vec<crate::protocol::CloudLaunch>,
     /// Families whose next pull waits until then, after a delta that
-    /// couldn't apply yet.
-    pub(crate) pull_paused: HashMap<FamilyId, Instant>,
+    /// couldn't apply yet, and how long they waited this time.
+    pub(crate) pull_paused: HashMap<FamilyId, (Instant, Duration)>,
     /// Agents the web UI started, by thread.
     pub(crate) acp: HashMap<ThreadId, crate::acp::AcpRun>,
     pub(crate) events: mpsc::UnboundedSender<Event>,

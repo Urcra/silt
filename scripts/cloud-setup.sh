@@ -59,6 +59,16 @@ if [ "$(cargo nextest --version 2>/dev/null | awk 'NR == 1 {print $2}')" != "$NE
     fi
 fi
 
+# A full gate's builds outgrow a cloud container's disk with full debug
+# info, and nobody steps through code with a debugger there, so the
+# workspace's crates get only line tables, as dependencies do, still enough
+# for backtraces. In this machine's own cargo config, not the repository's.
+config="${CARGO_HOME:-$HOME/.cargo}/config.toml"
+if ! grep -qs 'silt cloud-setup' "$config"; then
+    step "line tables only for debug builds, in $config"
+    printf '\n# silt cloud-setup: smaller debug builds, to fit the disk\n[profile.dev]\ndebug = "line-tables-only"\n' >>"$config"
+fi
+
 # Only needed to add migrations or change `query!`s; slow to build, so opt in.
 if [ "${SILT_SETUP_SQLX:-0}" = 1 ] && ! command -v sqlx >/dev/null; then
     step "sqlx-cli"

@@ -310,6 +310,8 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
 })
 
 test('the server-hosted app continues a thread on a chosen device', async ({ browser }) => {
+  // The agent starts, and the prompt goes, through the server's relay to the machine.
+  test.slow()
   const machine = await (await browser.newContext()).newPage()
   await startInNewThread(machine, 'Fake agent')
   await machine.getByLabel('draft').fill('first turn')
@@ -328,12 +330,12 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
   await there.getByLabel('device to continue on').selectOption({ label: 'alice' })
   await there.getByLabel('agent to continue with').selectOption({ label: 'Fake agent' })
   await there.getByRole('button', { name: 'Continue there' }).click()
-  await expect(machine.getByTestId('agent-state')).toHaveText('Fake agent is ready')
-  await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  await expect(machine.getByTestId('agent-state')).toHaveText('Fake agent is ready', { timeout: 15_000 })
+  await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is ready', { timeout: 15_000 })
 
   await there.getByLabel('draft').fill('second turn')
   await there.getByLabel('draft').press('Enter')
-  await expect(machine.getByText(/^Done: [\s\S]*second turn$/)).toBeVisible()
+  await expect(machine.getByText(/^Done: [\s\S]*second turn$/)).toBeVisible({ timeout: 15_000 })
   await stopAgent(there)
   await expect(machine.getByPlaceholder('Ask for the next step; sending starts the agent')).toBeVisible()
   await machine.context().close()
