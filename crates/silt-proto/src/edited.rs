@@ -279,25 +279,46 @@ fn id_text(id: &silt_crdt::CharId) -> String {
 
 /// The sheet's view, values computed as of `today`, a date serial.
 pub fn sheet_view(cells: &SheetCells, today: f64) -> SheetView {
-    let rows: Vec<String> = cells.rows.iter().map(id_text).collect();
-    let columns: Vec<String> = cells.columns.iter().map(id_text).collect();
-    let positions = silt_sheet::Positions::new(&rows, &columns);
-    let raw: Vec<Vec<String>> = cells
-        .rows
+    book_view(&[cells], 0, today)
+}
+
+/// Each sheet's row and column ids, as text, for formulas kept by them.
+fn axes_of(book: &[&SheetCells]) -> Vec<(Vec<String>, Vec<String>)> {
+    book.iter().map(|cells| (cells.rows.iter().map(id_text).collect(), cells.columns.iter().map(id_text).collect())).collect()
+}
+
+/// Sheet `sheet` of `book`, every sheet of an artifact, as its viewer shows
+/// it: formulas may name another sheet's cells, `Sheet2!B3` (ADR 0077).
+pub fn book_view(book: &[&SheetCells], sheet: usize, today: f64) -> SheetView {
+    let axes = axes_of(book);
+    let borrowed: Vec<(&[String], &[String])> =
+        axes.iter().map(|(rows, columns)| (rows.as_slice(), columns.as_slice())).collect();
+    let raws: Vec<Vec<Vec<String>>> = book
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(at, cells)| {
+            let positions = silt_sheet::Positions::in_book(&borrowed, at);
             cells
-                .columns
+                .rows
                 .iter()
-                .map(|column| cells.cells.get(&(*row, *column)).map_or_else(String::new, |raw| positions.from_ids(raw)))
+                .map(|row| {
+                    cells
+                        .columns
+                        .iter()
+                        .map(|column| cells.cells.get(&(*row, *column)).map_or_else(String::new, |raw| positions.from_ids(raw)))
+                        .collect()
+                })
                 .collect()
         })
         .collect();
-    let values = silt_sheet::evaluate(&silt_sheet::Sheet { cells: &raw, today })
+    let sheets: Vec<&[Vec<String>]> = raws.iter().map(Vec::as_slice).collect();
+    let values = silt_sheet::evaluate_in(&silt_sheet::Book { sheets: &sheets, today }, sheet)
         .into_iter()
         .map(|row| row.into_iter().map(|value| value.to_string()).collect())
         .collect();
-    SheetView { rows, columns, raw, values, sheets: 1 }
+    let (rows, columns) = axes.get(sheet).cloned().unwrap_or_default();
+    let raw = raws.get(sheet).cloned().unwrap_or_default();
+    SheetView { rows, columns, raw, values, sheets: u16::try_from(book.len()).unwrap_or(SHEETS).max(1) }
 }
 
 /// What a `Set` needs first: how many rows and columns to add at the end so
@@ -340,8 +361,22 @@ pub fn cell_ops(
     cells: &SheetCells,
     set: &BTreeMap<String, String>,
 ) -> Result<Vec<PageOp>, String> {
-    let rows: Vec<String> = cells.rows.iter().map(id_text).collect();
-    let columns: Vec<String> = cells.columns.iter().map(id_text).collect();
+    cell_ops_in(artifact, sheet, &[cells], 0, set)
+}
+
+/// [`cell_ops`] for sheet `sheet` with `book`, every sheet of the artifact,
+/// at `at` in it: a formula naming another sheet keeps that sheet's ids.
+pub fn cell_ops_in(
+    artifact: ArtifactId,
+    sheet: u16,
+    book: &[&SheetCells],
+    at: usize,
+    set: &BTreeMap<String, String>,
+) -> Result<Vec<PageOp>, String> {
+    let Some(cells) = book.get(at) else { return Err("no such sheet".into()) };
+    let axes = axes_of(book);
+    let borrowed: Vec<(&[String], &[String])> =
+        axes.iter().map(|(rows, columns)| (rows.as_slice(), columns.as_slice())).collect();
     set.iter()
         .map(|(address, raw)| {
             let (row, column) = silt_sheet::parse_address(address).ok_or_else(|| format!("{address} isn't a cell's address"))?;
@@ -351,7 +386,7 @@ pub fn cell_ops(
             if raw.len() > silt_log::page::CELL_BYTES {
                 return Err(format!("{address} is over {} KiB", silt_log::page::CELL_BYTES >> 10));
             }
-            Ok(PageOp::Cell { artifact, sheet, row: *row, column: *column, raw: silt_sheet::to_ids(raw, &rows, &columns) })
+            Ok(PageOp::Cell { artifact, sheet, row: *row, column: *column, raw: silt_sheet::to_ids_in(raw, &borrowed, at) })
         })
         .collect()
 }

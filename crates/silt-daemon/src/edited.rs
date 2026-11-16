@@ -63,8 +63,8 @@ impl Core {
         let lines = |sheet, axis, op| PageOp::Lines { artifact: id, sheet, axis, op };
         match asked {
             SheetRequest::Read { sheet, range } => {
-                let mut view = silt_proto::edited::sheet_view(&self.sheet_cells(thread, id, sheet), today());
-                view.sheets = self.sheet_count(thread, id);
+                let book = self.sheet_book(thread, id, sheet);
+                let view = silt_proto::edited::book_view(&book.iter().collect::<Vec<_>>(), usize::from(sheet), today());
                 match range {
                     Some(range) => Ok(
                         serde_json::json!({ "values": silt_proto::edited::read_range(&view, &range).map_err(CoreError::Invalid)? }),
@@ -90,8 +90,10 @@ impl Core {
                     let op = TextOp::Insert { pos: at, content: "c".repeat(columns) };
                     self.append_page(family, thread, lines(sheet, silt_log::Axis::Columns, op)).await?;
                 }
-                let ops = silt_proto::edited::cell_ops(id, sheet, &self.sheet_cells(thread, id, sheet), &cells)
-                    .map_err(CoreError::Invalid)?;
+                let book = self.sheet_book(thread, id, sheet);
+                let ops =
+                    silt_proto::edited::cell_ops_in(id, sheet, &book.iter().collect::<Vec<_>>(), usize::from(sheet), &cells)
+                        .map_err(CoreError::Invalid)?;
                 let written = ops.len();
                 for op in ops {
                     self.append_page(family, thread, op).await?;
@@ -167,6 +169,13 @@ impl Core {
                 silt_log::doc_crdt_in(log, &crate::page::graph_of(log), thread, artifact)
             }
         }
+    }
+
+    /// Every sheet of a sheet artifact, through `sheet` at least, as one
+    /// about to be written may be past the last.
+    pub(crate) fn sheet_book(&self, thread: ThreadId, artifact: ArtifactId, sheet: u16) -> Vec<silt_log::page::SheetCells> {
+        let count = self.sheet_count(thread, artifact).max(sheet + 1);
+        (0..count).map(|at| self.sheet_cells(thread, artifact, at)).collect()
     }
 
     /// How many sheets a sheet artifact has.

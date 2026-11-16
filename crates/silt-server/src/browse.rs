@@ -761,11 +761,12 @@ async fn save_edited_version(
         match latest.kind.as_str() {
             "doc" => silt_log::doc_text_in(&browsed.log, browsed.graph(), row.id, artifact_id),
             "sheet" => {
-                let sheets = (0..silt_log::sheet_count_in(&browsed.log, browsed.graph(), row.id, artifact_id))
-                    .map(|sheet| {
-                        let cells = silt_log::sheet_cells_in(&browsed.log, browsed.graph(), row.id, artifact_id, sheet);
-                        serde_json::json!({ "rows": silt_proto::edited::sheet_view(&cells, 0.0).raw })
-                    })
+                let book: Vec<_> = (0..silt_log::sheet_count_in(&browsed.log, browsed.graph(), row.id, artifact_id))
+                    .map(|sheet| silt_log::sheet_cells_in(&browsed.log, browsed.graph(), row.id, artifact_id, sheet))
+                    .collect();
+                let book: Vec<&_> = book.iter().collect();
+                let sheets = (0..book.len())
+                    .map(|sheet| serde_json::json!({ "rows": silt_proto::edited::book_view(&book, sheet, 0.0).raw }))
                     .collect();
                 silt_proto::edited::sheet_content(sheets)
             }
@@ -886,6 +887,17 @@ async fn sheet_data(
         return Err(bad_request(format!("an artifact has at most {} sheets", silt_proto::edited::SHEETS)));
     }
     let page = page_of(&server, browser.user, &id, artifact).await?;
+    // Every sheet, through `sheet` at least, as one about to be written may be past the last.
+    let book = |server: Server, sheet: u16| {
+        let page = &page;
+        async move {
+            edited(&server, browser.user, page, |log, graph| {
+                let count = silt_log::sheet_count_in(log, graph, page.thread, artifact).max(sheet + 1);
+                (0..count).map(|at| silt_log::sheet_cells_in(log, graph, page.thread, artifact, at)).collect::<Vec<_>>()
+            })
+            .await
+        }
+    };
     let cells = |server: Server, sheet: u16| {
         let page = &page;
         async move {
@@ -901,10 +913,8 @@ async fn sheet_data(
     let today = (crate::now_ms() as f64 / 86_400_000.0).floor() + 25_569.0;
     match asked {
         SheetRequest::Read { sheet, range } => {
-            let mut view = silt_proto::edited::sheet_view(&cells(server.clone(), sheet).await?, today);
-            view.sheets =
-                edited(&server, browser.user, &page, |log, graph| silt_log::sheet_count_in(log, graph, page.thread, artifact))
-                    .await?;
+            let book = book(server.clone(), sheet).await?;
+            let view = silt_proto::edited::book_view(&book.iter().collect::<Vec<_>>(), usize::from(sheet), today);
             match range {
                 Some(range) => {
                     Ok(Json(serde_json::json!({ "values": silt_proto::edited::read_range(&view, &range).map_err(bad_request)? })))
@@ -928,8 +938,10 @@ async fn sheet_data(
                 ));
             }
             write_all(growth).await?;
+            let book = book(server.clone(), sheet).await?;
             let ops =
-                silt_proto::edited::cell_ops(artifact, sheet, &cells(server.clone(), sheet).await?, &set).map_err(bad_request)?;
+                silt_proto::edited::cell_ops_in(artifact, sheet, &book.iter().collect::<Vec<_>>(), usize::from(sheet), &set)
+                    .map_err(bad_request)?;
             let written = ops.len();
             write_all(ops).await?;
             Ok(Json(serde_json::json!({ "written": written })))

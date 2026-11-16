@@ -186,7 +186,7 @@ fn show_tools() -> Vec<Value> {
         }),
         json!({
             "name": "silt_artifact_sheet",
-            "description": "Read or write a sheet artifact's cells (ADR 0077). Make the sheet first with silt_artifact, kind sheet and content {\"rows\": [[...], ...]}, or {\"sheets\": [{\"rows\": ...}, ...]} for several; then write cells here by address, with formulas such as =SUM(B2:B9). Rows and columns grow to fit. Formulas: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, IF, IFS, AND, OR, NOT, ROUND, ABS, CONCAT, TEXT, LEFT, RIGHT, LEN, TODAY, DATE, VLOOKUP, XLOOKUP, SUMIF, COUNTIF.",
+            "description": "Read or write a sheet artifact's cells (ADR 0077). Make the sheet first with silt_artifact, kind sheet and content {\"rows\": [[...], ...]}, or {\"sheets\": [{\"rows\": ...}, ...]} for several; then write cells here by address; a formula reads another sheet as Sheet2!B3, with formulas such as =SUM(B2:B9). Rows and columns grow to fit. Formulas: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, IF, IFS, AND, OR, NOT, ROUND, ABS, CONCAT, TEXT, LEFT, RIGHT, LEN, TODAY, DATE, VLOOKUP, XLOOKUP, SUMIF, COUNTIF.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

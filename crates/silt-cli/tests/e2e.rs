@@ -2006,6 +2006,14 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     assert_eq!(first["sheets"], 2, "{first}");
     let second = api.ok("POST", &path, Some(serde_json::json!({"op": "read", "sheet": 1})));
     assert_eq!((&second["raw"][0][0], &second["values"][1][0]), (&"rhubarb".into(), &"2".into()), "{second}");
+    // A formula on the first sheet reads the second, and keeps meaning the same
+    // cell when a row goes in at the second's top.
+    api.ok("POST", &path, Some(serde_json::json!({"op": "set", "cells": {"D1": "=Sheet2!A2*10"}})));
+    let reads = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));
+    assert_eq!((&reads["raw"][0][3], &reads["values"][0][3]), (&"=Sheet2!A2*10".into(), &"20".into()), "{reads}");
+    api.ok("POST", &path, Some(serde_json::json!({"op": "insert", "sheet": 1, "axis": "rows", "at": 0})));
+    let followed = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));
+    assert_eq!((&followed["raw"][0][3], &followed["values"][0][3]), (&"=Sheet2!A3*10".into(), &"20".into()), "{followed}");
     let (too_many, _) = api.call("POST", &path, Some(serde_json::json!({"op": "read", "sheet": 16})));
     assert!(!too_many, "an artifact has at most 16 sheets");
     for word in ["fruit", "rhubarb"] {

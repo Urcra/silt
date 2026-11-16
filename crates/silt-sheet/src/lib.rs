@@ -178,9 +178,10 @@ pub fn parse_address(text: &str) -> Option<(usize, usize)> {
 enum Token {
     Number(f64),
     Text(String),
-    Ref(usize, usize),
-    /// A reference kept by the ids of its row and column.
-    Id(String, String),
+    /// A cell by address, on another sheet (from 0) when it names one.
+    Ref(Option<u16>, usize, usize),
+    /// A reference kept by the ids of its row and column, and its sheet.
+    Id(Option<u16>, String, String),
     Name(String),
     Op(&'static str),
     Open,
@@ -225,8 +226,13 @@ fn lex(source: &str) -> Result<Vec<(Token, std::ops::Range<usize>)>, CellError> 
             '⟨' => {
                 let close = chars[at..].iter().position(|(_, c)| *c == '⟩').ok_or(CellError::Ref)? + at;
                 let inner: String = chars[at + 1..close].iter().map(|(_, c)| c).collect();
+                // `⟨row,column⟩` on this sheet, `⟨2:row,column⟩` on sheet 2 from 0.
+                let (sheet, inner) = match inner.split_once(':') {
+                    Some((sheet, rest)) => (Some(sheet.parse::<u16>().map_err(|_| CellError::Ref)?), rest.to_owned()),
+                    None => (None, inner),
+                };
                 let (row, column) = inner.split_once(',').ok_or(CellError::Ref)?;
-                tokens.push((Token::Id(row.to_owned(), column.to_owned()), start..end_of(close + 1)));
+                tokens.push((Token::Id(sheet, row.to_owned(), column.to_owned()), start..end_of(close + 1)));
                 at = close + 1;
             }
             '#' => {
@@ -266,14 +272,30 @@ fn lex(source: &str) -> Result<Vec<(Token, std::ops::Range<usize>)>, CellError> 
                     .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '$' | '_' | '.'))
                     .collect();
                 at += word.chars().count();
+                // `Sheet2!B3`: a cell on another sheet, its tab's name and the address.
+                let mut sheet = None;
+                let mut word = word;
+                if chars.get(at).is_some_and(|(_, c)| *c == '!') {
+                    let named = sheet_named(&word).ok_or(CellError::Ref)?;
+                    at += 1;
+                    word = chars[at..].iter().map(|(_, c)| *c).take_while(|c| c.is_ascii_alphanumeric() || *c == '$').collect();
+                    at += word.chars().count();
+                    sheet = Some(named);
+                }
                 let token = match parse_address(&word) {
                     Some((row, column))
                         if word.chars().next().is_some_and(|c| c == '$' || c.is_ascii_alphabetic())
                             && word.bytes().any(|b| b.is_ascii_digit())
                             && !chars.get(at).is_some_and(|(_, c)| *c == '(') =>
                     {
-                        Token::Ref(row, column)
+                        // A range's end is on its start's sheet: `Sheet2!A1:B3`.
+                        let sheet = sheet.or(match tokens.as_slice() {
+                            [.., (Token::Ref(on, ..), _), (Token::Colon, _)] => *on,
+                            _ => None,
+                        });
+                        Token::Ref(sheet, row, column)
                     }
+                    _ if sheet.is_some() => return Err(CellError::Ref),
                     _ => Token::Name(word.to_ascii_uppercase()),
                 };
                 tokens.push((token, start..end_of(at)));
@@ -317,11 +339,24 @@ fn lex(source: &str) -> Result<Vec<(Token, std::ops::Range<usize>)>, CellError> 
 /// column's ids, so it keeps meaning the same cells as rows and columns
 /// move. `rows` and `columns` are the ids in order; ids hold no `,` or `⟩`.
 pub fn to_ids(formula: &str, rows: &[String], columns: &[String]) -> String {
+    to_ids_in(formula, &[(rows, columns)], 0)
+}
+
+/// [`to_ids`] for sheet `sheet` of a book whose sheets' row and column ids
+/// are `axes`: a reference to another sheet keeps that sheet's ids.
+pub fn to_ids_in(formula: &str, axes: &[(&[String], &[String])], sheet: usize) -> String {
     rewrite(formula, |token| match token {
-        Token::Ref(row, column) => Some(match (rows.get(*row), columns.get(*column)) {
-            (Some(row), Some(column)) => format!("⟨{row},{column}⟩"),
-            _ => "#REF!".to_owned(),
-        }),
+        Token::Ref(on, row, column) => {
+            let of = on.map_or(sheet, usize::from);
+            let Some((rows, columns)) = axes.get(of) else { return Some("#REF!".to_owned()) };
+            Some(match (rows.get(*row), columns.get(*column)) {
+                (Some(row), Some(column)) => match on {
+                    Some(on) => format!("⟨{on}:{row},{column}⟩"),
+                    None => format!("⟨{row},{column}⟩"),
+                },
+                _ => "#REF!".to_owned(),
+            })
+        }
         _ => None,
     })
 }
@@ -332,29 +367,64 @@ pub fn from_ids(formula: &str, rows: &[String], columns: &[String]) -> String {
     Positions::new(rows, columns).from_ids(formula)
 }
 
+/// Where a sheet's rows and its columns stand, by id.
+type Axes<'a> = (HashMap<&'a str, usize>, HashMap<&'a str, usize>);
+
 /// Where each row and column id stands, to show many kept formulas of one
 /// sheet without finding them again for each.
 pub struct Positions<'a> {
-    rows: HashMap<&'a str, usize>,
-    columns: HashMap<&'a str, usize>,
+    /// Each sheet's rows and columns, by id.
+    sheets: Vec<Axes<'a>>,
+    /// The sheet whose formulas these show.
+    sheet: usize,
 }
 
 impl<'a> Positions<'a> {
     pub fn new(rows: &'a [String], columns: &'a [String]) -> Self {
-        let at = |ids: &'a [String]| ids.iter().enumerate().map(|(at, id)| (id.as_str(), at)).collect();
-        Self { rows: at(rows), columns: at(columns) }
+        Self::in_book(&[(rows, columns)], 0)
     }
 
-    /// [`from_ids`] against these positions.
+    /// Positions for sheet `sheet` of a book whose sheets' ids are `axes`.
+    pub fn in_book(axes: &[(&'a [String], &'a [String])], sheet: usize) -> Self {
+        let at = |ids: &'a [String]| ids.iter().enumerate().map(|(at, id)| (id.as_str(), at)).collect();
+        Self { sheets: axes.iter().map(|(rows, columns)| (at(rows), at(columns))).collect(), sheet }
+    }
+
+    /// [`from_ids`] against these positions; a reference to another sheet
+    /// shows as `Sheet2!B3`.
     pub fn from_ids(&self, formula: &str) -> String {
-        rewrite(formula, |token| match token {
-            Token::Id(row, column) => Some(match (self.rows.get(row.as_str()), self.columns.get(column.as_str())) {
-                (Some(row), Some(column)) => address(*row, *column),
-                _ => "#REF!".to_owned(),
-            }),
-            _ => None,
+        // A range's end shows without its sheet, which its start names.
+        let after_colon = std::cell::Cell::new(false);
+        rewrite(formula, |token| {
+            let ends_range = after_colon.replace(*token == Token::Colon);
+            match token {
+                Token::Id(on, row, column) => {
+                    let Some((rows, columns)) = self.sheets.get(on.map_or(self.sheet, usize::from)) else {
+                        return Some("#REF!".to_owned());
+                    };
+                    Some(match (rows.get(row.as_str()), columns.get(column.as_str())) {
+                        (Some(row), Some(column)) => match on {
+                            Some(on) if !ends_range => format!("{}!{}", sheet_name(*on), address(*row, *column)),
+                            _ => address(*row, *column),
+                        },
+                        _ => "#REF!".to_owned(),
+                    })
+                }
+                _ => None,
+            }
         })
     }
+}
+
+/// The name a sheet's tab shows, from 0: `Sheet1`, `Sheet2`, ….
+pub fn sheet_name(sheet: u16) -> String {
+    format!("Sheet{}", u32::from(sheet) + 1)
+}
+
+/// The sheet, from 0, a name such as `Sheet2` names.
+fn sheet_named(name: &str) -> Option<u16> {
+    let number: u16 = name.get(..5).filter(|start| start.eq_ignore_ascii_case("sheet")).and(name.get(5..))?.parse().ok()?;
+    number.checked_sub(1)
 }
 
 fn rewrite(formula: &str, change: impl Fn(&Token) -> Option<String>) -> String {
@@ -380,8 +450,9 @@ fn rewrite(formula: &str, change: impl Fn(&Token) -> Option<String>) -> String {
 #[derive(Debug, Clone, PartialEq)]
 enum Expr {
     Value(Value),
-    Ref(usize, usize),
-    Range(usize, usize, usize, usize),
+    /// A cell, on another sheet when it names one.
+    Ref(Option<u16>, usize, usize),
+    Range(Option<u16>, usize, usize, usize, usize),
     Negate(Box<Expr>),
     Percent(Box<Expr>),
     Binary(&'static str, Box<Expr>, Box<Expr>),
@@ -473,15 +544,25 @@ impl Parser {
             Token::Text(text) => Ok(Expr::Value(Value::Text(text))),
             Token::Error(error) => Ok(Expr::Value(Value::Error(error))),
             Token::Id(..) => Err(CellError::Ref),
-            Token::Ref(row, column) => {
+            Token::Ref(sheet, row, column) => {
                 if self.peek() == Some(&Token::Colon) {
                     self.at += 1;
-                    let Some(Token::Ref(to_row, to_column)) = self.next() else {
+                    // `Sheet2!A1:B3`: the range's end is on its start's sheet.
+                    let Some(Token::Ref(to_sheet, to_row, to_column)) = self.next() else {
                         return Err(CellError::Ref);
                     };
-                    return Ok(Expr::Range(row.min(to_row), column.min(to_column), row.max(to_row), column.max(to_column)));
+                    if to_sheet.is_some() && to_sheet != sheet {
+                        return Err(CellError::Ref);
+                    }
+                    return Ok(Expr::Range(
+                        sheet,
+                        row.min(to_row),
+                        column.min(to_column),
+                        row.max(to_row),
+                        column.max(to_column),
+                    ));
                 }
-                Ok(Expr::Ref(row, column))
+                Ok(Expr::Ref(sheet, row, column))
             }
             Token::Name(name) if name == "TRUE" && self.peek() != Some(&Token::Open) => Ok(Expr::Value(Value::Bool(true))),
             Token::Name(name) if name == "FALSE" && self.peek() != Some(&Token::Open) => Ok(Expr::Value(Value::Bool(false))),
@@ -546,7 +627,7 @@ pub fn addresses_in(formula: &str) -> Vec<(usize, usize)> {
             tokens
                 .into_iter()
                 .filter_map(|(token, _)| match token {
-                    Token::Ref(row, column) => Some((row, column)),
+                    Token::Ref(None, row, column) => Some((row, column)),
                     _ => None,
                 })
                 .collect()
@@ -571,28 +652,42 @@ pub struct Sheet<'a> {
     pub today: f64,
 }
 
+/// Every sheet of an artifact, by its typed cells, for formulas that reach
+/// across them, and what day it is.
+pub struct Book<'a> {
+    pub sheets: &'a [&'a [Vec<String>]],
+    pub today: f64,
+}
+
 /// Every cell's value; a formula's references are `A1` addresses here (see
 /// [`from_ids`]). A cycle is an error in each cell on it, never a hang.
 pub fn evaluate(sheet: &Sheet<'_>) -> Vec<Vec<Value>> {
-    let mut evaluator = Evaluator::new(sheet);
+    evaluate_in(&Book { sheets: &[sheet.cells], today: sheet.today }, 0)
+}
+
+/// [`evaluate`] for sheet `sheet` of `book`, whose formulas may name cells
+/// of its other sheets, `Sheet2!B3`.
+pub fn evaluate_in(book: &Book<'_>, sheet: usize) -> Vec<Vec<Value>> {
+    let Some(cells) = book.sheets.get(sheet) else { return Vec::new() };
+    let mut evaluator = Evaluator::new(book, sheet);
     // A chain of references deeper than DEPTH isn't a cycle: each pass keeps
     // what it could reach, so the next goes further, as a running total
     // whose sum sits above it needs.
     for _ in 0..PASSES {
         evaluator.deep = false;
-        for row in 0..sheet.cells.len() {
-            for column in 0..sheet.cells[row].len() {
-                evaluator.cell(row, column);
+        for row in 0..cells.len() {
+            for column in 0..cells[row].len() {
+                evaluator.cell(sheet, row, column);
             }
         }
         if !evaluator.deep {
             break;
         }
     }
-    (0..sheet.cells.len())
+    (0..cells.len())
         .map(|row| {
-            (0..sheet.cells[row].len())
-                .map(|column| evaluator.done.get(&(row, column)).cloned().unwrap_or(Value::Error(CellError::Num)))
+            (0..cells[row].len())
+                .map(|column| evaluator.done.get(&(sheet, row, column)).cloned().unwrap_or(Value::Error(CellError::Num)))
                 .collect()
         })
         .collect()
@@ -600,7 +695,8 @@ pub fn evaluate(sheet: &Sheet<'_>) -> Vec<Vec<Value>> {
 
 /// One formula's value against `sheet`, as an agent asks for one.
 pub fn evaluate_formula(sheet: &Sheet<'_>, formula: &str) -> Value {
-    let mut evaluator = Evaluator::new(sheet);
+    let book = Book { sheets: &[sheet.cells], today: sheet.today };
+    let mut evaluator = Evaluator::new(&book, 0);
     match parse(formula.strip_prefix('=').unwrap_or(formula)) {
         Ok(expr) => evaluator.value(&expr),
         Err(error) => Value::Error(error),
@@ -608,42 +704,65 @@ pub fn evaluate_formula(sheet: &Sheet<'_>, formula: &str) -> Value {
 }
 
 struct Evaluator<'s, 'a> {
-    sheet: &'s Sheet<'a>,
-    done: HashMap<(usize, usize), Value>,
-    visiting: Vec<(usize, usize)>,
+    book: &'s Book<'a>,
+    /// The sheet whose cell is being worked out, which its own references mean.
+    current: usize,
+    done: HashMap<(usize, usize, usize), Value>,
+    visiting: Vec<(usize, usize, usize)>,
     /// Whether a value since this was last cleared ran into [`DEPTH`], so
     /// it isn't kept: a later pass may reach it.
     deep: bool,
 }
 
 impl<'s, 'a> Evaluator<'s, 'a> {
-    fn new(sheet: &'s Sheet<'a>) -> Self {
-        Self { sheet, done: HashMap::new(), visiting: Vec::new(), deep: false }
+    fn new(book: &'s Book<'a>, current: usize) -> Self {
+        Self { book, current, done: HashMap::new(), visiting: Vec::new(), deep: false }
+    }
+
+    fn cells(&self, sheet: usize) -> &'a [Vec<String>] {
+        self.book.sheets.get(sheet).copied().unwrap_or_default()
+    }
+
+    /// The sheet a reference means: the one it names, or the current one.
+    fn sheet_of(&self, named: Option<u16>) -> Result<usize, CellError> {
+        match named {
+            None => Ok(self.current),
+            Some(sheet) if usize::from(sheet) < self.book.sheets.len() => Ok(usize::from(sheet)),
+            Some(_) => Err(CellError::Ref),
+        }
     }
 
     /// The last row, and each row's last column, a range may reach: the
     /// sheet's own, as every cell past them is empty.
-    fn clamped(&self, top: usize, left: usize, bottom: usize, right: usize) -> Vec<(usize, std::ops::RangeInclusive<usize>)> {
-        let rows = self.sheet.cells.len().min(ROWS);
+    fn clamped(
+        &self,
+        sheet: usize,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+    ) -> Vec<(usize, std::ops::RangeInclusive<usize>)> {
+        let cells = self.cells(sheet);
+        let rows = cells.len().min(ROWS);
         (top..=bottom.min(rows.saturating_sub(1)))
             .filter(|row| *row < rows)
             .map(|row| {
-                let columns = self.sheet.cells[row].len().min(COLUMNS);
+                let columns = cells[row].len().min(COLUMNS);
                 (row, left..=right.min(columns.saturating_sub(1)))
             })
-            .filter(|(row, columns)| columns.start() < &self.sheet.cells[*row].len().min(COLUMNS))
+            .filter(|(row, columns)| columns.start() < &cells[*row].len().min(COLUMNS))
             .collect()
     }
 
-    fn raw(&self, row: usize, column: usize) -> &str {
-        self.sheet.cells.get(row).and_then(|cells| cells.get(column)).map_or("", String::as_str)
+    fn raw(&self, sheet: usize, row: usize, column: usize) -> &'a str {
+        self.cells(sheet).get(row).and_then(|cells| cells.get(column)).map_or("", String::as_str)
     }
 
-    fn cell(&mut self, row: usize, column: usize) -> Value {
-        if let Some(value) = self.done.get(&(row, column)) {
+    fn cell(&mut self, sheet: usize, row: usize, column: usize) -> Value {
+        if let Some(value) = self.done.get(&(sheet, row, column)) {
             return value.clone();
         }
-        if self.visiting.contains(&(row, column)) {
+        if self.visiting.contains(&(sheet, row, column)) {
             return Value::Error(CellError::Cycle);
         }
         if self.visiting.len() >= DEPTH {
@@ -651,10 +770,12 @@ impl<'s, 'a> Evaluator<'s, 'a> {
             return Value::Error(CellError::Num);
         }
         let deep_before = std::mem::take(&mut self.deep);
-        let raw = self.raw(row, column).to_owned();
+        let raw = self.raw(sheet, row, column);
         let value = match raw.strip_prefix('=') {
             Some(formula) => {
-                self.visiting.push((row, column));
+                self.visiting.push((sheet, row, column));
+                // Its own references mean its own sheet, whichever asked.
+                let asked_from = std::mem::replace(&mut self.current, sheet);
                 let value = match parse(formula) {
                     Ok(expr) => match self.value(&expr) {
                         Value::Empty => Value::Number(0.0),
@@ -662,14 +783,15 @@ impl<'s, 'a> Evaluator<'s, 'a> {
                     },
                     Err(error) => Value::Error(error),
                 };
+                self.current = asked_from;
                 self.visiting.pop();
                 value
             }
-            None => Value::of_typed(&raw),
+            None => Value::of_typed(raw),
         };
         // A value that ran out of depth isn't the cell's; a later pass may reach it.
         if !self.deep {
-            self.done.insert((row, column), value.clone());
+            self.done.insert((sheet, row, column), value.clone());
         }
         self.deep |= deep_before;
         value
@@ -677,11 +799,12 @@ impl<'s, 'a> Evaluator<'s, 'a> {
 
     fn range(&mut self, expr: &Expr) -> Vec<Value> {
         match expr {
-            Expr::Range(top, left, bottom, right) => {
+            Expr::Range(named, top, left, bottom, right) => {
+                let Ok(sheet) = self.sheet_of(*named) else { return vec![Value::Error(CellError::Ref)] };
                 let mut values = Vec::new();
-                for (row, columns) in self.clamped(*top, *left, *bottom, *right) {
+                for (row, columns) in self.clamped(sheet, *top, *left, *bottom, *right) {
                     for column in columns {
-                        values.push(self.cell(row, column));
+                        values.push(self.cell(sheet, row, column));
                     }
                 }
                 values
@@ -692,11 +815,15 @@ impl<'s, 'a> Evaluator<'s, 'a> {
 
     fn rows_of(&mut self, expr: &Expr) -> Result<Vec<Vec<Value>>, CellError> {
         match expr {
-            Expr::Range(top, left, bottom, right) => {
-                let rows = self.clamped(*top, *left, *bottom, *right);
-                Ok(rows.into_iter().map(|(row, columns)| columns.map(|column| self.cell(row, column)).collect()).collect())
+            Expr::Range(named, top, left, bottom, right) => {
+                let sheet = self.sheet_of(*named)?;
+                let rows = self.clamped(sheet, *top, *left, *bottom, *right);
+                Ok(rows.into_iter().map(|(row, columns)| columns.map(|column| self.cell(sheet, row, column)).collect()).collect())
             }
-            Expr::Ref(row, column) => Ok(vec![vec![self.cell(*row, *column)]]),
+            Expr::Ref(named, row, column) => {
+                let sheet = self.sheet_of(*named)?;
+                Ok(vec![vec![self.cell(sheet, *row, *column)]])
+            }
             _ => Err(CellError::Value),
         }
     }
@@ -717,11 +844,12 @@ impl<'s, 'a> Evaluator<'s, 'a> {
     fn try_value(&mut self, expr: &Expr) -> Result<Value, CellError> {
         Ok(match expr {
             Expr::Value(value) => value.clone(),
-            Expr::Ref(row, column) => {
+            Expr::Ref(named, row, column) => {
                 if *row >= ROWS || *column >= COLUMNS {
                     return Err(CellError::Ref);
                 }
-                self.cell(*row, *column)
+                let sheet = self.sheet_of(*named)?;
+                self.cell(sheet, *row, *column)
             }
             Expr::Range(..) => return Err(CellError::Value),
             Expr::Negate(inner) => Value::Number(-self.number(inner)?),
@@ -870,7 +998,7 @@ impl<'s, 'a> Evaluator<'s, 'a> {
                 Value::Text(taken)
             }
             "LEN" => Value::Number(self.value(arg(0)?).text()?.chars().count() as f64),
-            "TODAY" => Value::Number(self.sheet.today),
+            "TODAY" => Value::Number(self.book.today),
             "DATE" => {
                 let (year, month, day) = (self.number(arg(0)?)?, self.number(arg(1)?)?, self.number(arg(2)?)?);
                 // Spreadsheets take years 0 to 9999; months and days roll over within reason.
@@ -1029,6 +1157,40 @@ fn formatted(number: f64, format: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cells(rows: &[&[&str]]) -> Vec<Vec<String>> {
+        rows.iter().map(|row| row.iter().map(|cell| (*cell).to_owned()).collect()).collect()
+    }
+
+    #[test]
+    fn a_formula_reaches_another_sheets_cells() {
+        let first = cells(&[&["=Sheet2!A1*2", "=SUM(Sheet2!A1:A3)", "=sheet2!B1"], &["=Sheet3!A1", "=Sheet2!C1", ""]]);
+        let second = cells(&[&["5", "=Sheet1!A1+1", "=Sheet1!B2"], &["6", "", ""], &["7", "", ""]]);
+        let book = Book { sheets: &[&first, &second], today: 46_000.0 };
+        let values = evaluate_in(&book, 0);
+        assert_eq!(values[0][0], Value::Number(10.0));
+        assert_eq!(values[0][1], Value::Number(18.0));
+        assert_eq!(values[0][2], Value::Number(11.0), "its own references mean its own sheet");
+        assert_eq!(values[1][0], Value::Error(CellError::Ref), "no third sheet");
+        assert_eq!(values[1][1], Value::Error(CellError::Cycle), "a cycle across sheets is a cycle");
+        assert_eq!(evaluate_in(&book, 1)[0][1], Value::Number(11.0));
+    }
+
+    #[test]
+    fn a_reference_to_another_sheet_keeps_that_sheets_ids() {
+        let (rows_1, columns_1) = (vec!["r1".to_owned()], vec!["c1".to_owned()]);
+        let (rows_2, columns_2) = (vec!["x1".to_owned(), "x2".to_owned()], vec!["y1".to_owned(), "y2".to_owned()]);
+        let axes: [(&[String], &[String]); 2] = [(&rows_1, &columns_1), (&rows_2, &columns_2)];
+        let kept = to_ids_in("=Sheet2!B2+A1+SUM(Sheet2!A1:B2)", &axes, 0);
+        assert_eq!(kept, "=⟨1:x2,y2⟩+⟨r1,c1⟩+SUM(⟨1:x1,y1⟩:⟨1:x2,y2⟩)");
+        // A row goes in at the top of Sheet2: the reference follows it.
+        let moved = vec!["x0".to_owned(), "x1".to_owned(), "x2".to_owned()];
+        let shown: [(&[String], &[String]); 2] = [(&rows_1, &columns_1), (&moved, &columns_2)];
+        assert_eq!(Positions::in_book(&shown, 0).from_ids(&kept), "=Sheet2!B3+A1+SUM(Sheet2!A2:B3)");
+        assert_eq!(to_ids_in("=Sheet9!A1", &axes, 0), "=#REF!", "no such sheet");
+        assert!(formula_ok("=SUM(Sheet2!A1:B2)") && !formula_ok("=Sheet2!"));
+        assert_eq!(addresses_in("=Sheet2!C9+B2"), vec![(1, 1)], "only its own sheet's cells grow it");
+    }
 
     fn sheet(rows: &[&[&str]]) -> Vec<Vec<String>> {
         rows.iter().map(|row| row.iter().map(|cell| (*cell).to_owned()).collect()).collect()
