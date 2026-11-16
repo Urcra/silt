@@ -365,6 +365,13 @@ impl Core {
         let thread = self.find_thread(thread)?;
         let id: silt_types::ArtifactId =
             artifact.parse().map_err(|_| CoreError::Invalid(format!("{artifact} isn't an artifact id")))?;
+        // The thread's workspace, and its org, may name the connectors its pages call.
+        if let Some(family) = self.threads.get(&thread).map(|record| record.family) {
+            let workspace = self.family_workspace(family);
+            self.rules(&workspace)
+                .check_connector(server)
+                .map_err(|refusal| CoreError::Invalid(format!("not_granted: {refusal}")))?;
+        }
         let config = self.declared(thread, id, "mcp")?;
         if !declared(&config, server, tool) {
             return Err(CoreError::Invalid(format!("not_granted: the page doesn't declare {server}'s {tool}")));

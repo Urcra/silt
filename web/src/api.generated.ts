@@ -1144,7 +1144,12 @@ isolated?: boolean,
  * Projects keep the workspace's server: no other, and not this machine
  * only.
  */
-home_locked?: boolean, };
+home_locked?: boolean, 
+/**
+ * The page connectors its artifacts' pages may call, by name; any
+ * when unset (ADR 0080).
+ */
+connectors?: Array<string> | null, };
 
 export type OrgPolicy = { org: string, server: string, policy: Policy, };
 
