@@ -49,6 +49,8 @@ export function dbHandler(thread: string, artifact: ArtifactView): CapabilityHan
   return {
     methods: [...READS, ...WRITES, 'watch', 'unwatch'],
     perMinute: 600,
+    // A query may answer with every document, up to the artifact's 16 MiB.
+    answerBytes: 17 << 20,
     call: async (method, args, context) => {
       const given = (args ?? {}) as Record<string, unknown>
       if (READS.includes(method) || WRITES.includes(method)) return ask({ ...given, op: method })

@@ -463,8 +463,8 @@ interface SiltFiles {
   list(opts?: { path?: string; recursive?: boolean; cursor?: string }): Promise<{ entries: { path: string; kind: 'file' | 'folder' }[]; cursor: string | null }>
   /**
    * A text file at the thread's head, or `at` an earlier revision. Rejects
-   * `refused` for a path the page may not read, a binary file or one over
-   * 4 MiB, and `too_large` for an answer over the bridge's 1 MiB.
+   * `refused` for a path the page may not read or a binary file, and
+   * `too_large` for one over 4 MiB.
    */
   read(path: string, opts?: { at?: string }): Promise<{ path: string; text: string; size: number; revision: string }>
   /**
@@ -628,7 +628,7 @@ interface SiltMcp {
  * level. A moment's topic is 1 to 64 characters and its data at most
  * 16 KiB; each view sends at most 30 a second. A view never hears its own
  * moments. A refused moment (`not_granted`, `too_large`, `rate_limited`)
- * is dropped, and the page isn't told. 1,800 calls a minute.
+ * is dropped, and `onRefused` hears why. 1,800 calls a minute.
  */
 interface SiltRoomPeer {
   /** This connection, unique in the room. */
@@ -656,6 +656,8 @@ interface SiltRoom {
   presence(patch: object): Promise<null>
   /** Everyone here, this view included, whenever someone comes, goes or changes their presence. */
   onPeers(fn: (peers: SiltRoomPeer[]) => void): () => void
+  /** Why a moment or presence this view sent was dropped: `not_granted` for a topic its level may not send, `too_large`, `rate_limited`. */
+  onRefused(fn: (refusal: { code: 'not_granted' | 'too_large' | 'rate_limited' | string }) => void): () => void
   /** A sub-room, by a name of at most 64 characters, heard only by those who join it. Names aren't secret. */
   join(name: string): SiltRoom
   leave(): Promise<null>

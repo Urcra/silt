@@ -176,12 +176,14 @@ function filesHandler(thread: string, artifact: ArtifactView, holder: Holder): C
     if (!(await consented())) throw new Refusal('not_granted', "the person chose not to let this page read the thread's files")
     return api.pageFiles(thread, artifact.id, asked).catch((failure: unknown) => {
       const said = failure instanceof Error ? failure.message : String(failure)
-      throw new Refusal(/not_found|no file|had no/i.test(said) ? 'refused' : refusalOf(failure).code, said)
+      throw new Refusal(/too_large|over 4 MiB/i.test(said) ? 'too_large' : /not_found|no file|had no/i.test(said) ? 'refused' : refusalOf(failure).code, said)
     })
   }
   return {
     methods: ['list', 'read', 'history', 'download'],
     perMinute: 120,
+    // A text file is at most 4 MiB, which its JSON may double.
+    answerBytes: FILE_ANSWER_BYTES,
     call: async (method, args) => {
       const given = (args ?? {}) as { path?: unknown; recursive?: unknown; cursor?: unknown; at?: unknown }
       const path = typeof given.path === 'string' ? given.path : ''
@@ -211,15 +213,22 @@ function refusalOf(failure: unknown): Refusal {
   return new Refusal(code === 'conflict' || code === 'rate_limited' || code === 'not_granted' ? code : 'refused', said)
 }
 
+/** The largest answer `files` gives: a text file of 4 MiB, as JSON. */
+export const FILE_ANSWER_BYTES = (8 << 20) + 4096
+/** The largest page `artifact.publish` takes, as the agent's are (ADR 0072). */
+export const PUBLISH_BYTES = 10 << 20
+
 /** `artifact`: the page saves a whole new document as the next version, over the one it was opened at. */
 function artifactHandler(thread: string, artifact: ArtifactView): CapabilityHandler {
   return {
     methods: ['publish', 'version'],
     perMinute: 12,
+    callBytes: PUBLISH_BYTES + 4096,
     call: async (method, args) => {
       if (method === 'version') return { version: artifact.version }
       const html = (args as { html?: unknown } | null)?.html
       if (typeof html !== 'string' || !/^\s*<!doctype html/i.test(html)) throw new Refusal('refused', 'publish takes a whole document, doctype first')
+      if (new Blob([html]).size > PUBLISH_BYTES) throw new Refusal('too_large', 'a page is at most 10 MiB')
       try {
         return await api.publishArtifact(thread, artifact.id, html, artifact.version)
       } catch (failure) {

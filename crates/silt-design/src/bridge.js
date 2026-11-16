@@ -324,6 +324,7 @@ function roomClient(ns) {
         return ns.presence({ room: name, state: state });
       },
       onPeers: function (fn) { return ns.on('peers', function (d) { if (d && d.room === name) fn(d.peers); }); },
+      onRefused: function (fn) { return ns.on('refused', function (d) { if (d && d.room === name) fn({ code: String(d.reason) }); }); },
       join: function (sub) { return room(String(sub)); },
       leave: function () { return ns.leave({ room: name }); }
     });
