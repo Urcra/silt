@@ -194,7 +194,8 @@ pub fn apca(text: Srgb, background: Srgb) -> f64 {
     if c.abs() < 0.1 { 0.0 } else { (c - c.signum() * 0.027) * 100.0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Verdict {
     Pass,
     /// Allowed only with what the check's detail says.
@@ -212,14 +213,14 @@ impl Verdict {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Check {
     pub name: &'static str,
     pub verdict: Verdict,
     pub detail: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Report {
     pub checks: Vec<Check>,
 }

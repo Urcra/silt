@@ -38,9 +38,7 @@ impl Core {
                 let text = self.doc_text(thread, id);
                 let ops = silt_proto::edited::doc_ops(&text, &edits).map_err(CoreError::Invalid)?;
                 let family = self.threads[&thread].family;
-                for op in ops {
-                    self.append_page(family, thread, PageOp::Text { artifact: id, op }).await?;
-                }
+                self.append_pages(family, thread, ops.into_iter().map(|op| PageOp::Text { artifact: id, op }).collect()).await?;
                 Ok(self.doc_read(thread, id))
             }
         }
@@ -101,9 +99,7 @@ impl Core {
                 )
                 .map_err(CoreError::Invalid)?;
                 let written = ops.len();
-                for op in ops {
-                    self.append_page(family, thread, op).await?;
-                }
+                self.append_pages(family, thread, ops).await?;
                 Ok(serde_json::json!({ "written": written }))
             }
             SheetRequest::Insert { sheet, axis, at, count } => {

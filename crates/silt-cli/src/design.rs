@@ -27,6 +27,9 @@ pub enum DesignCommand {
         /// Check an ordinal ramp instead: one hue stepping steadily in lightness
         #[arg(long)]
         ordinal: bool,
+        /// Print the checks as JSON, `{"passed": …, "checks": [{"name", "verdict", "detail"}]}`
+        #[arg(long)]
+        json: bool,
     },
     /// Text contrast of one colour on another: WCAG 2's ratio and APCA's lightness contrast
     Contrast {
@@ -51,7 +54,7 @@ pub enum PairsArg {
 
 pub fn run(command: DesignCommand) -> Result<(), Exn<CliError>> {
     match command {
-        DesignCommand::Palette { colors, surface, theme, pairs, ordinal } => {
+        DesignCommand::Palette { colors, surface, theme, pairs, ordinal, json } => {
             let colors = palette::parse_list(&colors).map_err(|error| fail(error.to_string()))?;
             let surface = Srgb::parse(&surface).map_err(|error| fail(error.to_string()))?;
             let theme = match theme {
@@ -67,7 +70,11 @@ pub fn run(command: DesignCommand) -> Result<(), Exn<CliError>> {
             } else {
                 palette::categorical(&colors, surface, theme, pairs)
             };
-            print!("{report}");
+            if json {
+                println!("{}", serde_json::json!({ "passed": report.passed(), "checks": report.checks }));
+            } else {
+                print!("{report}");
+            }
             if report.passed() { Ok(()) } else { Err(fail("the palette fails a check; fix each FAIL")) }
         }
         DesignCommand::Contrast { text, ground } => {

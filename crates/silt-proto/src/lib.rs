@@ -25,7 +25,7 @@ pub mod view;
 /// through each server they use (ADR 0071). 13: an artifact's page data
 /// (`Op::Page`) and comments on a doc's text (ADR 0072, ADR 0077). 14:
 /// rooms that span machines through `/v1/rooms` (ADR 0081).
-pub const PROTOCOL: u32 = 14;
+pub const PROTOCOL: u32 = 15;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 

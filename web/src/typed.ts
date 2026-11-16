@@ -123,9 +123,15 @@ export function dataPageOf(json: string): DataPage | null {
   return sources && page.blocks.every(block) ? (page as DataPage) : null
 }
 
-/** One slide or board as a sealed frame's document, at its own size. */
+/**
+ * One slide or board as a sealed frame's document, at its own size, on the theme's ground unless it sets its own. A
+ * shared style's `@import`s go first, where CSS reads them.
+ */
 export function partDocument(html: string, shared: string | undefined, width: number, height: number, style: string | null, theme: FrameTheme): string {
-  const css = `html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden}${shared ?? ''}`
+  const imports = (shared ?? '').match(/@import\s[^;]+;/g) ?? []
+  const rest = imports.reduce((left, rule) => left.replace(rule, ''), shared ?? '')
+  const ground = `color-scheme:${theme};background:var(--bg,Canvas);color:var(--fg,CanvasText)`
+  const css = `${imports.join('')}html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden}html{${ground}}${rest}`
   return sandboxedDocument(`<!doctype html><html><head><style>${css.replace(/<\//g, '<\\/')}</style></head><body>${html}</body></html>`, {
     style,
     theme,

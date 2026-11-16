@@ -26,8 +26,8 @@ const job = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
 const host = '<!doctype html><html><body style="margin:0"><iframe id="f" sandbox="allow-scripts" style="border:0;display:block;width:100vw;height:100vh"></iframe>' +
   '<script>window.__problems=[];window.__checked=false;addEventListener("message",function(e){var d=e.data;if(!d)return;' +
   'if(d.silt==="problems")window.__problems=d.problems;if(d.silt==="checked")window.__checked=true})</script></body></html>';
-// What each visible element with text of its own shows: its colour and the
-// ground behind it, which the check compares across themes.
+// What each visible element with text of its own shows: its colour, an SVG
+// text's fill, and the ground behind it, which the check compares across themes.
 const SAMPLE = () => {
   const clear = (c) => !c || c === 'transparent' || /^rgba\([^)]*,\s*0\)$/.test(c);
   const ground = (el) => { for (let e = el; e; e = e.parentElement) { const c = getComputedStyle(e).backgroundColor; if (!clear(c)) return c; } return 'rgb(255, 255, 255)'; };
@@ -48,7 +48,9 @@ const SAMPLE = () => {
     if (![...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) continue;
     const s = getComputedStyle(el);
     if (s.visibility === 'hidden' || s.display === 'none' || !el.getClientRects().length) continue;
-    samples.push({ selector: name(el), color: s.color, background: ground(el), size: parseFloat(s.fontSize) || 16, weight: parseInt(s.fontWeight, 10) || 400 });
+    // SVG text shows its fill, which a literal attribute may set whatever the CSS colour.
+    const color = el instanceof SVGElement && /^rgba?\(/.test(s.fill) ? s.fill : s.color;
+    samples.push({ selector: name(el), color, background: ground(el), size: parseFloat(s.fontSize) || 16, weight: parseInt(s.fontWeight, 10) || 400 });
   }
   return { body: getComputedStyle(document.body).backgroundColor, samples };
 };
