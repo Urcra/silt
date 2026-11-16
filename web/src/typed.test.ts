@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canvasOf, chartColors, chartTable, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
+import { canvasOf, chartColors, chartTable, runs, xPositions, yDomain, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
 
 describe('the artifact types', () => {
   it('opens a deck at the slide a link names, within the deck', () => {
@@ -34,6 +34,22 @@ describe('the artifact types', () => {
     const imported = partDocument('', "h1{color:red}@import url('https://fonts.googleapis.com/css2?family=Inter');", 1280, 720, null, 'light')
     expect(imported.indexOf('@import')).toBeLessThan(imported.indexOf('html,body'))
     expect(parsed('{bad')).toBeNull()
+  })
+})
+
+describe("a chart's scales", () => {
+  it('place x by order, by number, or by date', () => {
+    expect(xPositions(['a', 'b', 'c'], undefined)).toEqual([0, 0.5, 1])
+    expect(xPositions([0, 10, 2.5], 'number')).toEqual([0, 1, 0.25])
+    expect(xPositions(['2026-11-01', '2026-11-11', '2026-11-03'], 'time')).toEqual([0, 1, 0.2])
+    expect(xPositions(['a', 2], 'number')).toEqual([0, 1])
+  })
+  it('break a line where a value is missing, and start y near the values only when asked', () => {
+    expect(runs([1, 2, null, 4, undefined, null, 6])).toEqual([[[0, 1], [1, 2]], [[3, 4]], [[6, 6]]])
+    expect(yDomain([400, 500], true)).toEqual([0, 500])
+    const [low, high] = yDomain([400, 500], false)
+    expect(low).toBeGreaterThan(300)
+    expect(high).toBeLessThan(600)
   })
 })
 

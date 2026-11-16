@@ -175,6 +175,18 @@ pub enum SheetRequest {
         #[serde(default = "one")]
         count: usize,
     },
+    /// The sheet's name, and its columns' widths and number formats by
+    /// column letter; `null`, or an empty name or format, clears one.
+    Format {
+        #[serde(default)]
+        sheet: u16,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        widths: BTreeMap<String, Option<u16>>,
+        #[serde(default)]
+        formats: BTreeMap<String, Option<String>>,
+    },
 }
 
 fn one() -> usize {
@@ -198,8 +210,9 @@ impl From<AxisName> for Axis {
 }
 
 /// A sheet as its page shows it: rows and columns by id, what each cell
-/// holds (formulas with addresses) and its value.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// holds (formulas with addresses) and its value, in its column's number
+/// format, with each sheet's name and its columns' widths (ADR 0083).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SheetView {
     pub rows: Vec<String>,
@@ -210,6 +223,114 @@ pub struct SheetView {
     /// How many sheets the artifact has, for its tabs; a read fills it in.
     #[serde(default = "one_sheet")]
     pub sheets: u16,
+    /// Each sheet's name for its tab, `Sheet 2` where it has none.
+    #[serde(default)]
+    pub names: Vec<String>,
+    /// Each column's width in pixels, where someone set one.
+    #[serde(default)]
+    pub widths: Vec<Option<u16>>,
+    /// Each column's number format, where someone set one.
+    #[serde(default)]
+    pub formats: Vec<Option<String>>,
+}
+
+/// The longest name a sheet takes.
+pub const SHEET_NAME_CHARS: usize = 64;
+/// The narrowest and widest a column is set, in pixels.
+pub const COLUMN_WIDTHS: std::ops::RangeInclusive<u16> = 24..=800;
+
+/// Where a sheet's settings are kept among its artifact's page documents:
+/// written only through the sheet's own requests, at its edit level.
+pub fn meta_path(sheet: u16) -> String {
+    format!("_sheets/s{sheet}")
+}
+
+/// A sheet's name, and its columns' widths and number formats by column id.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SheetMeta {
+    pub name: Option<String>,
+    pub widths: BTreeMap<String, u16>,
+    pub formats: BTreeMap<String, String>,
+}
+
+/// The settings `doc` keeps, what isn't one a sheet takes left out, as a
+/// peer may have written anything there.
+pub fn sheet_meta(doc: Option<&serde_json::Value>) -> SheetMeta {
+    let mut meta = SheetMeta::default();
+    let Some(fields) = doc.and_then(serde_json::Value::as_object) else { return meta };
+    for (field, value) in fields {
+        if field == "name" {
+            meta.name = value.as_str().filter(|name| name_ok(name)).map(str::to_owned);
+        } else if let Some(column) = field.strip_prefix("w:") {
+            if let Some(width) =
+                value.as_u64().and_then(|width| u16::try_from(width).ok()).filter(|width| COLUMN_WIDTHS.contains(width))
+            {
+                meta.widths.insert(column.to_owned(), width);
+            }
+        } else if let Some(column) = field.strip_prefix("f:")
+            && let Some(format) = value.as_str().filter(|format| silt_sheet::number_format_ok(format))
+        {
+            meta.formats.insert(column.to_owned(), format.to_owned());
+        }
+    }
+    meta
+}
+
+fn name_ok(name: &str) -> bool {
+    !name.trim().is_empty() && name.chars().count() <= SHEET_NAME_CHARS && !name.chars().any(char::is_control)
+}
+
+/// The settings of each of `count` sheets, from their artifact's documents.
+pub fn metas_of(docs: &silt_log::page::Documents, count: usize) -> Vec<SheetMeta> {
+    (0..count).map(|sheet| sheet_meta(u16::try_from(sheet).ok().and_then(|sheet| docs.get(&meta_path(sheet))))).collect()
+}
+
+/// The op that names sheet `sheet` and sets its columns' widths and
+/// formats, by column letter as `cells` stands: `None`, or an empty name or
+/// format, clears one.
+pub fn format_op(
+    artifact: ArtifactId,
+    sheet: u16,
+    cells: &SheetCells,
+    name: Option<&str>,
+    widths: &BTreeMap<String, Option<u16>>,
+    formats: &BTreeMap<String, Option<String>>,
+) -> Result<PageOp, String> {
+    let mut fields = serde_json::Map::new();
+    if let Some(name) = name {
+        if !name.is_empty() && !name_ok(name) {
+            return Err(format!("a sheet's name is 1 to {SHEET_NAME_CHARS} characters"));
+        }
+        fields.insert("name".into(), if name.is_empty() { serde_json::Value::Null } else { name.trim().into() });
+    }
+    let column_id = |letter: &str| {
+        silt_sheet::parse_address(&format!("{letter}1"))
+            .and_then(|(_, column)| cells.columns.get(column))
+            .map(id_text)
+            .ok_or_else(|| format!("{letter} isn't a column in the sheet"))
+    };
+    for (letter, width) in widths {
+        let value = match width {
+            Some(width) if COLUMN_WIDTHS.contains(width) => serde_json::Value::from(*width),
+            Some(_) => return Err(format!("a column is {} to {} pixels wide", COLUMN_WIDTHS.start(), COLUMN_WIDTHS.end())),
+            None => serde_json::Value::Null,
+        };
+        fields.insert(format!("w:{}", column_id(letter)?), value);
+    }
+    for (letter, format) in formats {
+        let value = match format.as_deref() {
+            None | Some("") => serde_json::Value::Null,
+            Some(format) if silt_sheet::number_format_ok(format) => format.into(),
+            Some(format) => {
+                return Err(format!("{format} isn't a number format: use 0, 0.00, #,##0, 0%, or one after $, €, £ or ¥"));
+            }
+        };
+        fields.insert(format!("f:{}", column_id(letter)?), value);
+    }
+    if fields.is_empty() {
+        return Err("give a name, widths or formats".into());
+    }
+    Ok(PageOp::Patched { artifact, path: meta_path(sheet), fields: serde_json::Value::Object(fields).to_string() })
 }
 
 fn one_sheet() -> u16 {
@@ -223,9 +344,11 @@ impl SheetRequest {
     /// Which sheet it's about.
     pub fn sheet(&self) -> u16 {
         match self {
-            Self::Read { sheet, .. } | Self::Set { sheet, .. } | Self::Insert { sheet, .. } | Self::Remove { sheet, .. } => {
-                *sheet
-            }
+            Self::Read { sheet, .. }
+            | Self::Set { sheet, .. }
+            | Self::Insert { sheet, .. }
+            | Self::Remove { sheet, .. }
+            | Self::Format { sheet, .. } => *sheet,
         }
     }
 }
@@ -294,6 +417,12 @@ fn axes_of(book: &[&SheetCells]) -> Vec<(Vec<String>, Vec<String>)> {
 /// Sheet `sheet` of `book`, every sheet of an artifact, as its viewer shows
 /// it: formulas may name another sheet's cells, `Sheet2!B3` (ADR 0077).
 pub fn book_view(book: &[&SheetCells], sheet: usize, today: f64) -> SheetView {
+    book_view_in(book, &[], sheet, today)
+}
+
+/// [`book_view`] with each sheet's settings, `metas`: its name, and its
+/// columns' widths and number formats (ADR 0083).
+pub fn book_view_in(book: &[&SheetCells], metas: &[SheetMeta], sheet: usize, today: f64) -> SheetView {
     let axes = axes_of(book);
     let borrowed: Vec<(&[String], &[String])> =
         axes.iter().map(|(rows, columns)| (rows.as_slice(), columns.as_slice())).collect();
@@ -316,13 +445,27 @@ pub fn book_view(book: &[&SheetCells], sheet: usize, today: f64) -> SheetView {
         })
         .collect();
     let sheets: Vec<&[Vec<String>]> = raws.iter().map(Vec::as_slice).collect();
+    let (rows, columns) = axes.get(sheet).cloned().unwrap_or_default();
+    let meta = metas.get(sheet).cloned().unwrap_or_default();
+    let formats: Vec<Option<String>> = columns.iter().map(|column| meta.formats.get(column).cloned()).collect();
     let values = silt_sheet::evaluate_in(&silt_sheet::Book { sheets: &sheets, today }, sheet)
         .into_iter()
-        .map(|row| row.into_iter().map(|value| value.to_string()).collect())
+        .map(|row| {
+            row.into_iter()
+                .enumerate()
+                .map(|(column, value)| match (&value, formats.get(column).and_then(Option::as_deref)) {
+                    (silt_sheet::Value::Number(number), Some(format)) => silt_sheet::format_number(*number, format),
+                    _ => value.to_string(),
+                })
+                .collect()
+        })
         .collect();
-    let (rows, columns) = axes.get(sheet).cloned().unwrap_or_default();
     let raw = raws.get(sheet).cloned().unwrap_or_default();
-    SheetView { rows, columns, raw, values, sheets: u16::try_from(book.len()).unwrap_or(SHEETS).max(1) }
+    let names = (0..book.len().max(1))
+        .map(|at| metas.get(at).and_then(|meta| meta.name.clone()).unwrap_or_else(|| format!("Sheet {}", at + 1)))
+        .collect();
+    let widths = columns.iter().map(|column| meta.widths.get(column).copied()).collect();
+    SheetView { rows, columns, raw, values, sheets: u16::try_from(book.len()).unwrap_or(SHEETS).max(1), names, widths, formats }
 }
 
 /// What a `Set` needs first: how many rows and columns to add at the end so
@@ -452,34 +595,100 @@ pub fn xlsx(view: &SheetView, name: &str) -> Result<Vec<u8>, String> {
 #[cfg(feature = "xlsx")]
 pub fn xlsx_book(sheets: &[(String, SheetView)]) -> Result<Vec<u8>, String> {
     use rust_xlsxwriter::Workbook;
+    let titles = xlsx_titles(sheets.iter().map(|(name, _)| name.as_str()));
     let mut book = Workbook::new();
-    for (name, view) in sheets {
+    for ((_, view), title) in sheets.iter().zip(&titles) {
         let sheet = book.add_worksheet();
-        let title: String = name.chars().filter(|c| !"[]:*?/\\".contains(*c)).take(31).collect();
-        if !title.trim().is_empty() {
-            sheet.set_name(title.trim()).map_err(|error| error.to_string())?;
-        }
-        write_sheet(sheet, view)?;
+        sheet.set_name(title).map_err(|error| error.to_string())?;
+        write_sheet(sheet, view, &titles)?;
     }
     book.save_to_buffer().map_err(|error| error.to_string())
 }
 
+/// Worksheet names from sheets' names: without what a workbook refuses, at
+/// most 31 characters, and each its own.
 #[cfg(feature = "xlsx")]
-fn write_sheet(sheet: &mut rust_xlsxwriter::Worksheet, view: &SheetView) -> Result<(), String> {
-    use rust_xlsxwriter::Formula;
+fn xlsx_titles<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut titles: Vec<String> = Vec::new();
+    for (at, name) in names.enumerate() {
+        let cleaned: String = name.chars().filter(|c| !"[]:*?/\\'".contains(*c)).take(28).collect();
+        let base = if cleaned.trim().is_empty() { format!("Sheet{}", at + 1) } else { cleaned.trim().to_owned() };
+        let mut title = base.clone();
+        let mut again = 2;
+        while titles.iter().any(|taken| taken.eq_ignore_ascii_case(&title)) {
+            title = format!("{base} {again}");
+            again += 1;
+        }
+        titles.push(title);
+    }
+    titles
+}
+
+/// `raw` with each `SheetN!` outside quotes naming that sheet's worksheet,
+/// as Silt numbers sheets in formulas and a workbook names them.
+#[cfg(feature = "xlsx")]
+fn named_sheets(raw: &str, titles: &[String]) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut quoted = false;
+    let mut rest = raw;
+    while let Some(c) = rest.chars().next() {
+        if c == '"' {
+            quoted = !quoted;
+        }
+        let before = out.chars().last();
+        if !quoted
+            && before.is_none_or(|before| !before.is_ascii_alphanumeric() && before != '_')
+            && rest.get(..5).is_some_and(|head| head.eq_ignore_ascii_case("sheet"))
+        {
+            let digits: String = rest[5..].chars().take_while(char::is_ascii_digit).collect();
+            if !digits.is_empty()
+                && rest[5 + digits.len()..].starts_with('!')
+                && let Some(title) = digits.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).and_then(|n| titles.get(n))
+            {
+                out.push_str(&format!("'{title}'!"));
+                rest = &rest[5 + digits.len() + 1..];
+                continue;
+            }
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
+#[cfg(feature = "xlsx")]
+fn write_sheet(sheet: &mut rust_xlsxwriter::Worksheet, view: &SheetView, titles: &[String]) -> Result<(), String> {
+    use rust_xlsxwriter::{Format, Formula};
+    let formats: Vec<Option<Format>> =
+        view.formats.iter().map(|format| format.as_deref().map(|format| Format::new().set_num_format(format))).collect();
+    for (column, width) in view.widths.iter().enumerate() {
+        if let (Some(width), Ok(column)) = (width, u16::try_from(column)) {
+            sheet.set_column_width_pixels(column, u32::from(*width)).map_err(|error| error.to_string())?;
+        }
+    }
     for (row, cells) in view.raw.iter().enumerate() {
         for (column, raw) in cells.iter().enumerate() {
             let (r, c) =
                 (u32::try_from(row).map_err(|_| "too many rows")?, u16::try_from(column).map_err(|_| "too many columns")?);
             let value = view.values.get(row).and_then(|values| values.get(column)).cloned().unwrap_or_default();
+            let format = formats.get(column).and_then(Option::as_ref);
             // Only a formula Silt computes is kept live, so a workbook never
             // runs what a peer wrote, such as WEBSERVICE or a DDE call.
             let written = if raw.starts_with('=') && silt_sheet::formula_ok(raw) {
-                sheet.write_formula(r, c, Formula::new(raw.as_str()).set_result(value)).map(|_| ())
+                let formula = Formula::new(named_sheets(raw, titles)).set_result(value);
+                match format {
+                    Some(format) => sheet.write_formula_with_format(r, c, formula, format),
+                    None => sheet.write_formula(r, c, formula),
+                }
+                .map(|_| ())
             } else if raw.is_empty() {
                 Ok(())
             } else if let Ok(number) = raw.trim().parse::<f64>() {
-                sheet.write_number(r, c, number).map(|_| ())
+                match format {
+                    Some(format) => sheet.write_number_with_format(r, c, number, format),
+                    None => sheet.write_number(r, c, number),
+                }
+                .map(|_| ())
             } else {
                 sheet.write_string(r, c, raw.as_str()).map(|_| ())
             };
@@ -688,8 +897,47 @@ mod tests {
             raw: vec![vec!["1".into()]],
             values: vec![vec!["1".into()]],
             sheets: 1,
+            ..Default::default()
         };
         assert_eq!(read_range(&view, "A1:ZZZ99999999"), Ok(vec![vec!["1".to_owned()]]));
+    }
+
+    #[test]
+    fn a_sheet_is_named_and_its_columns_sized_and_formatted() {
+        let artifact: ArtifactId = "0123456789ab".parse().expect("an id");
+        let id = |n: u64| silt_crdt::CharId::Delta(silt_types::DeltaId::new(silt_types::ActorId(1), silt_types::Lamport(n)));
+        let cells = SheetCells {
+            rows: vec![id(1), id(2)],
+            columns: vec![id(3), id(4)],
+            cells: BTreeMap::from([((id(1), id(4)), "0.25".to_owned())]),
+        };
+        let op = format_op(
+            artifact,
+            0,
+            &cells,
+            Some("Budget"),
+            &BTreeMap::from([("B".to_owned(), Some(120))]),
+            &BTreeMap::from([("B".to_owned(), Some("0%".to_owned()))]),
+        )
+        .expect("an op");
+        let PageOp::Patched { path, fields, .. } = &op else { panic!("{op:?}") };
+        assert_eq!(path, "_sheets/s0");
+        let doc: serde_json::Value = serde_json::from_str(fields).expect("json");
+        let meta = sheet_meta(Some(&doc));
+        assert_eq!(meta.name.as_deref(), Some("Budget"));
+        let view = book_view_in(&[&cells], &[meta], 0, 0.0);
+        assert_eq!(view.values[0][1], "25%");
+        assert_eq!((view.widths.clone(), view.names.clone()), (vec![None, Some(120)], vec!["Budget".to_owned()]));
+        assert!(
+            format_op(artifact, 0, &cells, None, &BTreeMap::new(), &BTreeMap::from([("Z".to_owned(), Some("0".to_owned()))]))
+                .is_err()
+        );
+        assert!(
+            format_op(artifact, 0, &cells, None, &BTreeMap::new(), &BTreeMap::from([("A".to_owned(), Some("yyyy".to_owned()))]))
+                .is_err()
+        );
+        let peer = serde_json::json!({"name": "\u{7}", "w:x": 5000, "f:y": "=HYPERLINK()"});
+        assert_eq!(sheet_meta(Some(&peer)), SheetMeta::default(), "what a peer wrote that a sheet doesn't take is left out");
     }
 
     #[test]
@@ -700,6 +948,7 @@ mod tests {
             raw: vec![vec!["=cmd|' /C calc'!A0".into(), "-5".into(), "@SUM(1)".into()]],
             values: vec![vec!["=cmd|' /C calc'!A0".into(), "-5".into(), "@SUM(1)".into()]],
             sheets: 1,
+            ..Default::default()
         };
         assert_eq!(csv(&view), "'=cmd|' /C calc'!A0,-5,'@SUM(1)");
         assert!(silt_sheet::formula_ok("=SUM(A1:B2)*2") && !silt_sheet::formula_ok("=WEBSERVICE(\"https://x\")"));
@@ -738,8 +987,14 @@ mod tests {
             raw: vec![vec!["2".into()], vec!["=A1*3".into()]],
             values: vec![vec!["2".into()], vec!["6".into()]],
             sheets: 1,
+            ..Default::default()
         };
         let bytes = xlsx(&view, "Tracker").expect("a workbook");
+        assert_eq!(
+            named_sheets("=Sheet2!A1+SHEET1!B2&\"Sheet2!\"", &["Tracker".into(), "It's".into()]),
+            "='It's'!A1+'Tracker'!B2&\"Sheet2!\""
+        );
+        assert_eq!(xlsx_titles(["Q1", "q1", "", "a/b"].into_iter()), ["Q1", "q1 2", "Sheet3", "ab"]);
         let mut book: Xlsx<_> = calamine::open_workbook_from_rs(std::io::Cursor::new(bytes)).expect("opens");
         let formulas = book.worksheet_formula("Tracker").expect("formulas");
         assert_eq!(formulas.get_value((1, 0)).map(String::as_str), Some("A1*3"));

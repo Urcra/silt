@@ -914,7 +914,8 @@ async fn sheet_data(
     match asked {
         SheetRequest::Read { sheet, range } => {
             let book = book(server.clone(), sheet).await?;
-            let view = silt_proto::edited::book_view(&book.iter().collect::<Vec<_>>(), usize::from(sheet), today);
+            let metas = silt_proto::edited::metas_of(&page.docs, book.len());
+            let view = silt_proto::edited::book_view_in(&book.iter().collect::<Vec<_>>(), &metas, usize::from(sheet), today);
             match range {
                 Some(range) => {
                     Ok(Json(serde_json::json!({ "values": silt_proto::edited::read_range(&view, &range).map_err(bad_request)? })))
@@ -964,6 +965,14 @@ async fn sheet_data(
             write(lines(sheet, axis, TextOp::Insert { pos: at.min(len), content: mark.repeat(count) })).await?;
             Ok(Json(serde_json::json!({ "inserted": count })))
         }
+        SheetRequest::Format { sheet, name, widths, formats } => {
+            may_edit(&page)?;
+            let now = cells(server.clone(), sheet).await?;
+            let op =
+                silt_proto::edited::format_op(artifact, sheet, &now, name.as_deref(), &widths, &formats).map_err(bad_request)?;
+            write(op).await?;
+            Ok(Json(serde_json::json!({ "formatted": true })))
+        }
         SheetRequest::Remove { sheet, axis, at, count } => {
             may_edit(&page)?;
             let now = cells(server.clone(), sheet).await?;
@@ -997,7 +1006,8 @@ async fn sheet_xlsx(
         .await?;
         let view: silt_proto::edited::SheetView = serde_json::from_value(view).map_err(|_| not_found())?;
         count = view.sheets;
-        sheets.push((format!("Sheet{}", sheet + 1), view));
+        let name = view.names.get(usize::from(sheet)).cloned().unwrap_or_else(|| format!("Sheet{}", sheet + 1));
+        sheets.push((name, view));
         sheet += 1;
     }
     let bytes = silt_proto::edited::xlsx_book(&sheets).map_err(bad_request)?;

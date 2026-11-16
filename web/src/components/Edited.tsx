@@ -334,6 +334,9 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
   })
   const [editing, setEditing] = useState<{ row: number; column: number; raw: string } | null>(null)
   const [selected, setSelected] = useState<{ row: number; column: number }>({ row: 0, column: 0 })
+  const [renaming, setRenaming] = useState<string | null>(null)
+  // A column being made wider or narrower by its header's edge, until it's let go.
+  const [sizing, setSizing] = useState<{ column: number; width: number; from: number; start: number } | null>(null)
   // Only the rows near what's shown are drawn, so a sheet of thousands of rows stays quick (ADR 0077).
   const scroller = useRef<HTMLDivElement>(null)
   const [window_, setWindow] = useState({ top: 0, height: 800 })
@@ -379,6 +382,17 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
   const first = windowed ? Math.max(0, Math.floor(window_.top / ROW) - 20) : 0
   const last = windowed ? Math.min(view.rows.length, Math.ceil((window_.top + window_.height) / ROW) + 20) : view.rows.length
   const drawn = view.rows.slice(first, last).map((id, at) => [id, first + at] as const)
+  const widthOf = (column: number) => (sizing?.column === column ? sizing.width : (view.widths?.[column] ?? null))
+  const sized = (column: number) => {
+    const width = widthOf(column)
+    return width ? { width, minWidth: width, maxWidth: width } : undefined
+  }
+  const rename = async () => {
+    if (renaming === null) return
+    const name = renaming.trim()
+    setRenaming(null)
+    if (name !== (view.names?.[tab] ?? '')) await change({ op: 'format', name: name === `Sheet ${tab + 1}` ? '' : name })
+  }
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="sheet">
       <div className="flex shrink-0 items-center gap-2 border-b border-line-subtle px-2 py-1">
@@ -389,6 +403,18 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
         <code className="min-w-0 flex-1 truncate font-mono text-xs text-fg-1" aria-label="the selected cell holds">
           {shown}
         </code>
+        <select
+          aria-label="number format of the selected column"
+          value={view.formats?.[selected.column] ?? ''}
+          onChange={(event) => void change({ op: 'format', formats: { [columnName(selected.column)]: event.target.value || null } })}
+          className="h-7 rounded-sm border border-line bg-surface-1 px-1 text-xs text-fg-1"
+        >
+          {NUMBER_FORMATS.map(([format, label]) => (
+            <option key={format} value={format}>
+              {label}
+            </option>
+          ))}
+        </select>
         <Button size="sm" variant="ghost" onClick={() => void change({ op: 'insert', axis: 'rows', at: selected.row })}>
           Row above
         </Button>
@@ -403,8 +429,32 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
             <tr>
               <th className="w-10 border-r border-b border-line" />
               {view.columns.map((id, column) => (
-                <th key={id} scope="col" className="min-w-24 border-r border-b border-line px-2 py-1 font-medium text-fg-2">
+                <th
+                  key={id}
+                  scope="col"
+                  style={sized(column)}
+                  className={cx('relative border-r border-b border-line px-2 py-1 font-medium text-fg-2', !widthOf(column) && 'min-w-24')}
+                >
                   {columnName(column)}
+                  <span
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label={`width of column ${columnName(column)}`}
+                    className="absolute inset-y-0 right-0 w-1.5 cursor-col-resize hover:bg-accent/40"
+                    onPointerDown={(event) => {
+                      event.currentTarget.setPointerCapture(event.pointerId)
+                      const start = event.currentTarget.parentElement?.getBoundingClientRect().width ?? 96
+                      setSizing({ column, width: Math.round(start), from: event.clientX, start: Math.round(start) })
+                    }}
+                    onPointerMove={(event) => {
+                      if (sizing?.column === column) setSizing({ ...sizing, width: Math.min(800, Math.max(24, Math.round(sizing.start + event.clientX - sizing.from))) })
+                    }}
+                    onPointerUp={() => {
+                      if (sizing?.column !== column) return
+                      setSizing(null)
+                      if (sizing.width !== sizing.start) void change({ op: 'format', widths: { [columnName(column)]: sizing.width } })
+                    }}
+                  />
                 </th>
               ))}
             </tr>
@@ -422,6 +472,7 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
                   return (
                     <td
                       key={columnId}
+                      style={sized(column)}
                       className={cx('h-7 border-r border-b border-line-subtle p-0', active && 'outline-2 -outline-offset-2 outline-accent')}
                       onClick={() => setSelected({ row, column })}
                       onDoubleClick={() => setEditing({ row, column, raw: view.raw[row]?.[column] ?? '' })}
@@ -454,21 +505,40 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
         </table>
       </div>
       <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-line-subtle px-2 py-1" role="tablist" aria-label="sheets">
-        {Array.from({ length: view.sheets ?? 1 }, (_, at) => (
-          <button
-            key={at}
-            role="tab"
-            aria-selected={tab === at}
-            onClick={() => {
-              setTab(at)
-              setSelected({ row: 0, column: 0 })
-              setEditing(null)
-            }}
-            className={cx('rounded px-2 py-0.5 text-xs', tab === at ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}
-          >
-            Sheet {at + 1}
-          </button>
-        ))}
+        {Array.from({ length: view.sheets ?? 1 }, (_, at) =>
+          tab === at && renaming !== null ? (
+            <input
+              key={at}
+              autoFocus
+              aria-label="the sheet's name"
+              value={renaming}
+              maxLength={64}
+              onChange={(event) => setRenaming(event.target.value)}
+              onBlur={() => void rename()}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void rename()
+                if (event.key === 'Escape') setRenaming(null)
+              }}
+              className="w-32 rounded bg-bg px-2 py-0.5 text-xs text-fg-1 outline-1 outline-accent"
+            />
+          ) : (
+            <button
+              key={at}
+              role="tab"
+              aria-selected={tab === at}
+              title={tab === at ? 'Double-click to rename' : undefined}
+              onClick={() => {
+                setTab(at)
+                setSelected({ row: 0, column: 0 })
+                setEditing(null)
+              }}
+              onDoubleClick={() => tab === at && setRenaming(view.names?.[at] ?? `Sheet ${at + 1}`)}
+              className={cx('rounded px-2 py-0.5 text-xs', tab === at ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}
+            >
+              {view.names?.[at] ?? `Sheet ${at + 1}`}
+            </button>
+          ),
+        )}
         {(view.sheets ?? 1) < 16 && (
           <Button
             size="sm"
@@ -491,3 +561,17 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
     </div>
   )
 }
+
+/** The number formats a column may take, as the sheet's engine shows them (ADR 0083). */
+const NUMBER_FORMATS: [string, string][] = [
+  ['', 'General'],
+  ['0', '1234'],
+  ['0.00', '1234.10'],
+  ['#,##0', '1,234'],
+  ['#,##0.00', '1,234.10'],
+  ['0%', '12%'],
+  ['0.0%', '12.3%'],
+  ['$#,##0.00', '$1,234.10'],
+  ['€#,##0.00', '€1,234.10'],
+  ['£#,##0.00', '£1,234.10'],
+]

@@ -62,7 +62,9 @@ impl Core {
         match asked {
             SheetRequest::Read { sheet, range } => {
                 let book = self.sheet_book(thread, id, sheet);
-                let view = silt_proto::edited::book_view(&book.iter().collect::<Vec<_>>(), usize::from(sheet), today());
+                let metas = silt_proto::edited::metas_of(&self.page_docs(family, thread, id), book.len());
+                let view =
+                    silt_proto::edited::book_view_in(&book.iter().collect::<Vec<_>>(), &metas, usize::from(sheet), today());
                 match range {
                     Some(range) => Ok(
                         serde_json::json!({ "values": silt_proto::edited::read_range(&view, &range).map_err(CoreError::Invalid)? }),
@@ -116,6 +118,14 @@ impl Core {
                 let op = TextOp::Insert { pos: at.min(len), content: mark.repeat(count) };
                 self.append_page(family, thread, lines(sheet, axis.into(), op)).await?;
                 Ok(serde_json::json!({ "inserted": count }))
+            }
+            SheetRequest::Format { sheet, name, widths, formats } => {
+                self.may_edit(thread, id)?;
+                let cells = self.sheet_cells(thread, id, sheet);
+                let op = silt_proto::edited::format_op(id, sheet, &cells, name.as_deref(), &widths, &formats)
+                    .map_err(CoreError::Invalid)?;
+                self.append_page(family, thread, op).await?;
+                Ok(serde_json::json!({ "formatted": true }))
             }
             SheetRequest::Remove { sheet, axis, at, count } => {
                 self.may_edit(thread, id)?;

@@ -1002,7 +1002,8 @@ async fn sheet_xlsx(State(web): State<Web>, Path((thread, artifact)): Path<(Stri
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         };
         count = view.sheets;
-        sheets.push((format!("Sheet{}", sheet + 1), view));
+        let name = view.names.get(usize::from(sheet)).cloned().unwrap_or_else(|| format!("Sheet{}", sheet + 1));
+        sheets.push((name, view));
         sheet += 1;
     }
     match silt_proto::edited::xlsx_book(&sheets) {

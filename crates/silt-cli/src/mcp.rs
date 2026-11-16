@@ -281,13 +281,28 @@ impl silt_mcp::Backend for DaemonTools {
                         .collect();
                     ask(silt_proto::edited::SheetRequest::Set { sheet, cells, ids: Default::default() })?;
                 }
+                if let Some(format) = arguments.get("format").and_then(Value::as_object) {
+                    let name = format.get("name").and_then(Value::as_str).map(str::to_owned);
+                    let (mut widths, mut formats) = (std::collections::BTreeMap::new(), std::collections::BTreeMap::new());
+                    for (letter, column) in format.get("columns").and_then(Value::as_object).into_iter().flatten() {
+                        if let Some(width) = column.get("width") {
+                            widths.insert(letter.clone(), width.as_u64().and_then(|width| u16::try_from(width).ok()));
+                        }
+                        if let Some(shown) = column.get("format") {
+                            formats.insert(letter.clone(), shown.as_str().map(str::to_owned));
+                        }
+                    }
+                    ask(silt_proto::edited::SheetRequest::Format { sheet, name, widths, formats })?;
+                }
                 let range = arguments.get("read").and_then(Value::as_str).map(str::to_owned);
                 let read = ask(silt_proto::edited::SheetRequest::Read { sheet, range: range.clone() })?;
                 return Ok(match range {
                     Some(_) => serde_json::to_string(&read["values"]).unwrap_or_default(),
                     None => {
                         let count = read["sheets"].as_u64().unwrap_or(1);
-                        let heading = if count > 1 { format!("Sheet {} of {count}\n", sheet + 1) } else { String::new() };
+                        let name = read["names"][usize::from(sheet)].as_str().unwrap_or_default();
+                        let heading =
+                            if count > 1 { format!("{name}, sheet {} of {count}\n", sheet + 1) } else { format!("{name}\n") };
                         format!("{heading}{}", sheet_text(&read))
                     }
                 });
@@ -507,8 +522,8 @@ HTML out: it shows as text.\n";
 const SHEET_GUIDE: &str = "A sheet is a grid with formulas that people edit with you. Give its first cells as `content`, \
 {\"rows\": [[\"Task\", \"Hours\"], [\"Design\", 3]]}, header row first; after that, write cells with \
 silt_artifact_sheet. Use formulas (=SUM(B2:B9)) rather than computed numbers, so the sheet stays right as people \
-change it, and keep one table per sheet with one header row. A cell has no number format of its own: show a share \
-or an amount with TEXT, =TEXT(C10/C9,\"0%\") or =TEXT(B2,\"#,##0.00\"), in the cell itself rather than a unit in the next.\n";
+change it, and keep one table per sheet with one header row. Show a share or an amount with the column's number format, \
+silt_artifact_sheet's format {\"columns\": {\"C\": {\"format\": \"0%\"}}}, rather than a unit in the next cell.\n";
 const WHITEBOARD_GUIDE: &str = "A whiteboard is notes, arrows, sections and strokes people arrange together, live. Give its first items as \
 `content`: {\"items\": [{\"id\": \"goal\", \"type\": \"block\", \"x\": 0, \"y\": 0, \"w\": 160, \"h\": 100, \"text\": \"Ship M30\", \
 \"color\": \"yellow\"}, {\"id\": \"a1\", \"type\": \"arrow\", \"from\": \"goal\", \"to\": \"risk\", \"label\": \"blocked by\"}]}. Types: block \

@@ -1124,12 +1124,38 @@ pub fn date_serial(year: i64, month: i64, day: i64) -> f64 {
     (days_from_civil(year, month, day) - days_from_civil(1899, 12, 30)) as f64
 }
 
+/// Whether `format` is one a column may show its numbers in (ADR 0083):
+/// decimals (`0`, `0.00`), thousands (`#,##0.0`), a percentage (`0%`,
+/// `0.0%`), and those after a currency sign (`$#,##0.00`).
+pub fn number_format_ok(format: &str) -> bool {
+    let body = format.strip_prefix(['$', '€', '£', '¥']).unwrap_or(format);
+    let body = body.strip_suffix('%').unwrap_or(body);
+    let (whole, decimals) = body.split_once('.').unwrap_or((body, ""));
+    matches!(whole, "0" | "#,##0") && decimals.len() <= 6 && decimals.chars().all(|c| c == '0') && !body.ends_with('.')
+}
+
+/// `number` in a column's `format`, as [`number_format_ok`] takes them;
+/// a currency's sign goes after the minus.
+pub fn format_number(number: f64, format: &str) -> String {
+    match format.chars().next().filter(|c| "$€£¥".contains(*c)) {
+        Some(symbol) => {
+            let shown = formatted(number.abs(), &format[symbol.len_utf8()..]);
+            format!("{}{symbol}{shown}", if number < 0.0 { "-" } else { "" })
+        }
+        None => formatted(number, format),
+    }
+}
+
 /// `number` as a `TEXT` format shows it: decimals from the zeros after a
 /// point, thousands with a comma, and a percentage with `%`.
 fn formatted(number: f64, format: &str) -> String {
     let percent = format.ends_with('%');
     let value = if percent { number * 100.0 } else { number };
     let decimals = format.split_once('.').map_or(0, |(_, after)| after.chars().filter(|c| *c == '0' || *c == '#').count());
+    // Halves away from zero, as a spreadsheet rounds, where formatting rounds them to even.
+    let factor = 10f64.powi(i32::try_from(decimals).unwrap_or(0));
+    let rounded = (value * factor).round() / factor;
+    let value = if rounded.is_finite() { rounded } else { value };
     let mut text = format!("{value:.decimals$}");
     if format.contains(',') {
         let (whole, fraction) = text.split_once('.').map_or((text.as_str(), None), |(whole, fraction)| (whole, Some(fraction)));
@@ -1160,6 +1186,18 @@ mod tests {
 
     fn cells(rows: &[&[&str]]) -> Vec<Vec<String>> {
         rows.iter().map(|row| row.iter().map(|cell| (*cell).to_owned()).collect()).collect()
+    }
+
+    #[test]
+    fn a_column_shows_its_numbers_in_its_format() {
+        assert_eq!(format_number(0.5, "0%"), "50%");
+        assert_eq!(format_number(1234.5, "#,##0.00"), "1,234.50");
+        assert_eq!(format_number(-1234.5, "$#,##0"), "-$1,235");
+        assert_eq!(format_number(2.71, "0.0"), "2.7");
+        assert!(number_format_ok("€#,##0.00") && number_format_ok("0.0%") && number_format_ok("0"));
+        assert!(
+            !number_format_ok("yyyy-mm-dd") && !number_format_ok("0.") && !number_format_ok("#,##0.0#") && !number_format_ok("")
+        );
     }
 
     #[test]

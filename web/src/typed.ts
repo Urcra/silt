@@ -10,9 +10,20 @@ export type Source = { id: string; name: string; kind: string; detail: string; a
 export type Series = { name: string; points: [string | number, number | null][] }
 export type Block =
   | { type: 'text'; text: string }
-  | { type: 'stat'; label: string; value: number | string; unit?: string; change?: number; source: string }
+  | { type: 'stat'; label: string; value: number | string; unit?: string; change?: number; better?: 'up' | 'down'; source: string }
   | { type: 'table'; title?: string; columns: string[]; rows: unknown[][]; source: string }
-  | { type: 'chart'; title?: string; chart: string; x?: string; y?: string; stacked?: boolean; series: Series[]; source: string }
+  | {
+      type: 'chart'
+      title?: string
+      chart: string
+      x?: string
+      y?: string
+      x_scale?: 'category' | 'number' | 'time'
+      y_zero?: boolean
+      stacked?: boolean
+      series: Series[]
+      source: string
+    }
 export type DataPage = { title: string; summary?: string; sources: Source[]; blocks: Block[] }
 
 /**
@@ -186,6 +197,43 @@ export function chartTable(series: Series[]): { columns: string[]; rows: unknown
     columns: ['x', ...series.map((one) => one.name)],
     rows: xs.map((x) => [x, ...series.map((one) => one.points.find(([px]) => px === x)?.[1] ?? null)]),
   }
+}
+
+/**
+ * Where each of a chart's x values sits across its plot, 0 to 1 (ADR 0076): in order, or by value for a `number`
+ * or `time` scale, which every x must then be; in order again where one isn't.
+ */
+export function xPositions(xs: unknown[], scale: 'category' | 'number' | 'time' | undefined): number[] {
+  const ordinal = xs.map((_, at) => (xs.length === 1 ? 0.5 : at / (xs.length - 1)))
+  if (!scale || scale === 'category') return ordinal
+  const values = xs.map((x) => (scale === 'time' ? Date.parse(String(x)) : typeof x === 'number' ? x : Number.NaN))
+  if (values.some((value) => !Number.isFinite(value))) return ordinal
+  const [least, most] = [Math.min(...values), Math.max(...values)]
+  return values.map((value) => (most === least ? 0.5 : (value - least) / (most - least)))
+}
+
+/** A series' runs of values, by index, so a line breaks where one is missing rather than bridging it. */
+export function runs(ys: unknown[]): [number, number][][] {
+  const found: [number, number][][] = []
+  let run: [number, number][] = []
+  ys.forEach((y, at) => {
+    if (typeof y === 'number') run.push([at, y])
+    else if (run.length > 0) {
+      found.push(run)
+      run = []
+    }
+  })
+  if (run.length > 0) found.push(run)
+  return found
+}
+
+/** The values a chart's y axis spans: from zero, or, for a line or dots that may, just around its values. */
+export function yDomain(values: number[], fromZero: boolean): [number, number] {
+  if (values.length === 0) return [0, 1]
+  const [least, most] = [Math.min(...values), Math.max(...values)]
+  if (fromZero) return [Math.min(0, least), Math.max(0, most)]
+  const pad = (most - least) * 0.08 || Math.abs(most) * 0.1 || 1
+  return [least - pad, most + pad]
 }
 
 /** A column's letters: 0 is `A`, 26 is `AA`. */

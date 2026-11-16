@@ -194,7 +194,8 @@ fn show_tools() -> Vec<Value> {
                     "id": {"type": "string", "description": "The sheet's id"},
                     "set": {"type": "object", "description": "Cells to write, such as {\"A1\": \"Task\", \"B7\": \"=SUM(B2:B6)\"}; \"\" clears one"},
                     "read": {"type": "string", "description": "A range whose computed values to read, such as A1:D20; leave both out to read the whole sheet"},
-                    "sheet": {"type": "integer", "minimum": 1, "maximum": 16, "description": "Which sheet, from 1; the first when left out. Writing to the one after the last adds it"}
+                    "sheet": {"type": "integer", "minimum": 1, "maximum": 16, "description": "Which sheet, from 1; the first when left out. Writing to the one after the last adds it"},
+                    "format": {"type": "object", "description": "The sheet's name and its columns' widths and number formats, such as {\"name\": \"Budget\", \"columns\": {\"B\": {\"width\": 120, \"format\": \"$#,##0.00\"}, \"C\": {\"format\": \"0%\"}}}. Formats: 0, 0.0, #,##0, #,##0.00, 0%, 0.0%, and those after $, €, £ or ¥; null or \"\" clears one. Formulas still name sheets by number, Sheet2!B3"}
                 },
                 "required": ["id"]
             }

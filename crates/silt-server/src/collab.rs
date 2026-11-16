@@ -257,7 +257,17 @@ fn page_allowed(user: UserId, thread: ThreadId, op: &silt_log::PageOp, ledger: &
     let Some(declared) = declared else {
         return Err(refused("write"));
     };
+    let edit_level = || match declared.get("edit").and_then(|edit| edit.get("level")).and_then(serde_json::Value::as_str) {
+        Some("collaborator") => Level::Collaborator,
+        _ => Level::Comment,
+    };
     match op {
+        // A sheet's name and its columns' widths and formats are edits of the sheet (ADR 0083).
+        PageOp::Patched { path, .. } if path.starts_with("_sheets/") => {
+            if level < edit_level() {
+                return Err(refused("edit"));
+            }
+        }
         PageOp::Deleted { path, .. } if path.starts_with("_assets/") => {
             if !declared.contains_key("assets") || level < Level::Collaborator {
                 return Err(refused("delete the files of"));
@@ -280,11 +290,7 @@ fn page_allowed(user: UserId, thread: ThreadId, op: &silt_log::PageOp, ledger: &
             }
         }
         PageOp::Text { .. } | PageOp::Lines { .. } | PageOp::Cell { .. } => {
-            let needs = match declared.get("edit").and_then(|edit| edit.get("level")).and_then(serde_json::Value::as_str) {
-                Some("collaborator") => Level::Collaborator,
-                _ => Level::Comment,
-            };
-            if level < needs {
+            if level < edit_level() {
                 return Err(refused("edit"));
             }
         }

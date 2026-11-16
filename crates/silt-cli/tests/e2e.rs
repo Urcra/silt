@@ -2022,6 +2022,18 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     api.ok("POST", &path, Some(typed));
     let now = api.ok("POST", &path, Some(serde_json::json!({"op": "read", "sheet": 1})));
     assert_eq!((&now["raw"][0][0], &now["raw"][1][0]), (&"".into(), &"kept".into()), "{now}");
+    // A sheet is named, and a column sized and shown as a percentage.
+    api.ok("POST", &path, Some(serde_json::json!({"op": "set", "sheet": 2, "cells": {"A1": "0.25"}})));
+    let format = serde_json::json!({"op": "format", "sheet": 2, "name": "Shares", "widths": {"A": 140}, "formats": {"A": "0%"}});
+    api.ok("POST", &path, Some(format));
+    let shares = api.ok("POST", &path, Some(serde_json::json!({"op": "read", "sheet": 2})));
+    assert_eq!(
+        (&shares["values"][0][0], &shares["widths"][0], &shares["names"][2]),
+        (&"25%".into(), &140.into(), &"Shares".into()),
+        "{shares}"
+    );
+    let (refused, _) = api.call("POST", &path, Some(serde_json::json!({"op": "format", "sheet": 2, "formats": {"A": "=1"}})));
+    assert!(!refused, "only a number format");
     let (too_many, _) = api.call("POST", &path, Some(serde_json::json!({"op": "read", "sheet": 16})));
     assert!(!too_many, "an artifact has at most 16 sheets");
     for word in ["fruit", "rhubarb"] {

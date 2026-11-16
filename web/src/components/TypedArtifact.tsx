@@ -17,6 +17,9 @@ import {
   canvasOf,
   chartColors,
   chartTable,
+  runs,
+  xPositions,
+  yDomain,
   csvOf,
   dataPageOf,
   deckOf,
@@ -660,7 +663,8 @@ function Chart({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const [W, H, L, B, T, R] = [shownWidth, 260, 48, 28, 12, 12];
+  // Room for the axes' titles where the page gives them.
+  const [W, H, L, B, T, R] = [shownWidth, block.x ? 276 : 260, block.y ? 64 : 48, block.x ? 44 : 28, 12, 12];
   const values = block.series
     .flatMap((one) => one.points.map(([, y]) => y))
     .filter((y): y is number => typeof y === "number");
@@ -669,11 +673,17 @@ function Chart({
       .slice(1)
       .reduce<number>((sum, y) => sum + (typeof y === "number" ? y : 0), 0),
   );
-  const top = Math.max(0, ...(block.stacked ? stackedTotals : values));
-  const bottom = Math.min(0, ...values);
+  // Bars and areas measure from zero; a line or dots may start near their values.
+  const fromZero =
+    block.y_zero !== false || ["bar", "segmented", "area", "heatmap"].includes(block.chart) || Boolean(block.stacked);
+  const [bottom, top] = yDomain(block.stacked ? [...values, ...stackedTotals] : values, fromZero);
   const span = top - bottom || 1;
-  const sx = (index: number) =>
-    L + (W - L - R) * (rows.length === 1 ? 0.5 : index / (rows.length - 1));
+  const across = xPositions(
+    rows.map((row) => row[0]),
+    block.x_scale,
+  );
+  const order = rows.map((_row, index) => index).sort((a, b) => across[a] - across[b]);
+  const sx = (index: number) => L + (W - L - R) * (across[index] ?? 0.5);
   const sy = (value: number) => T + (H - T - B) * (1 - (value - bottom) / span);
   const ticks = [bottom, bottom + span / 2, top];
   const band = (W - L - R) / Math.max(rows.length, 1);
@@ -737,8 +747,11 @@ function Chart({
           (point): point is readonly [number, number] =>
             typeof point[1] === "number",
         );
-      const path = points
-        .map(([index, y], at) => `${at === 0 ? "M" : "L"}${sx(index)},${sy(y)}`)
+      // A missing value breaks the line, in the order the x scale puts them.
+      const path = runs(order.map((index) => rows[index][s + 1]))
+        .map((run) =>
+          run.map(([at, y], step) => `${step === 0 ? "M" : "L"}${sx(order[at])},${sy(y)}`).join(""),
+        )
         .join("");
       if (block.chart === "line" || block.chart === "area")
         marks.push(
@@ -834,7 +847,7 @@ function Chart({
                   ? sx(index)
                   : L + band * (index + 0.5)
               }
-              y={H - 8}
+              y={H - B + 18}
               textAnchor="middle"
               fontSize={11}
               fill="currentColor"
@@ -842,6 +855,23 @@ function Chart({
               {String(row[0])}
             </text>
           ),
+        )}
+        {block.x && (
+          <text x={L + (W - L - R) / 2} y={H - 6} textAnchor="middle" fontSize={11} fill="currentColor">
+            {block.x}
+          </text>
+        )}
+        {block.y && (
+          <text
+            x={14}
+            y={T + (H - T - B) / 2}
+            transform={`rotate(-90 14 ${T + (H - T - B) / 2})`}
+            textAnchor="middle"
+            fontSize={11}
+            fill="currentColor"
+          >
+            {block.y}
+          </text>
         )}
         {hover !== null && (
           <g pointerEvents="none">
@@ -878,6 +908,17 @@ function Chart({
         )}
         <desc>{columns.join(", ")}</desc>
       </svg>
+      {block.chart === "heatmap" && (
+        <div className="mt-1 flex items-center gap-2 text-xs text-fg-2" aria-label="scale">
+          <span className="tabular-nums">{shown(Number(bottom.toPrecision(3)))}</span>
+          <span
+            aria-hidden="true"
+            className="h-2 w-28 rounded-sm"
+            style={{ background: `linear-gradient(to right, color-mix(in srgb, ${colors[0]} 15%, transparent), ${colors[0]})` }}
+          />
+          <span className="tabular-nums">{shown(Number(top.toPrecision(3)))}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -928,7 +969,16 @@ export function DataView({ text, theme, style }: { text: string; theme: FrameThe
                   )}
                 </span>
                 {typeof block.change === "number" && (
-                  <span className="text-xs text-fg-2">
+                  <span
+                    className={cx(
+                      "text-xs",
+                      !block.better || block.change === 0
+                        ? "text-fg-2"
+                        : (block.change > 0) === (block.better === "up")
+                          ? "text-ok"
+                          : "text-danger",
+                    )}
+                  >
                     {block.change > 0 ? "▲" : block.change < 0 ? "▼" : "="}{" "}
                     {shown(Math.abs(block.change * 100))}%
                   </span>

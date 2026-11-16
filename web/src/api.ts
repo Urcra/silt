@@ -131,7 +131,16 @@ async function requestBlob(path: string): Promise<Blob> {
 }
 
 /** A sheet as its viewer shows it (ADR 0077). */
-export type SheetView = { rows: string[]; columns: string[]; raw: string[][]; values: string[][]; sheets?: number }
+export type SheetView = {
+  rows: string[]
+  columns: string[]
+  raw: string[][]
+  values: string[][]
+  sheets?: number
+  names?: string[]
+  widths?: (number | null)[]
+  formats?: (string | null)[]
+}
 
 /** The search form's fields, as typed; `since` is a date. */
 export interface SearchForm {

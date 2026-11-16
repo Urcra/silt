@@ -204,6 +204,13 @@ fn html(text: &str, what: &str) -> Result<(), String> {
     if text.len() > PART_HTML_BYTES { Err(format!("{what} is over {} KiB", PART_HTML_BYTES >> 10)) } else { Ok(()) }
 }
 
+/// Whether `text` starts as an ISO 8601 date, `2026-11-16`, as a time scale's x does.
+fn iso_date(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() >= 10
+        && bytes[..10].iter().enumerate().all(|(at, byte)| if at == 4 || at == 7 { *byte == b'-' } else { byte.is_ascii_digit() })
+}
+
 fn data_block(block: &Value, sources: &std::collections::HashSet<&str>) -> Result<(), String> {
     let kind = block.get("type").and_then(Value::as_str).ok_or("each block has a type: stat, chart, table or text")?;
     let source = || -> Result<(), String> {
@@ -216,6 +223,9 @@ fn data_block(block: &Value, sources: &std::collections::HashSet<&str>) -> Resul
             source()?;
             block.get("label").and_then(Value::as_str).ok_or("a stat has a label")?;
             block.get("value").filter(|value| value.is_number() || value.is_string()).ok_or("a stat has a value")?;
+            if block.get("better").is_some_and(|better| !matches!(better.as_str(), Some("up" | "down"))) {
+                return Err("a stat's better is up or down".into());
+            }
             Ok(())
         }
         "table" => {
@@ -237,6 +247,15 @@ fn data_block(block: &Value, sources: &std::collections::HashSet<&str>) -> Resul
             if series.is_empty() || series.len() > 12 {
                 return Err("a chart has 1 to 12 series".into());
             }
+            let scale = block.get("x_scale").map(|scale| scale.as_str().unwrap_or_default());
+            if scale.is_some_and(|scale| !["category", "number", "time"].contains(&scale)) {
+                return Err("x_scale is category, number or time".into());
+            }
+            let placed = |x: &Value| match scale {
+                Some("number") => x.is_number(),
+                Some("time") => x.as_str().is_some_and(iso_date),
+                _ => true,
+            };
             let mut points = 0;
             for one in series {
                 one.get("name").and_then(Value::as_str).ok_or("each series has a name")?;
@@ -245,6 +264,9 @@ fn data_block(block: &Value, sources: &std::collections::HashSet<&str>) -> Resul
                     let pair = point.as_array().filter(|pair| pair.len() == 2).ok_or("a point is [x, y]")?;
                     if !pair[1].is_number() && !pair[1].is_null() {
                         return Err("a point's y is a number or null".into());
+                    }
+                    if !placed(&pair[0]) {
+                        return Err("on a number or time scale, each x is a number or an ISO 8601 date".into());
                     }
                 }
                 points += data.len();
@@ -324,15 +346,19 @@ pub fn guide(kind: &str) -> Option<(Value, Value)> {
                 let text = json!({"type": "object", "required": ["type", "text"], "properties": {"type": {"const": "text"}, "text": {"type": "string", "description": "Markdown"}}});
                 let stat = json!({"type": "object", "required": ["type", "label", "value", "source"], "properties": {
                     "type": {"const": "stat"}, "label": {"type": "string"}, "value": {"type": ["number", "string"]},
-                    "unit": {"type": "string"}, "change": {"type": "number", "description": "A fraction: -0.62 is down 62%"}, "source": {"type": "string"}}});
+                    "unit": {"type": "string"}, "change": {"type": "number", "description": "A fraction: -0.62 is down 62%"},
+                "better": {"enum": ["up", "down"], "description": "Which way the change is good, so it shows as good or bad"}, "source": {"type": "string"}}});
                 let table = json!({"type": "object", "required": ["type", "columns", "rows", "source"], "properties": {
                     "type": {"const": "table"}, "title": {"type": "string"}, "columns": {"type": "array", "items": {"type": "string"}},
                     "rows": {"type": "array", "items": {"type": "array"}}, "source": {"type": "string"}}});
                 let series = json!({"type": "object", "required": ["name", "points"], "properties": {
                     "name": {"type": "string"}, "points": {"type": "array", "items": {"type": "array", "minItems": 2, "maxItems": 2}}}});
                 let chart = json!({"type": "object", "required": ["type", "chart", "series", "source"], "properties": {
-                    "type": {"const": "chart"}, "title": {"type": "string"}, "chart": {"enum": CHARTS}, "x": {"type": "string"},
-                    "y": {"type": "string"}, "stacked": {"type": "boolean"},
+                    "type": {"const": "chart"}, "title": {"type": "string"}, "chart": {"enum": CHARTS},
+                    "x": {"type": "string", "description": "The x axis's title"}, "y": {"type": "string", "description": "The y axis's title"},
+                    "x_scale": {"enum": ["category", "number", "time"], "description": "category: x values in order; number or time: placed by value, every x a number or an ISO 8601 date"},
+                    "y_zero": {"type": "boolean", "description": "false lets a line, dot or scatter chart's y axis start near its values rather than at zero"},
+                    "stacked": {"type": "boolean"},
                     "series": {"type": "array", "minItems": 1, "maxItems": 12, "items": series}, "source": {"type": "string"}}});
                 json!({
                     "type": "object",
@@ -384,6 +410,23 @@ mod tests {
         let pie = r#"{"title": "t", "sources": [{"id": "s", "name": "s", "kind": "manual", "detail": "", "at": ""}], "blocks": [{"type": "chart", "chart": "pie", "series": [], "source": "s"}]}"#;
         assert!(validate("data", pie).is_err());
         assert_eq!(validate("html", "<p>anything</p>"), Ok(()));
+    }
+
+    #[test]
+    fn a_chart_on_a_number_or_time_scale_places_every_x() {
+        let page = |chart: &str| {
+            format!(
+                r#"{{"title": "t", "sources": [{{"id": "s", "name": "s", "kind": "manual", "detail": "", "at": ""}}], "blocks": [{chart}]}}"#
+            )
+        };
+        let timed = r#"{"type": "chart", "chart": "line", "x_scale": "time", "y_zero": false, "series": [{"name": "p50", "points": [["2026-11-01", 3], ["2026-11-09T10:00:00Z", null]]}], "source": "s"}"#;
+        assert!(validate("data", &page(timed)).is_ok());
+        let untimed = r#"{"type": "chart", "chart": "line", "x_scale": "time", "series": [{"name": "p50", "points": [["a1", 3]]}], "source": "s"}"#;
+        assert!(validate("data", &page(untimed)).unwrap_err().contains("ISO 8601"));
+        let scattered = r#"{"type": "chart", "chart": "scatter", "x_scale": "number", "series": [{"name": "files", "points": [[12, 3], ["13", 4]]}], "source": "s"}"#;
+        assert!(validate("data", &page(scattered)).is_err(), "a number scale's x is a number");
+        let stat = r#"{"type": "stat", "label": "p50", "value": 3, "change": -0.5, "better": "sideways", "source": "s"}"#;
+        assert!(validate("data", &page(stat)).is_err());
     }
 
     #[test]
