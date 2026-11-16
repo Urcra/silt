@@ -13,7 +13,7 @@ use crate::delta::{Delta, SessionRef};
 
 /// The encoding of [`Family::snapshot`]; a snapshot in another one is
 /// replayed instead of read.
-pub const SNAPSHOT_FORMAT: i64 = 4;
+pub const SNAPSHOT_FORMAT: i64 = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotError {

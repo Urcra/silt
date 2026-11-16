@@ -9,7 +9,15 @@ streaming: string, };
 
 export type AgentState = "starting" | "idle" | "working" | "awaiting_permission" | "awaiting_input" | "error" | "stopped";
 
-export type Capabilities = { answer_permissions: boolean, send_prompts: boolean, run_agents: boolean, review: boolean, };
+export type Capabilities = { answer_permissions: boolean, send_prompts: boolean, run_agents: boolean, review: boolean, 
+/**
+ * Ask one of the person's computers' agents a page's question (ADR 0072).
+ */
+sample: boolean, 
+/**
+ * Call the person's page connectors on one of their computers (ADR 0080).
+ */
+page_tools: boolean, };
 
 export type InboxAction = { "do": "permission", id: number, title: string, options: Array<[string, string]>, } | { "do": "plan" };
 
@@ -226,7 +234,7 @@ export type ChoiceAsked = {
  */
 value: string, label: string, description: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "lagged" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "lagged" };
 
 export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<string>, };
 
@@ -251,7 +259,7 @@ export type CommentLocation = { "at": "entry", index: number, excerpt: string, }
  * Where they are in the base the comments were asked against, when
  * they're there: a diff shows a comment on deleted lines beside them.
  */
-before: LineSpan | null, } | { "at": "unknown" };
+before: LineSpan | null, } | { "at": "doc", artifact: string, start: number, end: number, excerpt: string, outdated: boolean, } | { "at": "unknown" };
 
 export type LineSpan = { start: number, end: number, };
 
@@ -260,7 +268,7 @@ export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", pat
  * The lines are numbered as a diff with git's rewrites left out
  * shows them (ADR 0069).
  */
-hide_git?: boolean, } | { "on": "anchored", anchor: string, };
+hide_git?: boolean, } | { "on": "anchored", anchor: string, } | { "on": "doc", artifact: string, start: number, end: number, };
 
 export type PendingAnchor = { anchor: string, };
 
@@ -608,7 +616,83 @@ design_system?: string | null,
  * The blob holding the CSS that system's tokens compiled to, which the
  * version's frame is given; read with the same route as the content.
  */
-style?: string | null, };
+style?: string | null, 
+/**
+ * What this version changed (ADR 0073).
+ */
+note?: string | null, 
+/**
+ * What the artifact is, as its card says.
+ */
+description?: string | null, 
+/**
+ * The capabilities the version's page may use, each with its config
+ * (ADR 0072).
+ */
+capabilities?: Record<string, Record<string, unknown>> | null, 
+/**
+ * The person this version was saved for, when the page saved itself
+ * rather than an agent making it (ADR 0072).
+ */
+by?: string | null, 
+/**
+ * An HTML version's runtime contract, which its page's `silt` is
+ * (ADR 0072).
+ */
+contract?: string | null, 
+/**
+ * The files beside an HTML version's page, by path, which its frame
+ * fetches relative to itself (ADR 0074).
+ */
+files?: { [key in string]: ArtifactFile } | null, };
+
+export type ArtifactFile = { blob: string, size: number, media_type: string, };
+
+export type ArtifactListed = { thread: string, thread_title: string | null, repo: string, owner: string, 
+/**
+ * Whether the thread is the person's own.
+ */
+mine: boolean, artifact: ArtifactView, 
+/**
+ * When its latest version was made.
+ */
+time_ms: number, pinned: boolean, 
+/**
+ * Hidden by the thread's owner; shown only when asked for.
+ */
+archived: boolean, };
+
+export type PageConnector = { name: string, 
+/**
+ * A stdio server's program, with `args`.
+ */
+command: string | null, args: Array<string>, 
+/**
+ * A Streamable HTTP server's address.
+ */
+url: string | null, 
+/**
+ * Headers sent to an HTTP server, each from the environment variable
+ * it names, so no secret is kept in the file.
+ */
+header_env: { [key in string]: string }, 
+/**
+ * The environment variables a stdio server gets beyond the few every
+ * program needs ([`BASE_ENV`]), by name; nothing else of the daemon's
+ * environment reaches it.
+ */
+pass_env: Array<string>, 
+/**
+ * The tools pages may call, by name; every one is off until ticked.
+ */
+tools: { [key in string]: boolean }, };
+
+export type ConnectorTool = { name: string, description: string | null, 
+/**
+ * The server marks it as only reading; anything else is an action the
+ * viewer confirms each time.
+ */
+read_only: boolean, input_schema: unknown, };
 
 export type DesignSource = "project" | "personal" | "builtin";
 
@@ -898,7 +982,11 @@ turn: number | null,
 /**
  * The agent compacted its context after it.
  */
-before_compaction: boolean, };
+before_compaction: boolean, 
+/**
+ * The doc or sheet whose text it's in.
+ */
+artifact: string | null, };
 
 export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
 

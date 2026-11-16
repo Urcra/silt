@@ -494,3 +494,56 @@ export function taking(phase: DictationPhase): boolean {
 }
 
 export type Dictation = ReturnType<typeof useDictation>
+
+/** A take a page started through `dictation` (ADR 0079): stopping it waits for the last words. */
+export type PageTake = { stop: () => Promise<void> }
+
+/**
+ * A take for a page: the microphone to the daemon's speech helper, its live guesses and settled phrases told to
+ * `heard`, until stopped, too long, or failed. Rejects when the speech helper has no model yet or the microphone won't
+ * open.
+ */
+export async function pageTake(heard: { partial: (text: string) => void; final: (text: string) => void; ended: (reason: string) => void }): Promise<PageTake> {
+  const status = await api.voiceStatus()
+  if (!status.model) throw new Error("Silt's speech model isn't downloaded yet; dictate once in the composer to get it.")
+  const framer = new Framer(FRAME_SAMPLES)
+  let socket: WebSocket | null = null
+  let over = false
+  let finished: () => void = () => undefined
+  const done = new Promise<void>((resolve) => (finished = resolve))
+  const end = (reason: string) => {
+    if (over) return
+    over = true
+    closeMicrophone()
+    socket?.close()
+    finished()
+    heard.ended(reason)
+  }
+  const closeMicrophone = await openMicrophone((samples) => {
+    for (const frame of framer.push(samples)) if (socket?.readyState === WebSocket.OPEN) socket.send(frame.buffer as ArrayBuffer)
+  })
+  socket = dictationSocket()
+  socket.onmessage = (message: MessageEvent<string>) => {
+    const event = JSON.parse(message.data) as VoiceEvent
+    if (event.kind === 'partial') heard.partial(event.text)
+    else if (event.kind === 'segment') heard.final(event.text)
+    else if (event.kind === 'failed') end('failed')
+    else if (event.kind === 'done') end('stopped')
+  }
+  socket.onclose = () => end('failed')
+  const longest = setTimeout(() => void stop(), LONGEST_TAKE_MS)
+  const stop = async () => {
+    clearTimeout(longest)
+    if (over) return
+    closeMicrophone()
+    const rest = framer.rest()
+    if (socket?.readyState === WebSocket.OPEN) {
+      if (rest) socket.send(rest.buffer as ArrayBuffer)
+      socket.send('finish')
+      setTimeout(() => end('stopped'), FINISH_WAIT_MS)
+      await done
+    } else end('stopped')
+  }
+  document.addEventListener('visibilitychange', () => document.hidden && void stop(), { once: true })
+  return { stop }
+}

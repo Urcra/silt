@@ -52,7 +52,8 @@ function sizeOf(bytes: number): string {
 }
 
 export function KindIcon({ kind, className }: { kind: string; className?: string }) {
-  return <Icon name={kind === 'image' || kind === 'svg' ? 'image' : kind === 'mermaid' ? 'graph' : 'file'} className={className} />
+  const name = kind === 'image' || kind === 'svg' || kind === 'canvas' ? 'image' : kind === 'mermaid' ? 'graph' : kind === 'slides' ? 'play' : kind === 'data' ? 'list' : 'file'
+  return <Icon name={name} className={className} />
 }
 
 /** An artifact version as the conversation shows it where the agent made it: a card that opens it beside the conversation. */
@@ -78,7 +79,9 @@ export function ArtifactCard({ entry }: { entry: HistoryEntry }) {
         <span className="truncate font-medium">{artifact.title}</span>
         <span className="text-xs text-fg-2">
           {kindLabel(artifact.kind)} · v{artifact.version}
+          {artifact.note ? ` · ${artifact.note}` : ''}
         </span>
+        {artifact.description ? <span className="line-clamp-2 text-xs text-fg-3">{artifact.description}</span> : null}
       </span>
       <span className="shrink-0 text-xs text-accent-fg">{open ? 'Open beside' : 'Open'}</span>
     </button>

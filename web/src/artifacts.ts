@@ -1,7 +1,17 @@
 // What agents showed the person (ADR 0068): artifacts, each a run of
 // versions under one id, and images shown in the conversation.
 
-import type { ArtifactContent, ArtifactView, CommentView, HistoryEntry } from './api'
+import type { ArtifactContent, ArtifactListed, ArtifactView, CommentView, HistoryEntry } from './api'
+import {
+  FIRST_SCRIPT_BRIDGE,
+  FIRST_SCRIPT_END,
+  FIRST_SCRIPT_START,
+  FONT_SOURCES,
+  OFFLINE_STUB,
+  SCRIPT_SOURCES,
+  STYLE_SOURCES,
+  VENDOR_HOSTS,
+} from './frame.generated'
 
 export type ArtifactVersion = { entry: HistoryEntry; artifact: ArtifactView }
 
@@ -36,7 +46,19 @@ export function versionOf(group: ArtifactGroup, version: number | null): Artifac
   return group.versions.find((candidate) => candidate.artifact.version === version) ?? latest(group)
 }
 
-const KINDS: Record<string, string> = { html: 'HTML page', svg: 'SVG', markdown: 'Document', mermaid: 'Diagram', image: 'Image' }
+const KINDS: Record<string, string> = {
+  html: 'HTML page',
+  svg: 'SVG',
+  markdown: 'Document',
+  mermaid: 'Diagram',
+  image: 'Image',
+  slides: 'Slides',
+  canvas: 'Canvas',
+  data: 'Data',
+  doc: 'Doc',
+  sheet: 'Sheet',
+  whiteboard: 'Whiteboard',
+}
 
 export function kindLabel(kind: string): string {
   return KINDS[kind] ?? kind
@@ -48,17 +70,14 @@ export function kindLabel(kind: string): string {
  */
 export const ARTIFACT_CSP = framePolicy(null)
 
-/** The hosts Silt's vendor route fetches from, as `silt_design::frame` lists them. */
-const VENDOR_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'unpkg.com', 'cdn.tailwindcss.com', 'code.jquery.com', 'fonts.googleapis.com', 'fonts.gstatic.com']
-
 /**
  * The policy a frame runs under, as `silt_design::frame::policy` writes it: the CDNs themselves, or only `vendor`, an
  * absolute URL ending in `/` that serves them through Silt (ADR 0071).
  */
 export function framePolicy(vendor: string | null): string {
-  const scripts = vendor ?? 'https://cdnjs.cloudflare.com https://cdn.jsdelivr.net/npm/ https://unpkg.com https://cdn.tailwindcss.com https://code.jquery.com'
-  const styles = vendor ?? 'https://fonts.googleapis.com'
-  const fonts = vendor ?? 'https://fonts.gstatic.com'
+  const scripts = vendor ?? SCRIPT_SOURCES.join(' ')
+  const styles = vendor ?? STYLE_SOURCES.join(' ')
+  const fonts = vendor ?? FONT_SOURCES.join(' ')
   return `default-src 'none'; script-src 'unsafe-inline' ${scripts}; style-src 'unsafe-inline' ${styles}; font-src data: ${fonts}; img-src data: blob:; media-src data: blob:`
 }
 
@@ -77,24 +96,37 @@ export type FrameTheme = 'light' | 'dark'
 /** What the page in an artifact's frame reported going wrong in it: a load the policy blocked, a script error, or a page wider than its frame. */
 export type FrameProblem = { kind: 'blocked' | 'error' | 'overflow'; text: string }
 
+/** Whether `origin` is a bare `http(s)://host[:port]`, as `silt_design::frame::is_origin` checks. */
+function isOrigin(origin: string): boolean {
+  const host = origin.startsWith('https://') ? origin.slice(8) : origin.startsWith('http://') ? origin.slice(7) : null
+  return host !== null && host.length > 0 && host.length <= 255 && /^[A-Za-z0-9.:[\]-]+$/.test(host)
+}
+
 /**
- * The script that runs first in an artifact's frame. It takes the viewer's theme, now and as it changes, and tells the
- * page holding the frame what text is selected, for a comment to quote, and what went wrong in it (ADR 0071).
+ * The script that runs first in an artifact's frame, as `silt_design::frame::first_script` writes it. It takes the
+ * viewer's theme, now and as it changes, and tells the page holding the frame, at `parent`, what text is selected, for
+ * a comment to quote, and what went wrong in it (ADR 0071).
  */
-function frameScript(theme: FrameTheme | null): string {
-  return [
-    '(function(){var root=document.documentElement;',
-    theme ? `root.setAttribute('data-theme','${theme}');` : '',
-    "addEventListener('message',function(e){var d=e.data;if(e.source!==parent||!d||d.silt!=='theme')return;if(d.theme==='light'||d.theme==='dark')root.setAttribute('data-theme',d.theme)});",
-    "document.addEventListener('mouseup',function(){var t=String(getSelection()||'').trim();parent.postMessage({silt:'selection',text:t.slice(0,500)},'*')});",
-    'var seen={},problems=[];',
-    "function report(kind,text){text=String(text).slice(0,300);if(seen[kind+text]||problems.length>=20)return;seen[kind+text]=1;problems.push({kind:kind,text:text});parent.postMessage({silt:'problems',problems:problems.slice()},'*')}",
-    "document.addEventListener('securitypolicyviolation',function(e){report('blocked',(e.blockedURI||'inline')+' ('+e.effectiveDirective+')')});",
-    "addEventListener('error',function(e){if(e.message)report('error',e.message+(e.lineno?' (line '+e.lineno+')':''))});",
-    "addEventListener('unhandledrejection',function(e){var r=e.reason;report('error','Unhandled rejection: '+(r&&r.message||r))});",
-    "addEventListener('load',function(){setTimeout(function(){var w=root.scrollWidth,v=root.clientWidth;if(w>v+1)report('overflow','The page is '+w+'px wide in a '+v+'px frame')},300)});",
-    '})();',
-  ].join('')
+function frameScript(theme: FrameTheme | null, parent: string | null, boot: string | null): string {
+  const themed = theme ? `root.setAttribute('data-theme','${theme}');` : ''
+  const to = parent !== null && isOrigin(parent) ? parent : '*'
+  return `${FIRST_SCRIPT_START}${themed}var to='${to}';var boot=${bootJson(boot)};${FIRST_SCRIPT_END}${FIRST_SCRIPT_BRIDGE}})();`
+}
+
+/** The most of a viewer's storage and kept state a frame is handed, as `silt_design::frame::BOOT_BYTES`. */
+const BOOT_BYTES = 2 << 20
+
+/** `boot` as a JSON object safe inside a script element, or `{}`, as `silt_design::frame` writes it: checked, then kept as written. */
+function bootJson(boot: string | null): string {
+  if (boot === null || boot.length > BOOT_BYTES) return '{}'
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(boot)
+  } catch {
+    return '{}'
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return '{}'
+  return boot.replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
 }
 
 export type FrameOptions = {
@@ -106,26 +138,40 @@ export type FrameOptions = {
   theme?: FrameTheme | null
   /** Silt's vendor route, an absolute URL ending in `/`, when libraries and fonts load through it. */
   vendor?: string | null
+  /** The origin of the page holding the frame, which the frame's messages go to. */
+  parent?: string | null
+  /** The policy as a `<meta>`; a page served with it as a header leaves it out. */
+  policyMeta?: boolean
+  /** What the holding page kept for this viewer, as a JSON object: their storage, and the last version's state. */
+  boot?: string | null
+}
+
+/** A page's doctype, or the standard one when it has none, and the rest, as `silt_design::frame::split_doctype` splits it. */
+function splitDoctype(html: string): [string, string] {
+  const trimmed = html.trimStart()
+  const end = trimmed.slice(0, 9).toLowerCase() === '<!doctype' ? trimmed.indexOf('>') : -1
+  return end >= 0 ? [trimmed.slice(0, end + 1), trimmed.slice(end + 1)] : ['<!doctype html>', trimmed]
 }
 
 /**
- * An HTML artifact as its sandboxed frame loads it: with a policy that lets it reach nothing but the CDN allowlist,
- * the frame's script and the design system's tokens before anything of its own, and its doctype kept first so it
- * renders as written.
+ * An HTML artifact as its sandboxed frame loads it, composed as `silt_design::frame::compose` does on every other
+ * surface: a policy that lets it reach nothing but the CDN allowlist, the frame's script and the design system's tokens
+ * before anything of its own, and its doctype kept first so it renders as written.
  */
-export function sandboxedDocument(html: string, { probe = true, style = null, theme = null, vendor = null }: FrameOptions = {}): string {
+export function sandboxedDocument(
+  html: string,
+  { probe = true, style = null, theme = null, vendor = null, parent = null, policyMeta = true, boot = null }: FrameOptions = {},
+): string {
   if (vendor) {
     html = throughVendor(html, vendor)
     style = style && throughVendor(style, vendor)
   }
-  const doctype = /^\s*<!doctype[^>]*>/i.exec(html)
-  const first = doctype ? doctype[0].trim() : '<!doctype html>'
-  const rest = doctype ? html.slice(doctype[0].length) : html
-  const policy = `<meta http-equiv="Content-Security-Policy" content="${framePolicy(vendor)}">`
-  const script = probe ? `<script>${frameScript(theme)}</script>` : ''
+  const [doctype, rest] = splitDoctype(html)
+  const policy = policyMeta ? `<meta http-equiv="Content-Security-Policy" content="${framePolicy(vendor)}">` : ''
+  const script = probe ? `<script>${frameScript(theme, parent, boot)}</script>` : `<script>${OFFLINE_STUB}</script>`
   // The CSS can't close its own element, whatever a peer put in it.
   const styled = style ? `<style data-silt="design-system">${style.replace(/<\//g, '<\\/')}</style>` : ''
-  return `${first}${policy}${script}${styled}${rest}`
+  return `${doctype}${policy}${script}${styled}${rest}`
 }
 
 /** A prompt asking the agent to fix what the viewer's frame reported in a version. */
@@ -186,12 +232,49 @@ function escape(text: string): string {
 }
 
 /**
- * A version as one HTML file that opens anywhere, with no Silt and no network: an HTML artifact as it is, under the
- * same policy as in Silt; anything else, as `rendered` (Markdown's markup, a diagram's SVG as an image) or the
+ * A version as one HTML file that opens anywhere, with no Silt and no network: an HTML artifact as it is, or as
+ * `rendered` with its diagrams drawn in, under the same policy as in Silt; anything else, as `rendered` (Markdown's markup, a diagram's SVG as an image) or the
  * content inline, on a plain page titled with the artifact's name.
  */
-export function offlineHtml(artifact: ArtifactView, content: ArtifactContent, rendered?: string, style?: string | null): string {
-  if (artifact.kind === 'html') return sandboxedDocument(textOf(content), { probe: false, style })
+/** The path that opens one artifact, at its latest version unless `version` names another. */
+export function artifactPath(thread: string, artifact: string, version?: number | null): string {
+  return version ? `/t/${thread}/artifacts/${artifact}/v/${version}` : `/t/${thread}/artifacts/${artifact}`
+}
+
+/** Whether `row` is among what the filters ask for. */
+export function listingMatches(row: ArtifactListed, filters: { text: string; kind: string; repo: string; mine: boolean; archived: boolean }): boolean {
+  if (row.archived !== filters.archived) return false
+  if (filters.kind && row.artifact.kind !== filters.kind) return false
+  if (filters.repo && row.repo !== filters.repo) return false
+  if (filters.mine && !row.mine) return false
+  const text = filters.text.trim().toLowerCase()
+  return !text || `${row.artifact.title} ${row.artifact.description ?? ''}`.toLowerCase().includes(text)
+}
+
+/** A version's files as the offline copy carries them: each one's type and its bytes as base64, by path. */
+export type InlineFiles = Record<string, { media_type: string; data: string }>
+
+/**
+ * `html` with its own files carried inside it, for the offline copy (ADR 0074): each `src` or `href` naming one becomes
+ * a `data:` URI, and `fetch` of one answers from what's carried.
+ */
+export function withFilesInlined(html: string, files: InlineFiles): string {
+  const paths = Object.keys(files)
+  if (paths.length === 0) return html
+  let out = html
+  for (const path of paths) {
+    const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const uri = `data:${files[path].media_type.split(';')[0]};base64,${files[path].data}`
+    out = out.replace(new RegExp(`((?:src|href)\\s*=\\s*["'])(?:\\./)?${escaped}(["'])`, 'g'), (_match, before: string, after: string) => `${before}${uri}${after}`)
+  }
+  const carried = JSON.stringify(Object.fromEntries(paths.map((path) => [path, [files[path].media_type, files[path].data]]))).replace(/</g, '\\u003c')
+  const shim = `<script>(function(){var f=${carried};var of=window.fetch;window.fetch=function(u,o){var k=String(u&&u.url||u).replace(/^\\.\\//,'');if(Object.prototype.hasOwnProperty.call(f,k)){var b=atob(f[k][1]),a=new Uint8Array(b.length);for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return Promise.resolve(new Response(a,{headers:{'content-type':f[k][0]}}))}return of.apply(this,arguments)}})()</script>`
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(out)
+  return doctype ? doctype[0] + shim + out.slice(doctype[0].length) : shim + out
+}
+
+export function offlineHtml(artifact: ArtifactView, content: ArtifactContent, rendered?: string, style?: string | null, files: InlineFiles = {}): string {
+  if (artifact.kind === 'html') return sandboxedDocument(withFilesInlined(rendered ?? textOf(content), files), { probe: false, style })
   const title = escape(`${artifact.title} · v${artifact.version}`)
   const body = rendered ?? `<img alt="${escape(artifact.title)}" src="${dataUrl(content)}">`
   return [

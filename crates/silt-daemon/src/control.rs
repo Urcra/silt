@@ -179,7 +179,14 @@ impl Core {
             return;
         };
         let id = command.id;
+        let command_thread = command.thread.to_string();
+        let streams = matches!(command.command, RemoteCommand::Sample { .. });
         let request = self.checked(server, command);
+        // A page's question streams: what's said so far goes to the server
+        // as it comes, for the hosted app to show.
+        let thread = command_thread.clone();
+        let streaming = (streams && request.is_ok())
+            .then(|| tokio::spawn(stream_progress(remote.clone(), id, thread, self.bus.subscribe(), self.events.clone())));
         let (reply, response) = oneshot::channel();
         match request {
             Ok(request) => self.request(request, reply).await,
@@ -193,6 +200,9 @@ impl Core {
                 Ok(Response::Error { message }) => CommandAnswer::refused(message),
                 Err(_) => CommandAnswer::refused("the daemon stopped"),
             };
+            if let Some(streaming) = streaming {
+                streaming.abort();
+            }
             if let Err(error) = remote.answer_command(id, &answer).await {
                 warn!(%error, id, "could not answer a command");
             }
@@ -219,6 +229,7 @@ impl Core {
         }
         command.capabilities.allow(&command.command).map_err(|needs| format!("that device may not {needs}"))?;
         info!(id = command.id, thread = %command.thread, from = ?command.from, "running a command from elsewhere");
+        let id = command.id;
         let thread = command.thread.to_string();
         let preset = |preset: String| {
             serde_json::from_value::<Preset>(serde_json::Value::String(preset)).map_err(|_| "unknown preset".to_owned())
@@ -240,6 +251,21 @@ impl Core {
             RemoteCommand::SignIn { method } => Request::AcpSignIn { thread, method },
             RemoteCommand::SignInCode { code } => Request::AcpSignInCode { thread, code },
             RemoteCommand::SignInCancel => Request::AcpSignInCancel { thread },
+            RemoteCommand::PageFiles { artifact, asked } => Request::PageFiles { thread, artifact, asked },
+            RemoteCommand::PageMcp { artifact, asked } => Request::PageMcp {
+                thread,
+                artifact,
+                asked: serde_json::from_value(asked).map_err(|error| format!("that isn't a connector call: {error}"))?,
+            },
+            RemoteCommand::Sample { question, images, model, tools } => Request::Sample {
+                thread,
+                artifact: None,
+                ask: Some(control_ask(id)),
+                input: serde_json::Value::String(question),
+                images,
+                tools,
+                model,
+            },
             RemoteCommand::Start { agent, preset: chosen, mode } => Request::AcpStart {
                 thread: Some(thread),
                 clone: None,
@@ -247,6 +273,68 @@ impl Core {
                 options: StartOptions { mode, preset: chosen.map(preset).transpose()?, ..StartOptions::default() },
             },
         })
+    }
+}
+
+/// The name a page's question relayed as command `id` streams under here.
+fn control_ask(id: i64) -> String {
+    format!("control-{}", id.unsigned_abs())
+}
+
+/// How often what's said so far of an answer goes to the server.
+const PROGRESS_EVERY: Duration = Duration::from_millis(300);
+
+/// Tells the server what the agent has said so far of command `id`'s
+/// answer, at most every [`PROGRESS_EVERY`], and passes the agent's calls
+/// of the page's tools to the page through it, until aborted.
+async fn stream_progress(
+    remote: crate::remote::Remote,
+    id: i64,
+    thread: String,
+    mut bus: tokio::sync::broadcast::Receiver<BusEvent>,
+    events: tokio::sync::mpsc::UnboundedSender<crate::core::Event>,
+) {
+    let ask = control_ask(id);
+    let mut latest: Option<String> = None;
+    let mut sent_at = Instant::now() - PROGRESS_EVERY;
+    loop {
+        let wait = PROGRESS_EVERY.saturating_sub(sent_at.elapsed());
+        match tokio::time::timeout(wait, bus.recv()).await {
+            Ok(Ok(BusEvent::Sample { ask: of, text })) if of == ask => latest = Some(text),
+            Ok(Ok(BusEvent::SampleTool { ask: of, call, name, input })) if of == ask => {
+                let (remote, events, ask, thread) = (remote.clone(), events.clone(), ask.clone(), thread.clone());
+                tokio::spawn(async move {
+                    let answered = remote.command_tool(id, call, &name, &input).await;
+                    let result = match answered.map(serde_json::from_value::<crate::protocol::SampleToolResult>) {
+                        Ok(Ok(result)) => result,
+                        Ok(Err(error)) => crate::protocol::SampleToolResult {
+                            ok: false,
+                            value: serde_json::Value::Null,
+                            error: error.to_string(),
+                        },
+                        Err(error) => crate::protocol::SampleToolResult {
+                            ok: false,
+                            value: serde_json::Value::Null,
+                            error: error.to_string(),
+                        },
+                    };
+                    let request = Request::SampleToolResult { thread, artifact: String::new(), ask, call, result };
+                    let (reply, _) = oneshot::channel();
+                    let _ = events.send(crate::core::Event::Request(request, reply));
+                });
+            }
+            Ok(Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => return,
+            Err(_) => {}
+        }
+        if sent_at.elapsed() >= PROGRESS_EVERY
+            && let Some(text) = latest.take()
+        {
+            if let Err(error) = remote.command_progress(id, &text).await {
+                warn!(%error, id, "could not tell the server how an answer goes");
+            }
+            sent_at = Instant::now();
+        }
     }
 }
 

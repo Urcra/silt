@@ -126,7 +126,8 @@ impl ConnectTo<Agent> for V2 {
                     Some(id) => match connection
                         .send_request(
                             ResumeSessionRequest::new(SessionId::new(id.clone()), start.cwd.clone())
-                                .mcp_servers(mcp_servers.clone()),
+                                .mcp_servers(mcp_servers.clone())
+                                .meta(crate::session_meta()),
                         )
                         .block_task()
                         .await
@@ -148,7 +149,11 @@ impl ConnectTo<Agent> for V2 {
                     Some(resumed) => resumed,
                     None => {
                         let created = match connection
-                            .send_request(NewSessionRequest::new(start.cwd.clone()).mcp_servers(mcp_servers.clone()))
+                            .send_request(
+                                NewSessionRequest::new(start.cwd.clone())
+                                    .mcp_servers(mcp_servers.clone())
+                                    .meta(crate::session_meta()),
+                            )
                             .block_task()
                             .await
                         {

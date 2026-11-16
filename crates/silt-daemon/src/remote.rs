@@ -246,6 +246,18 @@ impl Remote {
         Ok(checked(response).await?.json().await?)
     }
 
+    /// The artifacts the person pinned on any of their machines (ADR 0075).
+    pub async fn artifact_pins(&self) -> Result<Vec<silt_proto::view::ArtifactPin>, RemoteError> {
+        let response = self.request(reqwest::Method::GET, "/v1/me/artifact-pins").send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
+    pub async fn pin_artifact(&self, pin: &silt_proto::view::ArtifactPin) -> Result<(), RemoteError> {
+        let response = self.request(reqwest::Method::PUT, "/v1/me/artifact-pins").json(pin).send().await?;
+        checked(response).await?;
+        Ok(())
+    }
+
     pub async fn seen(&self) -> Result<Vec<silt_proto::MrSeen>, RemoteError> {
         let response = self.request(reqwest::Method::GET, "/v1/me/seen").send().await?;
         Ok(checked(response).await?.json().await?)
@@ -359,6 +371,39 @@ impl Remote {
 
     pub async fn answer_command(&self, id: i64, answer: &silt_proto::CommandAnswer) -> Result<(), RemoteError> {
         checked(self.request(reqwest::Method::POST, &format!("/v1/control/{id}")).json(answer).send().await?).await?;
+        Ok(())
+    }
+
+    /// The thread's agent speaks in, or listens to, a page's room on the
+    /// server, where the thread's views meet (ADR 0081).
+    pub async fn room_agent(
+        &self,
+        thread: &str,
+        artifact: &str,
+        emit: Option<(String, serde_json::Value)>,
+    ) -> Result<serde_json::Value, RemoteError> {
+        let body = serde_json::json!({ "thread": thread, "artifact": artifact, "emit": emit });
+        Ok(checked(self.request(reqwest::Method::POST, "/v1/rooms/agent").json(&body).send().await?).await?.json().await?)
+    }
+
+    /// The agent's call of one of a page's tools while it answers command
+    /// `id`, run by the page through the server; waits for its answer.
+    pub async fn command_tool(
+        &self,
+        id: i64,
+        call: u32,
+        name: &str,
+        input: &serde_json::Value,
+    ) -> Result<serde_json::Value, RemoteError> {
+        let request = self.request(reqwest::Method::POST, &format!("/v1/control/{id}/tool")).timeout(Duration::from_secs(75));
+        let body = serde_json::json!({ "call": call, "name": name, "input": input });
+        Ok(checked(request.json(&body).send().await?).await?.json().await?)
+    }
+
+    /// What this device's agent has said so far of command `id`'s answer.
+    pub async fn command_progress(&self, id: i64, text: &str) -> Result<(), RemoteError> {
+        let request = self.request(reqwest::Method::POST, &format!("/v1/control/{id}/progress"));
+        checked(request.json(&serde_json::json!({ "text": text })).send().await?).await?;
         Ok(())
     }
 

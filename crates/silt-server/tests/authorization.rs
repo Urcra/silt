@@ -499,6 +499,20 @@ impl Browser {
         let status = response.status();
         (status, response.json().await.unwrap_or_default())
     }
+
+    async fn put(&self, path: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+        let response = self
+            .http
+            .put(format!("{}/app/api{path}", self.base))
+            .header(reqwest::header::COOKIE, &self.cookie)
+            .header("x-silt-request", "1")
+            .json(&body)
+            .send()
+            .await
+            .expect("sends");
+        let status = response.status();
+        (status, response.json().await.unwrap_or_default())
+    }
 }
 
 #[tokio::test]
@@ -1078,7 +1092,7 @@ async fn a_phone_paired_by_code_answers_and_reviews_but_needs_more_to_prompt() {
     let listed = devices.iter().find(|device| device["kind"] == "phone").expect("the phone is listed");
     assert_eq!(
         listed["capabilities"],
-        serde_json::json!({ "answer_permissions": true, "send_prompts": false, "run_agents": false, "review": true })
+        serde_json::json!({ "answer_permissions": true, "send_prompts": false, "run_agents": false, "review": true, "sample": false, "page_tools": false })
     );
     let id = listed["id"].as_str().expect("an id").to_owned();
     let change = |browser: &Browser, body: serde_json::Value| {
@@ -1460,4 +1474,551 @@ async fn the_hosted_app_shows_a_subagent_inside_its_call_and_not_as_a_turn() {
     let (_, turns) = alice.get(&format!("/threads/{THREAD}/turns")).await;
     assert_eq!(turns.as_array().map(Vec::len), Some(1), "{turns}");
     assert_eq!(turns[0]["prompt"], "Look into the lexer", "the turn's prompt is the thread's own, not the subagent's");
+}
+
+/// The hosted app tells a fork's history as the daemon does: the source's
+/// conversation up to the fork point, then its own (ADR 0010, ADR 0068).
+#[tokio::test]
+async fn a_forks_history_in_the_hosted_app_includes_what_it_inherited() {
+    use silt_log::{ConvOp, SessionFile, SessionRef};
+    const FORK: ThreadId = ThreadId(304);
+    let mut world = world(Visibility::Org).await;
+    let alice = &world.alice;
+    let family = &mut world.family;
+    let line = |said: &str| {
+        Op::Conv(ConvOp::Native {
+            session: SessionRef { agent: "claude-code".into(), id: "s".into() },
+            file: SessionFile::Main,
+            line: format!(r#"{{"type":"user","message":{{"role":"user","content":"{said}"}}}}"#),
+        })
+    };
+    let before =
+        applied(family, family.delta(ActorId(1), THREAD, Author::User, 5, family.thread_head(THREAD), line("Tidy the parser")));
+    let info = ThreadInfo {
+        id: FORK,
+        family: FAMILY,
+        repo: REPO.into(),
+        created_ms: 3,
+        lease: None,
+        owner: String::new(),
+        collaborators: Vec::new(),
+    };
+    assert_eq!(alice.send(alice.request(Method::POST, "/v1/threads").json(&info)).await, StatusCode::NO_CONTENT);
+    let forked =
+        applied(family, family.delta(ActorId(2), FORK, Author::User, 6, family.thread_head(THREAD), Op::Fork { from: THREAD }));
+    let after =
+        applied(family, family.delta(ActorId(1), THREAD, Author::User, 7, family.thread_head(THREAD), line("After the fork")));
+    let own =
+        applied(family, family.delta(ActorId(2), FORK, Author::User, 8, family.thread_head(FORK), line("Only in the fork")));
+    assert_eq!(alice.push(vec![before, forked, after, own]).await, StatusCode::OK);
+
+    let browser = Browser::sign_in(alice, "alice").await;
+    let (status, page) = browser.get(&format!("/threads/{FORK}/history")).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let told: Vec<(String, String)> = page["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|entry| {
+            (entry["text"].as_str().unwrap_or_default().to_owned(), entry["origin"].as_str().unwrap_or_default().to_owned())
+        })
+        .collect();
+    assert_eq!(
+        told,
+        vec![("Tidy the parser".to_owned(), "inherited".to_owned()), ("Only in the fork".to_owned(), "own".to_owned())],
+        "{page}"
+    );
+    let (_, source) = browser.get(&format!("/threads/{THREAD}/history")).await;
+    assert_eq!(source["total"], 2, "the source keeps its own: {source}");
+}
+
+/// An HTML artifact's frame loads from a key (ADR 0074): made only for
+/// someone who can read the thread, serving that one version under the
+/// sandbox's policy, and nothing for a key that wasn't made.
+#[tokio::test]
+async fn a_frame_key_opens_one_version_for_someone_who_can_read_it() {
+    use base64::Engine as _;
+    use silt_log::{ConvOp, SessionFile, SessionRef};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let alice = &world.alice;
+    let html = b"<!doctype html><h1>Rescan benchmark</h1>";
+    let blob = BlobStore::hash(html);
+    let put = alice.request(Method::PUT, &format!("/v1/blobs/{blob}")).body(html.to_vec());
+    assert_eq!(alice.send(put).await, StatusCode::NO_CONTENT);
+    let data = br#"{"n": 3}"#;
+    let data_blob = BlobStore::hash(data);
+    let put = alice.request(Method::PUT, &format!("/v1/blobs/{data_blob}")).body(data.to_vec());
+    assert_eq!(alice.send(put).await, StatusCode::NO_CONTENT);
+    let record = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 1, "title": "Rescan benchmark", "kind": "html",
+        "media_type": "text/html", "blob": blob.to_string(), "size": html.len(), "inline": false,
+        "files": {"data.json": {"blob": data_blob.to_string(), "size": data.len(), "media_type": "application/json"}},
+        "capabilities": {"assets": {}}
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let family = &mut world.family;
+    let attached = applied(
+        family,
+        family.delta(
+            ActorId(1),
+            THREAD,
+            Author::User,
+            5,
+            family.thread_head(THREAD),
+            Op::Conv(ConvOp::Attachment { session: session.clone(), name: "artifact/0123456789ab/v1/page.html".into(), blob }),
+        ),
+    );
+    let recorded = applied(
+        family,
+        family.delta(
+            ActorId(1),
+            THREAD,
+            Author::User,
+            6,
+            family.thread_head(THREAD),
+            Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: record.to_string() }),
+        ),
+    );
+    assert_eq!(alice.push(vec![attached, recorded]).await, StatusCode::OK);
+
+    let browser_of = |name: &'static str| {
+        let client = &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+        Browser::sign_in(client, name)
+    };
+    let (bob, erin) = (browser_of("bob").await, browser_of("erin").await);
+    let frame = format!("/threads/{THREAD}/artifacts/0123456789ab/frame");
+    let ask = serde_json::json!({"version": 1, "theme": "dark", "parent": bob.base.clone()});
+    assert_eq!(erin.post(&frame, ask.clone()).await.0, StatusCode::NOT_FOUND, "someone who can't read the thread gets no key");
+    let (status, made) = bob.post(&frame, ask).await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let path = made["path"].as_str().expect("a path").to_owned();
+    assert!(path.starts_with("/f/") && path.ends_with('/'), "{path}");
+
+    let anyone = reqwest::Client::new();
+    let served = anyone.get(format!("{}{path}", bob.base)).send().await.expect("sends");
+    assert_eq!(served.status(), StatusCode::OK);
+    let policy = served.headers()[reqwest::header::CONTENT_SECURITY_POLICY].to_str().expect("text").to_owned();
+    assert!(policy.starts_with("sandbox allow-scripts;") && policy.contains("default-src 'none'"), "{policy}");
+    let page = served.text().await.expect("text");
+    assert!(page.contains("setAttribute('data-theme','dark')") && page.contains(&format!("var to='{}';", bob.base)), "{page}");
+    assert!(page.ends_with("<h1>Rescan benchmark</h1>"), "{page}");
+
+    let unknown = anyone.get(format!("{}/f/{}/", bob.base, "0".repeat(64))).send().await.expect("sends");
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    let file = anyone.get(format!("{}{path}data.json", bob.base)).send().await.expect("sends");
+    assert_eq!(file.status(), StatusCode::OK, "a version's file is served beside its page");
+    assert_eq!(file.headers()[reqwest::header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+    assert_eq!(file.text().await.expect("text"), r#"{"n": 3}"#);
+    let missing = anyone.get(format!("{}{path}missing.json", bob.base)).send().await.expect("sends");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    // Files people add to the page (ADR 0074): the owner adds one, someone
+    // who may only comment can't, and the frame serves it.
+    let assets = format!("/threads/{THREAD}/artifacts/0123456789ab/assets");
+    let png = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nfake");
+    let add = serde_json::json!({"op": "add", "name": "chart.png", "media_type": "image/png", "data": png});
+    let carol = browser_of("carol").await;
+    assert_eq!(carol.post(&assets, add.clone()).await.0, StatusCode::FORBIDDEN, "carol only comments");
+    let owner = Browser::sign_in(&world.alice, "alice").await;
+    let (status, added) = owner.post(&assets, add).await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let url = added["url"].as_str().expect("a url");
+    let served = anyone.get(format!("{}{path}{url}", bob.base)).send().await.expect("sends");
+    assert_eq!(served.status(), StatusCode::OK);
+    assert_eq!(served.headers()[reqwest::header::CONTENT_TYPE], "image/png");
+    let (_, listed) = bob.post(&assets, serde_json::json!({"op": "list"})).await;
+    assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
+    let delete = serde_json::json!({"op": "delete", "id": added["id"]});
+    assert_eq!(carol.post(&assets, delete.clone()).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(owner.post(&assets, delete).await.0, StatusCode::OK);
+    let gone = anyone.get(format!("{}{path}{url}", bob.base)).send().await.expect("sends");
+    assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+}
+
+/// An artifact's page data on the server (ADR 0072): a push is checked
+/// against the rules the version declares, by who wrote it, and the hosted
+/// app reads and writes it as the person.
+#[tokio::test]
+async fn page_data_is_written_under_the_versions_rules_by_who_wrote_it() {
+    use silt_log::{ConvOp, PageOp, SessionFile, SessionRef};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let alice = &world.alice;
+    let rules = serde_json::json!([
+        {"path": "votes", "read": "read", "write": "owner"},
+        {"path": "votes/{self}", "write": "comment"}
+    ]);
+    let record = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 1, "title": "Lunch poll", "kind": "html",
+        "media_type": "text/html", "blob": "ab".repeat(32), "size": 1, "inline": false,
+        "capabilities": {"db": {"rules": rules}}
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let family = &mut world.family;
+    let recorded = applied(
+        family,
+        family.delta(
+            ActorId(1),
+            THREAD,
+            Author::User,
+            5,
+            family.thread_head(THREAD),
+            Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: record.to_string() }),
+        ),
+    );
+    assert_eq!(alice.push(vec![recorded]).await, StatusCode::OK);
+
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let vote = |who: &str| {
+        Op::Page(PageOp::Set {
+            artifact,
+            path: format!("votes/{}", silt_proto::page::person_id(who)),
+            value: r#"{"pick":"soup"}"#.into(),
+        })
+    };
+    let carol = &world.people.iter().find(|(name, _)| *name == "carol").expect("carol").1;
+    let as_alice = family.delta(ActorId(77), THREAD, Author::User, 6, family.thread_head(THREAD), vote("alice"));
+    assert_eq!(carol.push(vec![as_alice]).await, StatusCode::FORBIDDEN, "carol can't vote as alice");
+    // A version forged under alice's actor, loosening the rules, is dropped
+    // with the push, and carol's write is judged by the real version's.
+    let loose = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 2, "title": "Lunch poll", "kind": "html",
+        "media_type": "text/html", "blob": "ab".repeat(32), "size": 1, "inline": false,
+        "capabilities": {"db": {"rules": [{"path": "votes", "read": "read", "write": "comment"}]}}
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let forged = family.delta(
+        ActorId(1),
+        THREAD,
+        Author::User,
+        6,
+        family.thread_head(THREAD),
+        Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: loose.to_string() }),
+    );
+    let as_alice_again =
+        family.delta(ActorId(77), THREAD, Author::User, 7, silt_types::Frontier::single(forged.span.last()), vote("alice"));
+    assert_eq!(carol.push(vec![forged, as_alice_again]).await, StatusCode::FORBIDDEN, "a forged version loosens nothing");
+    let own = applied(family, family.delta(ActorId(77), THREAD, Author::User, 6, family.thread_head(THREAD), vote("carol")));
+    assert_eq!(carol.push(vec![own]).await, StatusCode::OK, "carol votes as herself");
+
+    let erin = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "erin").expect("erin").1, "erin").await;
+    let data = format!("/threads/{THREAD}/artifacts/0123456789ab/data");
+    let list = serde_json::json!({"op": "list", "collection": "votes"});
+    assert_eq!(erin.post(&data, list.clone()).await.0, StatusCode::NOT_FOUND, "someone who can't read the thread reads nothing");
+
+    let bob = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "bob").expect("bob").1, "bob").await;
+    let mine = serde_json::json!({"op": "set", "path": format!("votes/{}", silt_proto::page::person_id("bob")), "value": {"pick": "pizza"}});
+    let (status, written) = bob.post(&data, mine).await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+    let theirs = serde_json::json!({"op": "set", "path": format!("votes/{}", silt_proto::page::person_id("carol")), "value": {"pick": "x"}});
+    assert_eq!(bob.post(&data, theirs).await.0, StatusCode::FORBIDDEN, "bob can't vote as carol");
+    let (status, votes) = bob.post(&data, list).await;
+    assert_eq!(status, StatusCode::OK, "{votes}");
+    let picks: Vec<&str> = votes.as_array().expect("docs").iter().filter_map(|doc| doc["data"]["pick"].as_str()).collect();
+    assert_eq!(picks.len(), 2, "{votes}");
+    assert!(picks.contains(&"soup") && picks.contains(&"pizza"), "{picks:?}");
+}
+
+/// A page saves itself as its thread's owner, over the latest version only,
+/// and not as someone who only reads the thread (ADR 0072).
+#[tokio::test]
+async fn a_page_saves_itself_only_for_the_owner_over_the_latest_version() {
+    use silt_log::{ConvOp, SessionFile, SessionRef};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let record = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 1, "title": "Planner", "kind": "html",
+        "media_type": "text/html", "blob": "ab".repeat(32), "size": 1, "inline": false,
+        "capabilities": {"artifact": {}}
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let family = &mut world.family;
+    let recorded = applied(
+        family,
+        family.delta(
+            ActorId(1),
+            THREAD,
+            Author::User,
+            5,
+            family.thread_head(THREAD),
+            Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: record.to_string() }),
+        ),
+    );
+    assert_eq!(world.alice.push(vec![recorded]).await, StatusCode::OK);
+
+    let publish = format!("/threads/{THREAD}/artifacts/0123456789ab/publish");
+    let page = serde_json::json!({"html": "<!doctype html><h1>Saved</h1>", "base": 1});
+    let carol = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "carol").expect("carol").1, "carol").await;
+    assert_eq!(carol.post(&publish, page.clone()).await.0, StatusCode::FORBIDDEN, "carol only reads the thread");
+    let (status, viewer) = carol.get(&format!("/threads/{THREAD}/viewer")).await;
+    assert_eq!((status, &viewer["level"]), (StatusCode::OK, &"comment".into()), "{viewer}");
+    assert_eq!(viewer["id"], silt_proto::page::person_id("carol"));
+    assert_eq!(viewer["people"][silt_proto::page::person_id("alice")], "alice", "the owner's name, by id");
+
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let (status, saved) = alice.post(&publish, page.clone()).await;
+    assert_eq!((status, &saved["version"]), (StatusCode::OK, &2.into()), "{saved}");
+    assert_eq!(alice.post(&publish, page).await.0, StatusCode::CONFLICT, "version 1 is no longer the latest");
+    // The Artifacts page lists it for those who can read the thread, and
+    // only its owner archives it (ADR 0075).
+    let (_, listed) = carol.get("/artifacts").await;
+    let row = listed.as_array().and_then(|rows| rows.first()).cloned().expect("carol sees it");
+    assert_eq!((&row["artifact"]["version"], &row["mine"]), (&2.into(), &false.into()), "{row}");
+    let erin = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "erin").expect("erin").1, "erin").await;
+    let (_, none) = erin.get("/artifacts").await;
+    assert_eq!(none.as_array().map(Vec::len), Some(0), "erin can't read the thread: {none}");
+    let archive = format!("/threads/{THREAD}/artifacts/0123456789ab/archive");
+    assert_eq!(carol.put(&archive, serde_json::json!({"archived": true})).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(alice.put(&archive, serde_json::json!({"archived": true})).await.0, StatusCode::NO_CONTENT);
+    let (_, listed) = carol.get("/artifacts").await;
+    assert_eq!(listed[0]["archived"], true, "archived for everyone: {listed}");
+    let pin = format!("/threads/{THREAD}/artifacts/0123456789ab/pin");
+    assert_eq!(carol.put(&pin, serde_json::json!({"pinned": true})).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(carol.get("/artifacts").await.1[0]["pinned"], true);
+    assert_eq!(alice.get("/artifacts").await.1[0]["pinned"], false, "a pin is the person's own");
+
+    let (_, history) = alice.get(&format!("/threads/{THREAD}/history")).await;
+    let latest = history["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter_map(|entry| entry.get("artifact"))
+        .rfind(|artifact| !artifact.is_null())
+        .cloned()
+        .expect("an artifact");
+    assert_eq!((&latest["version"], &latest["by"]), (&2.into(), &"alice".into()), "{latest}");
+    assert_eq!(latest["capabilities"], serde_json::json!({"artifact": {}}), "the declaration carries forward");
+}
+
+/// A doc and a sheet edited from the hosted app (ADR 0077): written as the
+/// person, read back folded, and refused for someone who can't read the
+/// thread or, where the version asks, isn't a collaborator.
+#[tokio::test]
+async fn docs_and_sheets_are_edited_from_the_hosted_app_by_who_may() {
+    use silt_log::{ConvOp, SessionFile, SessionRef};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let record = |id: &str, kind: &str, edit: serde_json::Value| {
+        serde_json::json!({
+            "t": "artifact", "id": id, "version": 1, "title": kind, "kind": kind,
+            "media_type": "text/markdown", "blob": "ab".repeat(32), "size": 1, "inline": false,
+            "capabilities": {"edit": edit}
+        })
+    };
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let mut pushed = Vec::new();
+    for (lamport, line) in [
+        (5, record("0123456789ab", "doc", serde_json::json!({}))),
+        (6, record("ba9876543210", "sheet", serde_json::json!({"level": "collaborator"}))),
+    ] {
+        let family = &mut world.family;
+        let op = Op::Conv(ConvOp::Native { session: session.clone(), file: SessionFile::Main, line: line.to_string() });
+        pushed.push(applied(family, family.delta(ActorId(1), THREAD, Author::User, lamport, family.thread_head(THREAD), op)));
+    }
+    assert_eq!(world.alice.push(pushed).await, StatusCode::OK);
+
+    let person = |name: &'static str| &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+    let carol = Browser::sign_in(person("carol"), "carol").await;
+    let erin = Browser::sign_in(person("erin"), "erin").await;
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let doc = format!("/threads/{THREAD}/artifacts/0123456789ab/doc");
+    let typed = serde_json::json!({"op": "edit", "edits": [{"pos": 0, "delete": 0, "insert": "# Plan\n"}]});
+    assert_eq!(erin.post(&doc, typed.clone()).await.0, StatusCode::NOT_FOUND, "erin can't read the thread");
+    let (status, after) = carol.post(&doc, typed).await;
+    assert_eq!((status, &after["text"]), (StatusCode::OK, &"# Plan\n".into()), "carol may comment, so she edits: {after}");
+    let (_, read) = carol.post(&doc, serde_json::json!({"op": "read"})).await;
+    let (_, after) = alice.post(&doc, serde_json::json!({"op": "edit", "edits": [{"old": "Plan", "new": "Launch plan"}]})).await;
+    assert_eq!(after["text"], "# Launch plan\n");
+    // Carol's edit, counted against what she read before Alice's, lands where she meant it.
+    let late = serde_json::json!({"op": "edit", "base": read["base"], "edits": [{"pos": 7, "delete": 0, "insert": "- ship\n"}]});
+    let (status, merged) = carol.post(&doc, late).await;
+    assert_eq!((status, &merged["text"]), (StatusCode::OK, &"# Launch plan\n- ship\n".into()), "{merged}");
+    alice.post(&doc, serde_json::json!({"op": "edit", "edits": [{"old": "- ship\n", "new": ""}]})).await;
+
+    let sheet = format!("/threads/{THREAD}/artifacts/ba9876543210/sheet");
+    let set = serde_json::json!({"op": "set", "cells": {"A1": "2", "A2": "=A1*3"}});
+    assert_eq!(carol.post(&sheet, set.clone()).await.0, StatusCode::FORBIDDEN, "this sheet asks for a collaborator");
+    assert_eq!(alice.post(&sheet, set).await.0, StatusCode::OK);
+    let (_, view) = carol.post(&sheet, serde_json::json!({"op": "read"})).await;
+    assert_eq!(view["values"][1][0], "6", "{view}");
+
+    // Search finds a doc's text as it stands, for who may read the thread.
+    let (_, found) = carol.get("/search?q=launch").await;
+    let hit = &found[0];
+    assert_eq!((&hit["kind"], &hit["artifact"]), (&"doc".into(), &"0123456789ab".into()), "{found}");
+    assert_eq!(hit["snippet"], "[Launch] plan", "{found}");
+    let (_, found) = erin.get("/search?q=launch").await;
+    assert_eq!(found, serde_json::json!([]), "erin can't read the thread");
+
+    // Save version keeps the doc as it stands, for its owner and collaborators.
+    let versions = format!("/threads/{THREAD}/artifacts/0123456789ab/versions");
+    assert_eq!(carol.post(&versions, serde_json::json!({})).await.0, StatusCode::FORBIDDEN, "carol only comments");
+    let (status, saved) = alice.post(&versions, serde_json::json!({"note": "First draft"})).await;
+    assert_eq!((status, &saved["version"]), (StatusCode::OK, &2.into()), "{saved}");
+
+    // A comment on the doc's text follows it through edits.
+    let comments = format!("/threads/{THREAD}/comments");
+    let on =
+        |artifact: &str| serde_json::json!({"on": {"on": "doc", "artifact": artifact, "start": 2, "end": 8}, "text": "rename?"});
+    let (status, made) = carol.post(&comments, on("0123456789ab")).await;
+    assert_eq!((status, &made["location"]["excerpt"]), (StatusCode::OK, &"Launch".into()), "{made}");
+    assert_eq!(carol.post(&comments, on("ba9876543210")).await.0, StatusCode::BAD_REQUEST, "a sheet's text takes no comments");
+    alice.post(&doc, serde_json::json!({"op": "edit", "edits": [{"pos": 0, "delete": 0, "insert": "Draft\n"}]})).await;
+    let (_, listed) = carol.get(&comments).await;
+    let location =
+        &listed.as_array().and_then(|all| all.iter().find(|comment| comment["text"] == "rename?")).expect("listed")["location"];
+    assert_eq!((&location["start"], &location["excerpt"]), (&8.into(), &"Launch".into()), "{listed}");
+}
+
+type RoomStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// The next thing a room's socket hears that isn't the list of peers.
+async fn next(socket: &mut RoomStream) -> serde_json::Value {
+    use futures_util::StreamExt as _;
+    loop {
+        let message = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+            .await
+            .expect("in time")
+            .expect("open")
+            .expect("a message");
+        if let tokio_tungstenite::tungstenite::Message::Text(text) = message {
+            let heard: serde_json::Value = serde_json::from_str(&text).expect("json");
+            if heard["event"] != "peers" {
+                return heard;
+            }
+        }
+    }
+}
+
+/// A page's room in the hosted app (ADR 0081): only someone who can read the
+/// thread joins, moments reach the others, and a topic needs its level.
+#[tokio::test]
+async fn a_rooms_moments_reach_its_peers_by_level() {
+    use futures_util::SinkExt as _;
+    use silt_log::{ConvOp, SessionFile, SessionRef};
+    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest as _};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let record = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 1, "title": "Board", "kind": "whiteboard",
+        "media_type": "application/json", "blob": "ab".repeat(32), "size": 1, "inline": false,
+        "capabilities": {"room": {"topics": {"cursor": "comment"}}}
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let family = &mut world.family;
+    let op = Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: record.to_string() });
+    let recorded = applied(family, family.delta(ActorId(1), THREAD, Author::User, 5, family.thread_head(THREAD), op));
+    assert_eq!(world.alice.push(vec![recorded]).await, StatusCode::OK);
+
+    let person = |name: &'static str| &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+    let open = |browser: &Browser| {
+        let mut request =
+            format!("{}/app/api/rooms", browser.base.replacen("http", "ws", 1)).into_client_request().expect("a request");
+        request.headers_mut().insert("cookie", browser.cookie.parse().expect("a cookie"));
+        async move {
+            let (mut socket, _) = tokio_tungstenite::connect_async(request).await.expect("connects");
+            let join = serde_json::json!({"thread": THREAD.to_string(), "artifact": "0123456789ab"});
+            socket.send(Message::Text(join.to_string().into())).await.expect("joins");
+            socket
+        }
+    };
+    let alice = Browser::sign_in(&world.alice, "alice").await;
+    let carol = Browser::sign_in(person("carol"), "carol").await;
+    let erin = Browser::sign_in(person("erin"), "erin").await;
+    let mut alice_room = open(&alice).await;
+    assert_eq!(next(&mut alice_room).await["event"], "joined");
+    let mut carol_room = open(&carol).await;
+    assert_eq!(next(&mut carol_room).await["event"], "joined");
+    let mut erin_room = open(&erin).await;
+    assert_eq!(next(&mut erin_room).await["reason"], "not_found", "erin can't read the thread");
+
+    alice_room.send(Message::Text(r#"{"op": "emit", "topic": "move", "data": {"x": 1}}"#.into())).await.expect("sends");
+    let heard = next(&mut carol_room).await;
+    assert_eq!((&heard["topic"], &heard["data"]["x"]), (&"move".into(), &1.into()), "{heard}");
+    carol_room.send(Message::Text(r#"{"op": "emit", "topic": "move", "data": 2}"#.into())).await.expect("sends");
+    assert_eq!(next(&mut carol_room).await["reason"], "not_granted", "move needs a collaborator");
+    carol_room.send(Message::Text(r#"{"op": "emit", "topic": "cursor", "data": [3, 4]}"#.into())).await.expect("sends");
+    assert_eq!(next(&mut alice_room).await["data"], serde_json::json!([3, 4]), "the declaration opens cursor to commenters");
+
+    // Once the thread is hidden from her, carol's open socket is told and closed.
+    let private = VisibilityRequest { repo: None, thread: Some(THREAD), visibility: Visibility::Private };
+    assert_eq!(world.alice.send(world.alice.request(Method::PUT, "/v1/visibility").json(&private)).await, StatusCode::NO_CONTENT);
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        use futures_util::StreamExt as _;
+        while let Some(Ok(message)) = carol_room.next().await {
+            if let tokio_tungstenite::tungstenite::Message::Text(text) = message {
+                let heard: serde_json::Value = serde_json::from_str(&text).expect("json");
+                if heard["event"] == "refused" {
+                    return heard;
+                }
+            }
+        }
+        serde_json::Value::Null
+    })
+    .await
+    .expect("told within the recheck");
+    assert_eq!(closed["reason"], "not_found", "{closed}");
+}
+
+/// An artifact's own routes answer only someone who can read the thread;
+/// a grant is for a declared capability of a real artifact; a push writes
+/// `_meta` only at the level each needs; and a person's pins reach their
+/// machines only for threads they can read (ADRs 0072, 0075).
+#[tokio::test]
+async fn an_artifacts_routes_grants_meta_and_pins_follow_the_thread() {
+    use silt_log::{ConvOp, PageOp, SessionFile, SessionRef};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let record = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 1, "title": "Board", "kind": "html",
+        "media_type": "text/html", "blob": "ab".repeat(32), "size": 1, "inline": false,
+        "capabilities": {"sample": {}, "assets": {}}
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let family = &mut world.family;
+    let recorded = applied(
+        family,
+        family.delta(
+            ActorId(1),
+            THREAD,
+            Author::User,
+            5,
+            family.thread_head(THREAD),
+            Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: record.to_string() }),
+        ),
+    );
+    assert_eq!(world.alice.push(vec![recorded]).await, StatusCode::OK);
+    let person = |name: &'static str| &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+    let erin = Browser::sign_in(person("erin"), "erin").await;
+    let carol = Browser::sign_in(person("carol"), "carol").await;
+    let base = format!("/threads/{THREAD}/artifacts/0123456789ab");
+
+    // Erin can't read the thread: none of its artifact's routes answer her.
+    for path in ["grants", "thumbnail", "sheet.xlsx", &format!("assets/{}", "0".repeat(32))] {
+        assert_eq!(erin.get(&format!("{base}/{path}")).await.0, StatusCode::NOT_FOUND, "{path}");
+    }
+    let grant = serde_json::json!({"capability": "sample", "state": "granted"});
+    assert_eq!(erin.put(&format!("{base}/grants"), grant.clone()).await.0, StatusCode::NOT_FOUND);
+
+    // Carol reads it: she keeps a grant for what it declares, and only that.
+    assert_eq!(carol.put(&format!("{base}/grants"), grant.clone()).await.0, StatusCode::NO_CONTENT);
+    let (_, held) = carol.get(&format!("{base}/grants")).await;
+    assert_eq!(held["sample"], "granted", "{held}");
+    let undeclared = serde_json::json!({"capability": "mcp", "state": "granted"});
+    assert_eq!(carol.put(&format!("{base}/grants"), undeclared).await.0, StatusCode::BAD_REQUEST, "not declared");
+    let elsewhere = format!("/threads/{THREAD}/artifacts/{}/grants", "0".repeat(12));
+    assert_eq!(carol.put(&elsewhere, grant).await.0, StatusCode::NOT_FOUND, "no such artifact");
+
+    // Over sync, a commenter may neither archive nor draw a thumbnail.
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    for (at, path) in ["_meta/archived", "_meta/thumbnail"].into_iter().enumerate() {
+        let op = Op::Page(PageOp::Set { artifact, path: path.into(), value: "true".into() });
+        let delta = family.delta(ActorId(77), THREAD, Author::User, 6 + at as i64, family.thread_head(THREAD), op);
+        assert_eq!(person("carol").push(vec![delta]).await, StatusCode::FORBIDDEN, "{path}");
+    }
+
+    // A pin reaches the person's machines while they can read its thread.
+    let pin = serde_json::json!({"thread": THREAD.to_string(), "artifact": "0123456789ab", "pinned": true});
+    let pinned = person("carol").send(person("carol").request(Method::PUT, "/v1/me/artifact-pins").json(&pin)).await;
+    assert_eq!(pinned, StatusCode::NO_CONTENT);
+    let listed: serde_json::Value =
+        person("carol").request(Method::GET, "/v1/me/artifact-pins").send().await.expect("sends").json().await.expect("json");
+    assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
+    let refused = person("erin").send(person("erin").request(Method::PUT, "/v1/me/artifact-pins").json(&pin)).await;
+    assert_eq!(refused, StatusCode::NOT_FOUND, "erin can't pin what she can't read");
 }

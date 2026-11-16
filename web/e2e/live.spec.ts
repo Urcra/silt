@@ -836,6 +836,45 @@ test('what an agent shows opens beside the thread: an artifact in a sandbox, its
   await expect(list.getByTestId('shown-image')).toBeVisible()
 })
 
+test("an artifact's page keeps what it stores for the viewer, and gets null for a capability it didn't declare", async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Artifact counter')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact counter')).toBeVisible()
+  const frame = page.frameLocator('[data-testid="artifact-frame"]')
+  await expect(frame.getByText('Opened 1 times')).toBeVisible()
+  await expect(frame.getByText('db: none')).toBeVisible()
+  // The frame loads from its own address (ADR 0074), and what the page stored comes back on the next open (ADR 0072).
+  await expect(page.getByTestId('artifact-frame')).toHaveAttribute('src', /^\/f\/[0-9a-f]{64}\/$/)
+  const viewer = page.getByTestId('artifact-viewer')
+  const reload = viewer.getByRole('button', { name: 'Reload' })
+  if (await reload.isVisible()) await reload.click()
+  else {
+    await viewer.getByRole('button', { name: 'More' }).click()
+    await page.getByRole('menuitem', { name: 'Reload' }).click()
+  }
+  await expect(frame.getByText('Opened 2 times')).toBeVisible()
+})
+
+test("an artifact's page keeps its tasks in the thread's page data, live and across reloads", async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Artifact checklist')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact checklist')).toBeVisible()
+  const frame = page.frameLocator('[data-testid="artifact-frame"]')
+  await expect(frame.getByText('tasks: 0')).toBeVisible()
+  await frame.getByRole('button', { name: 'Add a task' }).click()
+  await expect(frame.getByText('tasks: 1')).toBeVisible()
+  await frame.getByRole('button', { name: 'Add a task' }).click()
+  await expect(frame.getByText('tasks: 2')).toBeVisible()
+  await page.reload()
+  // After a reload the panel either reopens the artifact or shows its card.
+  const card = page.getByTestId('artifact-card').first()
+  await expect(page.getByTestId('artifact-frame').or(card).first()).toBeVisible()
+  if (await card.isVisible()) await card.click()
+  await expect(page.frameLocator('[data-testid="artifact-frame"]').getByText('tasks: 2')).toBeVisible()
+})
+
 test('an agent that goes on by itself once its turn ended, as Claude does after a background task, opens a turn of its own', async ({ page }) => {
   await startInNewThread(page, 'Fake v2 agent')
   await page.getByLabel('draft').fill('add acp Later')
@@ -1577,4 +1616,202 @@ test("the agent's commands are offered as / starts a prompt, in its thread and i
   await form.getByLabel('first prompt').fill('/comp')
   await commands.getByRole('option').filter({ hasText: '/compact' }).click()
   await expect(form.getByLabel('first prompt')).toHaveValue('/compact ')
+})
+
+test('a deck pages by keys, links to a slide and shows the presenter its notes (ADR 0076)', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Artifact deck')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact deck')).toBeVisible()
+  const card = page.getByTestId('artifact-card').first()
+  if (!(await page.getByTestId('slides').isVisible())) await card.click()
+  const slides = page.getByTestId('slides')
+  await expect(slides.getByLabel('slide 1 of 2')).toBeVisible()
+  await expect(page.frameLocator('[data-testid="slide-frame"]').getByText('Rescans got 3x faster')).toBeVisible()
+  await slides.click({ position: { x: 5, y: 5 } })
+  await page.keyboard.press('ArrowRight')
+  await expect(slides.getByLabel('slide 2 of 2')).toBeVisible()
+  await slides.getByRole('button', { name: '1. Rescans' }).click()
+  await slides.getByRole('button', { name: 'Present' }).click()
+  await expect(page.getByTestId('presenter')).toContainText('Open with the headline.')
+  await expect(page.getByTestId('presenter')).toContainText('Why')
+})
+
+test('a data page links each number to its source, and a canvas shows each board at its size (ADR 0076)', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Artifact numbers')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact numbers')).toBeVisible()
+  await expect(page.getByTestId('data-page').or(page.getByTestId('artifact-card').first()).first()).toBeVisible()
+  if (!(await page.getByTestId('data-page').isVisible())) await page.getByTestId('artifact-card').first().click()
+  const data = page.getByTestId('data-page')
+  await expect(data.getByTestId('stat')).toContainText('412')
+  await expect(data.getByRole('link', { name: 'source: silt-bench rescan' }).first()).toHaveAttribute('href', '#source-bench')
+  await data.getByRole('button', { name: 'Table' }).click()
+  await expect(data.getByRole('cell', { name: '1,080' })).toBeVisible()
+
+  await page.getByLabel('draft').fill('Artifact boards')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact boards')).toBeVisible()
+  await page.getByRole('button', { name: 'Open the artifact Settings screen, version 1' }).click()
+  const boards = page.getByTestId('board')
+  await expect(boards).toHaveCount(3)
+  await expect(boards.nth(2)).toContainText('390×844')
+  // Two boards side by side at one scale.
+  await boards.nth(0).getByRole('button', { name: 'Compare' }).click()
+  await boards.nth(2).getByRole('button', { name: 'Compare' }).click()
+  const compared = page.getByTestId('boards-compared')
+  await expect(compared).toContainText('Desktop and Phone')
+  await expect(compared.locator('iframe')).toHaveCount(2)
+  await compared.getByRole('button', { name: 'Done' }).click()
+  await expect(compared).toHaveCount(0)
+})
+
+test('a doc and a sheet are edited in place, and what was typed is kept (ADR 0077)', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Artifact doc')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact doc')).toBeVisible()
+  if (!(await page.getByTestId('doc-editor').isVisible())) await page.getByTestId('artifact-card').first().click()
+  const doc = page.getByTestId('doc-editor')
+  await expect(doc.getByRole('heading', { name: 'Plan' })).toBeVisible()
+  await doc.getByRole('button', { name: 'Edit' }).click()
+  const text = doc.getByLabel("the doc's text")
+  await text.press('ControlOrMeta+End')
+  await text.pressSequentially('- review\n')
+  await expect(doc.getByText('Saved')).toBeVisible()
+  await doc.getByRole('button', { name: 'Read' }).click()
+  await expect(doc.getByText('review')).toBeVisible()
+  // The first version against the doc now, then the doc kept as a version of its own.
+  await doc.getByRole('button', { name: 'Compare with a version' }).click()
+  await page.getByRole('menuitem', { name: /^v1/ }).click()
+  await expect(doc.getByTestId('doc-compare')).toContainText('added: - review')
+  await doc.getByRole('button', { name: 'Save version' }).click()
+  await doc.getByLabel('what this version is').fill('Reviewed')
+  await doc.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByText('Saved as v2')).toBeVisible()
+
+  await page.getByLabel('draft').fill('Artifact sheet')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact sheet')).toBeVisible()
+  await page.getByRole('button', { name: 'Open the artifact Tracker, version 1' }).click()
+  const sheet = page.getByTestId('sheet')
+  await expect(sheet.getByRole('grid')).toContainText('apples')
+  await sheet.getByRole('row').nth(3).getByRole('gridcell').nth(1).dblclick()
+  await sheet.getByLabel('cell B3').fill('=SUM(B1:B2)')
+  await sheet.getByLabel('cell B3').press('Enter')
+  await expect(sheet.getByRole('row').nth(3).getByRole('gridcell').nth(1)).toHaveText('8')
+
+  // A second sheet, in its own tab; the first keeps its cells.
+  await sheet.getByRole('button', { name: 'Add a sheet' }).click()
+  await expect(sheet.getByRole('tab', { name: 'Sheet 2' })).toHaveAttribute('aria-selected', 'true')
+  await expect(sheet.getByRole('grid')).not.toContainText('apples')
+  await sheet.getByRole('tab', { name: 'Sheet 1' }).click()
+  await expect(sheet.getByRole('grid')).toContainText('apples')
+})
+
+test("two views of a whiteboard see each other's cursors, and a note moved by one stays moved (ADR 0081)", async ({ page, context }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Artifact board')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact board')).toBeVisible()
+  await expect(page.getByTestId('whiteboard').or(page.getByTestId('artifact-card').first()).first()).toBeVisible()
+  if (!(await page.getByTestId('whiteboard').isVisible())) await page.getByTestId('artifact-card').first().click()
+  const board = page.getByTestId('whiteboard')
+  await expect(board.getByTestId('whiteboard-block')).toHaveCount(2)
+
+  // A second view, as another tab: the token lives in each tab's session storage.
+  const token = await page.evaluate(() => sessionStorage.getItem('silt-token'))
+  const other = await context.newPage()
+  await other.addInitScript((given) => sessionStorage.setItem('silt-token', given ?? ''), token)
+  await other.goto(page.url())
+  const card = other.getByTestId('artifact-card').first()
+  await expect(other.getByTestId('whiteboard').or(card).first()).toBeVisible()
+  if (!(await other.getByTestId('whiteboard').isVisible())) await card.click()
+  const theirs = other.getByTestId('whiteboard')
+  await expect(theirs.getByTestId('whiteboard-block')).toHaveCount(2)
+
+  // A cursor is presence, sent as the pointer moves and kept by nobody: it moves on until the other view shows it,
+  // as a person's would, so a moment's frame lost while that view joins doesn't leave it waiting for a move.
+  const box = await board.boundingBox()
+  let step = 0
+  await expect(async () => {
+    step += 1
+    await page.mouse.move(box!.x + 300 + (step % 2) * 20, box!.y + 300 + (step % 2) * 10)
+    await expect(theirs.getByTestId('whiteboard-cursor')).toHaveCount(1, { timeout: 1_000 })
+  }).toPass({ timeout: 15_000 })
+
+  const note = board.locator('[data-item="goal"] rect')
+  const at = await note.boundingBox()
+  await page.mouse.move(at!.x + 20, at!.y + 20)
+  await page.mouse.down()
+  await page.mouse.move(at!.x + 120, at!.y + 220, { steps: 5 })
+  await page.mouse.up()
+  await expect
+    .poll(async () => (await theirs.locator('[data-item="goal"] rect').boundingBox())!.y, { timeout: 10_000 })
+    .toBeGreaterThan(at!.y + 100)
+  await other.close()
+})
+
+test('on a whiteboard people draw, connect, resize, rename and delete, and add an image (ADR 0081)', async ({ page }) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Artifact board')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact board')).toBeVisible()
+  await expect(page.getByTestId('whiteboard').or(page.getByTestId('artifact-card').first()).first()).toBeVisible()
+  if (!(await page.getByTestId('whiteboard').isVisible())) await page.getByTestId('artifact-card').first().click()
+  const board = page.getByTestId('whiteboard')
+  await expect(board.getByTestId('whiteboard-block')).toHaveCount(2)
+  const box = (await board.boundingBox())!
+
+  // A stroke drawn on an empty part of the board.
+  await board.getByRole('button', { name: 'Draw' }).click()
+  await page.mouse.move(box.x + 120, box.y + box.height - 120)
+  await page.mouse.down()
+  await page.mouse.move(box.x + 260, box.y + box.height - 80, { steps: 8 })
+  await page.mouse.up()
+  await expect(board.getByTestId('whiteboard-stroke')).toHaveCount(1)
+
+  // An arrow back from the second note to the first.
+  await board.getByRole('button', { name: 'Connect' }).click()
+  await board.locator('[data-item="risk"]').click()
+  await board.locator('[data-item="goal"]').click()
+  await expect(board.getByTestId('whiteboard-arrow')).toHaveCount(2)
+
+  // A note made bigger by its handle, and renamed.
+  await board.getByRole('button', { name: 'Move' }).click()
+  const note = board.locator('[data-item="goal"] rect')
+  const before = (await note.boundingBox())!
+  await board.locator('[data-item="goal"]').click()
+  const handle = (await board.getByTestId('whiteboard-resize').boundingBox())!
+  await page.mouse.move(handle.x + 6, handle.y + 6)
+  await page.mouse.down()
+  await page.mouse.move(handle.x + 86, handle.y + 46, { steps: 5 })
+  await page.mouse.up()
+  await expect.poll(async () => (await note.boundingBox())!.width, { timeout: 10_000 }).toBeGreaterThan(before.width + 40)
+  await board.locator('[data-item="goal"]').dblclick()
+  await board.getByLabel("the note's text").fill('Ship rooms by Friday')
+  await board.getByLabel("the note's text").press('Enter')
+  await expect(board.locator('[data-item="goal"]')).toContainText('Ship rooms by Friday')
+
+  // An image, as a file someone picked.
+  const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+  await board.getByLabel('an image to add').setInputFiles({ name: 'dot.png', mimeType: 'image/png', buffer: pixel })
+  await expect(board.getByTestId('whiteboard-image').locator('image')).toHaveCount(1)
+
+  // The other note deleted, with the arrows that met it.
+  await board.locator('[data-item="risk"]').click()
+  await board.getByRole('button', { name: 'Delete' }).click()
+  await expect(board.getByTestId('whiteboard-block')).toHaveCount(1)
+  await expect(board.getByTestId('whiteboard-arrow')).toHaveCount(0)
+
+  const download = page.waitForEvent('download')
+  await board.getByRole('button', { name: 'Download as SVG' }).click()
+  expect((await download).suggestedFilename()).toBe('Planning-board.svg')
+  const png = page.waitForEvent('download')
+  await board.getByRole('button', { name: 'Download as PNG' }).click()
+  const saved = await png
+  expect(saved.suggestedFilename()).toBe('Planning-board.png')
+  const bytes = readFileSync((await saved.path()) ?? '')
+  expect([...bytes.subarray(1, 4)].map((byte) => String.fromCharCode(byte)).join('')).toBe('PNG')
 })

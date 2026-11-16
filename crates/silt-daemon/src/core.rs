@@ -288,6 +288,16 @@ pub struct Core {
     /// Threads a wrapper recorded on its own until this daemon took them
     /// over.
     pub(crate) adopted: HashSet<ThreadId>,
+    /// The rooms of the pages open on this machine (ADR 0081).
+    pub(crate) rooms: silt_proto::rooms::Hub,
+    /// The page connectors' running MCP clients (ADR 0080).
+    pub(crate) page_clients: std::sync::Arc<crate::connectors::Clients>,
+    /// When each artifact's page last asked `sample`, for its rate.
+    pub(crate) samples: HashMap<String, Vec<Instant>>,
+    /// How many page questions this machine's agent answers now, across pages.
+    pub(crate) sampling: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Questions whose pages offered tools, by name (ADR 0072).
+    pub(crate) sample_calls: HashMap<String, crate::sample::WaitingTools>,
     /// What changed, for browsers listening (ADR 0021).
     pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
     /// How each thread's agent stands as last stored (ADR 0022).
@@ -528,6 +538,11 @@ impl Core {
             exe: std::env::current_exe().ok().and_then(|exe| ExeStamp::of(&exe).map(|stamp| (exe, stamp))),
             resident,
             adopted: HashSet::new(),
+            samples: HashMap::new(),
+            sampling: std::sync::Arc::default(),
+            sample_calls: HashMap::new(),
+            page_clients: std::sync::Arc::default(),
+            rooms: silt_proto::rooms::Hub::default(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
             agent_runs: HashMap::new(),
             summary_cache: Mutex::new(HashMap::new()),
@@ -567,7 +582,7 @@ impl Core {
         }
         if let Request::Scoped { token, asking } = request {
             if let Request::PutArtifact { artifact } = *asking {
-                let _ = reply.send(to_response(self.put_artifact(&token, artifact).await));
+                let _ = reply.send(to_response(self.put_artifact(&token, *artifact).await));
                 return;
             }
             if let Request::ArtifactGuide { design_system } = *asking {
@@ -576,6 +591,66 @@ impl Core {
             }
             if let Request::ArtifactRead { id, version } = *asking {
                 let _ = reply.send(to_response(self.artifact_read(&token, &id, version).await));
+                return;
+            }
+            if let Request::PageData { artifact, asked, as_level, .. } = *asking {
+                let _ = reply.send(to_response(self.run_page_data(&token, &artifact, asked, as_level).await));
+                return;
+            }
+            if let Request::PageAsset { artifact, asset, .. } = *asking {
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.page_asset(&thread, &artifact, &asset).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
+            if let Request::RoomAgent { artifact, emit, .. } = *asking {
+                // A thread that syncs with a server meets its views in the
+                // server's room, so the agent speaks there.
+                let remote = match self.run_thread(&token).await {
+                    Ok(thread) => {
+                        self.find_thread(&thread).ok().and_then(|id| self.remote_for(id).cloned()).map(|remote| (thread, remote))
+                    }
+                    Err(_) => None,
+                };
+                if let Some((thread, remote)) = remote {
+                    tokio::spawn(async move {
+                        let answer = remote
+                            .room_agent(&thread, &artifact, emit)
+                            .await
+                            .map_err(|error| CoreError::Invalid(error.to_string()));
+                        let _ = reply.send(to_response(answer));
+                    });
+                    return;
+                }
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.room_agent(&thread, &artifact, emit).map(|(deliveries, heard)| {
+                        // What the agent said reaches the open views through the web server.
+                        let _ = self.bus.send(crate::protocol::BusEvent::Room {
+                            deliveries: serde_json::to_value(deliveries).unwrap_or_default(),
+                        });
+                        heard
+                    }),
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
+            if let Request::DocData { artifact, asked, .. } = *asking {
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.doc_data(&thread, &artifact, asked).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
+            if let Request::SheetData { artifact, asked, .. } = *asking {
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.sheet_data(&thread, &artifact, asked).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
                 return;
             }
             let workspace = match self.scope_of(&token, &asking).await {
@@ -611,11 +686,166 @@ impl Core {
             Request::SetArtifactSettings { settings } => {
                 to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))
             }
+            Request::PageData { thread, artifact, asked, as_level } => {
+                to_response(self.page_data(&thread, &artifact, asked, as_level).await)
+            }
+            Request::PublishArtifact { thread, artifact, html, base } => {
+                to_response(self.publish_artifact(&thread, &artifact, html, base).await)
+            }
+            Request::PageViewer { thread } => to_response(self.page_viewer(&thread)),
+            Request::ArtifactListing => return answer_later(reply, Ok(self.artifact_listing_merged())),
+            // The id becomes a directory's name, so it's checked first.
+            Request::ArtifactThumbnail { artifact, .. } if artifact.parse::<silt_types::ArtifactId>().is_err() => {
+                Response::error("not an artifact id")
+            }
+            Request::ArtifactThumbnail { thread, artifact } => {
+                let kept = self.kept_thumbnail(&thread, &artifact).await;
+                let source = self.thumbnail_source(&thread, &artifact).await;
+                let events = self.events.clone();
+                let dir = self.data_dir.join("thumbnails").join(&artifact);
+                return answer_later(
+                    reply,
+                    Ok(async move {
+                        if let Some(jpeg) = kept? {
+                            return Ok(serde_json::json!({ "media_type": "image/jpeg", "data": jpeg }));
+                        }
+                        let Some((page, style, version)) = source? else {
+                            return Err(CoreError::Invalid("only an HTML version has a thumbnail".into()));
+                        };
+                        let jpeg = tokio::task::spawn_blocking(move || crate::thumbnails::render(&page, style.as_deref(), &dir))
+                            .await
+                            .map_err(|error| CoreError::Invalid(error.to_string()))?
+                            .map_err(CoreError::Invalid)?
+                            .ok_or_else(|| CoreError::Invalid("no headless browser here to draw one".into()))?;
+                        use base64::Engine as _;
+                        let encoded = base64::engine::general_purpose::STANDARD.encode(&jpeg);
+                        let (kept, _) = tokio::sync::oneshot::channel();
+                        let keep = Request::KeepThumbnail { thread, artifact, version, jpeg: encoded.clone() };
+                        let _ = events.send(Event::Request(keep, kept));
+                        Ok(serde_json::json!({ "media_type": "image/jpeg", "data": encoded }))
+                    }),
+                );
+            }
+            Request::KeepThumbnail { thread, artifact, version, jpeg } => {
+                use base64::Engine as _;
+                match base64::engine::general_purpose::STANDARD.decode(jpeg) {
+                    Ok(bytes) => to_response(self.keep_thumbnail(&thread, &artifact, version, bytes).await.map(|()| "kept")),
+                    Err(_) => Response::error("not base64"),
+                }
+            }
+            Request::PinArtifact { thread, artifact, pinned } => {
+                let full = self.find_thread(&thread).map(|id| id.to_string());
+                return answer_later(
+                    reply,
+                    self.pin_artifact(&thread, &artifact, pinned).and(full).map(|full| self.share_pin(&full, &artifact, pinned)),
+                );
+            }
+            Request::ArchiveArtifact { thread, artifact, archived } => {
+                to_response(self.archive_artifact(&thread, &artifact, archived).await.map(|()| "saved"))
+            }
+            Request::PageAssets { thread, artifact, asked } => to_response(self.page_assets(&thread, &artifact, asked).await),
+            Request::DocData { thread, artifact, asked } => to_response(self.doc_data(&thread, &artifact, asked).await),
+            Request::SheetData { thread, artifact, asked } => to_response(self.sheet_data(&thread, &artifact, asked).await),
+            Request::RoomAgent { .. } => Response::error("only an agent's run speaks in a room, with its token"),
+            Request::RoomRoute { thread } => Response::ok(
+                self.find_thread(&thread)
+                    .ok()
+                    .and_then(|thread| self.remote_for(thread))
+                    .map(|remote| serde_json::json!({ "url": remote.config.url, "token": remote.config.token })),
+            ),
+            Request::RoomJoin { key, peer } => to_response(self.room_join(key, peer, false)),
+            Request::RoomSend { key, peer, sent } => Response::ok(self.room_send(&key, &peer, sent)),
+            Request::RoomLeave { key, peer } => Response::ok(self.room_leave(&key, &peer)),
+            Request::PageConnectors => Response::ok(crate::connectors::connectors(&self.data_dir)),
+            Request::SetPageConnectors { connectors } => {
+                to_response(crate::connectors::set_connectors(&self.data_dir, &connectors).map(|()| "saved"))
+            }
+            Request::ImportPageConnectors => to_response(self.import_page_connectors()),
+            Request::ConnectorTools { name } => return answer_later(reply, self.connector_tools(&name)),
+            Request::PageMcp { thread, artifact, asked } => return answer_later(reply, self.page_mcp(&thread, &artifact, asked)),
+            Request::PageFiles { thread, artifact, asked } => to_response(self.page_files(&thread, &artifact, asked)),
+            Request::PageAsset { thread, artifact, asset } => to_response(self.page_asset(&thread, &artifact, &asset).await),
+            Request::ArtifactFile { thread, id, version, path } => {
+                to_response(self.artifact_file(&thread, &id, version, &path).await)
+            }
+            Request::Sample { thread, artifact, ask, input, images, tools, model } => {
+                let asked = crate::sample::Question { input, images, tools, model };
+                return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, asked));
+            }
+            Request::ArtifactPdf { thread, artifact, html } => {
+                let printable = self
+                    .find_thread(&thread)
+                    .and_then(|thread| {
+                        self.edited_artifact(thread, &artifact, "doc")
+                            .or_else(|_| self.edited_artifact(thread, &artifact, "slides"))
+                    })
+                    .and_then(|id| {
+                        if html.len() > DOC_PDF_HTML_BYTES {
+                            return Err(CoreError::Invalid("the page is too large to print".into()));
+                        }
+                        Ok(self.data_dir.join("pdf").join(id.to_string()))
+                    });
+                return answer_later(
+                    reply,
+                    printable.map(|dir| async move {
+                        use base64::Engine as _;
+                        let printed = tokio::task::spawn_blocking(move || crate::thumbnails::pdf(&html, &dir))
+                            .await
+                            .map_err(|error| CoreError::Invalid(error.to_string()))?
+                            .map_err(CoreError::Invalid)?
+                            .ok_or_else(|| {
+                                CoreError::Invalid(
+                                    "this computer has no headless browser (Node with Playwright) to print a PDF".into(),
+                                )
+                            })?;
+                        Ok(silt_proto::view::ArtifactContent {
+                            media_type: "application/pdf".into(),
+                            data: base64::engine::general_purpose::STANDARD.encode(printed),
+                        })
+                    }),
+                );
+            }
+            Request::SaveEditedVersion { thread, artifact, note } => {
+                to_response(self.save_edited_version(&thread, &artifact, note).await)
+            }
+            Request::SampleToolCall { ask, name, input } => {
+                return answer_later(reply, self.sample_tool_call(&ask, name, input));
+            }
+            Request::SampleToolResult { thread, artifact, ask, call, result } => {
+                to_response(self.sample_tool_result(&thread, &artifact, &ask, call, result))
+            }
+            Request::ArtifactGrants { thread, artifact } => match self.find_thread(&thread) {
+                Ok(thread) => {
+                    let latest = self.version_view(thread, &artifact, None);
+                    Response::ok(crate::design::artifact_grants(&self.data_dir, &thread.to_string(), &artifact, latest.as_ref()))
+                }
+                Err(error) => Response::failure(&error),
+            },
+            Request::SetArtifactGrant { thread, artifact, capability, state, version } => match self.find_thread(&thread) {
+                Ok(thread) => {
+                    let declared = self.version_view(thread, &artifact, version);
+                    to_response(
+                        crate::design::set_artifact_grant(
+                            &self.data_dir,
+                            &thread.to_string(),
+                            &artifact,
+                            &capability,
+                            state.as_deref(),
+                            declared.as_ref(),
+                        )
+                        .map(|()| "saved"),
+                    )
+                }
+                Err(error) => Response::failure(&error),
+            },
             Request::SetProjectDesignSystem { repo, design_system } => {
                 to_response(self.set_project_design_system(&repo, design_system.as_deref()))
             }
             Request::ArtifactRead { .. } => Response::error("only an agent's run reads its artifacts back, with its token"),
             Request::ArtifactContent { thread, blob } => to_response(self.artifact_content(&thread, &blob).await),
+            Request::ArtifactVersion { thread, id, version } => {
+                to_response(self.artifact_version_of(&thread, &id, version).await)
+            }
             Request::Ping => Response::ok("pong"),
             Request::Compact => to_response(self.compact().await),
             Request::DaemonBuild => Response::ok(self.daemon_build()),
@@ -2274,7 +2504,14 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
         | Op::Text { inode, .. }
         | Op::SetContent { inode, .. }
         | Op::SetExecutable { inode, .. } => Some(*inode),
-        Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) | Op::Comment(_) => None,
+        Op::Conv(_)
+        | Op::Git(_)
+        | Op::Lease { .. }
+        | Op::Fork { .. }
+        | Op::Merge { .. }
+        | Op::Mr(_)
+        | Op::Comment(_)
+        | Op::Page(_) => None,
     }
 }
 
@@ -2453,6 +2690,9 @@ pub(crate) fn redactor(data_dir: &Path) -> Redactor {
 
 /// Answers `reply` once `call`, a call to the server, is done, off the event
 /// loop: a slow server then holds up only this request.
+/// The most of a doc's page printed to a PDF, in bytes.
+const DOC_PDF_HTML_BYTES: usize = 8 << 20;
+
 fn answer_later<T, F>(reply: oneshot::Sender<Response>, call: Result<F, CoreError>)
 where
     T: serde::Serialize,

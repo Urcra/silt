@@ -16,6 +16,7 @@ mod entry;
 mod error;
 pub mod gemini;
 pub mod history;
+pub mod oneshot;
 pub mod opencode;
 mod render;
 mod rewrite;

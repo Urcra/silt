@@ -108,7 +108,7 @@ fi
 if ! $quick; then
     # The pure crates build for the browser (ADR 0004).
     step "wasm32 build of the pure crates"
-    cargo build -p silt-types -p silt-sumtree -p silt-crdt -p silt-log -p silt-checkout -p silt-wasm -p silt-workspace -p silt-design --target wasm32-unknown-unknown
+    cargo build -p silt-types -p silt-sumtree -p silt-crdt -p silt-log -p silt-checkout -p silt-wasm -p silt-workspace -p silt-design -p silt-sheet --target wasm32-unknown-unknown
 fi
 
 if $has_web; then

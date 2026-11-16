@@ -7,6 +7,7 @@
 
 mod hex_serde;
 
+mod artifact;
 mod cloud;
 mod entity;
 mod frontier;
@@ -14,6 +15,7 @@ mod hex;
 mod id;
 mod oid;
 
+pub use artifact::ArtifactId;
 pub use cloud::{CloudSessionId, ParseCloudSessionError};
 pub use entity::{BlobHash, DeviceId, FamilyId, ThreadId};
 pub use frontier::{Frontier, Version};
