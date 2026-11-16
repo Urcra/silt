@@ -177,15 +177,30 @@ pub fn sheet_view(cells: &SheetCells, today: f64) -> SheetView {
 /// every address it names exists.
 pub fn sheet_growth(cells: &SheetCells, set: &BTreeMap<String, String>) -> Result<(usize, usize), String> {
     let mut needed = (0, 0);
-    for address in set.keys() {
+    for (address, raw) in set {
         let (row, column) = silt_sheet::parse_address(address).ok_or_else(|| format!("{address} isn't a cell's address"))?;
-        if row >= silt_sheet::ROWS || column >= silt_sheet::COLUMNS {
-            return Err(format!("{address} is past a sheet's {} rows or {} columns", silt_sheet::ROWS, silt_sheet::COLUMNS));
+        // The cells a formula names exist too, so it keeps meaning them
+        // rather than becoming #REF! (spreadsheets count rows added later).
+        for (row, column) in std::iter::once((row, column)).chain(silt_sheet::addresses_in(raw)) {
+            if row >= silt_sheet::ROWS || column >= silt_sheet::COLUMNS {
+                return Err(format!(
+                    "{address} names a cell past a sheet's {} rows or {} columns",
+                    silt_sheet::ROWS,
+                    silt_sheet::COLUMNS
+                ));
+            }
+            needed = (needed.0.max(row + 1), needed.1.max(column + 1));
         }
-        needed = (needed.0.max(row + 1), needed.1.max(column + 1));
+    }
+    let (rows, columns) = (needed.0.max(cells.rows.len()), needed.1.max(cells.columns.len()));
+    if rows.saturating_mul(columns) > SHEET_CELLS {
+        return Err(format!("a sheet holds at most {SHEET_CELLS} cells; that would make it {rows} by {columns}"));
     }
     Ok((needed.0.saturating_sub(cells.rows.len()), needed.1.saturating_sub(cells.columns.len())))
 }
+
+/// The most cells a sheet's grid holds, rows times columns (ADR 0077).
+pub const SHEET_CELLS: usize = silt_log::page::SHEET_CELLS;
 
 /// The cell writes a `Set` makes once its rows and columns exist, each
 /// formula kept with its references by ids.
@@ -217,19 +232,31 @@ pub fn read_range(view: &SheetView, range: &str) -> Result<Vec<Vec<String>>, Str
     let (Some((top, left)), Some((bottom, right))) = (silt_sheet::parse_address(start), silt_sheet::parse_address(end)) else {
         return Err(format!("{range} isn't a range"));
     };
-    Ok((top.min(bottom)..=top.max(bottom))
+    // Only what the sheet holds: past it every cell is empty.
+    let rows = view.values.len();
+    let columns = view.columns.len();
+    let (top, bottom) = (top.min(bottom), top.max(bottom).min(rows.saturating_sub(1)));
+    let (left, right) = (left.min(right), left.max(right).min(columns.saturating_sub(1)));
+    if rows == 0 || columns == 0 || top > bottom || left > right {
+        return Ok(Vec::new());
+    }
+    Ok((top..=bottom)
         .map(|row| {
-            (left.min(right)..=left.max(right))
+            (left..=right)
                 .map(|column| view.values.get(row).and_then(|cells| cells.get(column)).cloned().unwrap_or_default())
                 .collect()
         })
         .collect())
 }
 
-/// A sheet as CSV: what each cell shows.
+/// A sheet as CSV: what each cell shows. A value a spreadsheet app would run
+/// as a formula on opening starts with `'`, as OWASP advises.
 pub fn csv(view: &SheetView) -> String {
-    let cell =
-        |text: &str| if text.contains([',', '"', '\n']) { format!("\"{}\"", text.replace('"', "\"\"")) } else { text.to_owned() };
+    let cell = |text: &str| {
+        let runs = text.starts_with(['=', '+', '-', '@', '\t', '\r']) && text.trim().parse::<f64>().is_err();
+        let text = if runs { format!("'{text}") } else { text.to_owned() };
+        if text.contains([',', '"', '\n', '\r']) { format!("\"{}\"", text.replace('"', "\"\"")) } else { text }
+    };
     view.values.iter().map(|row| row.iter().map(|value| cell(value)).collect::<Vec<_>>().join(",")).collect::<Vec<_>>().join("\n")
 }
 
@@ -249,7 +276,9 @@ pub fn xlsx(view: &SheetView, name: &str) -> Result<Vec<u8>, String> {
             let (r, c) =
                 (u32::try_from(row).map_err(|_| "too many rows")?, u16::try_from(column).map_err(|_| "too many columns")?);
             let value = view.values.get(row).and_then(|values| values.get(column)).cloned().unwrap_or_default();
-            let written = if raw.starts_with('=') {
+            // Only a formula Silt computes is kept live, so a workbook never
+            // runs what a peer wrote, such as WEBSERVICE or a DDE call.
+            let written = if raw.starts_with('=') && silt_sheet::formula_ok(raw) {
                 sheet.write_formula(r, c, Formula::new(raw.as_str()).set_result(value)).map(|_| ())
             } else if raw.is_empty() {
                 Ok(())
@@ -390,6 +419,39 @@ pub fn sheet_text(cells: &SheetCells) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_log_folds_a_sheet_within_what_the_evaluator_computes() {
+        assert_eq!((silt_log::page::SHEET_ROWS, silt_log::page::SHEET_COLUMNS), (silt_sheet::ROWS, silt_sheet::COLUMNS));
+    }
+
+    #[test]
+    fn a_formula_naming_cells_past_the_sheet_grows_it_and_a_range_reads_only_the_sheet() {
+        let cells = SheetCells::default();
+        let set = BTreeMap::from([("A1".to_owned(), "=SUM(B2:B100)".to_owned())]);
+        assert_eq!(sheet_growth(&cells, &set), Ok((100, 2)));
+        let huge = BTreeMap::from([("A1".to_owned(), "=SUM(A1:GR10000)".to_owned())]);
+        assert!(sheet_growth(&cells, &huge).is_err(), "past the cells a sheet holds");
+        let view = SheetView {
+            rows: vec!["r".into()],
+            columns: vec!["c".into()],
+            raw: vec![vec!["1".into()]],
+            values: vec![vec!["1".into()]],
+        };
+        assert_eq!(read_range(&view, "A1:ZZZ99999999"), Ok(vec![vec!["1".to_owned()]]));
+    }
+
+    #[test]
+    fn exports_never_run_what_a_cell_holds() {
+        let view = SheetView {
+            rows: vec!["r".into()],
+            columns: vec!["a".into(), "b".into(), "c".into()],
+            raw: vec![vec!["=cmd|' /C calc'!A0".into(), "-5".into(), "@SUM(1)".into()]],
+            values: vec![vec!["=cmd|' /C calc'!A0".into(), "-5".into(), "@SUM(1)".into()]],
+        };
+        assert_eq!(csv(&view), "'=cmd|' /C calc'!A0,-5,'@SUM(1)");
+        assert!(silt_sheet::formula_ok("=SUM(A1:B2)*2") && !silt_sheet::formula_ok("=WEBSERVICE(\"https://x\")"));
+    }
     use silt_crdt::TextOp;
 
     #[test]

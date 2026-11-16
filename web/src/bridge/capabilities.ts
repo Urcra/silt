@@ -392,6 +392,8 @@ const SAMPLE_IMAGES = 4
 
 /** `sample`: a question for an agent, asked once the person agrees, its answer told to the page as it streams. */
 function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
+  // The page's names for its questions, each to the one minted for it.
+  const asks = new Map<string, string>()
   const takesImages = (artifact.capabilities?.sample as { images?: unknown } | undefined)?.images === true
   let consent: Promise<boolean> | null = null
   const consented = () =>
@@ -402,8 +404,8 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
       const agreed = await holder.confirm({
         title: `Let ${artifact.title} ask an agent?`,
         detail: hosted()
-          ? 'One of your computers asks its agent, with no tools, and the page reads the answer.'
-          : "This computer's agent answers, with no tools, and the page reads the answer.",
+          ? "One of your computers asks its agent, which gets no tools or settings of yours, only those the page offers, and the page reads the answer."
+          : "This computer's agent answers, with no tools or settings of yours, only those the page offers, and the page reads the answer.",
         action: 'Allow',
       })
       await api.setArtifactGrant(thread, artifact.id, 'sample', agreed ? 'granted' : 'refused').catch(() => undefined)
@@ -418,7 +420,9 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
       if (method === 'toolResult') {
         const said = (args ?? {}) as { ask?: unknown; call?: unknown; ok?: unknown; value?: unknown; error?: unknown }
         const result = said.ok === true ? { ok: true, value: said.value ?? null } : { ok: false, error: String(said.error ?? 'the tool failed').slice(0, 2000) }
-        await api.sampleToolResult(thread, artifact.id, String(said.ask ?? ''), Number(said.call), result)
+        const minted = asks.get(String(said.ask ?? ''))
+        if (!minted) throw new Refusal('refused', 'no question by that name is waiting')
+        await api.sampleToolResult(thread, artifact.id, minted, Number(said.call), result)
         return null
       }
       const given = (args ?? {}) as { input?: unknown; ask?: unknown; images?: unknown; tools?: unknown; model?: { model_tier?: unknown; model?: unknown } }
@@ -432,13 +436,17 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
       if (blobs.length > SAMPLE_IMAGES || !blobs.every((blob) => blob instanceof Blob)) throw new Refusal('refused', `show at most ${SAMPLE_IMAGES} images, as Blobs`)
       if (!(await consented())) throw new Refusal('not_granted', 'the person chose not to let this page ask')
       const images = await Promise.all((blobs as Blob[]).map(async (blob) => ({ media_type: blob.type, data: await base64Of(blob) })))
-      const ask = typeof given.ask === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(given.ask) ? given.ask : Math.random().toString(36).slice(2)
+      // The page's name for the question stays between it and this view; the
+      // daemon and the server hear one minted here, which no other page can pick.
+      const named = typeof given.ask === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(given.ask) ? given.ask : 'q'
+      const ask = `${artifact.id}-${crypto.randomUUID()}`
+      asks.set(named, ask)
       const unsubscribe = bus.subscribe(`sample:${ask}`)
       const unlisten = bus.listen((event) => {
         const said = event as { event?: string; ask?: string; text?: string }
-        if (said.event === 'sample' && said.ask === ask) context.emit('sample', 'text', { ask, text: said.text ?? '' })
+        if (said.event === 'sample' && said.ask === ask) context.emit('sample', 'text', { ask: named, text: said.text ?? '' })
         const called = event as { event?: string; ask?: string; call?: number; name?: string; input?: unknown }
-        if (called.event === 'sample_tool' && called.ask === ask) context.emit('sample', 'tool', { ask, call: called.call, name: called.name, input: called.input })
+        if (called.event === 'sample_tool' && called.ask === ask) context.emit('sample', 'tool', { ask: named, call: called.call, name: called.name, input: called.input })
       })
       // The hosted app has no bus: it reads what the device's agent has said so far.
       let heard = ''
@@ -449,11 +457,11 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
             void api
               .sampleSoFar(thread, artifact.id, ask)
               .then(({ text, calls }) => {
-                if (text && text !== heard) context.emit('sample', 'text', { ask, text: (heard = text) })
+                if (text && text !== heard) context.emit('sample', 'text', { ask: named, text: (heard = text) })
                 for (const call of calls ?? []) {
                   if (told.has(call.call)) continue
                   told.add(call.call)
-                  context.emit('sample', 'tool', { ask, call: call.call, name: call.name, input: call.input })
+                  context.emit('sample', 'tool', { ask: named, call: call.call, name: call.name, input: call.input })
                 }
               })
               .catch(() => undefined)
@@ -466,6 +474,7 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
         throw refusalOf(failure)
       } finally {
         if (polling !== null) window.clearInterval(polling)
+        if (asks.get(named) === ask) asks.delete(named)
         unlisten()
         unsubscribe()
       }

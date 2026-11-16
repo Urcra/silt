@@ -30,7 +30,6 @@ quick-xml = "0.42.0"
 ts = ["dep:ts-rs", "silt-workspace/ts"]
 # A sheet as an `.xlsx` workbook, for the shell crates that serve it.
 xlsx = ["dep:rust_xlsxwriter"]
-rust_xlsxwriter = ["dep:rust_xlsxwriter"]
 
 [dev-dependencies]
 calamine = "0.38.0"

@@ -1678,6 +1678,25 @@ async fn page_data_is_written_under_the_versions_rules_by_who_wrote_it() {
     let carol = &world.people.iter().find(|(name, _)| *name == "carol").expect("carol").1;
     let as_alice = family.delta(ActorId(77), THREAD, Author::User, 6, family.thread_head(THREAD), vote("alice"));
     assert_eq!(carol.push(vec![as_alice]).await, StatusCode::FORBIDDEN, "carol can't vote as alice");
+    // A version forged under alice's actor, loosening the rules, is dropped
+    // with the push, and carol's write is judged by the real version's.
+    let loose = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 2, "title": "Lunch poll", "kind": "html",
+        "media_type": "text/html", "blob": "ab".repeat(32), "size": 1, "inline": false,
+        "capabilities": {"db": {"rules": [{"path": "votes", "read": "read", "write": "comment"}]}}
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let forged = family.delta(
+        ActorId(1),
+        THREAD,
+        Author::User,
+        6,
+        family.thread_head(THREAD),
+        Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: loose.to_string() }),
+    );
+    let as_alice_again =
+        family.delta(ActorId(77), THREAD, Author::User, 7, silt_types::Frontier::single(forged.span.last()), vote("alice"));
+    assert_eq!(carol.push(vec![forged, as_alice_again]).await, StatusCode::FORBIDDEN, "a forged version loosens nothing");
     let own = applied(family, family.delta(ActorId(77), THREAD, Author::User, 6, family.thread_head(THREAD), vote("carol")));
     assert_eq!(carol.push(vec![own]).await, StatusCode::OK, "carol votes as herself");
 

@@ -617,7 +617,7 @@ fn expand<'a>(
         seen.insert(delta.span.first());
         items.push(HistoryItem { delta, source: HistorySource::Own, rewound: false });
     }
-    mark_rewound(&mut items);
+    mark_rewound(&mut items, threads.graph());
     expansion.open.remove(&thread);
     let items: Rc<[HistoryItem<'a>]> = items.into();
     if whole {
@@ -753,15 +753,27 @@ pub fn comments_in(log: &[Delta], thread: ThreadId) -> Vec<Comment> {
 
 /// Marks what each revert in `items` rewound: everything after the delta it
 /// names and before the revert itself (ADR 0029).
-fn mark_rewound(items: &mut [HistoryItem<'_>]) {
-    for at in 0..items.len() {
-        let Op::Conv(crate::delta::ConvOp::Rewound { to }) = items[at].delta.op else {
-            continue;
-        };
-        if let Some(from) = items[..at].iter().position(|item| item.delta.span.contains(to)) {
-            for item in &mut items[from + 1..at] {
-                item.rewound = true;
+/// Marks what each revert among `items` rewound: what it came after,
+/// causally, and its target didn't. Something concurrent with a revert,
+/// such as a viewer's page write or a fork's own work, survives it on every
+/// replica, whatever order the deltas arrived in.
+fn mark_rewound(items: &mut [HistoryItem<'_>], graph: &CausalGraph) {
+    let reverts: Vec<(VersionVector, VersionVector)> = items
+        .iter()
+        .filter_map(|item| match item.delta.op {
+            Op::Conv(crate::delta::ConvOp::Rewound { to }) => {
+                Some((graph.version_vector(&item.delta.parents), graph.version_vector(&silt_types::Frontier::single(to))))
             }
+            _ => None,
+        })
+        .collect();
+    if reverts.is_empty() {
+        return;
+    }
+    for item in items.iter_mut() {
+        let (first, last) = (item.delta.span.first(), item.delta.span.last());
+        if reverts.iter().any(|(before, kept)| before.contains(last) && !kept.contains(first)) {
+            item.rewound = true;
         }
     }
 }

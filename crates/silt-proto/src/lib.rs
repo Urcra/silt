@@ -23,7 +23,8 @@ pub mod view;
 /// reviewed it through (ADR 0067); tool calls that ran git, whose edits a
 /// diff may leave out (ADR 0069). 12: a person's own design systems, synced
 /// through each server they use (ADR 0071). 13: an artifact's page data
-/// (`Op::Page`) and comments on a doc's text (ADR 0072, ADR 0077).
+/// (`Op::Page`) and comments on a doc's text (ADR 0072, ADR 0077). 14:
+/// rooms that span machines through `/v1/rooms` (ADR 0081).
 pub const PROTOCOL: u32 = 14;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";

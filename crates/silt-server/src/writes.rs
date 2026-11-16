@@ -41,8 +41,10 @@ pub(crate) async fn actor_of(server: &Server, user: UserId) -> Result<ActorId, s
     Ok(ActorId(id_from(&actor)))
 }
 
-/// Writes `op` on `thread` as `user`, after the thread's head and `also`.
-async fn write_as(
+/// Writes `op` on `thread` as `user`, after the thread's head and `also`,
+/// when the device may comment or review: what a phone limited on the
+/// Devices page may not do (ADR 0028), such as publishing a version.
+pub(crate) async fn write_as(
     server: &Server,
     browser: Browser,
     family: FamilyId,
@@ -54,8 +56,9 @@ async fn write_as(
     write_as_with(server, browser, family, thread, also, op).await
 }
 
-/// [`write_as`] for what any session that can read a thread may write,
-/// such as an artifact's page data (ADR 0072), whose rules the push checks.
+/// [`write_as`] for what any session that can read a thread may write:
+/// only an artifact's page data and the files people add to a page
+/// (ADR 0072), whose rules the push checks.
 pub(crate) async fn write_as_with(
     server: &Server,
     browser: Browser,

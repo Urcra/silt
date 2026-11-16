@@ -184,8 +184,12 @@ impl Clients {
 
 async fn start(connector: &PageConnector) -> Result<Client, String> {
     if let Some(program) = &connector.command {
-        let mut command = tokio::process::Command::new(program);
-        command.args(&connector.args).stderr(std::process::Stdio::null());
+        // On Windows `npx` and its kind are `.cmd` files, which a bare name misses.
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let found = silt_os::find_program(program, &path).unwrap_or_else(|| program.into());
+        let mut command = tokio::process::Command::new(found);
+        command.args(&connector.args).stderr(std::process::Stdio::null()).kill_on_drop(true);
+        silt_os::own_group(&mut command);
         let transport =
             rmcp::transport::TokioChildProcess::new(command).map_err(|error| format!("couldn't start {program}: {error}"))?;
         return ().serve(transport).await.map_err(|error| error.to_string());

@@ -688,7 +688,7 @@ async fn write_version(
     let blob = server.shared.blobs.put(&bytes).await.map_err(|_| bad_request("the version couldn't be kept"))?;
     let name = format!("artifact/{artifact}/v{version}/{file}");
     let attachment = Op::Conv(silt_log::ConvOp::Attachment { session: session.clone(), name, blob });
-    crate::writes::write_as_with(server, browser, row.family, row.id, None, attachment).await?;
+    crate::writes::write_as(server, browser, row.family, row.id, None, attachment).await?;
     let view = ArtifactView {
         version,
         media_type: media_type.into(),
@@ -700,7 +700,7 @@ async fn write_version(
     };
     let line = silt_agents::acp::artifact(&view);
     let native = Op::Conv(silt_log::ConvOp::Native { session, file: silt_log::SessionFile::Main, line });
-    crate::writes::write_as_with(server, browser, row.family, row.id, None, native).await?;
+    crate::writes::write_as(server, browser, row.family, row.id, None, native).await?;
     Ok(version)
 }
 
@@ -835,7 +835,7 @@ async fn doc_data(
             let ops = silt_proto::edited::doc_ops(&text(&log, &graph), &edits).map_err(bad_request)?;
             for op in ops {
                 let op = Op::Page(silt_log::PageOp::Text { artifact, op });
-                crate::writes::write_as_with(&server, browser, page.family, page.thread, None, op).await?;
+                crate::writes::write_as(&server, browser, page.family, page.thread, None, op).await?;
             }
             let (log, graph) = edited_log(&server, browser.user, &page).await?;
             Ok(Json(serde_json::json!({ "text": text(&log, &graph) })))
@@ -862,8 +862,7 @@ async fn sheet_data(
             Ok::<_, ApiError>(silt_log::sheet_cells_in(&log, &graph, page.thread, artifact, sheet))
         }
     };
-    let write =
-        |op: silt_log::PageOp| crate::writes::write_as_with(&server, browser, page.family, page.thread, None, Op::Page(op));
+    let write = |op: silt_log::PageOp| crate::writes::write_as(&server, browser, page.family, page.thread, None, Op::Page(op));
     let lines = |sheet, axis: AxisName, op| silt_log::PageOp::Lines { artifact, sheet, axis: axis.into(), op };
     let today = (crate::now_ms() as f64 / 86_400_000.0).floor() + 25_569.0;
     match asked {
@@ -1113,7 +1112,7 @@ async fn archive_artifact(
         return Err(crate::forbidden("only the thread's owner archives its artifacts"));
     }
     let op = silt_log::PageOp::Set { artifact, path: ARCHIVED.into(), value: archive.archived.to_string() };
-    crate::writes::write_as_with(&server, browser, page.family, page.thread, None, Op::Page(op)).await?;
+    crate::writes::write_as(&server, browser, page.family, page.thread, None, Op::Page(op)).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 

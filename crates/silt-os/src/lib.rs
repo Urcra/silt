@@ -118,6 +118,11 @@ pub fn own_group(command: &mut tokio::process::Command) {
     imp::own_group(command);
 }
 
+/// [`own_group`] for a process started without tokio.
+pub fn own_group_std(command: &mut std::process::Command) {
+    imp::own_group_std(command);
+}
+
 /// Stops the process `pid` started with `own_group`, and everything it
 /// started.
 pub fn kill_tree(pid: u32) {

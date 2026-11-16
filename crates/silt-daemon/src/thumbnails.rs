@@ -77,7 +77,7 @@ fn run(script_text: &str, page: &str, dir: &Path, name: &str) -> Result<Option<V
     let _ = std::fs::remove_file(&out);
     std::fs::write(&job, serde_json::json!({"page": page, "out": out}).to_string()).map_err(|error| error.to_string())?;
     std::fs::write(&script, script_text).map_err(|error| error.to_string())?;
-    let mut command = Command::new("node");
+    let mut command = Command::new(program("node"));
     command.arg(&script).arg(&job).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     if let Some(global) = npm_root() {
         command.env("NODE_PATH", global);
@@ -98,8 +98,14 @@ fn run(script_text: &str, page: &str, dir: &Path, name: &str) -> Result<Option<V
     Ok(std::fs::read(&out).ok())
 }
 
+/// `name` found on `PATH`, as Windows names an npm install `npm.cmd`.
+fn program(name: &str) -> std::path::PathBuf {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    silt_os::find_program(name, &path).unwrap_or_else(|| name.into())
+}
+
 fn npm_root() -> Option<std::path::PathBuf> {
-    let output = Command::new("npm").args(["root", "-g"]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    let output = Command::new(program("npm")).args(["root", "-g"]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
     let root = String::from_utf8(output.stdout).ok()?;
     let root = root.trim();
     (output.status.success() && !root.is_empty()).then(|| root.into())

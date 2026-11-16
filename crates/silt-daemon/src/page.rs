@@ -78,6 +78,13 @@ impl Core {
                 if bytes.len() as u64 > silt_proto::artifact::ASSET_BYTES {
                     return Err(CoreError::Invalid(format!("a file is at most {} MiB", silt_proto::artifact::ASSET_BYTES >> 20)));
                 }
+                let taken: u64 = silt_proto::page::assets(&docs).iter().map(|kept| kept.size).sum();
+                if taken.saturating_add(bytes.len() as u64) > silt_proto::artifact::PAGE_ASSETS_BYTES {
+                    return Err(CoreError::Invalid(format!(
+                        "this page's files would take more than {} MiB",
+                        silt_proto::artifact::PAGE_ASSETS_BYTES >> 20
+                    )));
+                }
                 let blob = self.store.blobs().put(&bytes).await?;
                 let asset = format!("{:032x}", uuid::Uuid::new_v4().as_u128())[..12].to_owned();
                 let size = bytes.len() as u64;

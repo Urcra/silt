@@ -104,6 +104,10 @@ pub fn asset_media_type_ok(media_type: &str) -> bool {
     )
 }
 
+/// The most the files people add to one artifact's page take on a machine,
+/// and by default on a server, whose `artifact_assets_mib` may change it.
+pub const PAGE_ASSETS_BYTES: u64 = 256 << 20;
+
 /// The runtime contract a page's `silt` is: the newest, and every one this
 /// Silt still serves. A version keeps the one it was made with until a new
 /// version asks for another (ADR 0072).

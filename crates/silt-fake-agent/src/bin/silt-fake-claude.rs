@@ -509,17 +509,19 @@ fn print_mode(args: &[String]) -> Step {
     if let Some(logs) = env::var_os("FAKE_LOG_DIR").map(PathBuf::from) {
         write(&logs.join("claude-print"), args.join(" ").as_bytes())?;
     }
-    let tools = args.iter().position(|arg| arg == "--allowedTools").and_then(|at| args.get(at + 1));
-    let config = args.iter().position(|arg| arg == "--mcp-config").and_then(|at| args.get(at + 1));
-    // Print mode may use only the tools of the asker's own server.
-    let allowed = match (tools, config) {
-        (Some(tools), None) => tools.is_empty(),
-        (Some(tools), Some(_)) => !tools.is_empty() && tools.split(',').all(|tool| tool.starts_with("mcp__page__")),
-        (None, _) => false,
-    };
-    if !allowed || (config.is_some() && !args.iter().any(|arg| arg == "--strict-mcp-config")) {
-        return Err(Failed(2, "print mode was allowed tools beyond the asker's".into()));
+    let value = |flag: &str| args.iter().position(|arg| arg == flag).and_then(|at| args.get(at + 1)).map(String::as_str);
+    // Print mode is locked down: no built-in tools, only the asker's MCP
+    // servers, none of the person's settings, and nothing run unasked.
+    let locked = value("--tools") == Some("")
+        && args.iter().any(|arg| arg == "--strict-mcp-config")
+        && value("--setting-sources") == Some("project")
+        && value("--permission-mode") == Some("dontAsk");
+    let allowed = value("--allowedTools")
+        .is_some_and(|tools| tools.is_empty() || tools.split(',').all(|tool| tool.starts_with("mcp__page__")));
+    if !locked || !allowed {
+        return Err(Failed(2, format!("print mode wasn't locked down: {}", args.join(" "))));
     }
+    let config = value("--mcp-config").filter(|config| config.contains("\"page\""));
     let mut message = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut message).map_err(io)?;
     // With stream-json input, the question is a user message, images and all.
