@@ -512,3 +512,52 @@ fn the_hosted_app_asks_a_pages_question_of_the_persons_computer() {
     });
     assert_eq!(answered["text"], "Sampled: Which row? [lookup: row 7]", "{answered}");
 }
+
+/// With none of the person's devices online, the hosted app lists a
+/// thread's files from the server's own fold of its deltas, and reads them
+/// where the server has their text (ADR 0078).
+#[test]
+fn the_hosted_app_reads_a_threads_files_with_no_device_online() {
+    let world = world();
+    let laptop = &world.laptop;
+    let started = laptop.web(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": laptop.repo, "agent": "v1", "prompt": "Artifact files"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    let browser = HostedBrowser::sign_in(&world.server, "owner", world._root.path().join("cookies"));
+    let mut id = String::new();
+    assert!(
+        eventually(|| {
+            let history = browser.call("GET", &format!("/threads/{thread}/history"), None);
+            let found = history["entries"]
+                .as_array()
+                .and_then(|entries| entries.iter().find_map(|entry| entry["artifact"]["id"].as_str().map(str::to_owned)));
+            found.map(|found| id = found).is_some()
+        }),
+        "the hosted app has the artifact"
+    );
+    let grant = serde_json::json!({"capability": "files", "state": "granted"});
+    browser.call("PUT", &format!("/threads/{thread}/artifacts/{id}/grants"), Some(grant));
+    laptop.silt(&["daemon", "stop"]);
+    let files = format!("/threads/{thread}/artifacts/{id}/files");
+    let mut listed = serde_json::Value::Null;
+    assert!(
+        eventually(|| {
+            listed = browser.call("POST", &files, Some(serde_json::json!({"op": "list", "recursive": true})));
+            listed["entries"].as_array().is_some_and(|entries| entries.iter().any(|entry| entry["path"] == "src/main.rs"))
+        }),
+        "the server lists the thread's files itself: {listed}"
+    );
+    let paths: Vec<&str> =
+        listed["entries"].as_array().expect("entries").iter().filter_map(|entry| entry["path"].as_str()).collect();
+    assert!(paths.iter().all(|path| path.starts_with("src/")), "only what the page declares: {paths:?}");
+    let read = browser.call("POST", &files, Some(serde_json::json!({"op": "read", "path": "src/main.rs"})));
+    assert!(
+        read["text"].as_str().is_some_and(|text| text.contains("fn main")) || read.to_string().contains("isn't on the server"),
+        "read from the mirror, or said why not: {read}"
+    );
+    let outside = browser.call("POST", &files, Some(serde_json::json!({"op": "read", "path": "README.md"})));
+    assert!(outside["text"].is_null(), "outside its globs: {outside}");
+}

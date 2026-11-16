@@ -2161,6 +2161,90 @@ async fn projects(State(server): State<Server>, Extension(browser): Extension<Br
     ))
 }
 
+/// Git's texts read from a family's mirror, for files the server folds.
+struct MirrorBases {
+    git_dir: std::path::PathBuf,
+}
+
+impl silt_log::BaseText for MirrorBases {
+    fn text(&mut self, oid: silt_types::GitOid) -> Option<String> {
+        let out = std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(&self.git_dir)
+            .args(["cat-file", "blob", &oid.to_string()])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8(out.stdout).ok()
+    }
+}
+
+/// A thread's files as the server folds them from the family's deltas, with
+/// git's texts from the family's mirror, for a page in the hosted app when
+/// none of the person's devices answers (ADR 0078). It reads the thread as
+/// it is now; a version's files and a file's history are a device's to read.
+pub(crate) async fn projected_files(
+    server: &Server,
+    user: UserId,
+    selector: &str,
+    config: serde_json::Value,
+    asked: silt_proto::page::FilesRequest,
+) -> Result<serde_json::Value, ApiError> {
+    use silt_log::{BaseText as _, FileView};
+    use silt_proto::page::{FilesRequest, files_allowed, list_files};
+    let readable = Readable::load(server, user).await?;
+    let row = readable.row(selector)?;
+    let (thread, family_id) = (row.id, row.family);
+    let log = readable.of(row).to_vec();
+    let git_dir = server.git_root().join(format!("{family_id}.git"));
+    tokio::task::spawn_blocking(move || {
+        let mut bases = MirrorBases { git_dir };
+        let mut family = silt_log::Family::new();
+        // A delta whose git text the mirror lacks is left out, as a device leaves out one it can't apply.
+        for delta in log {
+            let _ = family.apply(delta, &mut bases);
+        }
+        let view = family.thread_view(thread);
+        let paths = view.paths();
+        match asked {
+            FilesRequest::List { path, recursive, cursor } => {
+                let shown = paths
+                    .iter()
+                    .filter(|(_, inode)| view.tree().kind(**inode) == Some(silt_crdt::InodeKind::File))
+                    .map(|(path, _)| path.as_str())
+                    .filter(|path| files_allowed(&config, path));
+                let (entries, next) = list_files(shown, &path, recursive, cursor.as_deref());
+                Ok(serde_json::json!({ "entries": entries, "cursor": next }))
+            }
+            FilesRequest::Read { path, at: None } => {
+                if !files_allowed(&config, &path) {
+                    return Err(bad_request(format!("not_found: this page may not read {path}")));
+                }
+                let inode = *paths.get(&path).ok_or_else(|| bad_request(format!("not_found: {path} isn't in the thread")))?;
+                let text = match view.file(inode) {
+                    Some(FileView::Text(text)) => text,
+                    Some(FileView::GitText(oid)) => bases.text(oid).ok_or_else(|| {
+                        bad_request(format!("unavailable: {path}'s text isn't on the server, and none of your devices is online"))
+                    })?,
+                    _ => return Err(bad_request(format!("{path} isn't text"))),
+                };
+                if text.len() > 4 << 20 {
+                    return Err(bad_request(format!("too_large: {path} is over 4 MiB")));
+                }
+                let revision = family.thread_head(thread).to_string();
+                Ok(serde_json::json!({ "path": path, "text": text, "size": text.len(), "revision": revision }))
+            }
+            FilesRequest::Read { .. } | FilesRequest::History { .. } => Err(bad_request(
+                "unavailable: a version's files and a file's history are read by one of your devices, and none is online",
+            )),
+        }
+    })
+    .await
+    .map_err(|_| bad_request("the files couldn't be read"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -39,6 +39,8 @@ struct Web {
     frames: Arc<Mutex<crate::frames::FrameKeys>>,
     /// Each room socket's way to its browser, by peer (ADR 0081).
     room_peers: Arc<Mutex<HashMap<String, mpsc::Sender<String>>>>,
+    /// Each server's one socket for every view's room here.
+    room_mux: crate::room_mux::Upstreams,
 }
 
 /// Codes that each stand in for the token once, shortly. Shared between the
@@ -108,6 +110,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         vendor: Arc::new(silt_vendor::Vendor::new(&crate::paths::data_dir().join("vendor"))),
         frames: Arc::default(),
         room_peers: Arc::default(),
+        room_mux: Arc::default(),
     };
     let api = Router::new()
         .route("/api/events", get(events_socket))
@@ -435,7 +438,11 @@ async fn serve_room(mut socket: WebSocket, web: Web) {
     if let Ok(route) = answer(&web, Request::RoomRoute { thread: join.thread.clone() }).await
         && let (Some(url), Some(token)) = (route["url"].as_str(), route["token"].as_str())
     {
-        relay_room(socket, url, token, first.to_string()).await;
+        // Every view here shares one socket to the server; one of its own where the server has none.
+        match crate::room_mux::join(&web.room_mux, url, token, &first).await {
+            Some(channel) => relay_on(socket, channel).await,
+            None => relay_room(socket, url, token, first.to_string()).await,
+        }
         return;
     }
     let key = silt_proto::rooms::RoomKey { thread: join.thread, artifact: join.artifact, name: join.name };
@@ -486,6 +493,24 @@ async fn serve_room(mut socket: WebSocket, web: Web) {
     web.room_peers.lock().expect("lock").remove(&peer);
     if let Ok(deliveries) = answer(&web, Request::RoomLeave { key, peer }).await {
         deliver(&web, &deliveries);
+    }
+}
+
+/// Relays one view's room on the server's shared socket, both ways until
+/// either side closes.
+async fn relay_on(mut socket: WebSocket, mut channel: crate::room_mux::Channel) {
+    loop {
+        tokio::select! {
+            message = socket.recv() => match message {
+                Some(Ok(Message::Text(text))) => if !channel.send(&text).await { break },
+                Some(Ok(_)) => continue,
+                Some(Err(_)) | None => break,
+            },
+            heard = channel.heard.recv() => match heard {
+                Some(text) => if socket.send(Message::Text(text.into())).await.is_err() { break },
+                None => break,
+            },
+        }
     }
 }
 
@@ -1909,6 +1934,7 @@ mod tests {
             vendor: Arc::new(silt_vendor::Vendor::new(std::path::Path::new("vendor"))),
             frames: Arc::default(),
             room_peers: Arc::default(),
+            room_mux: Arc::default(),
         };
         let url = info.one_time_url(None);
         assert!(!url.contains("secret"), "{url}");

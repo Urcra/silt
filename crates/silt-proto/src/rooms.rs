@@ -27,6 +27,9 @@ pub const QUEUED: usize = 256;
 pub const NAME_BYTES: usize = 64;
 /// How long presence lasts without a refresh, in milliseconds.
 pub const PRESENCE_MS: i64 = 15_000;
+/// The most rooms one daemon's shared socket to a server carries.
+pub const MUX_ROOMS: usize = 64;
+
 /// The moments a room keeps for the thread's agent.
 pub const KEPT: usize = 100;
 
