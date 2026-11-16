@@ -739,7 +739,8 @@ function ArtifactPage({
     )
   if (artifact.kind === 'canvas')
     return typed(<CanvasView text={textOf(content)} style={style} theme={startTheme} onComment={(quote) => holder.openComposer(quote)} />)
-  if (artifact.kind === 'data') return typed(<DataView text={textOf(content)} theme={theme} style={style} />)
+  if (artifact.kind === 'data')
+    return typed(<DataView text={textOf(content)} theme={theme} style={style} live={{ thread, artifact: artifact.id, version: artifact.version }} />)
   // Docs and sheets show as they stand now, edited in place (ADR 0077).
   if (artifact.kind === 'doc') return typed(<DocEditor thread={thread} artifact={artifact.id} title={artifact.title} versions={versions} />)
   if (artifact.kind === 'sheet') return typed(<SheetGrid thread={thread} artifact={artifact.id} title={artifact.title} />)

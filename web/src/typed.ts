@@ -11,12 +11,21 @@ export type Deck = {
 }
 export type Board = { id: string; name: string; caption?: string; width: number; height: number; x?: number; y?: number; grow?: boolean; html: string }
 export type Canvas = { style?: string; boards: Board[] }
-export type Source = { id: string; name: string; kind: string; detail: string; at: string }
-export type Series = { name: string; points: [string | number, number | null][] }
+export type Source = {
+  id: string
+  name: string
+  kind: string
+  detail: string
+  at: string
+  server?: string
+  tool?: string
+  input?: Record<string, unknown>
+}
+export type Series = { name: string; points: [string | number, number | null][]; pick?: string }
 export type Block =
   | { type: 'text'; text: string }
-  | { type: 'stat'; label: string; value: number | string; unit?: string; change?: number; better?: 'up' | 'down'; source: string }
-  | { type: 'table'; title?: string; columns: string[]; rows: unknown[][]; source: string }
+  | { type: 'stat'; label: string; value: number | string; unit?: string; change?: number; better?: 'up' | 'down'; source: string; pick?: string }
+  | { type: 'table'; title?: string; columns: string[]; rows: unknown[][]; source: string; pick?: string }
   | {
       type: 'chart'
       title?: string
@@ -108,7 +117,16 @@ export function dataPageOf(json: string): DataPage | null {
   if (!list(page.sources, 200) || !list(page.blocks, 500)) return null
   const named = (value: unknown) => text(value, 2000)
   const sources = page.sources.every(
-    (source) => object(source) && named(source.id) && named(source.name) && named(source.kind) && text(source.detail) && named(source.at),
+    (source) =>
+      object(source) &&
+      named(source.id) &&
+      named(source.name) &&
+      named(source.kind) &&
+      text(source.detail) &&
+      named(source.at) &&
+      optional(source.server, named) &&
+      optional(source.tool, named) &&
+      optional(source.input, object),
   )
   const point = (value: unknown) => list(value, 2) && value.length === 2 && (value[1] === null || number(value[1]))
   const block = (value: unknown) => {
@@ -117,7 +135,14 @@ export function dataPageOf(json: string): DataPage | null {
       case 'text':
         return text(value.text)
       case 'stat':
-        return named(value.label) && (number(value.value) || named(value.value)) && optional(value.unit, (unit) => named(unit) || number(unit)) && optional(value.change, number) && named(value.source)
+        return (
+          named(value.label) &&
+          (number(value.value) || named(value.value)) &&
+          optional(value.unit, (unit) => named(unit) || number(unit)) &&
+          optional(value.change, number) &&
+          optional(value.pick, named) &&
+          named(value.source)
+        )
       case 'table':
         return (
           optional(value.title, named) &&
@@ -125,6 +150,7 @@ export function dataPageOf(json: string): DataPage | null {
           value.columns.every((column) => named(column) || number(column)) &&
           list(value.rows, 10_000) &&
           value.rows.every((row) => list(row, 200)) &&
+          optional(value.pick, named) &&
           named(value.source)
         )
       case 'chart':
@@ -135,7 +161,9 @@ export function dataPageOf(json: string): DataPage | null {
           optional(value.y, named) &&
           optional(value.stacked, (stacked) => typeof stacked === 'boolean') &&
           list(value.series, 50) &&
-          value.series.every((series) => object(series) && named(series.name) && list(series.points, 10_000) && series.points.every(point)) &&
+          value.series.every(
+            (series) => object(series) && named(series.name) && list(series.points, 10_000) && series.points.every(point) && optional(series.pick, named),
+          ) &&
           named(value.source)
         )
       default:
@@ -269,6 +297,62 @@ export function yDomain(values: number[], fromZero: boolean): [number, number] {
   if (fromZero) return [Math.min(0, least), Math.max(0, most)]
   const pad = (most - least) * 0.08 || Math.abs(most) * 0.1 || 1
   return [least - pad, most + pad]
+}
+
+/** What a JSON pointer, RFC 6901's `/a/0/b`, points at in `value`; none where nothing is there. */
+export function pointer(value: unknown, path: string): unknown {
+  if (path === '') return value
+  if (!path.startsWith('/')) return undefined
+  let at: unknown = value
+  for (const raw of path.slice(1).split('/')) {
+    const key = raw.replace(/~1/g, '/').replace(/~0/g, '~')
+    if (Array.isArray(at)) at = at[Number(key)]
+    else if (at && typeof at === 'object') at = (at as Record<string, unknown>)[key]
+    else return undefined
+  }
+  return at
+}
+
+/** An MCP tool's result as one value: its structured content, else its first text as JSON, else that text. */
+export function toolValue(result: unknown): unknown {
+  const said = result as { structuredContent?: unknown; content?: { type?: string; text?: string }[] } | null
+  if (said?.structuredContent !== undefined && said.structuredContent !== null) return said.structuredContent
+  const text = said?.content?.find((part) => part.type === 'text')?.text
+  if (text === undefined) return result
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
+
+/**
+ * A data page with what its `mcp` sources' tools answered, by source id, put where its blocks' `pick`s point (ADR
+ * 0084): a stat's value, a table's rows, a series' points. A pick that finds nothing of the right shape keeps what the
+ * agent wrote.
+ */
+export function withLive(page: DataPage, answers: Record<string, unknown>): DataPage {
+  const from = (source: string, pick: string | undefined) => (pick !== undefined && source in answers ? pointer(answers[source], pick) : undefined)
+  const blocks = page.blocks.map((block): Block => {
+    if (block.type === 'stat') {
+      const value = from(block.source, block.pick)
+      return typeof value === 'number' || typeof value === 'string' ? { ...block, value } : block
+    }
+    if (block.type === 'table') {
+      const rows = from(block.source, block.pick)
+      return Array.isArray(rows) && rows.every((row) => Array.isArray(row) && row.length === block.columns.length) ? { ...block, rows: rows as unknown[][] } : block
+    }
+    if (block.type === 'chart') {
+      const series = block.series.map((one) => {
+        const points = from(block.source, one.pick)
+        const shaped = Array.isArray(points) && points.every((point) => Array.isArray(point) && point.length === 2 && (typeof point[1] === 'number' || point[1] === null))
+        return shaped ? { ...one, points: points as Series['points'] } : one
+      })
+      return { ...block, series }
+    }
+    return block
+  })
+  return { ...page, blocks }
 }
 
 /** A column's letters: 0 is `A`, 26 is `AA`. */

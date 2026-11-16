@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canvasOf, chartColors, chartTable, runs, stepsOf, xPositions, yDomain, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
+import { canvasOf, chartColors, chartTable, pointer, runs, stepsOf, toolValue, withLive, xPositions, yDomain, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
 
 describe('the artifact types', () => {
   it('opens a deck at the slide a link names, within the deck', () => {
@@ -41,6 +41,29 @@ describe('the artifact types', () => {
     const grows = partDocument('<p>long</p>', undefined, 390, 844, null, 'light', undefined, true)
     expect(grows).toContain('min-height:844px')
     expect(grows).toContain("silt:'grown'")
+  })
+})
+
+describe("a data page's live numbers", () => {
+  it("come from where its blocks point in the tool's answer, or stay as written", () => {
+    const answer = toolValue({ content: [{ type: 'text', text: '{"open": 12, "by": [["mon", 3], ["tue", 5]], "rows": [["a", 1]]}' }] })
+    expect(pointer(answer, '/by/1/1')).toBe(5)
+    expect(toolValue({ structuredContent: { open: 1 }, content: [] })).toEqual({ open: 1 })
+    const page = {
+      title: 't',
+      sources: [{ id: 'live', name: 'tracker', kind: 'mcp', detail: '', at: '', server: 'tracker', tool: 'count' }],
+      blocks: [
+        { type: 'stat' as const, label: 'Open', value: 0, source: 'live', pick: '/open' },
+        { type: 'table' as const, columns: ['who', 'n'], rows: [], source: 'live', pick: '/rows' },
+        { type: 'chart' as const, chart: 'bar', series: [{ name: 'by day', points: [], pick: '/by' }], source: 'live' },
+        { type: 'stat' as const, label: 'Missing', value: 7, source: 'live', pick: '/none' },
+      ],
+    }
+    const shown = withLive(page, { live: answer })
+    expect(shown.blocks[0]).toMatchObject({ value: 12 })
+    expect(shown.blocks[1]).toMatchObject({ rows: [['a', 1]] })
+    expect(shown.blocks[2]).toMatchObject({ series: [{ points: [['mon', 3], ['tue', 5]] }] })
+    expect(shown.blocks[3]).toMatchObject({ value: 7 })
   })
 })
 

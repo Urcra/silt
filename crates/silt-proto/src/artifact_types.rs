@@ -89,12 +89,20 @@ struct Source {
     kind: String,
     detail: String,
     at: String,
+    /// An `mcp` source's connector and read-only tool, which the viewer's
+    /// computer runs on open and on Refresh (ADRs 0080, 0084).
+    #[serde(default)]
+    server: Option<String>,
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    input: Option<Value>,
 }
 
 /// What a whiteboard's items are.
 pub const WHITEBOARD_ITEMS: &[&str] = &["block", "arrow", "section", "stroke", "image"];
 const CHARTS: &[&str] = &["line", "area", "bar", "dot", "scatter", "heatmap", "segmented"];
-const SOURCE_KINDS: &[&str] = &["query", "file", "command", "agent", "manual"];
+const SOURCE_KINDS: &[&str] = &["query", "file", "command", "agent", "manual", "mcp"];
 
 /// Whether `text` is a valid `kind` version, and why not.
 pub fn validate(kind: &str, text: &str) -> Result<(), String> {
@@ -153,7 +161,15 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
             let mut sources = std::collections::HashSet::new();
             for source in &page.sources {
                 if !SOURCE_KINDS.contains(&source.kind.as_str()) {
-                    return Err(format!("source {}'s kind is query, file, command, agent or manual", source.id));
+                    return Err(format!("source {}'s kind is query, file, command, agent, manual or mcp", source.id));
+                }
+                let mcp = source.kind == "mcp";
+                let named = (source.server.is_some(), source.tool.is_some(), source.input.is_some());
+                if if mcp { !(named.0 && named.1) } else { named != (false, false, false) } {
+                    return Err(format!("source {}: an mcp source names its server and tool, and only it does", source.id));
+                }
+                if source.input.as_ref().is_some_and(|input| !input.is_object()) {
+                    return Err(format!("source {}'s input is an object", source.id));
                 }
                 let _ = (&source.name, &source.detail, &source.at);
                 sources.insert(source.id.as_str());
@@ -401,18 +417,24 @@ pub fn guide(kind: &str) -> Option<(Value, Value)> {
                 let source = json!({
                     "type": "object", "required": ["id", "name", "kind", "detail", "at"], "additionalProperties": false,
                     "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "kind": {"enum": SOURCE_KINDS},
-                        "detail": {"type": "string", "description": "What was run or read"}, "at": {"type": "string", "description": "When, ISO 8601"}}
+                        "detail": {"type": "string", "description": "What was run or read"}, "at": {"type": "string", "description": "When, ISO 8601"},
+                    "server": {"type": "string", "description": "For kind mcp: the page connector, as the version's mcp declaration names it"},
+                    "tool": {"type": "string", "description": "For kind mcp: a tool of it that only reads, run on the viewer's computer on open and on Refresh"},
+                    "input": {"type": "object", "description": "For kind mcp: the tool's input"}}
                 });
                 let text = json!({"type": "object", "required": ["type", "text"], "properties": {"type": {"const": "text"}, "text": {"type": "string", "description": "Markdown"}}});
                 let stat = json!({"type": "object", "required": ["type", "label", "value", "source"], "properties": {
                     "type": {"const": "stat"}, "label": {"type": "string"}, "value": {"type": ["number", "string"]},
                     "unit": {"type": "string"}, "change": {"type": "number", "description": "A fraction: -0.62 is down 62%"},
-                "better": {"enum": ["up", "down"], "description": "Which way the change is good, so it shows as good or bad"}, "source": {"type": "string"}}});
+                "better": {"enum": ["up", "down"], "description": "Which way the change is good, so it shows as good or bad"}, "source": {"type": "string"},
+                "pick": {"type": "string", "description": "With an mcp source: a JSON pointer into the tool's result, such as /open, whose value the stat shows"}}});
                 let table = json!({"type": "object", "required": ["type", "columns", "rows", "source"], "properties": {
                     "type": {"const": "table"}, "title": {"type": "string"}, "columns": {"type": "array", "items": {"type": "string"}},
-                    "rows": {"type": "array", "items": {"type": "array"}}, "source": {"type": "string"}}});
+                    "rows": {"type": "array", "items": {"type": "array"}}, "source": {"type": "string"},
+                    "pick": {"type": "string", "description": "With an mcp source: a JSON pointer to an array of rows in the tool's result"}}});
                 let series = json!({"type": "object", "required": ["name", "points"], "properties": {
-                    "name": {"type": "string"}, "points": {"type": "array", "items": {"type": "array", "minItems": 2, "maxItems": 2}}}});
+                    "name": {"type": "string"}, "points": {"type": "array", "items": {"type": "array", "minItems": 2, "maxItems": 2}},
+                    "pick": {"type": "string", "description": "With an mcp source: a JSON pointer to an array of [x, y] in the tool's result"}}});
                 let chart = json!({"type": "object", "required": ["type", "chart", "series", "source"], "properties": {
                     "type": {"const": "chart"}, "title": {"type": "string"}, "chart": {"enum": CHARTS},
                     "x": {"type": "string", "description": "The x axis's title"}, "y": {"type": "string", "description": "The y axis's title"},
@@ -472,6 +494,21 @@ mod tests {
         let pie = r#"{"title": "t", "sources": [{"id": "s", "name": "s", "kind": "manual", "detail": "", "at": ""}], "blocks": [{"type": "chart", "chart": "pie", "series": [], "source": "s"}]}"#;
         assert!(validate("data", pie).is_err());
         assert_eq!(validate("html", "<p>anything</p>"), Ok(()));
+    }
+
+    #[test]
+    fn an_mcp_source_names_its_server_and_tool() {
+        let page = |source: &str| {
+            format!(
+                r#"{{"title": "t", "sources": [{source}], "blocks": [{{"type": "stat", "label": "Open", "value": 0, "pick": "/open", "source": "s"}}]}}"#
+            )
+        };
+        let mcp = r#"{"id": "s", "name": "tracker", "kind": "mcp", "detail": "open issues", "at": "", "server": "tracker", "tool": "count_issues", "input": {"state": "open"}}"#;
+        assert!(validate("data", &page(mcp)).is_ok());
+        let half = r#"{"id": "s", "name": "tracker", "kind": "mcp", "detail": "", "at": "", "server": "tracker"}"#;
+        assert!(validate("data", &page(half)).is_err(), "no tool");
+        let manual = r#"{"id": "s", "name": "n", "kind": "manual", "detail": "", "at": "", "tool": "x"}"#;
+        assert!(validate("data", &page(manual)).is_err(), "only an mcp source names a tool");
     }
 
     #[test]

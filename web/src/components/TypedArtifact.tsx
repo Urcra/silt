@@ -3,12 +3,14 @@
 // HTML at all, and every number it shows names its source.
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { api } from "../api";
 import { type FrameTheme } from "../artifacts";
 import { hosted } from "../served";
 import { useShownTheme } from "../theme";
@@ -20,6 +22,8 @@ import {
   chartTable,
   runs,
   stepsOf,
+  toolValue,
+  withLive,
   xPositions,
   yDomain,
   csvOf,
@@ -1026,9 +1030,63 @@ function Chart({
   );
 }
 
-export function DataView({ text, theme, style }: { text: string; theme: FrameTheme; style?: string | null }) {
-  const page = useMemo(() => dataPageOf(text), [text]);
+export function DataView({
+  text,
+  theme,
+  style,
+  live,
+}: {
+  text: string;
+  theme: FrameTheme;
+  style?: string | null;
+  /** Where the page's `mcp` sources are run from: its thread and version (ADR 0084). */
+  live?: { thread: string; artifact: string; version: number };
+}) {
+  const written = useMemo(() => dataPageOf(text), [text]);
   const [tables, setTables] = useState<Set<number>>(new Set());
+  const sources = useMemo(
+    () => (written?.sources ?? []).filter((source) => source.kind === "mcp" && source.server && source.tool),
+    [written],
+  );
+  // Whether the person let the page run its sources' tools; null until known.
+  const [allowed, setAllowed] = useState<boolean | null>(null);
+  const [fetched, setFetched] = useState<Record<string, { value?: unknown; at: string; error?: string }>>({});
+  useEffect(() => {
+    if (!live || sources.length === 0) return;
+    let gone = false;
+    api.artifactGrants(live.thread, live.artifact).then(
+      (grants) => !gone && setAllowed(grants.mcp === "granted"),
+      () => !gone && setAllowed(false),
+    );
+    return () => {
+      gone = true;
+    };
+  }, [live, sources.length]);
+  const refresh = useCallback(async () => {
+    if (!live) return;
+    const answers: Record<string, { value?: unknown; at: string; error?: string }> = {};
+    for (const source of sources) {
+      const at = new Date().toISOString();
+      try {
+        // Only a tool the server says only reads runs on its own.
+        const about = (await api.pageMcp(live.thread, live.artifact, { op: "describe", server: source.server, tool: source.tool })) as { read_only?: boolean };
+        if (!about.read_only) throw new Error(`${source.server}'s ${source.tool} doesn't only read, so it doesn't run on its own`);
+        const result = await api.pageMcp(live.thread, live.artifact, { op: "call", server: source.server, tool: source.tool, input: source.input ?? {} });
+        answers[source.id] = { value: toolValue(result), at };
+      } catch (failure) {
+        answers[source.id] = { at, error: failure instanceof Error ? failure.message : String(failure) };
+      }
+    }
+    setFetched(answers);
+  }, [live, sources]);
+  useEffect(() => {
+    if (allowed) void refresh();
+  }, [allowed, refresh]);
+  const page = useMemo(() => {
+    if (!written) return null;
+    const answers = Object.fromEntries(Object.entries(fetched).flatMap(([id, got]) => (got.error === undefined ? [[id, got.value]] : [])));
+    return withLive(written, answers);
+  }, [written, fetched]);
   if (!page)
     return (
       <p className="px-5 py-6 text-sm text-danger">
@@ -1050,6 +1108,42 @@ export function DataView({ text, theme, style }: { text: string; theme: FrameThe
           <h1 className="text-xl font-semibold text-balance text-fg-1">
             {page.title}
           </h1>
+          {live && sources.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-1 px-3 py-2 text-xs text-fg-2" data-testid="live-sources">
+              {allowed === false ? (
+                <>
+                  <span className="min-w-0 flex-1">
+                    Live numbers from {sources.map((source) => `${source.server}'s ${source.tool}`).join(", ")}, run on this computer.
+                  </span>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      void api.setArtifactGrant(live.thread, live.artifact, "mcp", "granted", live.version).then(() => setAllowed(true))
+                    }
+                  >
+                    Load them
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <span className="min-w-0 flex-1">
+                    {Object.keys(fetched).length === 0
+                      ? "Loading live numbers…"
+                      : sources
+                          .map((source) => {
+                            const got = fetched[source.id];
+                            if (!got) return `${source.name}: not yet`;
+                            return got.error ? `${source.name}: ${got.error}` : `${source.name}: fetched ${new Date(got.at).toLocaleTimeString()}`;
+                          })
+                          .join(" · ")}
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={() => void refresh()} disabled={!allowed}>
+                    Refresh
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
           {page.summary && (
             <p className="mt-1 text-sm text-fg-2">{page.summary}</p>
           )}
