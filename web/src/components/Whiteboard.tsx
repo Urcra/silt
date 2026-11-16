@@ -85,6 +85,19 @@ function BoardImage({ thread, artifact, item, onDown }: { thread: string; artifa
   )
 }
 
+/** What's on the board, as left, top, width and height with a margin; none when it's empty. */
+function boundsOf(items: Item[]): [number, number, number, number] | null {
+  const boxes = items
+    .filter((item) => item.x !== undefined && item.y !== undefined)
+    .map((item) => [item.x ?? 0, item.y ?? 0, ...sizeOf(item)] as const)
+  const strokes = items.flatMap((item) => (item.type === 'stroke' ? (item.points ?? []) : []))
+  const xs = [...boxes.flatMap(([x, , w]) => [x, x + w]), ...strokes.map(([x]) => x)]
+  const ys = [...boxes.flatMap(([, y, , h]) => [y, y + h]), ...strokes.map(([, y]) => y)]
+  if (xs.length === 0 || ys.length === 0) return null
+  const [left, top] = [Math.min(...xs) - 24, Math.min(...ys) - 24]
+  return [left, top, Math.max(...xs) - left + 24, Math.max(...ys) - top + 24]
+}
+
 export function WhiteboardView({ thread, artifact, title }: { thread: string; artifact: string; title: string }) {
   useTopic(`thread:${thread}`)
   const queries = useQueryClient()
@@ -128,6 +141,39 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
     }
   }, [thread, artifact])
   const items = useMemo(() => (listed.data ?? []).map((doc) => doc.data).filter((item) => item && typeof item.id === 'string'), [listed.data])
+  // The board is framed in the panel, as a canvas fits its boards, and again when the panel changes size, such as going
+  // to the full view, until the person pans or zooms.
+  const moved = useRef(false)
+  const shownItems = useRef(items)
+  useEffect(() => {
+    shownItems.current = items
+  })
+  const fit = useRef(() => {
+    const bounds = boundsOf(shownItems.current)
+    const shown = box.current?.getBoundingClientRect()
+    if (moved.current || !bounds || !shown || shown.width === 0) return
+    const [left, top, width, height] = bounds
+    const scale = Math.max(0.2, Math.min(1, (shown.width - 48) / width, (shown.height - 120) / height))
+    setView({ x: Math.max(24, (shown.width - width * scale) / 2) - left * scale, y: 96 - top * scale, scale })
+  })
+  const zoom = (by: number) => {
+    moved.current = true
+    setView((was) => ({ ...was, scale: Math.min(Math.max(was.scale * by, 0.1), 3) }))
+  }
+  const fittedOnce = useRef(false)
+  useEffect(() => {
+    if (fittedOnce.current || items.length === 0) return
+    fittedOnce.current = true
+    const frame = requestAnimationFrame(() => fit.current())
+    return () => cancelAnimationFrame(frame)
+  }, [items])
+  useEffect(() => {
+    const shown = box.current
+    if (!shown) return
+    const observer = new ResizeObserver(() => fit.current())
+    observer.observe(shown)
+    return () => observer.disconnect()
+  }, [])
   const byId = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const at = (event: { clientX: number; clientY: number }): [number, number] => {
     const rect = box.current?.getBoundingClientRect()
@@ -196,7 +242,10 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
     room.current?.presence({ cursor: [Math.round(x), Math.round(y)], dragging: moving?.id ?? null })
     const now = drag.current
     if (!now) return
-    if (now.kind === 'pan') setView({ ...now.from, x: now.from.x + event.clientX - now.x, y: now.from.y + event.clientY - now.y })
+    if (now.kind === 'pan') {
+      moved.current = true
+      setView({ ...now.from, x: now.from.x + event.clientX - now.x, y: now.from.y + event.clientY - now.y })
+    }
     else if (now.kind === 'item') setMoving({ id: now.id, dx: x - now.x, dy: y - now.y })
     else if (now.kind === 'resize') setResizing({ id: now.id, w: Math.max(MIN_SIZE, now.w + x - now.x), h: Math.max(MIN_SIZE, now.h + y - now.y) })
     else
@@ -259,15 +308,9 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   /** The board as an SVG file: what's on it, framed, without anyone's cursor. */
   const exportSvg = () => {
     const svg = picture.current
-    if (!svg || items.length === 0) return
-    const boxes = items
-      .filter((item) => item.x !== undefined && item.y !== undefined)
-      .map((item) => [item.x ?? 0, item.y ?? 0, ...sizeOf(item)] as const)
-    const strokes = items.flatMap((item) => (item.type === 'stroke' ? (item.points ?? []) : []))
-    const xs = [...boxes.flatMap(([x, , w]) => [x, x + w]), ...strokes.map(([x]) => x)]
-    const ys = [...boxes.flatMap(([, y, , h]) => [y, y + h]), ...strokes.map(([, y]) => y)]
-    const [left, top] = [Math.min(...xs) - 24, Math.min(...ys) - 24]
-    const [width, height] = [Math.max(...xs) - left + 24, Math.max(...ys) - top + 24]
+    const bounds = boundsOf(items)
+    if (!svg || !bounds) return
+    const [left, top, width, height] = bounds
     const copy = svg.cloneNode(true) as SVGSVGElement
     copy.querySelectorAll('[data-testid="whiteboard-cursor"], [data-handle]').forEach((node) => node.remove())
     copy.querySelector('g[data-board]')?.removeAttribute('transform')
@@ -316,7 +359,10 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
         onPointerDown={(event) => down(event)}
         onPointerMove={move}
         onPointerUp={up}
-        onWheel={(event) => setView((was) => ({ ...was, scale: Math.min(Math.max(was.scale * Math.exp(-event.deltaY / 500), 0.1), 3) }))}
+        onWheel={(event) => {
+          moved.current = true
+          setView((was) => ({ ...was, scale: Math.min(Math.max(was.scale * Math.exp(-event.deltaY / 500), 0.1), 3) }))
+        }}
       >
         <svg ref={picture} className="absolute inset-0 h-full w-full" role="img" aria-label={title}>
           <defs>
@@ -485,8 +531,8 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
       </div>
       <div className="absolute right-2 bottom-2 flex items-center gap-1 rounded-md border border-line bg-elevated p-1 shadow-overlay">
         <IconButton icon="download" label="Download as SVG" onClick={exportSvg} />
-        <IconButton icon="plus" label="Zoom in" onClick={() => setView((was) => ({ ...was, scale: Math.min(was.scale * 1.25, 3) }))} />
-        <IconButton icon="x" label="Zoom out" onClick={() => setView((was) => ({ ...was, scale: Math.max(was.scale / 1.25, 0.1) }))} />
+        <IconButton icon="plus" label="Zoom in" onClick={() => zoom(1.25)} />
+        <IconButton icon="x" label="Zoom out" onClick={() => zoom(1 / 1.25)} />
       </div>
     </div>
   )
