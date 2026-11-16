@@ -12,7 +12,7 @@ import { hosted } from '../served'
 import { columnName, csvOf, rebaseDraft, splice } from '../typed'
 import { Button, Icon, IconButton, Input, Menu, Textarea, cx, toast } from '../ui'
 import { CommentThread } from './CommentThread'
-import { Markdown } from './Markdown'
+import { DocMarkdown } from './Markdown'
 
 /** Characters, as the doc counts them, in the first `units` UTF-16 units of `text`. */
 function characters(text: string, units: number): number {
@@ -204,7 +204,7 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
   const page = async () => {
     const { renderToStaticMarkup } = await import('react-dom/server')
     const shown = versions.at(-1)
-    const rendered = renderToStaticMarkup(<Markdown text={text} />)
+    const rendered = renderToStaticMarkup(<DocMarkdown text={text} />)
     return shown ? offlineHtml(shown, { media_type: 'text/markdown', data: '' }, rendered) : rendered
   }
   const pdf = async () => {
@@ -312,7 +312,7 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
           <article className="mx-auto max-w-3xl px-6 pt-6 pb-10">
-            <Markdown text={text} />
+            <DocMarkdown text={text} />
           </article>
           <DocComments thread={thread} comments={commentsHere} onShow={show} onChanged={refreshComments} />
         </div>

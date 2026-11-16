@@ -69,13 +69,16 @@ export function ttsHandler(holder: Holder): CapabilityHandler {
     const voices = speechSynthesis.getVoices()
     // Silt's voice names map onto whatever voices this browser has, alike each time.
     const order = ['buttery', 'airy', 'glassy', 'rounded']
+    // Or one of this browser's own, by the name `voices()` gave.
+    const own = voices.find((voice) => voice.name === named)
+    if (own) return own
     const pool = language ? voices.filter((voice) => voice.lang.toLowerCase().startsWith(language.toLowerCase())) : voices
     const from = pool.length > 0 ? pool : voices
     if (from.length === 0) return undefined
     return from[Math.max(order.indexOf(named ?? 'buttery'), 0) % from.length]
   }
   return {
-    methods: ['speak', 'add', 'stop', 'pause', 'resume', 'setRate'],
+    methods: ['speak', 'add', 'stop', 'pause', 'resume', 'setRate', 'voices'],
     perMinute: 60,
     dispose: () => reading?.cancel(),
     call: async (method, args, context) => {
@@ -85,6 +88,7 @@ export function ttsHandler(holder: Holder): CapabilityHandler {
         reading?.cancel()
         return null
       }
+      if (method === 'voices') return speechSynthesis.getVoices().map((voice) => ({ name: voice.name, language: voice.lang }))
       if (method === 'pause' || method === 'resume') {
         if (method === 'pause') speechSynthesis.pause()
         else speechSynthesis.resume()

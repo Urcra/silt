@@ -32,6 +32,9 @@ struct Deck {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Slide {
+    /// Stays with the slide as others go in or out, so a patch can name it.
+    #[serde(default)]
+    id: Option<String>,
     title: String,
     html: String,
     #[serde(default)]
@@ -97,6 +100,14 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
                 return Err("a deck's aspect is 16:9 or 4:3".into());
             }
             parts(deck.slides.len(), "slide")?;
+            let mut ids = std::collections::HashSet::new();
+            for slide in &deck.slides {
+                if let Some(id) = &slide.id
+                    && (!ids.insert(id.as_str()) || !id_ok(id))
+                {
+                    return Err(format!("slide ids are unique, 1 to 64 of A-Z, a-z, 0-9, - and _: {id}"));
+                }
+            }
             for (at, slide) in deck.slides.iter().enumerate() {
                 if slide.title.trim().is_empty() {
                     return Err(format!("slide {} has no title", at + 1));
@@ -280,12 +291,50 @@ fn data_block(block: &Value, sources: &std::collections::HashSet<&str>) -> Resul
     }
 }
 
+fn id_ok(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// `patch` with each `/slides/@<id>` or `/boards/@<id>` in its paths
+/// turned into that slide's or board's place in `document`, so a patch
+/// names what it changes rather than where it stood when it was written.
+fn by_ids(document: &Value, patch: &Value) -> Result<Value, String> {
+    let place = |path: &str| -> Result<String, String> {
+        let mut segments: Vec<String> = path.split('/').map(str::to_owned).collect();
+        for at in 1..segments.len() {
+            let list = segments[at - 1].as_str();
+            let Some(id) = segments[at].strip_prefix('@').filter(|_| at == 2 && matches!(list, "slides" | "boards")) else {
+                continue;
+            };
+            let items = document.get(list).and_then(Value::as_array);
+            let index = items
+                .and_then(|items| items.iter().position(|item| item.get("id").and_then(Value::as_str) == Some(id)))
+                .ok_or_else(|| format!("there's no {} with id {id}", list.trim_end_matches('s')))?;
+            segments[at] = index.to_string();
+        }
+        Ok(segments.join("/"))
+    };
+    let Some(operations) = patch.as_array() else { return Ok(patch.clone()) };
+    let mut resolved = Vec::with_capacity(operations.len());
+    for operation in operations {
+        let mut operation = operation.clone();
+        for key in ["path", "from"] {
+            if let Some(path) = operation.get(key).and_then(Value::as_str).map(str::to_owned) {
+                operation[key] = Value::from(place(&path)?);
+            }
+        }
+        resolved.push(operation);
+    }
+    Ok(Value::Array(resolved))
+}
+
 /// `source` with RFC 6902 `patch` applied, for revising a type's content in
-/// place; nothing changes when an operation fails.
+/// place; nothing changes when an operation fails. A path may name a slide
+/// or a board by its id, `/slides/@why/html`.
 pub fn apply_patch(source: &str, patch: &Value) -> Result<String, String> {
     let mut document: Value = serde_json::from_str(source).map_err(|_| "the latest version isn't JSON".to_owned())?;
-    let patch: json_patch::Patch =
-        serde_json::from_value(patch.clone()).map_err(|error| format!("that isn't a JSON Patch: {error}"))?;
+    let patch = by_ids(&document, patch)?;
+    let patch: json_patch::Patch = serde_json::from_value(patch).map_err(|error| format!("that isn't a JSON Patch: {error}"))?;
     json_patch::patch(&mut document, &patch).map_err(|error| format!("the patch didn't apply: {error}"))?;
     serde_json::to_string_pretty(&document).map_err(|error| error.to_string())
 }
@@ -304,7 +353,7 @@ pub fn guide(kind: &str) -> Option<(Value, Value)> {
                     "style": {"type": "string", "description": "CSS every slide shares"},
                     "slides": {"type": "array", "minItems": 1, "maxItems": PARTS, "items": {
                         "type": "object", "required": ["title", "html"], "additionalProperties": false,
-                        "properties": {"title": {"type": "string"}, "html": html, "notes": {"type": "string", "description": "What the presenter says"}}
+                        "properties": {"id": {"type": "string", "description": "Optional, unique: lets a patch name the slide, /slides/@id/html"}, "title": {"type": "string"}, "html": html, "notes": {"type": "string", "description": "What the presenter says"}}
                     }}
                 }
             }),
@@ -436,6 +485,22 @@ mod tests {
         let patched = apply_patch(deck, &patch).expect("patched");
         assert_eq!(serde_json::from_str::<Value>(&patched).expect("json")["slides"][1]["title"], "Two");
         assert!(apply_patch(deck, &json!([{"op": "remove", "path": "/slides/7"}])).is_err());
+        // By id, wherever the slide stands now.
+        let named = r#"{"slides": [{"id": "open", "title": "One", "html": "1"}, {"id": "why", "title": "Why", "html": "2"}]}"#;
+        let moved = apply_patch(named, &json!([{"op": "add", "path": "/slides/0", "value": {"title": "Zero", "html": "0"}}]))
+            .expect("added");
+        let changed =
+            apply_patch(&moved, &json!([{"op": "replace", "path": "/slides/@why/html", "value": "two"}])).expect("by id");
+        assert_eq!(serde_json::from_str::<Value>(&changed).expect("json")["slides"][2]["html"], "two");
+        assert!(
+            apply_patch(&moved, &json!([{"op": "remove", "path": "/slides/@gone"}]))
+                .unwrap_err()
+                .contains("no slide with id gone")
+        );
+        assert!(
+            validate("slides", r#"{"slides": [{"id": "a", "title": "a", "html": "x"}, {"id": "a", "title": "b", "html": "y"}]}"#)
+                .is_err()
+        );
         assert!(apply_patch(deck, &json!({"op": "add"})).is_err());
     }
 }

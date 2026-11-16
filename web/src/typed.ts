@@ -3,7 +3,7 @@
 
 import { sandboxedDocument, type FrameTheme } from './artifacts'
 
-export type Deck = { aspect?: '16:9' | '4:3'; style?: string; slides: { title: string; html: string; notes?: string }[] }
+export type Deck = { aspect?: '16:9' | '4:3'; style?: string; slides: { id?: string; title: string; html: string; notes?: string }[] }
 export type Board = { id: string; name: string; caption?: string; width: number; height: number; x?: number; y?: number; html: string }
 export type Canvas = { style?: string; boards: Board[] }
 export type Source = { id: string; name: string; kind: string; detail: string; at: string }
@@ -66,7 +66,7 @@ export function deckOf(json: string): Deck | null {
   const deck = parsed<unknown>(json)
   if (!object(deck) || !list(deck.slides, 500)) return null
   if (!optional(deck.aspect, (aspect) => aspect === '16:9' || aspect === '4:3') || !optional(deck.style, text)) return null
-  const slides = deck.slides.every((slide) => object(slide) && text(slide.title, 2000) && text(slide.html) && optional(slide.notes, text))
+  const slides = deck.slides.every((slide) => object(slide) && optional(slide.id, (id) => text(id, 64)) && text(slide.title, 2000) && text(slide.html) && optional(slide.notes, text))
   return slides ? (deck as Deck) : null
 }
 

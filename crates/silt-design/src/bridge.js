@@ -284,6 +284,7 @@ function ttsClient(ns) {
     pause: function () { return ns.pause(); },
     resume: function () { return ns.resume(); },
     setRate: function (rate) { return ns.setRate({ rate: rate }); },
+    voices: function () { return ns.voices(); },
     onState: function (fn) { return ns.on('state', fn); },
     onLine: function (fn) { return ns.on('line', fn); }
   });

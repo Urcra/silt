@@ -11,6 +11,7 @@ import {
 } from "react";
 import { type FrameTheme } from "../artifacts";
 import { hosted } from "../served";
+import { useShownTheme } from "../theme";
 import {
   type Block,
   type Source,
@@ -635,6 +636,39 @@ function SourceLink({ id, sources }: { id: string; sources: Source[] }) {
     >
       source: {source?.name ?? id}
     </a>
+  );
+}
+
+/**
+ * A chart in a doc, `<?silt chart {…}?>` (ADR 0077): a data page's chart block, checked as one, with Silt's colours
+ * for the theme shown, and no source of its own.
+ */
+export function DocChart({ json }: { json: string }) {
+  const theme = useShownTheme();
+  const parsed = (() => {
+    try {
+      return JSON.parse(json) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  })();
+  const page = parsed
+    ? dataPageOf(
+        JSON.stringify({
+          title: "",
+          sources: [{ id: "doc", name: "the doc", kind: "manual", detail: "", at: "" }],
+          blocks: [{ ...parsed, type: "chart", source: "doc" }],
+        }),
+      )
+    : null;
+  const block = page?.blocks[0];
+  if (!block || block.type !== "chart")
+    return <p className="my-2 text-xs text-danger">This chart doesn't draw: it isn't a chart block of a data page.</p>;
+  return (
+    <figure className="my-3">
+      {block.title && <figcaption className="mb-1 text-sm font-medium text-fg-1">{block.title}</figcaption>}
+      <Chart block={block} theme={theme} palette={CHART[theme]} />
+    </figure>
   );
 }
 

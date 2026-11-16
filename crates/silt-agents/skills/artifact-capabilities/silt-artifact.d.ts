@@ -564,6 +564,8 @@ interface SiltTts {
   onState(fn: (said: { state: 'speaking' | 'paused' | 'idle'; reason?: 'completed' | 'viewer_stopped' }) => void): () => void
   /** As each line starts: its index, and its `id` if it had one. */
   onLine(fn: (said: { line: number; id: string | null }) => void): () => void
+  /** The browser's own voices, by name and language; `speak`'s `voice` takes a name from here as well as Silt's four. */
+  voices(): Promise<{ name: string; language: string }[]>
 }
 
 // ---------------------------------------------------------------------------
