@@ -24,6 +24,88 @@ export function parsed<T>(text: string): T | null {
   }
 }
 
+// A typed version comes from whoever wrote it, a peer's agent included, and the daemon checks only its own (ADR 0076):
+// each viewer takes it only once it has the shape it draws, with lists of a size it can draw, else says it can't.
+type Value = Record<string, unknown>
+const object = (value: unknown): value is Value => typeof value === 'object' && value !== null && !Array.isArray(value)
+const text = (value: unknown, most = 1 << 20) => typeof value === 'string' && value.length <= most
+const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value)
+const list = (value: unknown, most: number): value is unknown[] => Array.isArray(value) && value.length <= most
+const optional = (value: unknown, check: (value: unknown) => boolean) => value === undefined || value === null || check(value)
+
+/** A deck, if `json` is one. */
+export function deckOf(json: string): Deck | null {
+  const deck = parsed<unknown>(json)
+  if (!object(deck) || !list(deck.slides, 500)) return null
+  if (!optional(deck.aspect, (aspect) => aspect === '16:9' || aspect === '4:3') || !optional(deck.style, text)) return null
+  const slides = deck.slides.every((slide) => object(slide) && text(slide.title, 2000) && text(slide.html) && optional(slide.notes, text))
+  return slides ? (deck as Deck) : null
+}
+
+/** A canvas, if `json` is one. */
+export function canvasOf(json: string): Canvas | null {
+  const canvas = parsed<unknown>(json)
+  if (!object(canvas) || !list(canvas.boards, 200) || !optional(canvas.style, text)) return null
+  const size = (value: unknown) => number(value) && (value as number) > 0 && (value as number) <= 10_000
+  const boards = canvas.boards.every(
+    (board) =>
+      object(board) &&
+      text(board.id, 200) &&
+      text(board.name, 2000) &&
+      text(board.html) &&
+      size(board.width) &&
+      size(board.height) &&
+      optional(board.x, number) &&
+      optional(board.y, number) &&
+      optional(board.caption, text),
+  )
+  return boards ? (canvas as Canvas) : null
+}
+
+/** A data page, if `json` is one. */
+export function dataPageOf(json: string): DataPage | null {
+  const page = parsed<unknown>(json)
+  if (!object(page) || !text(page.title, 2000) || !optional(page.summary, text)) return null
+  if (!list(page.sources, 200) || !list(page.blocks, 500)) return null
+  const named = (value: unknown) => text(value, 2000)
+  const sources = page.sources.every(
+    (source) => object(source) && named(source.id) && named(source.name) && named(source.kind) && text(source.detail) && named(source.at),
+  )
+  const point = (value: unknown) => list(value, 2) && value.length === 2 && (value[1] === null || number(value[1]))
+  const block = (value: unknown) => {
+    if (!object(value)) return false
+    switch (value.type) {
+      case 'text':
+        return text(value.text)
+      case 'stat':
+        return named(value.label) && (number(value.value) || named(value.value)) && optional(value.unit, (unit) => named(unit) || number(unit)) && optional(value.change, number) && named(value.source)
+      case 'table':
+        return (
+          optional(value.title, named) &&
+          list(value.columns, 200) &&
+          value.columns.every((column) => named(column) || number(column)) &&
+          list(value.rows, 10_000) &&
+          value.rows.every((row) => list(row, 200)) &&
+          named(value.source)
+        )
+      case 'chart':
+        return (
+          optional(value.title, named) &&
+          named(value.chart) &&
+          optional(value.x, named) &&
+          optional(value.y, named) &&
+          optional(value.stacked, (stacked) => typeof stacked === 'boolean') &&
+          list(value.series, 50) &&
+          value.series.every((series) => object(series) && named(series.name) && list(series.points, 10_000) && series.points.every(point)) &&
+          named(value.source)
+        )
+      default:
+        return false
+    }
+  }
+  return sources && page.blocks.every(block) ? (page as DataPage) : null
+}
+
 /** One slide or board as a sealed frame's document, at its own size. */
 export function partDocument(html: string, shared: string | undefined, width: number, height: number, style: string | null, theme: FrameTheme): string {
   const css = `html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden}${shared ?? ''}`

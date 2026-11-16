@@ -522,13 +522,16 @@ impl<'a, 'g> LogThreads<'a, 'g> {
         let mut threads: HashMap<ThreadId, ThreadLines> = HashMap::new();
         let mut pages: HashMap<ThreadId, Vec<usize>> = HashMap::new();
         for (index, delta) in log.iter().enumerate() {
+            let first = !threads.contains_key(&delta.thread);
             let lines = threads.entry(delta.thread).or_insert_with(|| ThreadLines {
                 forked_from: None,
                 fork_point: None,
                 own: Vec::new(),
             });
             match &delta.op {
-                Op::Fork { from } => {
+                // Only as the thread's first delta, as `Family::apply` takes
+                // one, so a stray later fork can't give it another lineage.
+                Op::Fork { from } if first => {
                     lines.forked_from = Some(*from);
                     lines.fork_point = Some(delta.parents.clone());
                 }

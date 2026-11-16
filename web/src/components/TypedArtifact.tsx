@@ -13,15 +13,14 @@ import { type FrameTheme } from "../artifacts";
 import { hosted } from "../served";
 import {
   type Block,
-  type Canvas,
-  type DataPage,
-  type Deck,
   type Source,
+  canvasOf,
   chartTable,
   csvOf,
+  dataPageOf,
+  deckOf,
   deckPrint,
   layout,
-  parsed,
   partDocument,
   shown,
   slideFromHash,
@@ -68,7 +67,7 @@ export function SlidesView({
   /** Prints the deck, a slide a page, where this computer can. */
   onPrint?: (html: string) => void;
 }) {
-  const deck = useMemo(() => parsed<Deck>(text), [text]);
+  const deck = useMemo(() => deckOf(text), [text]);
   const count = deck?.slides.length ?? 0;
   const [at, setAt] = useState(() =>
     slideFromHash(window.location.hash, count),
@@ -269,7 +268,7 @@ export function CanvasView({
   /** Opens the artifact's comment composer, quoting what the comment is on. */
   onComment?: (quote: string) => void;
 }) {
-  const canvas = useMemo(() => parsed<Canvas>(text), [text]);
+  const canvas = useMemo(() => canvasOf(text), [text]);
   const placed = useMemo(() => layout(canvas?.boards ?? []), [canvas]);
   const box = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: 40, y: 60, scale: 0.4 });
@@ -881,7 +880,7 @@ function Chart({
 }
 
 export function DataView({ text, theme }: { text: string; theme: FrameTheme }) {
-  const page = useMemo(() => parsed<DataPage>(text), [text]);
+  const page = useMemo(() => dataPageOf(text), [text]);
   const [tables, setTables] = useState<Set<number>>(new Set());
   if (!page)
     return (

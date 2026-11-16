@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chartTable, columnName, csvOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
+import { canvasOf, chartTable, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
 
 describe('the artifact types', () => {
   it('opens a deck at the slide a link names, within the deck', () => {
@@ -31,6 +31,25 @@ describe('the artifact types', () => {
     expect(doc).toContain("setAttribute('data-theme','dark')")
     expect(doc).toContain('<h1>One</h1>')
     expect(parsed('{bad')).toBeNull()
+  })
+})
+
+describe("a peer's typed version", () => {
+  it('is drawn only once it has the shape its viewer draws', () => {
+    expect(deckOf('{"slides":[{"title":"One","html":"<p>1</p>"}]}')?.slides.length).toBe(1)
+    expect(deckOf('{"slides":[{"title":1,"html":"x"}]}')).toBeNull()
+    expect(deckOf('{"slides":"nope"}')).toBeNull()
+    expect(deckOf(JSON.stringify({ slides: Array(501).fill({ title: 't', html: 'h' }) }))).toBeNull()
+    expect(canvasOf('{"boards":[{"id":"a","name":"A","width":10,"height":10,"html":""}]}')?.boards.length).toBe(1)
+    expect(canvasOf('{"boards":[{"id":"a","name":"A","width":-1,"height":10,"html":""}]}')).toBeNull()
+    const page = { title: 'T', sources: [{ id: 's', name: 'S', kind: 'manual', detail: '', at: 'now' }], blocks: [] as unknown[] }
+    expect(dataPageOf(JSON.stringify(page))?.title).toBe('T')
+    page.blocks = [{ type: 'chart', chart: 'line', series: [{ name: 'a', points: [['x', 1], ['y', null]] }], source: 's' }]
+    expect(dataPageOf(JSON.stringify(page))).not.toBeNull()
+    page.blocks = [{ type: 'chart', chart: 'line', series: [{ name: 'a', points: [['x', 'one']] }], source: 's' }]
+    expect(dataPageOf(JSON.stringify(page))).toBeNull()
+    page.blocks = [{ type: 'table', columns: ['a'], rows: 'all of them', source: 's' }]
+    expect(dataPageOf(JSON.stringify(page))).toBeNull()
   })
 })
 
