@@ -210,7 +210,7 @@ interface SiltDocRef<T = any> {
   get(): Promise<SiltDoc<T> | null>
   /** Replaces the whole document. */
   set(value: T): Promise<SiltWritten>
-  /** Merges top-level fields; a `null` field removes it. A missing document starts as `{}`. */
+  /** Merges `fields` in, nested objects too; a `null` removes a field. A missing document starts as `{}`. */
   update(fields: Partial<T>): Promise<SiltWritten>
   delete(): Promise<SiltWritten>
   /**
@@ -346,10 +346,26 @@ interface SiltDownloads {
  * artifact (kept; `not_granted` if they said no). 20 calls a minute.
  */
 interface SiltComments {
-  /** Opens the composer on this version, quoting `text` (500 characters at most). */
-  openComposer(at: { text?: string }): Promise<null>
-  /** A comment as the viewer on the version shown: `text` 1 to 4,000 characters, `quote` at most 500. */
-  add(comment: { text: string; quote?: string }): Promise<{ id: string }>
+  /**
+   * Opens the composer, quoting `text` (500 characters at most). With
+   * `element` (or an `anchor` of the page's own), the comment is on that
+   * element, quoting its text when no `text` is given; without, on this version.
+   */
+  openComposer(at: { text?: string; element?: Element; anchor?: string }): Promise<null>
+  /**
+   * An element's anchor: the `data-comment-anchor` of it or an ancestor,
+   * else `#id`, else a CSS path. Give elements people comment on a
+   * `data-comment-anchor` (or an id) so comments keep to them across versions.
+   */
+  anchorFor(element: Element): string
+  /**
+   * For a page that draws what it's commented on itself (a canvas, a chart):
+   * `onReveal` hears the anchor of a comment the viewer asks to see, in place
+   * of Silt scrolling to the element and outlining it. Returns what stops it.
+   */
+  customAnchors(onReveal: (comment: { anchor: string }) => void): () => void
+  /** A comment as the viewer, on the version shown or on `element`/`anchor`: `text` 1 to 4,000 characters, `quote` at most 500. */
+  add(comment: { text: string; quote?: string; element?: Element; anchor?: string }): Promise<{ id: string }>
   /** `id` must be a comment on this artifact, else `refused`. */
   reply(to: { id: string; text: string }): Promise<{ id: string }>
   resolve(comment: { id: string }): Promise<{ id: string }>
@@ -400,13 +416,17 @@ interface SiltSampleOptions {
   model?: string
   /** Up to `limits().images` PNG, JPEG, GIF or WebP images, each at most 5 MiB as base64 (about 3.7 MB). Needs `{"images": true}`, else `refused`. */
   images?: Blob[]
+  /** The same question, with no tools or images, asked again within five minutes gets the answer it had, unless this is `false`, as a chat's turns should be. */
+  cache?: boolean
+  /** Aborting it rejects the call with `aborted` (an `AbortError`) and stops `onText`. Use a new `AbortController` per call. */
+  signal?: AbortSignal
 }
 
 /** Text, or a conversation that ends on the user's turn. At most 256 KiB, and not empty. */
 type SiltSampleInput = string | { role: 'user' | 'assistant'; content: string }[]
 
 interface SiltSample {
-  /** `truncated` when the answer was cut off. Rejects `not_granted` (the viewer said no: hide the feature), `rate_limited`, `refused`, `unavailable`. */
+  /** `truncated` when the answer was cut off. Rejects `not_granted` (the viewer said no: hide the feature), `rate_limited`, `refused`, `unavailable`, `aborted`. */
   (input: SiltSampleInput, opts?: SiltSampleOptions): Promise<{ text: string; truncated: boolean; modelApplied?: string }>
   /** The answer parsed as JSON, a ```json fence around it allowed. Throws a SyntaxError (no `code`) when it isn't JSON. */
   json(input: SiltSampleInput, opts?: SiltSampleOptions): Promise<any>
@@ -564,6 +584,8 @@ interface SiltTts {
   onState(fn: (said: { state: 'speaking' | 'paused' | 'idle'; reason?: 'completed' | 'viewer_stopped' }) => void): () => void
   /** As each line starts: its index, and its `id` if it had one. */
   onLine(fn: (said: { line: number; id: string | null }) => void): () => void
+  /** Milliseconds heard of the line being spoken, about four times a second; paused time isn't counted. There's no seek and no total length. */
+  onPosition(fn: (said: { ms: number; line: number }) => void): () => void
   /** The browser's own voices, by name and language; `speak`'s `voice` takes a name from here as well as Silt's four. */
   voices(): Promise<{ name: string; language: string }[]>
 }
@@ -603,13 +625,15 @@ interface SiltMcp {
    * Reads a read-only tool now, then again every `refetchInterval` ms (at
    * least 30 s) when given; without it, once. Errors arrive as events.
    * Returns a function that stops it. A tool that isn't marked as only
-   * reading is refused. `storedAt` is when this read came back.
+   * reading is refused. `storedAt` is when this read came back. What the
+   * viewer's app read last for the same call comes first, `stale` when it's
+   * more than 30 s old, and a fresh read follows it then.
    */
   watchTool(
     server: string,
     tool: string,
     input: object,
-    handler: (event: { type: 'data'; data: SiltMcpResult; cache: { storedAt: number } } | { type: 'error'; error: SiltRefusal }) => void,
+    handler: (event: { type: 'data'; data: SiltMcpResult; cache: { storedAt: number; stale: boolean } } | { type: 'error'; error: SiltRefusal }) => void,
     opts?: { refetchInterval?: number },
   ): () => void
   /** The tool's description, whether it only reads, and its input schema, from the server. */

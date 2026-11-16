@@ -292,7 +292,11 @@ export function offlineHtml(artifact: ArtifactView, content: ArtifactContent, re
 /** The comments made on any version of `group`: those on one of its versions' entries. */
 export function commentsOn(group: ArtifactGroup, comments: CommentView[]): CommentView[] {
   const indices = new Set(group.versions.map((version) => version.entry.index))
-  return comments.filter((comment) => comment.location.at === 'entry' && indices.has(comment.location.index))
+  return comments.filter(
+    (comment) =>
+      (comment.location.at === 'entry' && indices.has(comment.location.index)) ||
+      (comment.location.at === 'element' && comment.location.artifact === group.id),
+  )
 }
 
 /** A comment's words with the text it's about quoted first. */
@@ -305,6 +309,9 @@ export function quoted(text: string, quote: string | null): string {
 /** The prompt that sends comments on an artifact to its agent, asking for a new version. */
 export function artifactPrompt(shown: ArtifactVersion, comments: CommentView[]): string {
   const { id, title, version } = shown.artifact
-  const items = comments.map((comment) => `- ${comment.text.replace(/\n/g, '\n  ')}`)
+  const items = comments.map((comment) => {
+    const on = comment.location.at === 'element' ? `On the page's \`${comment.location.anchor}\`: ` : ''
+    return `- ${on}${comment.text.replace(/\n/g, '\n  ')}`
+  })
   return [`Comments on the artifact "${title}" (id ${id}, version ${version}):`, '', ...items, '', `Make a new version with silt_artifact and id ${id}.`].join('\n')
 }

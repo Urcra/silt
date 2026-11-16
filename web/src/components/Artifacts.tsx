@@ -159,6 +159,9 @@ export function ArtifactViewer({
   const [reloads, setReloads] = useState(0)
   // What's selected in the page, for a comment to quote.
   const [quote, setQuote] = useState<string | null>(null)
+  // The page's element a new comment is on, when the page opened the composer on one (ADR 0085).
+  const [anchor, setAnchor] = useState<string | null>(null)
+  const revealing = useRef<((anchor: string) => void) | null>(null)
   const [sharing, setSharing] = useState(false)
   // What a page asks the person to agree to, such as saving a file, until they answer.
   const [asking, setAsking] = useState<{ title: string; detail: string; action: string; answer: (agreed: boolean) => void } | null>(null)
@@ -189,14 +192,16 @@ export function ArtifactViewer({
           setAsking(waiting.current[0])
         }
       }),
-    openComposer: (text) => {
+    openComposer: (text, anchor) => {
       setQuote(text || null)
+      setAnchor(anchor ?? null)
       composer.current?.()
     },
-    addComment: async (text, quote) => {
+    addComment: async (text, quote, anchor) => {
       const { shown, onCommentsChanged } = current.current
       if (!shown) throw new Error('no version is shown')
-      const made = await api.addComment(thread, { on: 'entry', index: shown.entry.index }, quoted(text, quote))
+      const on = anchor ? ({ on: 'element', artifact: shown.artifact.id, anchor } as const) : ({ on: 'entry', index: shown.entry.index } as const)
+      const made = await api.addComment(thread, on, quoted(text, quote))
       await onCommentsChanged()
       return made.id
     },
@@ -205,6 +210,9 @@ export function ArtifactViewer({
       return group ? commentsOn(group, comments).map((comment) => comment.id) : []
     },
     commentsChanged: () => void current.current.onCommentsChanged(),
+    revealer: (reveal) => {
+      revealing.current = reveal
+    },
     voice: (now, stop) => setVoice(now === 'idle' || !stop ? null : { now, stop }),
   }))
   // A click within half a second of an ask appearing isn't taken as its answer.
@@ -451,11 +459,16 @@ export function ArtifactViewer({
           shown={shown}
           comments={comments}
           quote={quote}
-          onClearQuote={() => setQuote(null)}
+          anchor={anchor}
+          onClearQuote={() => {
+            setQuote(null)
+            setAnchor(null)
+          }}
           onChanged={onCommentsChanged}
           opener={(open) => {
             composer.current = open
           }}
+          onReveal={(shownAnchor) => revealing.current?.(shownAnchor)}
         />
         {onFull && (
           <IconButton icon={full ? 'collapse' : 'expand'} label={full ? 'Leave the full view (F)' : 'Full view (F)'} onClick={onFull} className="max-lg:hidden" />
@@ -691,8 +704,10 @@ function ArtifactPage({
       }
     }
     window.addEventListener('message', heard)
+    holder.revealer?.((anchor) => send.current({ silt: 'event', cap: 'comments', topic: 'reveal', data: { anchor } }))
     return () => {
       window.removeEventListener('message', heard)
+      holder.revealer?.(null)
       broker.dispose()
     }
   }, [thread, artifact, holder, nonce])

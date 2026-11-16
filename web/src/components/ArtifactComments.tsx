@@ -16,9 +16,11 @@ export function ArtifactCommentsButton({
   shown,
   comments,
   quote,
+  anchor = null,
   onClearQuote,
   onChanged,
   opener,
+  onReveal,
 }: {
   thread: string
   group: ArtifactGroup
@@ -26,10 +28,14 @@ export function ArtifactCommentsButton({
   comments: CommentView[]
   /** Text selected in the artifact, which a new comment quotes. */
   quote: string | null
+  /** The page's element a new comment is on, when the page named one (ADR 0085). */
+  anchor?: string | null
   onClearQuote: () => void
   onChanged: () => Promise<unknown>
   /** Handed what opens the composer, for a page's `comments.openComposer`. */
   opener?: (open: (() => void) | null) => void
+  /** Shows a comment's element in the page. */
+  onReveal?: (anchor: string) => void
 }) {
   const { mine, waiting, add, send } = useArtifactComments(thread, group, shown, comments, onChanged)
   const [text, setText] = useState('')
@@ -37,7 +43,7 @@ export function ArtifactCommentsButton({
   const submit = async (andSend: boolean) => {
     setBusy(true)
     try {
-      const made = text.trim() ? [await add(text, quote)] : []
+      const made = text.trim() ? [await add(text, quote, anchor)] : []
       setText('')
       onClearQuote()
       if (andSend) {
@@ -68,9 +74,22 @@ export function ArtifactCommentsButton({
       <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto" data-testid="artifact-comments">
         {mine.length === 0 && <p className="text-xs text-fg-2">Select something in the artifact to quote it, then say what to change.</p>}
         {mine.map((comment) => (
-          <CommentThread key={comment.id} thread={thread} comment={comment} onChanged={onChanged} />
+          <div key={comment.id} className="flex flex-col gap-0.5">
+            {comment.location.at === 'element' && (
+              <button
+                type="button"
+                onClick={() => comment.location.at === 'element' && onReveal?.(comment.location.anchor)}
+                className="self-start truncate font-mono text-2xs text-fg-2 hover:text-fg-1 hover:underline"
+                title="Show it in the page"
+              >
+                On {comment.location.anchor}
+              </button>
+            )}
+            <CommentThread thread={thread} comment={comment} onChanged={onChanged} />
+          </div>
         ))}
       </div>
+      {anchor && <p className="truncate font-mono text-2xs text-fg-2">On {anchor}</p>}
       {quote && (
         <blockquote className="flex items-start gap-2 border-l-2 border-accent pl-2 text-xs text-fg-2">
           <span className="line-clamp-3 flex-1">{quote}</span>

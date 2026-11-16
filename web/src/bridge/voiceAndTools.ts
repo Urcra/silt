@@ -61,10 +61,20 @@ export function dictationServed(): boolean {
 
 type Line = { text: string; voice?: string; rate?: number; language?: string; id?: string }
 
+/** How often a reading tells the page how far into its line it is. */
+const POSITION_MS = 250
+
 /** `tts`: text spoken to the viewer in the browser's own voices, a reading at a time. */
 export function ttsHandler(holder: Holder): CapabilityHandler {
   let rate = 1
   let reading: { cancel: () => void } | null = null
+  let paused = false
+  // How far into the line being spoken, told to the page as it goes; the browser's voices say only when a line starts.
+  let ticking: number | null = null
+  const stopTicking = () => {
+    if (ticking !== null) window.clearInterval(ticking)
+    ticking = null
+  }
   const voiceFor = (named: string | undefined, language: string | undefined) => {
     const voices = speechSynthesis.getVoices()
     // Silt's voice names map onto whatever voices this browser has, alike each time.
@@ -80,7 +90,10 @@ export function ttsHandler(holder: Holder): CapabilityHandler {
   return {
     methods: ['speak', 'add', 'stop', 'pause', 'resume', 'setRate', 'voices'],
     perMinute: 60,
-    dispose: () => reading?.cancel(),
+    dispose: () => {
+      stopTicking()
+      reading?.cancel()
+    },
     call: async (method, args, context) => {
       const state = (state: string, reason?: string) => context.emit('tts', 'state', { state, reason })
       const given = (args ?? {}) as { lines?: Line[]; rate?: number }
@@ -92,6 +105,7 @@ export function ttsHandler(holder: Holder): CapabilityHandler {
       if (method === 'pause' || method === 'resume') {
         if (method === 'pause') speechSynthesis.pause()
         else speechSynthesis.resume()
+        paused = method === 'pause'
         state(method === 'pause' ? 'paused' : 'speaking')
         return null
       }
@@ -108,6 +122,7 @@ export function ttsHandler(holder: Holder): CapabilityHandler {
         reading = {
           cancel: () => {
             stopped = true
+            stopTicking()
             speechSynthesis.cancel()
             holder.voice?.('idle', null)
             state('idle', 'viewer_stopped')
@@ -124,8 +139,17 @@ export function ttsHandler(holder: Holder): CapabilityHandler {
             holder.voice?.('speaking', () => reading?.cancel())
             state('speaking')
             context.emit('tts', 'line', { line: index, id: line.id ?? null })
+            stopTicking()
+            paused = false
+            let ms = 0
+            ticking = window.setInterval(() => {
+              if (paused) return
+              ms += POSITION_MS
+              context.emit('tts', 'position', { ms, line: index })
+            }, POSITION_MS)
           }
           utterance.onend = () => {
+            stopTicking()
             if (index === lines.length - 1 && !stopped) {
               holder.voice?.('idle', null)
               state('idle', 'completed')
@@ -142,6 +166,11 @@ export function ttsHandler(holder: Holder): CapabilityHandler {
 export function ttsServed(): boolean {
   return typeof speechSynthesis !== 'undefined'
 }
+
+/** What a page's read-only tool calls answered last, by artifact and call, for as long as the app is open. */
+const toolReads = new Map<string, { data: unknown; storedAt: number }>()
+/** The most reads kept, the oldest going first. */
+const TOOL_READS = 200
 
 /** `mcp`: the viewer's page connectors' tools, through their own daemon. Reads run within the grant; every action is
  * confirmed by the viewer, each time. */
@@ -163,7 +192,7 @@ export function mcpHandler(thread: string, artifact: ArtifactView, holder: Holde
     return { title: `Let ${artifact.title} use your connectors?`, detail: `${servers}. It reads what these return, as you.`, action: 'Allow' }
   })
   return {
-    methods: ['callTool', 'describeTool', 'listTools'],
+    methods: ['callTool', 'describeTool', 'listTools', 'cached'],
     perMinute: 30,
     call: async (method, args) => {
       const given = (args ?? {}) as { server?: unknown; tool?: unknown; input?: unknown; read?: unknown }
@@ -174,6 +203,8 @@ export function mcpHandler(thread: string, artifact: ArtifactView, holder: Holde
         return servers.find((entry) => entry.server === server)?.tools ?? []
       }
       if (!(await consented())) throw new Refusal('not_granted', 'the viewer chose not to let this page use their connectors')
+      const readKey = `${artifact.id}\u0000${server}\u0000${tool}\u0000${JSON.stringify(given.input ?? {})}`
+      if (method === 'cached') return toolReads.get(readKey) ?? null
       let about: Awaited<ReturnType<typeof describe>>
       try {
         about = await describe(server, tool)
@@ -189,7 +220,13 @@ export function mcpHandler(thread: string, artifact: ArtifactView, holder: Holde
         if (!agreed) throw new Refusal('not_granted', 'the viewer chose not to run it')
       }
       try {
-        return await api.pageMcp(thread, artifact.id, { op: 'call', server, tool, input: given.input ?? {} })
+        const result = await api.pageMcp(thread, artifact.id, { op: 'call', server, tool, input: given.input ?? {} })
+        if (about.read_only) {
+          toolReads.delete(readKey)
+          toolReads.set(readKey, { data: result, storedAt: Date.now() })
+          if (toolReads.size > TOOL_READS) toolReads.delete(toolReads.keys().next().value as string)
+        }
+        return result
       } catch (failure) {
         throw new Refusal('refused', failure instanceof Error ? failure.message : String(failure))
       }

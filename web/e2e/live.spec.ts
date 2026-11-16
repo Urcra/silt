@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import AxeBuilder from '@axe-core/playwright'
 import { type Page, expect, test } from '@playwright/test'
@@ -1680,6 +1681,32 @@ test('a data page links each number to its source, and a canvas shows each board
   await expect(page.getByTestId('canvas-note')).toHaveText('One step a screen.')
   await page.getByRole('tab', { name: 'Screens' }).click()
   await expect(boards).toHaveCount(3)
+})
+
+test("a page's comment on one of its elements says so, and shows the element when asked (ADR 0085)", async ({ page }) => {
+  const html =
+    '<!doctype html><p style="margin-top:1200px" id="total" data-comment-anchor="total-row">Total: 42</p><button id="c" style="position:fixed;top:8px">Comment on the total</button>' +
+    '<script>silt.use("comments").then(function(c){document.getElementById("c").onclick=function(){c.openComposer({element:document.getElementById("total")})}})</script>'
+  const file = join(mkdtempSync(join(tmpdir(), 'silt-element-')), 'page.json')
+  writeFileSync(file, JSON.stringify({ title: 'Totals', kind: 'html', content: html, capabilities: { comments: { composer_only: true } } }))
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill(`Artifact from ${file}`)
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText(`Done: Artifact from ${file}`)).toBeVisible()
+  const open = page.getByRole('button', { name: /^Open the artifact Totals/ })
+  await expect(page.getByTestId('artifact-frame').or(open).first()).toBeVisible()
+  if (!(await page.getByTestId('artifact-frame').isVisible())) await open.click()
+  const frame = page.frameLocator('[data-testid="artifact-frame"]')
+  await frame.getByRole('button', { name: 'Comment on the total' }).click()
+  await expect(page.getByText('On total-row')).toBeVisible()
+  await expect(page.getByText('Total: 42', { exact: true })).toBeVisible()
+  await page.getByLabel('comment on the artifact').fill('Round it')
+  await page.getByRole('button', { name: 'Comment', exact: true }).click()
+  const shown = page.getByRole('button', { name: 'On total-row' })
+  await expect(shown).toBeVisible()
+  await shown.click()
+  // The frame scrolls to the element and outlines it.
+  await expect.poll(() => frame.locator('#total').evaluate((element) => (element as HTMLElement).style.outline)).toContain('2px')
 })
 
 test('a doc and a sheet are edited in place, and what was typed is kept (ADR 0077)', async ({ page }) => {

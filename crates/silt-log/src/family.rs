@@ -751,7 +751,7 @@ pub fn comments_in(log: &[Delta], thread: ThreadId) -> Vec<Comment> {
                 replies.sort_by_key(|reply| Stamp::from(reply.id));
                 Some(Comment {
                     id,
-                    target: *target,
+                    target: target.clone(),
                     text: text.clone(),
                     by: by.clone(),
                     time_ms: delta.time_ms,

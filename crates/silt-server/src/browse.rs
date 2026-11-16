@@ -1865,6 +1865,9 @@ pub(crate) async fn comments(
                             silt_proto::edited::cell_comment_location(cells, artifact, sheet, &row, &column)
                         })
                     }
+                    CommentTarget::Element { artifact, anchor } => {
+                        CommentLocation::Element { artifact: artifact.to_string(), anchor }
+                    }
                     CommentTarget::Code { .. } => CommentLocation::Unknown,
                 },
                 replies: comment

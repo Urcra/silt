@@ -88,6 +88,13 @@ impl Core {
                 silt_proto::edited::cell_comment_target(&self.sheet_cells(thread, artifact, sheet), artifact, sheet, &address)
                     .map_err(CoreError::Invalid)?
             }
+            CommentOn::Element { artifact, anchor } => {
+                let artifact = self.edited_artifact(thread, &artifact, "html")?;
+                CommentTarget::Element {
+                    artifact,
+                    anchor: silt_proto::artifact::element_anchor(&anchor).map_err(CoreError::Invalid)?,
+                }
+            }
         };
         let by = match self.own_user(thread) {
             user if user.is_empty() => "you".to_owned(),
@@ -338,6 +345,9 @@ impl Core {
                         let cells =
                             sheets.entry((artifact, sheet)).or_insert_with(|| family.sheet_cells(thread, artifact, sheet));
                         silt_proto::edited::cell_comment_location(cells, artifact, sheet, &row, &column)
+                    }
+                    CommentTarget::Element { artifact, anchor } => {
+                        CommentLocation::Element { artifact: artifact.to_string(), anchor }
                     }
                 };
                 CommentView {

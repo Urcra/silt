@@ -182,7 +182,7 @@ pub enum CommentOp {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommentTarget {
     /// A conversation delta.
     Message { delta: DeltaId },
@@ -195,6 +195,9 @@ pub enum CommentTarget {
     /// A sheet's cell, by its row's and column's ids, so it follows the cell
     /// as rows and columns go in or out; last, as above.
     Cell { artifact: ArtifactId, sheet: u16, row: silt_crdt::CharId, column: silt_crdt::CharId },
+    /// An element of an HTML artifact's page, by the anchor the page gave
+    /// it: a name of its own or a CSS path (ADR 0085); last, as above.
+    Element { artifact: ArtifactId, anchor: String },
 }
 
 /// A merge request's life (ADR 0010). It is identified by the id of its

@@ -14,14 +14,16 @@ import { dictationHandler, dictationServed, mcpHandler, ttsHandler, ttsServed } 
 export type Holder = {
   /** Asks the person in the holding page itself, never in a browser dialog, and answers whether they agreed. */
   confirm: (ask: { title: string; detail: string; action: string }) => Promise<boolean>
-  /** Opens the artifact's comment composer, quoting `text`. */
-  openComposer: (text: string) => void
-  /** Comments as the viewer on the version shown, quoting `quote`, and answers the comment's id. */
-  addComment: (text: string, quote: string | null) => Promise<string>
+  /** Opens the artifact's comment composer, quoting `text`, on the page's element `anchor` where it names one. */
+  openComposer: (text: string, anchor?: string | null) => void
+  /** Comments as the viewer on the version shown, or on the page's element `anchor`, quoting `quote`; answers its id. */
+  addComment: (text: string, quote: string | null, anchor?: string | null) => Promise<string>
   /** The ids of the comments on this artifact, which a page may reply to and resolve. */
   commentIds: () => string[]
   /** Shows what a page's reply or resolve changed. */
   commentsChanged: () => void
+  /** Handed what shows a comment's element in the page, while a page is open (ADR 0085). */
+  revealer?: (reveal: ((anchor: string) => void) | null) => void
   /** Shows, outside the page, that it listens or speaks, with what stops it (ADR 0079). */
   voice?: (now: 'listening' | 'speaking' | 'idle', stop: (() => void) | null) => void
 }
@@ -49,7 +51,8 @@ const ASKED = ['sample', 'dictation', 'mcp', 'comments', 'files']
 
 /**
  * `permissions`, built in: what the viewer allowed this page, asked for at once, or forgotten so it asks again. A
- * capability this view doesn't serve, as dictation in the hosted app, is `unavailable`.
+ * capability this view doesn't serve, as dictation in the hosted app, is `unavailable`; one declared that never asks,
+ * such as `db`, is `granted` wherever it's served.
  */
 function permissionsHandler(thread: string, artifact: ArtifactView, holder: Holder, served: string[]): CapabilityHandler {
   const declared = () => ASKED.filter((name) => Boolean(artifact.capabilities?.[name]) && !(name === 'comments' && composerOnly(artifact)))
@@ -58,7 +61,12 @@ function permissionsHandler(thread: string, artifact: ArtifactView, holder: Hold
     const refused = refusedHere(holder)
     const state = (name: string) =>
       !served.includes(name) ? 'unavailable' : grants[name] === 'granted' ? 'granted' : refused.has(name) ? 'denied' : 'prompt'
-    return Object.fromEntries(declared().map((name) => [name, state(name)]))
+    const asking = declared()
+    const quiet = Object.keys(artifact.capabilities ?? {}).filter((name) => !asking.includes(name) && name !== 'edit' && name !== 'permissions')
+    return Object.fromEntries([
+      ...asking.map((name) => [name, state(name)]),
+      ...quiet.map((name) => [name, served.includes(name) ? 'granted' : 'unavailable']),
+    ])
   }
   // A refusal holds for the page's load: asking again shows nothing until it opens anew.
   const asked = new Set<string>()
@@ -374,13 +382,15 @@ function commentsHandler(thread: string, artifact: ArtifactView, holder: Holder)
     methods: writes ? ['openComposer', 'add', 'reply', 'resolve'] : ['openComposer'],
     perMinute: 20,
     call: async (method, args) => {
-      const given = (args ?? {}) as { text?: unknown; quote?: unknown; id?: unknown }
+      const given = (args ?? {}) as { text?: unknown; quote?: unknown; id?: unknown; anchor?: unknown }
+      const anchor = typeof given.anchor === 'string' && given.anchor.trim() ? given.anchor.trim().slice(0, 300) : null
       if (method === 'openComposer') {
-        holder.openComposer(typeof given.text === 'string' ? given.text.slice(0, 500) : '')
+        holder.openComposer(typeof given.text === 'string' ? given.text.slice(0, 500) : '', anchor)
         return null
       }
       if (!(await consented())) throw new Refusal('not_granted', 'the viewer chose not to let this page comment as them')
-      if (method === 'add') return { id: await holder.addComment(said(given.text), typeof given.quote === 'string' ? given.quote.slice(0, 500) : null) }
+      if (method === 'add')
+        return { id: await holder.addComment(said(given.text), typeof given.quote === 'string' ? given.quote.slice(0, 500) : null, anchor) }
       const id = own(given.id)
       if (method === 'reply') await api.reply(thread, id, said(given.text))
       else await api.resolveComment(thread, id)
@@ -409,10 +419,15 @@ function sampleTools(given: unknown): SampleTool[] {
 /** The most images one of a page's questions shows the agent, as the daemon and server take them. */
 const SAMPLE_IMAGES = 4
 
+/** How long a page's question asked again gets the answer it had. */
+const SAMPLE_CACHE_MS = 5 * 60_000
+
 /** `sample`: a question for an agent, asked once the person agrees, its answer told to the page as it streams. */
 function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
   // The page's names for its questions, each to the one minted for it.
   const asks = new Map<string, string>()
+  // Answers to questions asked again within five minutes, as they were, unless the page says `cache: false`.
+  const answered = new Map<string, { at: number; answer: { text: string; truncated: boolean; modelApplied?: string } }>()
   const takesImages = (artifact.capabilities?.sample as { images?: unknown } | undefined)?.images === true
   const consented = consentFor(thread, artifact, holder, 'sample', () => ({
     title: `Let ${artifact.title} ask an agent?`,
@@ -435,7 +450,7 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
         await api.sampleToolResult(thread, artifact.id, minted, Number(said.call), result)
         return null
       }
-      const given = (args ?? {}) as { input?: unknown; ask?: unknown; images?: unknown; tools?: unknown; model?: { model_tier?: unknown; model?: unknown } }
+      const given = (args ?? {}) as { input?: unknown; ask?: unknown; images?: unknown; tools?: unknown; cache?: unknown; model?: { model_tier?: unknown; model?: unknown } }
       const model = {
         model_tier: typeof given.model?.model_tier === 'string' ? given.model.model_tier : undefined,
         model: typeof given.model?.model === 'string' ? given.model.model : undefined,
@@ -445,6 +460,14 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
       if (blobs.length > 0 && !takesImages) throw new Refusal('refused', 'declare {sample: {images: true}} to show the agent images')
       if (blobs.length > SAMPLE_IMAGES || !blobs.every((blob) => blob instanceof Blob)) throw new Refusal('refused', `show at most ${SAMPLE_IMAGES} images, as Blobs`)
       if (!(await consented())) throw new Refusal('not_granted', 'the person chose not to let this page ask')
+      // Only a question with no tools or images is the same question asked again.
+      const key = given.cache === true && tools.length === 0 && blobs.length === 0 ? JSON.stringify([given.input, model]) : null
+      const kept = key === null ? undefined : answered.get(key)
+      if (kept && Date.now() - kept.at < SAMPLE_CACHE_MS) {
+        const named = typeof given.ask === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(given.ask) ? given.ask : 'q'
+        context.emit('sample', 'text', { ask: named, text: kept.answer.text })
+        return kept.answer
+      }
       const images = await Promise.all((blobs as Blob[]).map(async (blob) => ({ media_type: blob.type, data: await base64Of(blob) })))
       // The page's name for the question stays between it and this view; the
       // daemon and the server hear one minted here, which no other page can pick.
@@ -479,7 +502,9 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
         : null
       try {
         const answer = await api.sample(thread, artifact.id, ask, given.input, images, tools, model)
-        return { text: answer.text, truncated: answer.truncated, ...(answer.model_applied ? { modelApplied: answer.model_applied } : {}) }
+        const shown = { text: answer.text, truncated: answer.truncated, ...(answer.model_applied ? { modelApplied: answer.model_applied } : {}) }
+        if (key !== null) answered.set(key, { at: Date.now(), answer: shown })
+        return shown
       } catch (failure) {
         throw refusalOf(failure)
       } finally {

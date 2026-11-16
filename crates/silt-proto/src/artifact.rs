@@ -592,3 +592,26 @@ mod tests {
         assert!(short_text(Some(&"x".repeat(NOTE_CHARS + 1)), NOTE_CHARS, "a note").is_err());
     }
 }
+
+/// The longest anchor a comment on a page's element keeps.
+pub const ELEMENT_ANCHOR_CHARS: usize = 300;
+
+/// An element anchor as a comment keeps it: trimmed, 1 to 300 characters,
+/// with no control characters, as a page or a peer may send anything.
+pub fn element_anchor(anchor: &str) -> Result<String, String> {
+    let anchor = anchor.trim();
+    if anchor.is_empty() || anchor.chars().count() > ELEMENT_ANCHOR_CHARS || anchor.chars().any(char::is_control) {
+        return Err(format!("an element's anchor is 1 to {ELEMENT_ANCHOR_CHARS} characters, on one line"));
+    }
+    Ok(anchor.to_owned())
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    #[test]
+    fn an_element_anchor_is_one_short_line() {
+        assert_eq!(super::element_anchor("  #total ").as_deref(), Ok("#total"));
+        assert!(super::element_anchor("").is_err() && super::element_anchor("a\nb").is_err());
+        assert!(super::element_anchor(&"x".repeat(301)).is_err());
+    }
+}

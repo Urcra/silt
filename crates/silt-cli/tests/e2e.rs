@@ -2097,6 +2097,19 @@ fn a_page_calls_a_ticked_tool_of_a_page_connector() {
     settled_history(&api, &thread, "Done: Artifact tools");
     let id = artifacts_of(&api, &thread)[0]["id"].as_str().expect("id").to_owned();
 
+    // A comment on one of the page's elements keeps its anchor (ADR 0085).
+    let on = serde_json::json!({"on": {"on": "element", "artifact": id, "anchor": " #total "}, "text": "round this"});
+    api.ok("POST", &format!("/api/threads/{thread}/comments"), Some(on));
+    let comments = api.ok("GET", &format!("/api/threads/{thread}/comments"), None);
+    let element = comments.as_array().and_then(|all| all.iter().find(|comment| comment["text"] == "round this")).cloned();
+    assert_eq!(
+        element.as_ref().map(|comment| (&comment["location"]["at"], &comment["location"]["anchor"])),
+        Some((&"element".into(), &"#total".into())),
+        "{comments}"
+    );
+    let blank = serde_json::json!({"on": {"on": "element", "artifact": id, "anchor": "a\nb"}, "text": "x"});
+    assert!(!api.call("POST", &format!("/api/threads/{thread}/comments"), Some(blank)).0, "an anchor is one line");
+
     // `silt mcp` is an MCP server whose history tools only read.
     let silt = env!("CARGO_BIN_EXE_silt");
     let connector = serde_json::json!([{"name": "silt", "command": silt, "args": ["mcp", "--thread", thread], "tools": {}}]);
