@@ -814,14 +814,14 @@ impl Core {
             }
             Request::ArtifactGrants { thread, artifact } => match self.find_thread(&thread) {
                 Ok(thread) => {
-                    let latest = self.declared_by(thread, &artifact, None);
+                    let latest = self.version_view(thread, &artifact, None);
                     Response::ok(crate::design::artifact_grants(&self.data_dir, &thread.to_string(), &artifact, latest.as_ref()))
                 }
                 Err(error) => Response::failure(&error),
             },
             Request::SetArtifactGrant { thread, artifact, capability, state, version } => match self.find_thread(&thread) {
                 Ok(thread) => {
-                    let declared = self.declared_by(thread, &artifact, version);
+                    let declared = self.version_view(thread, &artifact, version);
                     to_response(
                         crate::design::set_artifact_grant(
                             &self.data_dir,

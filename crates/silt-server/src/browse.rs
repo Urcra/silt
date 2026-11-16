@@ -1230,9 +1230,7 @@ pub(crate) async fn grants_held(
     .await?;
     Ok(rows
         .into_iter()
-        .filter(|row| {
-            silt_proto::artifact::declaration(latest.capabilities.as_ref(), &row.capability).as_ref() == Some(&row.declaration)
-        })
+        .filter(|row| silt_proto::artifact::grant_basis(Some(&latest), &row.capability).as_ref() == Some(&row.declaration))
         .map(|row| (row.capability, row.state))
         .collect())
 }
@@ -1265,7 +1263,7 @@ async fn set_artifact_grant(
             .await?;
         }
         Some(state @ ("granted" | "refused")) => {
-            let declaration = silt_proto::artifact::declaration(seen.capabilities.as_ref(), &change.capability)
+            let declaration = silt_proto::artifact::grant_basis(Some(&seen), &change.capability)
                 .ok_or_else(|| bad_request(format!("artifact {artifact} doesn't declare {}", change.capability)))?;
             let at = now_ms();
             sqlx::query!(

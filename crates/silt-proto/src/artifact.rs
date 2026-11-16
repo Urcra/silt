@@ -341,6 +341,19 @@ pub fn declaration(declared: Option<&Capabilities>, capability: &str) -> Option<
     declared?.get(capability).map(|config| sorted(config).to_string())
 }
 
+/// The capabilities that run a page's own code with what's the person's:
+/// their agent, their connectors, their thread's files. A grant of one
+/// holds for the page it was given to, so a new page asks again.
+pub const PAGE_BOUND: &[&str] = &["sample", "mcp", "files"];
+
+/// What a grant of `capability` is given for, by `version`: what it
+/// declares of it, and for [`PAGE_BOUND`] capabilities, its page too.
+pub fn grant_basis(version: Option<&crate::view::ArtifactView>, capability: &str) -> Option<String> {
+    let version = version?;
+    let declared = declaration(version.capabilities.as_ref(), capability)?;
+    Some(if PAGE_BOUND.contains(&capability) { format!("{declared}@{}", version.blob) } else { declared })
+}
+
 /// One change to a version's source: `old` occurs exactly once, and
 /// becomes `new`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -208,13 +208,23 @@ impl Core {
         artifact: &str,
         version: Option<u32>,
     ) -> Option<silt_proto::artifact::Capabilities> {
+        self.version_view(thread, artifact, version).and_then(|view| view.capabilities)
+    }
+
+    /// Version `version` of the artifact, or its latest.
+    pub(crate) fn version_view(
+        &self,
+        thread: ThreadId,
+        artifact: &str,
+        version: Option<u32>,
+    ) -> Option<silt_proto::view::ArtifactView> {
         let views = self.history_entries(thread);
         let mut versions = views.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).filter(|view| view.id == artifact);
         let view = match version {
             Some(version) => versions.find(|view| view.version == version),
             None => versions.max_by_key(|view| view.version),
         };
-        view.and_then(|view| view.capabilities.clone())
+        view.cloned()
     }
 
     /// The config the artifact's latest version declares for `capability`.
