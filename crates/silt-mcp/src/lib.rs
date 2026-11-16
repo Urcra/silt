@@ -143,8 +143,8 @@ fn show_tools() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "The artifact's id"},
-                    "op": {"type": "string", "enum": ["get", "list", "query", "set", "update", "delete", "batch", "str_replace"], "description": "What to do"},
-                    "path": {"type": "string", "description": "A document's path, for get, set, update, delete and str_replace"},
+                    "op": {"type": "string", "enum": ["get", "list", "query", "set", "update", "delete", "batch", "str_replace", "add_asset"], "description": "What to do; add_asset adds a file of the checkout to the page's assets, as its people add them, and answers its id"},
+                    "path": {"type": "string", "description": "A document's path, for get, set, update, delete and str_replace; for add_asset, a PNG, JPEG, GIF, WebP, SVG or PDF in the checkout, such as docs/diagram.png"},
                     "field": {"type": "string", "description": "For str_replace: the document's text field to edit"},
                     "old": {"type": "string", "description": "For str_replace: text that occurs once in the field"},
                     "new": {"type": "string", "description": "For str_replace: what replaces it"},

@@ -209,6 +209,18 @@ impl silt_mcp::Backend for DaemonTools {
                 }
                 return Ok(out);
             }
+            "silt_artifact_data" if arguments.get("op").and_then(Value::as_str) == Some("add_asset") => {
+                let token = self.token.clone().ok_or("only an agent the web UI runs adds files to its artifacts")?;
+                let artifact = text_arg(arguments, "id")?;
+                let path = text_arg(arguments, "path")?;
+                let (name, media_type, data) = asset_from(&self.checkout, &path)?;
+                let asked = silt_proto::page::AssetRequest::Add { name, media_type, data };
+                let added: Value = ask_daemon(&Request::Scoped {
+                    token,
+                    asking: Box::new(Request::PageAssets { thread: String::new(), artifact, asked }),
+                })?;
+                return Ok(serde_json::to_string_pretty(&added).unwrap_or_default());
+            }
             "silt_artifact_data" => {
                 let token = self.token.clone().ok_or("only an agent the web UI runs reaches its artifacts' data")?;
                 let artifact = text_arg(arguments, "id")?;
@@ -559,6 +571,34 @@ const WHITEBOARD_GUIDE: &str = "A whiteboard is notes, arrows, sections and stro
 frame, x, y, w, h, text), stroke (points). After that, add or move items with silt_artifact_data at items/<id>, \
 and say something to the people there with silt_artifact_room. Lay items on a grid, 40 px apart, one idea per note.\n";
 
+/// A file in the checkout, by `path` within it, as a page's asset: its name,
+/// its media type by its extension, and its bytes as base64, at most 20 MiB.
+fn asset_from(checkout: &std::path::Path, path: &str) -> Result<(String, String, String), String> {
+    use base64::Engine as _;
+    let root = checkout.canonicalize().map_err(|error| format!("the checkout can't be read: {error}"))?;
+    let file = root.join(path).canonicalize().map_err(|_| format!("there's no file {path} in the checkout"))?;
+    if !file.starts_with(&root) {
+        return Err(format!("{path} isn't in the checkout"));
+    }
+    let extension = file.extension().and_then(|extension| extension.to_str()).unwrap_or_default().to_ascii_lowercase();
+    let media_type = match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        other => return Err(format!("a page's file is a PNG, JPEG, GIF, WebP, SVG or PDF, not .{other}")),
+    };
+    let size = std::fs::metadata(&file).map_err(|error| error.to_string())?.len();
+    if size > 20 << 20 {
+        return Err(format!("{path} is over 20 MiB"));
+    }
+    let bytes = std::fs::read(&file).map_err(|error| error.to_string())?;
+    let name = file.file_name().and_then(|name| name.to_str()).unwrap_or("file").to_owned();
+    Ok((name, media_type.to_owned(), base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
 /// What `silt_artifact_guide` answers: the design guidance for `kind`, the
 /// design system that applies and the others there are (ADR 0071).
 fn guide_text(kind: &str, guide: &ArtifactGuide, skills: &[Skill]) -> String {
@@ -859,6 +899,20 @@ pub fn serve_page_tools(file: &std::path::Path) -> Result<(), Exn<CliError>> {
 mod tests {
     use super::*;
     use silt_daemon::protocol::DesignSystemView;
+
+    #[test]
+    fn an_asset_is_a_picture_or_a_pdf_within_the_checkout() {
+        let dir = tempfile::tempdir().expect("dir");
+        let checkout = dir.path().join("repo");
+        std::fs::create_dir_all(checkout.join("docs")).expect("mkdir");
+        std::fs::write(checkout.join("docs/plan.png"), b"\x89PNG").expect("write");
+        std::fs::write(checkout.join("run.sh"), b"echo").expect("write");
+        std::fs::write(dir.path().join("secret.png"), b"\x89PNG").expect("write");
+        let (name, media_type, data) = asset_from(&checkout, "docs/plan.png").expect("a picture");
+        assert_eq!((name.as_str(), media_type.as_str(), data.as_str()), ("plan.png", "image/png", "iVBORw=="));
+        assert!(asset_from(&checkout, "run.sh").is_err(), "only pictures and PDFs");
+        assert!(asset_from(&checkout, "../secret.png").is_err(), "nothing outside the checkout");
+    }
 
     fn system(name: &str, source: DesignSource, readme: Option<&str>) -> DesignSystemView {
         DesignSystemView {

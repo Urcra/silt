@@ -597,6 +597,15 @@ impl Core {
                 let _ = reply.send(to_response(self.run_page_data(&token, &artifact, asked, as_level).await));
                 return;
             }
+            if let Request::PageAssets { artifact, asked, .. } = *asking {
+                // The agent adds a file to a page it made, as its people do.
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.page_assets(&thread, &artifact, asked).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
             if let Request::PageAsset { artifact, asset, .. } = *asking {
                 let answer = match self.run_thread(&token).await {
                     Ok(thread) => self.page_asset(&thread, &artifact, &asset).await,
