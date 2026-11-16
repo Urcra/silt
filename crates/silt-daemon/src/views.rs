@@ -638,7 +638,10 @@ impl Core {
                 let Ok(id) = artifact.id.parse::<silt_types::ArtifactId>() else { continue };
                 let text = match artifact.kind.as_str() {
                     "doc" => self.doc_text(thread, id),
-                    "sheet" => silt_proto::edited::sheet_text(&self.sheet_cells(thread, id, 0)),
+                    "sheet" => (0..self.sheet_count(thread, id))
+                        .map(|sheet| silt_proto::edited::sheet_text(&self.sheet_cells(thread, id, sheet)))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
                     _ => continue,
                 };
                 if let Some(snippet) = silt_proto::edited::text_hit(&text, query) {

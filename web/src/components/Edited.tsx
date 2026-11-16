@@ -324,14 +324,20 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
 export function SheetGrid({ thread, artifact, title }: { thread: string; artifact: string; title: string }) {
   useTopic(`thread:${thread}`)
   const queries = useQueryClient()
-  const key = ['sheet', thread, artifact]
-  const sheet = useQuery({ queryKey: key, queryFn: () => api.sheetData(thread, artifact, { op: 'read' }) as Promise<SheetView>, refetchInterval: 5_000 })
+  // The sheet shown, from 0; an artifact has up to 16 (ADR 0077).
+  const [tab, setTab] = useState(0)
+  const key = ['sheet', thread, artifact, tab]
+  const sheet = useQuery({
+    queryKey: key,
+    queryFn: () => api.sheetData(thread, artifact, { op: 'read', sheet: tab }) as Promise<SheetView>,
+    refetchInterval: 5_000,
+  })
   const [editing, setEditing] = useState<{ row: number; column: number; raw: string } | null>(null)
   const [selected, setSelected] = useState<{ row: number; column: number }>({ row: 0, column: 0 })
   const change = async (asked: Record<string, unknown>) => {
     try {
-      await api.sheetData(thread, artifact, asked)
-      await queries.invalidateQueries({ queryKey: key })
+      await api.sheetData(thread, artifact, { sheet: tab, ...asked })
+      await queries.invalidateQueries({ queryKey: ['sheet', thread, artifact] })
     } catch (failure) {
       toast(message(failure), 'danger')
     }
@@ -430,6 +436,41 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
             ))}
           </tbody>
         </table>
+      </div>
+      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-line-subtle px-2 py-1" role="tablist" aria-label="sheets">
+        {Array.from({ length: view.sheets ?? 1 }, (_, at) => (
+          <button
+            key={at}
+            role="tab"
+            aria-selected={tab === at}
+            onClick={() => {
+              setTab(at)
+              setSelected({ row: 0, column: 0 })
+              setEditing(null)
+            }}
+            className={cx('rounded px-2 py-0.5 text-xs', tab === at ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}
+          >
+            Sheet {at + 1}
+          </button>
+        ))}
+        {(view.sheets ?? 1) < 16 && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={async () => {
+              const next = view.sheets ?? 1
+              try {
+                await api.sheetData(thread, artifact, { op: 'set', sheet: next, cells: { E10: '' } })
+                await queries.invalidateQueries({ queryKey: ['sheet', thread, artifact] })
+                setTab(next)
+              } catch (failure) {
+                toast(message(failure), 'danger')
+              }
+            }}
+          >
+            Add a sheet
+          </Button>
+        )}
       </div>
     </div>
   )

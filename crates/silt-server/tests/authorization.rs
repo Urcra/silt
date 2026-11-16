@@ -1936,3 +1936,70 @@ async fn a_rooms_moments_reach_its_peers_by_level() {
     carol_room.send(Message::Text(r#"{"op": "emit", "topic": "cursor", "data": [3, 4]}"#.into())).await.expect("sends");
     assert_eq!(next(&mut alice_room).await["data"], serde_json::json!([3, 4]), "the declaration opens cursor to commenters");
 }
+
+/// An artifact's own routes answer only someone who can read the thread;
+/// a grant is for a declared capability of a real artifact; a push writes
+/// `_meta` only at the level each needs; and a person's pins reach their
+/// machines only for threads they can read (ADRs 0072, 0075).
+#[tokio::test]
+async fn an_artifacts_routes_grants_meta_and_pins_follow_the_thread() {
+    use silt_log::{ConvOp, PageOp, SessionFile, SessionRef};
+    let mut world = world(Visibility::Team("core".into())).await;
+    let record = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 1, "title": "Board", "kind": "html",
+        "media_type": "text/html", "blob": "ab".repeat(32), "size": 1, "inline": false,
+        "capabilities": {"sample": {}, "assets": {}}
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let family = &mut world.family;
+    let recorded = applied(
+        family,
+        family.delta(
+            ActorId(1),
+            THREAD,
+            Author::User,
+            5,
+            family.thread_head(THREAD),
+            Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: record.to_string() }),
+        ),
+    );
+    assert_eq!(world.alice.push(vec![recorded]).await, StatusCode::OK);
+    let person = |name: &'static str| &world.people.iter().find(|(person, _)| *person == name).expect("a person").1;
+    let erin = Browser::sign_in(person("erin"), "erin").await;
+    let carol = Browser::sign_in(person("carol"), "carol").await;
+    let base = format!("/threads/{THREAD}/artifacts/0123456789ab");
+
+    // Erin can't read the thread: none of its artifact's routes answer her.
+    for path in ["grants", "thumbnail", "sheet.xlsx", &format!("assets/{}", "0".repeat(32))] {
+        assert_eq!(erin.get(&format!("{base}/{path}")).await.0, StatusCode::NOT_FOUND, "{path}");
+    }
+    let grant = serde_json::json!({"capability": "sample", "state": "granted"});
+    assert_eq!(erin.put(&format!("{base}/grants"), grant.clone()).await.0, StatusCode::NOT_FOUND);
+
+    // Carol reads it: she keeps a grant for what it declares, and only that.
+    assert_eq!(carol.put(&format!("{base}/grants"), grant.clone()).await.0, StatusCode::NO_CONTENT);
+    let (_, held) = carol.get(&format!("{base}/grants")).await;
+    assert_eq!(held["sample"], "granted", "{held}");
+    let undeclared = serde_json::json!({"capability": "mcp", "state": "granted"});
+    assert_eq!(carol.put(&format!("{base}/grants"), undeclared).await.0, StatusCode::BAD_REQUEST, "not declared");
+    let elsewhere = format!("/threads/{THREAD}/artifacts/{}/grants", "0".repeat(12));
+    assert_eq!(carol.put(&elsewhere, grant).await.0, StatusCode::NOT_FOUND, "no such artifact");
+
+    // Over sync, a commenter may neither archive nor draw a thumbnail.
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    for (at, path) in ["_meta/archived", "_meta/thumbnail"].into_iter().enumerate() {
+        let op = Op::Page(PageOp::Set { artifact, path: path.into(), value: "true".into() });
+        let delta = family.delta(ActorId(77), THREAD, Author::User, 6 + at as i64, family.thread_head(THREAD), op);
+        assert_eq!(person("carol").push(vec![delta]).await, StatusCode::FORBIDDEN, "{path}");
+    }
+
+    // A pin reaches the person's machines while they can read its thread.
+    let pin = serde_json::json!({"thread": THREAD.to_string(), "artifact": "0123456789ab", "pinned": true});
+    let pinned = person("carol").send(person("carol").request(Method::PUT, "/v1/me/artifact-pins").json(&pin)).await;
+    assert_eq!(pinned, StatusCode::NO_CONTENT);
+    let listed: serde_json::Value =
+        person("carol").request(Method::GET, "/v1/me/artifact-pins").send().await.expect("sends").json().await.expect("json");
+    assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
+    let refused = person("erin").send(person("erin").request(Method::PUT, "/v1/me/artifact-pins").json(&pin)).await;
+    assert_eq!(refused, StatusCode::NOT_FOUND, "erin can't pin what she can't read");
+}

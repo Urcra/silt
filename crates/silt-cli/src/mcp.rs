@@ -257,6 +257,11 @@ impl silt_mcp::Backend for DaemonTools {
             "silt_artifact_sheet" => {
                 let token = self.token.clone().ok_or("only an agent the web UI runs edits its sheets")?;
                 let artifact = text_arg(arguments, "id")?;
+                // The agent counts sheets from 1, as their tabs do.
+                let sheet = arguments
+                    .get("sheet")
+                    .and_then(Value::as_u64)
+                    .map_or(Ok(0), |sheet| u16::try_from(sheet.saturating_sub(1)).map_err(|_| "no such sheet".to_owned()))?;
                 let ask = |asked| {
                     ask_daemon::<Value>(&Request::Scoped {
                         token: token.clone(),
@@ -268,13 +273,17 @@ impl silt_mcp::Backend for DaemonTools {
                         .iter()
                         .map(|(address, raw)| (address.clone(), raw.as_str().map_or_else(|| raw.to_string(), str::to_owned)))
                         .collect();
-                    ask(silt_proto::edited::SheetRequest::Set { sheet: 0, cells })?;
+                    ask(silt_proto::edited::SheetRequest::Set { sheet, cells })?;
                 }
                 let range = arguments.get("read").and_then(Value::as_str).map(str::to_owned);
-                let read = ask(silt_proto::edited::SheetRequest::Read { sheet: 0, range: range.clone() })?;
+                let read = ask(silt_proto::edited::SheetRequest::Read { sheet, range: range.clone() })?;
                 return Ok(match range {
                     Some(_) => serde_json::to_string(&read["values"]).unwrap_or_default(),
-                    None => sheet_text(&read),
+                    None => {
+                        let count = read["sheets"].as_u64().unwrap_or(1);
+                        let heading = if count > 1 { format!("Sheet {} of {count}\n", sheet + 1) } else { String::new() };
+                        format!("{heading}{}", sheet_text(&read))
+                    }
                 });
             }
             "silt_artifact_read" if arguments.get("asset").is_some() => {

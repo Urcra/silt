@@ -444,6 +444,12 @@ impl Family {
         crate::page::doc_crdt(&items, &self.graph, artifact)
     }
 
+    /// How many sheets a sheet artifact in `thread` has (ADR 0077).
+    pub fn sheet_count(&self, thread: ThreadId, artifact: silt_types::ArtifactId) -> u16 {
+        let items = expand(&FamilyThreads(self), thread, true, &mut Expansion::default()).0;
+        crate::page::sheet_count(&items, artifact)
+    }
+
     /// One sheet of a sheet artifact in `thread` (ADR 0077).
     pub fn sheet_cells(&self, thread: ThreadId, artifact: silt_types::ArtifactId, sheet: u16) -> crate::page::SheetCells {
         let items = expand(&FamilyThreads(self), thread, true, &mut Expansion::default()).0;
@@ -663,6 +669,13 @@ pub fn doc_crdt_in(log: &[Delta], graph: &CausalGraph, thread: ThreadId, artifac
     let threads = LogThreads::new(log, graph);
     let items = expand(&threads, thread, true, &mut Expansion::default()).0;
     crate::page::doc_crdt(&items, graph, artifact)
+}
+
+/// [`Family::sheet_count`] over any deltas of a family.
+pub fn sheet_count_in(log: &[Delta], graph: &CausalGraph, thread: ThreadId, artifact: silt_types::ArtifactId) -> u16 {
+    let threads = LogThreads::new(log, graph);
+    let items = expand(&threads, thread, true, &mut Expansion::default()).0;
+    crate::page::sheet_count(&items, artifact)
 }
 
 /// [`Family::sheet_cells`] over any deltas of a family.

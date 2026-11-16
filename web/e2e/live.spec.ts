@@ -1704,6 +1704,13 @@ test('a doc and a sheet are edited in place, and what was typed is kept (ADR 007
   await sheet.getByLabel('cell B3').fill('=SUM(B1:B2)')
   await sheet.getByLabel('cell B3').press('Enter')
   await expect(sheet.getByRole('row').nth(3).getByRole('gridcell').nth(1)).toHaveText('8')
+
+  // A second sheet, in its own tab; the first keeps its cells.
+  await sheet.getByRole('button', { name: 'Add a sheet' }).click()
+  await expect(sheet.getByRole('tab', { name: 'Sheet 2' })).toHaveAttribute('aria-selected', 'true')
+  await expect(sheet.getByRole('grid')).not.toContainText('apples')
+  await sheet.getByRole('tab', { name: 'Sheet 1' }).click()
+  await expect(sheet.getByRole('grid')).toContainText('apples')
 })
 
 test("two views of a whiteboard see each other's cursors, and a note moved by one stays moved (ADR 0081)", async ({ page, context }) => {

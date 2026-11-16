@@ -203,6 +203,71 @@ pub struct SheetView {
     /// By row, then column; `""` for an empty cell.
     pub raw: Vec<Vec<String>>,
     pub values: Vec<Vec<String>>,
+    /// How many sheets the artifact has, for its tabs; a read fills it in.
+    #[serde(default = "one_sheet")]
+    pub sheets: u16,
+}
+
+fn one_sheet() -> u16 {
+    1
+}
+
+/// The most sheets an artifact has, as the log takes them.
+pub const SHEETS: u16 = 16;
+
+impl SheetRequest {
+    /// Which sheet it's about.
+    pub fn sheet(&self) -> u16 {
+        match self {
+            Self::Read { sheet, .. } | Self::Set { sheet, .. } | Self::Insert { sheet, .. } | Self::Remove { sheet, .. } => {
+                *sheet
+            }
+        }
+    }
+}
+
+/// A sheet artifact's content from its sheets' rows: the first as `rows`,
+/// as a one-sheet artifact gives it, and all of them under `sheets`.
+pub fn sheet_content(sheets: Vec<serde_json::Value>) -> String {
+    let first = sheets.first().map(|sheet| sheet["rows"].clone()).unwrap_or_else(|| serde_json::json!([]));
+    if sheets.len() > 1 {
+        serde_json::json!({ "rows": first, "sheets": sheets }).to_string()
+    } else {
+        serde_json::json!({ "rows": first }).to_string()
+    }
+}
+
+/// The cells each sheet of a new sheet artifact starts with, by address,
+/// from its content: `{"sheets": [{"rows": [...]}, ...]}`, or one sheet's
+/// `{"rows": [...]}`. Each has a grid to type in, even empty, and there are
+/// at most [`SHEETS`].
+pub fn seeded_sheets(content: &str) -> Vec<BTreeMap<String, String>> {
+    let seeded: serde_json::Value = serde_json::from_str(content).unwrap_or_default();
+    let sheets: Vec<serde_json::Value> = match seeded["sheets"].as_array() {
+        Some(sheets) if !sheets.is_empty() => sheets.iter().take(usize::from(SHEETS)).cloned().collect(),
+        _ => vec![serde_json::json!({ "rows": seeded["rows"] })],
+    };
+    sheets
+        .iter()
+        .map(|sheet| {
+            let rows: Vec<Vec<serde_json::Value>> = serde_json::from_value(sheet["rows"].clone()).unwrap_or_default();
+            let mut cells = BTreeMap::new();
+            for (row, values) in rows.iter().enumerate() {
+                for (column, value) in values.iter().enumerate() {
+                    let raw = match value {
+                        serde_json::Value::String(text) => text.clone(),
+                        serde_json::Value::Null => continue,
+                        other => other.to_string(),
+                    };
+                    if !raw.is_empty() {
+                        cells.insert(silt_sheet::address(row, column), raw);
+                    }
+                }
+            }
+            cells.entry(silt_sheet::address(9, 4)).or_default();
+            cells
+        })
+        .collect()
 }
 
 fn id_text(id: &silt_crdt::CharId) -> String {
@@ -232,7 +297,7 @@ pub fn sheet_view(cells: &SheetCells, today: f64) -> SheetView {
         .into_iter()
         .map(|row| row.into_iter().map(|value| value.to_string()).collect())
         .collect();
-    SheetView { rows, columns, raw, values }
+    SheetView { rows, columns, raw, values, sheets: 1 }
 }
 
 /// What a `Set` needs first: how many rows and columns to add at the end so
@@ -329,13 +394,28 @@ pub fn csv(view: &SheetView) -> String {
 /// values cached, so it opens alike in a spreadsheet app.
 #[cfg(feature = "xlsx")]
 pub fn xlsx(view: &SheetView, name: &str) -> Result<Vec<u8>, String> {
-    use rust_xlsxwriter::{Formula, Workbook};
+    xlsx_book(&[(name.to_owned(), view.clone())])
+}
+
+/// A workbook of `sheets`, each a worksheet by its name, in order.
+#[cfg(feature = "xlsx")]
+pub fn xlsx_book(sheets: &[(String, SheetView)]) -> Result<Vec<u8>, String> {
+    use rust_xlsxwriter::Workbook;
     let mut book = Workbook::new();
-    let sheet = book.add_worksheet();
-    let title: String = name.chars().filter(|c| !"[]:*?/\\".contains(*c)).take(31).collect();
-    if !title.trim().is_empty() {
-        sheet.set_name(title.trim()).map_err(|error| error.to_string())?;
+    for (name, view) in sheets {
+        let sheet = book.add_worksheet();
+        let title: String = name.chars().filter(|c| !"[]:*?/\\".contains(*c)).take(31).collect();
+        if !title.trim().is_empty() {
+            sheet.set_name(title.trim()).map_err(|error| error.to_string())?;
+        }
+        write_sheet(sheet, view)?;
     }
+    book.save_to_buffer().map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "xlsx")]
+fn write_sheet(sheet: &mut rust_xlsxwriter::Worksheet, view: &SheetView) -> Result<(), String> {
+    use rust_xlsxwriter::Formula;
     for (row, cells) in view.raw.iter().enumerate() {
         for (column, raw) in cells.iter().enumerate() {
             let (r, c) =
@@ -355,7 +435,7 @@ pub fn xlsx(view: &SheetView, name: &str) -> Result<Vec<u8>, String> {
             written.map_err(|error| error.to_string())?;
         }
     }
-    book.save_to_buffer().map_err(|error| error.to_string())
+    Ok(())
 }
 
 /// A comment's target on characters `start..end` of a doc as it stands:
@@ -501,6 +581,25 @@ mod tests {
     }
 
     #[test]
+    fn a_sheet_starts_with_each_sheet_it_was_given() {
+        let one = seeded_sheets(r#"{"rows": [["Task", "Hours"], ["Design", 3]]}"#);
+        assert_eq!(one.len(), 1);
+        assert_eq!((one[0].get("A1").map(String::as_str), one[0].get("B2").map(String::as_str)), (Some("Task"), Some("3")));
+        let two = seeded_sheets(r#"{"sheets": [{"rows": [["a"]]}, {"rows": [["b", null, "c"]]}]}"#);
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[1].get("C1").map(String::as_str), Some("c"));
+        assert!(two.iter().all(|cells| cells.contains_key("E10")), "a grid to type in");
+        let many: Vec<_> = (0..40).map(|_| serde_json::json!({"rows": [["x"]]})).collect();
+        assert_eq!(seeded_sheets(&serde_json::json!({"sheets": many}).to_string()).len(), usize::from(SHEETS));
+        let content: serde_json::Value = serde_json::from_str(&sheet_content(vec![
+            serde_json::json!({"rows": [["a"]]}),
+            serde_json::json!({"rows": [["b"]]}),
+        ]))
+        .expect("json");
+        assert_eq!((&content["rows"][0][0], &content["sheets"][1]["rows"][0][0]), (&"a".into(), &"b".into()));
+    }
+
+    #[test]
     fn an_edit_counted_against_an_older_read_lands_where_it_was_meant() {
         let seen = ids("# Plan\n- ship\n", 0);
         // The agent put a line at the top since.
@@ -537,6 +636,7 @@ mod tests {
             columns: vec!["c".into()],
             raw: vec![vec!["1".into()]],
             values: vec![vec!["1".into()]],
+            sheets: 1,
         };
         assert_eq!(read_range(&view, "A1:ZZZ99999999"), Ok(vec![vec!["1".to_owned()]]));
     }
@@ -548,6 +648,7 @@ mod tests {
             columns: vec!["a".into(), "b".into(), "c".into()],
             raw: vec![vec!["=cmd|' /C calc'!A0".into(), "-5".into(), "@SUM(1)".into()]],
             values: vec![vec!["=cmd|' /C calc'!A0".into(), "-5".into(), "@SUM(1)".into()]],
+            sheets: 1,
         };
         assert_eq!(csv(&view), "'=cmd|' /C calc'!A0,-5,'@SUM(1)");
         assert!(silt_sheet::formula_ok("=SUM(A1:B2)*2") && !silt_sheet::formula_ok("=WEBSERVICE(\"https://x\")"));
@@ -585,6 +686,7 @@ mod tests {
             columns: vec!["c0".into()],
             raw: vec![vec!["2".into()], vec!["=A1*3".into()]],
             values: vec![vec!["2".into()], vec!["6".into()]],
+            sheets: 1,
         };
         let bytes = xlsx(&view, "Tracker").expect("a workbook");
         let mut book: Xlsx<_> = calamine::open_workbook_from_rs(std::io::Cursor::new(bytes)).expect("opens");

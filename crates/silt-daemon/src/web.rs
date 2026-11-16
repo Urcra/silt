@@ -989,15 +989,23 @@ async fn sheet_data(
 
 /// A sheet as an `.xlsx` workbook, formulas included (ADR 0077).
 async fn sheet_xlsx(State(web): State<Web>, Path((thread, artifact)): Path<(String, String)>) -> HttpResponse {
-    let asked = silt_proto::edited::SheetRequest::Read { sheet: 0, range: None };
-    let view = match answer(&web, Request::SheetData { thread, artifact, asked }).await {
-        Ok(view) => view,
-        Err(failed) => return failed.into_response(),
-    };
-    let Ok(view) = serde_json::from_value::<silt_proto::edited::SheetView>(view) else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    };
-    match silt_proto::edited::xlsx(&view, "Sheet1") {
+    let mut sheets = Vec::new();
+    let (mut sheet, mut count) = (0, 1);
+    while sheet < count {
+        let asked = silt_proto::edited::SheetRequest::Read { sheet, range: None };
+        let request = Request::SheetData { thread: thread.clone(), artifact: artifact.clone(), asked };
+        let view = match answer(&web, request).await {
+            Ok(view) => view,
+            Err(failed) => return failed.into_response(),
+        };
+        let Ok(view) = serde_json::from_value::<silt_proto::edited::SheetView>(view) else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        count = view.sheets;
+        sheets.push((format!("Sheet{}", sheet + 1), view));
+        sheet += 1;
+    }
+    match silt_proto::edited::xlsx_book(&sheets) {
         Ok(bytes) => xlsx_response(bytes),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
     }

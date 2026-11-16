@@ -136,6 +136,22 @@ pub fn doc_crdt(items: &[HistoryItem<'_>], graph: &CausalGraph, artifact: Artifa
     })
 }
 
+/// How many sheets `artifact` has along `items`: one past the last any
+/// operation names, and one at least, as a new sheet artifact has.
+pub fn sheet_count(items: &[HistoryItem<'_>], artifact: ArtifactId) -> u16 {
+    items
+        .iter()
+        .filter(|item| !item.rewound)
+        .filter_map(|item| match &item.delta.op {
+            Op::Page(PageOp::Lines { artifact: of, sheet, .. } | PageOp::Cell { artifact: of, sheet, .. }) if *of == artifact => {
+                Some(*sheet)
+            }
+            _ => None,
+        })
+        .max()
+        .map_or(1, |last| last + 1)
+}
+
 /// A sheet as it stands: its rows' and columns' ids in order, and each
 /// cell's typed text by its row's and column's ids.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

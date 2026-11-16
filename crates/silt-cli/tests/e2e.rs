@@ -1996,11 +1996,23 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     let view = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));
     assert_eq!(view["raw"][3][1], "=SUM(B2:B3)", "the formula moved with its cells: {view}");
     assert_eq!(view["values"][3][1], "8", "and means the same: {view}");
-    let found = api.ok("GET", "/api/search?q=fruit", None);
-    assert!(
-        found.as_array().is_some_and(|hits| hits.iter().any(|hit| hit["artifact"] == sheet.as_str() && hit["kind"] == "sheet")),
-        "a sheet hit: {found}"
-    );
+    // A second sheet, which a read counts, search finds and the workbook holds.
+    api.ok("POST", &path, Some(serde_json::json!({"op": "set", "sheet": 1, "cells": {"A1": "rhubarb", "A2": "=1+1"}})));
+    let first = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));
+    assert_eq!(first["sheets"], 2, "{first}");
+    let second = api.ok("POST", &path, Some(serde_json::json!({"op": "read", "sheet": 1})));
+    assert_eq!((&second["raw"][0][0], &second["values"][1][0]), (&"rhubarb".into(), &"2".into()), "{second}");
+    let (too_many, _) = api.call("POST", &path, Some(serde_json::json!({"op": "read", "sheet": 16})));
+    assert!(!too_many, "an artifact has at most 16 sheets");
+    for word in ["fruit", "rhubarb"] {
+        let found = api.ok("GET", &format!("/api/search?q={word}"), None);
+        assert!(
+            found
+                .as_array()
+                .is_some_and(|hits| hits.iter().any(|hit| hit["artifact"] == sheet.as_str() && hit["kind"] == "sheet")),
+            "a sheet hit for {word}: {found}"
+        );
+    }
     let output = Command::new("curl")
         .args([
             "-s",
@@ -2011,6 +2023,7 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
         .output()
         .expect("curl runs");
     assert!(output.stdout.starts_with(b"PK"), "a workbook: {}", String::from_utf8_lossy(&output.stdout));
+    assert!(output.stdout.windows(b"worksheets/sheet2.xml".len()).any(|name| name == b"worksheets/sheet2.xml"), "both sheets");
 }
 
 /// A page calls a tool of an MCP server the person set up for pages, through

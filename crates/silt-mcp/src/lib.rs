@@ -186,13 +186,14 @@ fn show_tools() -> Vec<Value> {
         }),
         json!({
             "name": "silt_artifact_sheet",
-            "description": "Read or write a sheet artifact's cells (ADR 0077). Make the sheet first with silt_artifact, kind sheet and content {\"rows\": [[...], ...]}; then write cells here by address, with formulas such as =SUM(B2:B9). Rows and columns grow to fit. Formulas: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, IF, IFS, AND, OR, NOT, ROUND, ABS, CONCAT, TEXT, LEFT, RIGHT, LEN, TODAY, DATE, VLOOKUP, XLOOKUP, SUMIF, COUNTIF.",
+            "description": "Read or write a sheet artifact's cells (ADR 0077). Make the sheet first with silt_artifact, kind sheet and content {\"rows\": [[...], ...]}, or {\"sheets\": [{\"rows\": ...}, ...]} for several; then write cells here by address, with formulas such as =SUM(B2:B9). Rows and columns grow to fit. Formulas: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, IF, IFS, AND, OR, NOT, ROUND, ABS, CONCAT, TEXT, LEFT, RIGHT, LEN, TODAY, DATE, VLOOKUP, XLOOKUP, SUMIF, COUNTIF.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "The sheet's id"},
                     "set": {"type": "object", "description": "Cells to write, such as {\"A1\": \"Task\", \"B7\": \"=SUM(B2:B6)\"}; \"\" clears one"},
-                    "read": {"type": "string", "description": "A range whose computed values to read, such as A1:D20; leave both out to read the whole sheet"}
+                    "read": {"type": "string", "description": "A range whose computed values to read, such as A1:D20; leave both out to read the whole sheet"},
+                    "sheet": {"type": "integer", "minimum": 1, "maximum": 16, "description": "Which sheet, from 1; the first when left out. Writing to the one after the last adds it"}
                 },
                 "required": ["id"]
             }

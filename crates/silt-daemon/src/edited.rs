@@ -56,11 +56,15 @@ impl Core {
         use silt_crdt::TextOp;
         let thread = self.find_thread(thread)?;
         let id = self.edited_artifact(thread, artifact, "sheet")?;
+        if asked.sheet() >= silt_proto::edited::SHEETS {
+            return Err(CoreError::Invalid(format!("an artifact has at most {} sheets", silt_proto::edited::SHEETS)));
+        }
         let family = self.threads[&thread].family;
         let lines = |sheet, axis, op| PageOp::Lines { artifact: id, sheet, axis, op };
         match asked {
             SheetRequest::Read { sheet, range } => {
-                let view = silt_proto::edited::sheet_view(&self.sheet_cells(thread, id, sheet), today());
+                let mut view = silt_proto::edited::sheet_view(&self.sheet_cells(thread, id, sheet), today());
+                view.sheets = self.sheet_count(thread, id);
                 match range {
                     Some(range) => Ok(
                         serde_json::json!({ "values": silt_proto::edited::read_range(&view, &range).map_err(CoreError::Invalid)? }),
@@ -161,6 +165,18 @@ impl Core {
             None => {
                 let log = self.local_log(family_id);
                 silt_log::doc_crdt_in(log, &crate::page::graph_of(log), thread, artifact)
+            }
+        }
+    }
+
+    /// How many sheets a sheet artifact has.
+    pub(crate) fn sheet_count(&self, thread: ThreadId, artifact: ArtifactId) -> u16 {
+        let family_id = self.threads[&thread].family;
+        match self.families.get(&family_id) {
+            Some(family) => family.sheet_count(thread, artifact),
+            None => {
+                let log = self.local_log(family_id);
+                silt_log::sheet_count_in(log, &crate::page::graph_of(log), thread, artifact)
             }
         }
     }

@@ -371,8 +371,17 @@ impl Core {
             let items: Vec<serde_json::Value> = items.as_array().into_iter().flatten().map(|doc| doc["data"].clone()).collect();
             return Ok(serde_json::json!({ "items": items }).to_string());
         }
-        let read = self.sheet_data(&thread_id, id, silt_proto::edited::SheetRequest::Read { sheet: 0, range: None }).await?;
-        Ok(serde_json::json!({ "rows": read["raw"] }).to_string())
+        // The first sheet as `rows`, as a one-sheet artifact gives it, and every sheet under `sheets`.
+        let mut sheets = Vec::new();
+        let mut count = 1;
+        let mut sheet = 0;
+        while sheet < count {
+            let read = self.sheet_data(&thread_id, id, silt_proto::edited::SheetRequest::Read { sheet, range: None }).await?;
+            count = read["sheets"].as_u64().map_or(1, |count| count as u16);
+            sheets.push(serde_json::json!({ "rows": read["raw"] }));
+            sheet += 1;
+        }
+        Ok(silt_proto::edited::sheet_content(sheets))
     }
 
     /// Seeds a new doc's text or a new sheet's cells from its first version.
@@ -403,26 +412,10 @@ impl Core {
             }
             return Ok(());
         }
-        let rows: Vec<Vec<serde_json::Value>> = serde_json::from_str::<serde_json::Value>(content)
-            .ok()
-            .and_then(|seeded| serde_json::from_value(seeded["rows"].clone()).ok())
-            .unwrap_or_default();
-        let mut cells = std::collections::BTreeMap::new();
-        for (row, values) in rows.iter().enumerate() {
-            for (column, value) in values.iter().enumerate() {
-                let raw = match value {
-                    serde_json::Value::String(text) => text.clone(),
-                    serde_json::Value::Null => continue,
-                    other => other.to_string(),
-                };
-                if !raw.is_empty() {
-                    cells.insert(silt_sheet::address(row, column), raw);
-                }
-            }
+        for (sheet, cells) in silt_proto::edited::seeded_sheets(content).into_iter().enumerate() {
+            let sheet = u16::try_from(sheet).unwrap_or(u16::MAX);
+            self.sheet_data(&thread_id, id, silt_proto::edited::SheetRequest::Set { sheet, cells }).await?;
         }
-        // An empty sheet still has a grid to type in.
-        cells.entry(silt_sheet::address(9, 4)).or_default();
-        self.sheet_data(&thread_id, id, silt_proto::edited::SheetRequest::Set { sheet: 0, cells }).await?;
         Ok(())
     }
 

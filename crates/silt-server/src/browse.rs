@@ -142,7 +142,13 @@ impl Browsed {
         }
         let text: Arc<str> = match kind {
             "doc" => silt_log::doc_text_in(&self.log, self.graph(), thread, artifact).into(),
-            _ => silt_proto::edited::sheet_text(&silt_log::sheet_cells_in(&self.log, self.graph(), thread, artifact, 0)).into(),
+            _ => (0..silt_log::sheet_count_in(&self.log, self.graph(), thread, artifact))
+                .map(|sheet| {
+                    silt_proto::edited::sheet_text(&silt_log::sheet_cells_in(&self.log, self.graph(), thread, artifact, sheet))
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                .into(),
         };
         self.texts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((thread, artifact), Arc::clone(&text));
         text
@@ -755,8 +761,13 @@ async fn save_edited_version(
         match latest.kind.as_str() {
             "doc" => silt_log::doc_text_in(&browsed.log, browsed.graph(), row.id, artifact_id),
             "sheet" => {
-                let cells = silt_log::sheet_cells_in(&browsed.log, browsed.graph(), row.id, artifact_id, 0);
-                serde_json::json!({ "rows": silt_proto::edited::sheet_view(&cells, 0.0).raw }).to_string()
+                let sheets = (0..silt_log::sheet_count_in(&browsed.log, browsed.graph(), row.id, artifact_id))
+                    .map(|sheet| {
+                        let cells = silt_log::sheet_cells_in(&browsed.log, browsed.graph(), row.id, artifact_id, sheet);
+                        serde_json::json!({ "rows": silt_proto::edited::sheet_view(&cells, 0.0).raw })
+                    })
+                    .collect();
+                silt_proto::edited::sheet_content(sheets)
             }
             _ => {
                 let docs = silt_log::page_documents_in(&browsed.log, browsed.graph(), row.id, artifact_id);
@@ -871,6 +882,9 @@ async fn sheet_data(
     use silt_crdt::TextOp;
     use silt_proto::edited::{AxisName, SheetRequest};
     let artifact: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    if asked.sheet() >= silt_proto::edited::SHEETS {
+        return Err(bad_request(format!("an artifact has at most {} sheets", silt_proto::edited::SHEETS)));
+    }
     let page = page_of(&server, browser.user, &id, artifact).await?;
     let cells = |server: Server, sheet: u16| {
         let page = &page;
@@ -887,7 +901,10 @@ async fn sheet_data(
     let today = (crate::now_ms() as f64 / 86_400_000.0).floor() + 25_569.0;
     match asked {
         SheetRequest::Read { sheet, range } => {
-            let view = silt_proto::edited::sheet_view(&cells(server.clone(), sheet).await?, today);
+            let mut view = silt_proto::edited::sheet_view(&cells(server.clone(), sheet).await?, today);
+            view.sheets =
+                edited(&server, browser.user, &page, |log, graph| silt_log::sheet_count_in(log, graph, page.thread, artifact))
+                    .await?;
             match range {
                 Some(range) => {
                     Ok(Json(serde_json::json!({ "values": silt_proto::edited::read_range(&view, &range).map_err(bad_request)? })))
@@ -950,15 +967,22 @@ async fn sheet_xlsx(
 ) -> Result<axum::response::Response, ApiError> {
     use axum::http::{HeaderValue, header};
     use axum::response::IntoResponse;
-    let Json(view) = sheet_data(
-        State(server),
-        Extension(browser),
-        Path((id, artifact)),
-        Json(silt_proto::edited::SheetRequest::Read { sheet: 0, range: None }),
-    )
-    .await?;
-    let view: silt_proto::edited::SheetView = serde_json::from_value(view).map_err(|_| not_found())?;
-    let bytes = silt_proto::edited::xlsx(&view, "Sheet1").map_err(bad_request)?;
+    let mut sheets = Vec::new();
+    let (mut sheet, mut count) = (0, 1);
+    while sheet < count {
+        let Json(view) = sheet_data(
+            State(server.clone()),
+            Extension(browser),
+            Path((id.clone(), artifact.clone())),
+            Json(silt_proto::edited::SheetRequest::Read { sheet, range: None }),
+        )
+        .await?;
+        let view: silt_proto::edited::SheetView = serde_json::from_value(view).map_err(|_| not_found())?;
+        count = view.sheets;
+        sheets.push((format!("Sheet{}", sheet + 1), view));
+        sheet += 1;
+    }
+    let bytes = silt_proto::edited::xlsx_book(&sheets).map_err(bad_request)?;
     let mut response = bytes.into_response();
     let headers = response.headers_mut();
     headers.insert(
