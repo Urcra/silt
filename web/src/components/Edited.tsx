@@ -353,7 +353,9 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
     if (!editing) return
     const at = `${columnName(editing.column)}${editing.row + 1}`
     setEditing(null)
-    await change({ op: 'set', cells: { [at]: editing.raw } })
+    // By the row and column the person typed in, so one put in above meanwhile doesn't move it.
+    const ids = view && view.rows[editing.row] && view.columns[editing.column] ? { [at]: [view.rows[editing.row], view.columns[editing.column]] } : {}
+    await change({ op: 'set', cells: { [at]: editing.raw }, ids })
   }
   const xlsx = async () => {
     try {

@@ -72,7 +72,7 @@ impl Core {
                     None => Ok(serde_json::to_value(view).unwrap_or_default()),
                 }
             }
-            SheetRequest::Set { sheet, cells } => {
+            SheetRequest::Set { sheet, cells, ids } => {
                 self.may_edit(thread, id)?;
                 let (rows, columns) =
                     silt_proto::edited::sheet_growth(&self.sheet_cells(thread, id, sheet), &cells).map_err(CoreError::Invalid)?;
@@ -91,9 +91,15 @@ impl Core {
                     self.append_page(family, thread, lines(sheet, silt_log::Axis::Columns, op)).await?;
                 }
                 let book = self.sheet_book(thread, id, sheet);
-                let ops =
-                    silt_proto::edited::cell_ops_in(id, sheet, &book.iter().collect::<Vec<_>>(), usize::from(sheet), &cells)
-                        .map_err(CoreError::Invalid)?;
+                let ops = silt_proto::edited::cell_ops_in(
+                    id,
+                    sheet,
+                    &book.iter().collect::<Vec<_>>(),
+                    usize::from(sheet),
+                    &cells,
+                    &ids,
+                )
+                .map_err(CoreError::Invalid)?;
                 let written = ops.len();
                 for op in ops {
                     self.append_page(family, thread, op).await?;

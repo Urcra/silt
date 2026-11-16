@@ -152,6 +152,10 @@ pub enum SheetRequest {
         #[serde(default)]
         sheet: u16,
         cells: BTreeMap<String, String>,
+        /// The row's and column's ids each address had where the person
+        /// typed it, so a row put in above meanwhile doesn't move it.
+        #[serde(default)]
+        ids: BTreeMap<String, (String, String)>,
     },
     /// Rows or columns put in before `at`, from 0.
     Insert {
@@ -361,7 +365,7 @@ pub fn cell_ops(
     cells: &SheetCells,
     set: &BTreeMap<String, String>,
 ) -> Result<Vec<PageOp>, String> {
-    cell_ops_in(artifact, sheet, &[cells], 0, set)
+    cell_ops_in(artifact, sheet, &[cells], 0, set, &BTreeMap::new())
 }
 
 /// [`cell_ops`] for sheet `sheet` with `book`, every sheet of the artifact,
@@ -372,6 +376,7 @@ pub fn cell_ops_in(
     book: &[&SheetCells],
     at: usize,
     set: &BTreeMap<String, String>,
+    ids: &BTreeMap<String, (String, String)>,
 ) -> Result<Vec<PageOp>, String> {
     let Some(cells) = book.get(at) else { return Err("no such sheet".into()) };
     let axes = axes_of(book);
@@ -379,7 +384,18 @@ pub fn cell_ops_in(
         axes.iter().map(|(rows, columns)| (rows.as_slice(), columns.as_slice())).collect();
     set.iter()
         .map(|(address, raw)| {
-            let (row, column) = silt_sheet::parse_address(address).ok_or_else(|| format!("{address} isn't a cell's address"))?;
+            let (row, column) = match ids.get(address) {
+                // The cell the person saw, wherever it stands now.
+                Some((row_id, column_id)) => {
+                    let row = cells.rows.iter().position(|id| id_text(id) == *row_id);
+                    let column = cells.columns.iter().position(|id| id_text(id) == *column_id);
+                    let (Some(row), Some(column)) = (row, column) else {
+                        return Err(format!("conflict: {address}'s row or column was taken out"));
+                    };
+                    (row, column)
+                }
+                None => silt_sheet::parse_address(address).ok_or_else(|| format!("{address} isn't a cell's address"))?,
+            };
             let (Some(row), Some(column)) = (cells.rows.get(row), cells.columns.get(column)) else {
                 return Err(format!("{address} isn't in the sheet"));
             };

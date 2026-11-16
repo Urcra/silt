@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canvasOf, chartTable, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
+import { canvasOf, chartColors, chartTable, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
 
 describe('the artifact types', () => {
   it('opens a deck at the slide a link names, within the deck', () => {
@@ -31,6 +31,15 @@ describe('the artifact types', () => {
     expect(doc).toContain("setAttribute('data-theme','dark')")
     expect(doc).toContain('<h1>One</h1>')
     expect(parsed('{bad')).toBeNull()
+  })
+})
+
+describe('chart colours', () => {
+  it("come from the version's design system for the theme shown, or not at all", () => {
+    const css = `:root, :root[data-theme="light"] {\n  --accent: #123456;\n  --chart-1: var(--accent);\n  --chart-2: #222222;\n  --chart-3: #333333;\n  --chart-4: #444444;\n  --chart-5: #555555;\n  --chart-6: #666666;\n}\n@media (prefers-color-scheme: dark) {\n  :root:not([data-theme="light"]) {\n    --chart-1: #aaaaaa;\n  }\n}\n:root[data-theme="dark"] {\n  --chart-1: #aaaaaa;\n}`
+    expect(chartColors(css, 'light')).toEqual(['#123456', '#222222', '#333333', '#444444', '#555555', '#666666'])
+    expect(chartColors(css, 'dark')).toBeNull()
+    expect(chartColors(null, 'light')).toBeNull()
   })
 })
 

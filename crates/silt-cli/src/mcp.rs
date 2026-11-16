@@ -273,7 +273,7 @@ impl silt_mcp::Backend for DaemonTools {
                         .iter()
                         .map(|(address, raw)| (address.clone(), raw.as_str().map_or_else(|| raw.to_string(), str::to_owned)))
                         .collect();
-                    ask(silt_proto::edited::SheetRequest::Set { sheet, cells })?;
+                    ask(silt_proto::edited::SheetRequest::Set { sheet, cells, ids: Default::default() })?;
                 }
                 let range = arguments.get("read").and_then(Value::as_str).map(str::to_owned);
                 let read = ask(silt_proto::edited::SheetRequest::Read { sheet, range: range.clone() })?;

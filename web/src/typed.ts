@@ -15,6 +15,23 @@ export type Block =
   | { type: 'chart'; title?: string; chart: string; x?: string; y?: string; stacked?: boolean; series: Series[]; source: string }
 export type DataPage = { title: string; summary?: string; sources: Source[]; blocks: Block[] }
 
+/**
+ * The chart colours `--chart-1` to `--chart-6` of a version's design system, from its compiled CSS, for `theme`; none
+ * where it doesn't give all six as colours, so the viewer keeps its own.
+ */
+export function chartColors(style: string | null | undefined, theme: 'light' | 'dark'): string[] | null {
+  if (!style) return null
+  const block = style.match(new RegExp(`\\[data-theme="${theme}"\\][^{]*\\{([^}]*)\\}`))?.[1]
+  if (!block) return null
+  const tokens = new Map([...block.matchAll(/--([\w-]+):\s*([^;]+);/g)].map((token) => [token[1], token[2].trim()]))
+  const resolve = (value: string, depth = 0): string => {
+    const named = value.match(/^var\(--([\w-]+)/)?.[1]
+    return named && depth < 4 ? resolve(tokens.get(named) ?? '', depth + 1) : value
+  }
+  const colors = [1, 2, 3, 4, 5, 6].map((slot) => resolve(tokens.get(`chart-${slot}`) ?? ''))
+  return colors.every((color) => /^(#[0-9a-f]{3,8}|rgba?\(|hsla?\(|oklch\(|oklab\()/i.test(color)) ? colors : null
+}
+
 /** The JSON of a typed version, or null when it isn't. */
 export function parsed<T>(text: string): T | null {
   try {

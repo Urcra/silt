@@ -15,6 +15,7 @@ import {
   type Block,
   type Source,
   canvasOf,
+  chartColors,
   chartTable,
   csvOf,
   dataPageOf,
@@ -637,11 +638,13 @@ function SourceLink({ id, sources }: { id: string; sources: Source[] }) {
 function Chart({
   block,
   theme,
+  palette,
 }: {
   block: Extract<Block, { type: "chart" }>;
   theme: FrameTheme;
+  palette: string[];
 }) {
-  const colors = CHART[theme === "dark" ? "dark" : "light"];
+  const colors = palette.length >= 6 ? palette : CHART[theme === "dark" ? "dark" : "light"];
   const [hover, setHover] = useState<number | null>(null);
   const { columns, rows } = chartTable(block.series);
   // Drawn at the width it's shown, so its labels stay the size of the page's text.
@@ -879,7 +882,7 @@ function Chart({
   );
 }
 
-export function DataView({ text, theme }: { text: string; theme: FrameTheme }) {
+export function DataView({ text, theme, style }: { text: string; theme: FrameTheme; style?: string | null }) {
   const page = useMemo(() => dataPageOf(text), [text]);
   const [tables, setTables] = useState<Set<number>>(new Set());
   if (!page)
@@ -888,7 +891,7 @@ export function DataView({ text, theme }: { text: string; theme: FrameTheme }) {
         This data page's content isn't one Silt can draw.
       </p>
     );
-  const colors = CHART[theme === "dark" ? "dark" : "light"];
+  const colors = chartColors(style, theme === "dark" ? "dark" : "light") ?? CHART[theme === "dark" ? "dark" : "light"];
   const toggle = (index: number) =>
     setTables((was) => {
       const next = new Set(was);
@@ -983,7 +986,7 @@ export function DataView({ text, theme }: { text: string; theme: FrameTheme }) {
               </div>
               {block.type === "chart" && !asTable && (
                 <>
-                  <Chart block={block} theme={theme} />
+                  <Chart block={block} theme={theme} palette={colors} />
                   {block.series.length > 1 && (
                     <ul
                       className="flex flex-wrap gap-3 text-xs text-fg-2"

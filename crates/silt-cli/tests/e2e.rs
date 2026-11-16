@@ -2014,6 +2014,14 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     api.ok("POST", &path, Some(serde_json::json!({"op": "insert", "sheet": 1, "axis": "rows", "at": 0})));
     let followed = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));
     assert_eq!((&followed["raw"][0][3], &followed["values"][0][3]), (&"=Sheet2!A3*10".into(), &"20".into()), "{followed}");
+    // A cell typed where the person saw it lands there, though a row went in above meanwhile.
+    let seen = api.ok("POST", &path, Some(serde_json::json!({"op": "read", "sheet": 1})));
+    let (row, column) = (seen["rows"][0].clone(), seen["columns"][0].clone());
+    api.ok("POST", &path, Some(serde_json::json!({"op": "insert", "sheet": 1, "axis": "rows", "at": 0})));
+    let typed = serde_json::json!({"op": "set", "sheet": 1, "cells": {"A1": "kept"}, "ids": {"A1": [row, column]}});
+    api.ok("POST", &path, Some(typed));
+    let now = api.ok("POST", &path, Some(serde_json::json!({"op": "read", "sheet": 1})));
+    assert_eq!((&now["raw"][0][0], &now["raw"][1][0]), (&"".into(), &"kept".into()), "{now}");
     let (too_many, _) = api.call("POST", &path, Some(serde_json::json!({"op": "read", "sheet": 16})));
     assert!(!too_many, "an artifact has at most 16 sheets");
     for word in ["fruit", "rhubarb"] {

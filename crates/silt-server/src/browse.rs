@@ -922,7 +922,7 @@ async fn sheet_data(
                 None => Ok(Json(serde_json::to_value(view).unwrap_or_default())),
             }
         }
-        SheetRequest::Set { sheet, cells: set } => {
+        SheetRequest::Set { sheet, cells: set, ids } => {
             may_edit(&page)?;
             let now = cells(server.clone(), sheet).await?;
             let (rows, columns) = silt_proto::edited::sheet_growth(&now, &set).map_err(bad_request)?;
@@ -939,9 +939,15 @@ async fn sheet_data(
             }
             write_all(growth).await?;
             let book = book(server.clone(), sheet).await?;
-            let ops =
-                silt_proto::edited::cell_ops_in(artifact, sheet, &book.iter().collect::<Vec<_>>(), usize::from(sheet), &set)
-                    .map_err(bad_request)?;
+            let ops = silt_proto::edited::cell_ops_in(
+                artifact,
+                sheet,
+                &book.iter().collect::<Vec<_>>(),
+                usize::from(sheet),
+                &set,
+                &ids,
+            )
+            .map_err(bad_request)?;
             let written = ops.len();
             write_all(ops).await?;
             Ok(Json(serde_json::json!({ "written": written })))

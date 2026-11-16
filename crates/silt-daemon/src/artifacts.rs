@@ -414,7 +414,8 @@ impl Core {
         }
         for (sheet, cells) in silt_proto::edited::seeded_sheets(content).into_iter().enumerate() {
             let sheet = u16::try_from(sheet).unwrap_or(u16::MAX);
-            self.sheet_data(&thread_id, id, silt_proto::edited::SheetRequest::Set { sheet, cells }).await?;
+            self.sheet_data(&thread_id, id, silt_proto::edited::SheetRequest::Set { sheet, cells, ids: Default::default() })
+                .await?;
         }
         Ok(())
     }
