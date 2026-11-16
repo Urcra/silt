@@ -6,6 +6,7 @@ import { hosted } from '../served'
 import { pageTake, type PageTake } from '../voice'
 import { type CapabilityHandler, Refusal } from './broker'
 import type { Holder } from './capabilities'
+import { consentFor } from './consent'
 
 /** Whether a take runs in any page, which speech waits for. */
 let listening = false
@@ -13,16 +14,11 @@ let listening = false
 /** `dictation`: the viewer's speech as text, a take at a time, started from the page's click. */
 export function dictationHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
   let take: PageTake | null = null
-  let allowed: Promise<boolean> | null = null
-  const consented = () =>
-    (allowed ??= (async () => {
-      const grants = await api.artifactGrants(thread, artifact.id).catch(() => ({}) as Record<string, string>)
-      if (grants.dictation === 'granted') return true
-      if (grants.dictation === 'refused') return false
-      const agreed = await holder.confirm({ title: `Let ${artifact.title} hear you?`, detail: "Your words are turned into text on this computer, and the page reads the text.", action: 'Allow' })
-      await api.setArtifactGrant(thread, artifact.id, 'dictation', agreed ? 'granted' : 'refused').catch(() => undefined)
-      return agreed
-    })())
+  const consented = consentFor(thread, artifact, holder, 'dictation', () => ({
+    title: `Let ${artifact.title} hear you?`,
+    detail: 'Your words are turned into text on this computer, and the page reads the text.',
+    action: 'Allow',
+  }))
   return {
     methods: ['start', 'stop'],
     perMinute: 30,
@@ -156,19 +152,12 @@ export function mcpHandler(thread: string, artifact: ArtifactView, holder: Holde
       )
     return described.get(key)!
   }
-  let allowed: Promise<boolean> | null = null
-  const consented = () =>
-    (allowed ??= (async () => {
-      const grants = await api.artifactGrants(thread, artifact.id).catch(() => ({}) as Record<string, string>)
-      if (grants.mcp === 'granted') return true
-      if (grants.mcp === 'refused') return false
-      const servers = ((artifact.capabilities?.mcp as { servers?: { server: string; tools: string[] }[] } | undefined)?.servers ?? [])
-        .map((entry) => `${entry.server}: ${entry.tools.join(', ')}`)
-        .join('; ')
-      const agreed = await holder.confirm({ title: `Let ${artifact.title} use your connectors?`, detail: `${servers}. It reads what these return, as you.`, action: 'Allow' })
-      await api.setArtifactGrant(thread, artifact.id, 'mcp', agreed ? 'granted' : 'refused').catch(() => undefined)
-      return agreed
-    })())
+  const consented = consentFor(thread, artifact, holder, 'mcp', () => {
+    const servers = ((artifact.capabilities?.mcp as { servers?: { server: string; tools: string[] }[] } | undefined)?.servers ?? [])
+      .map((entry) => `${entry.server}: ${entry.tools.join(', ')}`)
+      .join('; ')
+    return { title: `Let ${artifact.title} use your connectors?`, detail: `${servers}. It reads what these return, as you.`, action: 'Allow' }
+  })
   return {
     methods: ['callTool', 'describeTool', 'listTools'],
     perMinute: 30,

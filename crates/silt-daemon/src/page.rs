@@ -201,6 +201,22 @@ impl Core {
         }
     }
 
+    /// What version `version` of the artifact declares, or its latest.
+    pub(crate) fn declared_by(
+        &self,
+        thread: ThreadId,
+        artifact: &str,
+        version: Option<u32>,
+    ) -> Option<silt_proto::artifact::Capabilities> {
+        let views = self.history_entries(thread);
+        let mut versions = views.iter().filter_map(|(_, entry)| entry.artifact.as_ref()).filter(|view| view.id == artifact);
+        let view = match version {
+            Some(version) => versions.find(|view| view.version == version),
+            None => versions.max_by_key(|view| view.version),
+        };
+        view.and_then(|view| view.capabilities.clone())
+    }
+
     /// The config the artifact's latest version declares for `capability`.
     pub(crate) fn declared(
         &self,
@@ -209,13 +225,8 @@ impl Core {
         capability: &str,
     ) -> Result<serde_json::Value, CoreError> {
         let id = artifact.to_string();
-        self.history_entries(thread)
-            .iter()
-            .filter_map(|(_, entry)| entry.artifact.as_ref())
-            .filter(|view| view.id == id)
-            .max_by_key(|view| view.version)
-            .and_then(|view| view.capabilities.as_ref())
-            .and_then(|declared| declared.get(capability).cloned())
+        self.declared_by(thread, &id, None)
+            .and_then(|mut declared| declared.remove(capability))
             .ok_or_else(|| CoreError::Invalid(format!("artifact {id} doesn't declare {capability}")))
     }
 

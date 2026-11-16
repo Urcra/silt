@@ -900,7 +900,7 @@ async fn sheet_data(
             let now = cells(server.clone(), sheet).await?;
             let len = if axis == AxisName::Rows { now.rows.len() } else { now.columns.len() };
             let most = if axis == AxisName::Rows { silt_sheet::ROWS } else { silt_sheet::COLUMNS };
-            if count == 0 || len + count > most {
+            if count == 0 || len.checked_add(count).is_none_or(|grown| grown > most) {
                 return Err(bad_request(format!("a sheet has at most {most} of them")));
             }
             let mark = if axis == AxisName::Rows { "r" } else { "c" };
@@ -1026,6 +1026,8 @@ pub(crate) async fn device_pins(
     Extension(caller): Extension<crate::Caller>,
 ) -> Result<Json<Vec<silt_proto::view::ArtifactPin>>, ApiError> {
     let user = caller.user;
+    let viewer = server.viewer(user).await?;
+    let readable = Readable::rows(&server, user, &viewer).await?;
     let rows =
         sqlx::query!("SELECT thread_id, artifact_id FROM artifact_pins WHERE user_id = ?", user).fetch_all(server.db()).await?;
     Ok(Json(
@@ -1035,6 +1037,8 @@ pub(crate) async fn device_pins(
                 artifact: row.artifact_id,
                 pinned: true,
             })
+            // A thread the person can no longer read keeps its pin back.
+            .filter(|pin| readable.row(&pin.thread).is_ok())
             .collect(),
     ))
 }
@@ -1056,6 +1060,9 @@ async fn store_pin(
     pinned: bool,
 ) -> Result<axum::http::StatusCode, ApiError> {
     let _: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
+    if pinned {
+        readable_artifact(server, user, id, artifact, None).await?;
+    }
     let viewer = server.viewer(user).await?;
     let readable = Readable::rows(server, user, &viewer).await?;
     let thread = crate::id_bytes(readable.row(id)?.id.0);
@@ -1144,27 +1151,48 @@ struct GrantChange {
     /// `granted` or `refused`, or none to ask again.
     #[serde(default)]
     state: Option<String>,
+    /// The version the person saw, whose declaration the grant is for; the
+    /// latest when none.
+    #[serde(default)]
+    version: Option<u32>,
 }
 
-/// What the person allowed or refused an artifact's page, by capability
-/// (ADR 0072).
+/// What the person allowed or refused an artifact's page, by capability,
+/// where it was for what the latest version declares now (ADR 0072).
 async fn artifact_grants(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,
     Path((id, artifact)): Path<(String, String)>,
 ) -> Result<Json<std::collections::BTreeMap<String, String>>, ApiError> {
-    let viewer = server.viewer(browser.user).await?;
-    let readable = Readable::rows(&server, browser.user, &viewer).await?;
-    let thread = crate::id_bytes(readable.row(&id)?.id.0);
+    Ok(Json(grants_held(&server, browser.user, &id, &artifact).await?))
+}
+
+/// The person's grants on an artifact that still hold.
+pub(crate) async fn grants_held(
+    server: &Server,
+    user: UserId,
+    id: &str,
+    artifact: &str,
+) -> Result<std::collections::BTreeMap<String, String>, ApiError> {
+    let latest = readable_artifact(server, user, id, artifact, None).await?;
+    let viewer = server.viewer(user).await?;
+    let readable = Readable::rows(server, user, &viewer).await?;
+    let thread = crate::id_bytes(readable.row(id)?.id.0);
     let rows = sqlx::query!(
-        "SELECT capability, state FROM artifact_grants WHERE user_id = ? AND thread_id = ? AND artifact_id = ?",
-        browser.user,
+        "SELECT capability, state, declaration FROM artifact_grants WHERE user_id = ? AND thread_id = ? AND artifact_id = ?",
+        user,
         thread,
         artifact
     )
     .fetch_all(server.db())
     .await?;
-    Ok(Json(rows.into_iter().map(|row| (row.capability, row.state)).collect()))
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            silt_proto::artifact::declaration(latest.capabilities.as_ref(), &row.capability).as_ref() == Some(&row.declaration)
+        })
+        .map(|row| (row.capability, row.state))
+        .collect())
 }
 
 async fn set_artifact_grant(
@@ -1173,9 +1201,12 @@ async fn set_artifact_grant(
     Path((id, artifact)): Path<(String, String)>,
     Json(change): Json<GrantChange>,
 ) -> Result<axum::http::StatusCode, ApiError> {
-    if !silt_proto::artifact::CAPABILITIES.contains(&change.capability.as_str()) || artifact.len() != 12 {
+    if !silt_proto::artifact::CAPABILITIES.contains(&change.capability.as_str())
+        || artifact.parse::<silt_types::ArtifactId>().is_err()
+    {
         return Err(bad_request("no such capability or artifact"));
     }
+    let seen = readable_artifact(&server, browser.user, &id, &artifact, change.version).await?;
     let viewer = server.viewer(browser.user).await?;
     let readable = Readable::rows(&server, browser.user, &viewer).await?;
     let thread = crate::id_bytes(readable.row(&id)?.id.0);
@@ -1192,15 +1223,20 @@ async fn set_artifact_grant(
             .await?;
         }
         Some(state @ ("granted" | "refused")) => {
+            let declaration = silt_proto::artifact::declaration(seen.capabilities.as_ref(), &change.capability)
+                .ok_or_else(|| bad_request(format!("artifact {artifact} doesn't declare {}", change.capability)))?;
             let at = now_ms();
             sqlx::query!(
-                "INSERT INTO artifact_grants (user_id, thread_id, artifact_id, capability, state, at_ms) VALUES (?, ?, ?, ?, ?, ?)
-                 ON CONFLICT (user_id, thread_id, artifact_id, capability) DO UPDATE SET state = excluded.state, at_ms = excluded.at_ms",
+                "INSERT INTO artifact_grants (user_id, thread_id, artifact_id, capability, state, declaration, at_ms)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT (user_id, thread_id, artifact_id, capability)
+                 DO UPDATE SET state = excluded.state, declaration = excluded.declaration, at_ms = excluded.at_ms",
                 browser.user,
                 thread,
                 artifact,
                 change.capability,
                 state,
+                declaration,
                 at
             )
             .execute(server.db())
@@ -1288,7 +1324,8 @@ async fn make_frame(
             .filter(|text| text.len() <= silt_design::frame::BOOT_BYTES),
     };
     let key = crate::accounts::random_token();
-    server.shared.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key.clone(), grant);
+    let owner = browser.user.to_string();
+    server.shared.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key.clone(), grant, &owner);
     Ok(Json(
         serde_json::json!({ "path": format!("/f/{key}/"), "expires_in_ms": silt_proto::frames::FRAME_TTL.as_millis() as u64 }),
     ))

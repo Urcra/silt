@@ -89,7 +89,7 @@ impl Core {
                     silt_proto::edited::AxisName::Rows => silt_sheet::ROWS,
                     silt_proto::edited::AxisName::Columns => silt_sheet::COLUMNS,
                 };
-                if count == 0 || len + count > most {
+                if count == 0 || len.checked_add(count).is_none_or(|grown| grown > most) {
                     return Err(CoreError::Invalid(format!("a sheet has at most {most} of them")));
                 }
                 let mark = if axis == silt_proto::edited::AxisName::Rows { "r" } else { "c" };

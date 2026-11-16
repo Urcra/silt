@@ -6,6 +6,7 @@ import { bus } from '../bus'
 import { hosted } from '../served'
 import { type CapabilityHandler, Refusal } from './broker'
 import { RoomSocket } from '../rooms'
+import { consentFor } from './consent'
 import { dbHandler } from './db'
 import { dictationHandler, dictationServed, mcpHandler, ttsHandler, ttsServed } from './voiceAndTools'
 
@@ -44,7 +45,7 @@ export function handlersFor(thread: string, artifact: ArtifactView, holder: Hold
 }
 
 /** The capabilities that ask the viewer before they act, which `permissions` reports on. */
-const ASKED = ['sample', 'dictation', 'mcp', 'comments']
+const ASKED = ['sample', 'dictation', 'mcp', 'comments', 'files']
 
 /** `permissions`, built in: what the viewer allowed this page, asked for at once, or forgotten so it asks again. */
 function permissionsHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
@@ -71,7 +72,7 @@ function permissionsHandler(thread: string, artifact: ArtifactView, holder: Hold
         if (pending.length > 0) {
           pending.forEach((name) => asked.add(name))
           const agreed = await holder.confirm({ title: `Let ${artifact.title} use ${pending.join(', ')}?`, detail: 'You can change this later from the page.', action: 'Allow' })
-          for (const name of pending) await api.setArtifactGrant(thread, artifact.id, name, agreed ? 'granted' : 'refused').catch(() => undefined)
+          for (const name of pending) await api.setArtifactGrant(thread, artifact.id, name, agreed ? 'granted' : 'refused', artifact.version).catch(() => undefined)
         }
         const now = await states()
         return Object.fromEntries(wanted.map((name) => [name, now[name] ?? 'unavailable']))
@@ -166,11 +167,18 @@ function assetsHandler(thread: string, artifact: ArtifactView): CapabilityHandle
 
 /** `files`: the thread's files, read from its history as the person, within what the version declares. */
 function filesHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
-  const ask = (asked: Record<string, unknown>) =>
-    api.pageFiles(thread, artifact.id, asked).catch((failure: unknown) => {
+  const consented = consentFor(thread, artifact, holder, 'files', () => {
+    const paths = (artifact.capabilities?.files as { paths?: unknown } | undefined)?.paths
+    const scope = Array.isArray(paths) && paths.length > 0 ? paths.map(String).join(', ') : "all of the thread's files its workspace allows"
+    return { title: `Let ${artifact.title} read this thread's files?`, detail: `It reads ${scope}, and can show what it reads to anyone viewing it.`, action: 'Allow' }
+  })
+  const ask = async (asked: Record<string, unknown>) => {
+    if (!(await consented())) throw new Refusal('not_granted', "the person chose not to let this page read the thread's files")
+    return api.pageFiles(thread, artifact.id, asked).catch((failure: unknown) => {
       const said = failure instanceof Error ? failure.message : String(failure)
       throw new Refusal(/not_found|no file|had no/i.test(said) ? 'refused' : refusalOf(failure).code, said)
     })
+  }
   return {
     methods: ['list', 'read', 'download'],
     perMinute: 120,
@@ -200,7 +208,7 @@ function refusalOf(failure: unknown): Refusal {
   const said = failure instanceof Error ? failure.message : String(failure)
   if (/conflict/i.test(said)) return new Refusal('conflict', said)
   if (/rate limited/i.test(said)) return new Refusal('rate_limited', said)
-  if (/owner and collaborators|may not|forbidden/i.test(said)) return new Refusal('not_granted', said)
+  if (/not_granted|owner and collaborators|may not|forbidden/i.test(said)) return new Refusal('not_granted', said)
   return new Refusal('refused', said)
 }
 
@@ -327,20 +335,11 @@ function sizeText(bytes: number): string {
 /** `comments`: the page opens the artifact's own comment composer; the comments themselves stay Silt's to show. */
 function commentsHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
   const writes = !composerOnly(artifact)
-  let consent: Promise<boolean> | null = null
-  const consented = () =>
-    (consent ??= (async () => {
-      const grants = await api.artifactGrants(thread, artifact.id).catch(() => ({}) as Record<string, string>)
-      if (grants.comments === 'granted') return true
-      if (grants.comments === 'refused') return false
-      const agreed = await holder.confirm({
-        title: `Let ${artifact.title} comment as you?`,
-        detail: 'Comments it writes are yours, on this artifact, and go to the agent as yours do.',
-        action: 'Allow',
-      })
-      await api.setArtifactGrant(thread, artifact.id, 'comments', agreed ? 'granted' : 'refused').catch(() => undefined)
-      return agreed
-    })())
+  const consented = consentFor(thread, artifact, holder, 'comments', () => ({
+    title: `Let ${artifact.title} comment as you?`,
+    detail: 'Comments it writes are yours, on this artifact, and go to the agent as yours do.',
+    action: 'Allow',
+  }))
   const said = (value: unknown) => {
     const text = typeof value === 'string' ? value.trim() : ''
     if (!text || text.length > 4000) throw new Refusal('refused', 'a comment is 1 to 4,000 characters')
@@ -395,22 +394,13 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
   // The page's names for its questions, each to the one minted for it.
   const asks = new Map<string, string>()
   const takesImages = (artifact.capabilities?.sample as { images?: unknown } | undefined)?.images === true
-  let consent: Promise<boolean> | null = null
-  const consented = () =>
-    (consent ??= (async () => {
-      const grants = await api.artifactGrants(thread, artifact.id).catch(() => ({}) as Record<string, string>)
-      if (grants.sample === 'granted') return true
-      if (grants.sample === 'refused') return false
-      const agreed = await holder.confirm({
-        title: `Let ${artifact.title} ask an agent?`,
-        detail: hosted()
-          ? "One of your computers asks its agent, which gets no tools or settings of yours, only those the page offers, and the page reads the answer."
-          : "This computer's agent answers, with no tools or settings of yours, only those the page offers, and the page reads the answer.",
-        action: 'Allow',
-      })
-      await api.setArtifactGrant(thread, artifact.id, 'sample', agreed ? 'granted' : 'refused').catch(() => undefined)
-      return agreed
-    })())
+  const consented = consentFor(thread, artifact, holder, 'sample', () => ({
+    title: `Let ${artifact.title} ask an agent?`,
+    detail: hosted()
+      ? 'One of your computers asks its agent, which gets no tools or settings of yours, only those the page offers, and the page reads the answer.'
+      : "This computer's agent answers, with no tools or settings of yours, only those the page offers, and the page reads the answer.",
+    action: 'Allow',
+  }))
   return {
     methods: ['ask', 'limits', 'toolResult'],
     // Each question asks once; its tools' answers are many.

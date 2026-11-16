@@ -362,6 +362,21 @@ async fn answer(web: &Web, request: Request) -> Result<serde_json::Value, Failed
     }
 }
 
+/// Refuses a page's call of `capability` unless the person allowed what the
+/// artifact's latest version declares of it. The page holding the frame
+/// asks them; this stands behind it, for a document the frame navigated to
+/// (ADR 0072).
+async fn consented(web: &Web, thread: &str, artifact: &str, capability: &str) -> Result<(), Failed> {
+    let grants = answer(web, Request::ArtifactGrants { thread: thread.to_owned(), artifact: artifact.to_owned() }).await?;
+    if grants.get(capability).and_then(serde_json::Value::as_str) == Some("granted") {
+        return Ok(());
+    }
+    Err(Failed {
+        status: StatusCode::FORBIDDEN,
+        message: format!("not_granted: the person hasn't allowed this page {capability}"),
+    })
+}
+
 /// Asks the request `make` builds for this machine's clone of `thread`, as
 /// requests the CLI makes from a working directory need one.
 async fn ask_in_clone(web: &Web, thread: &str, make: impl FnOnce(PathBuf) -> Request) -> HttpResponse {
@@ -846,6 +861,9 @@ async fn sample(
     Path((thread, artifact)): Path<(String, String)>,
     Json(asked): Json<SampleAsk>,
 ) -> HttpResponse {
+    if let Err(refused) = consented(&web, &thread, &artifact, "sample").await {
+        return refused.into_response();
+    }
     let request = Request::Sample {
         thread,
         artifact: Some(artifact),
@@ -923,6 +941,9 @@ async fn page_mcp(
     Path((thread, artifact)): Path<(String, String)>,
     Json(asked): Json<crate::connectors::McpAsk>,
 ) -> HttpResponse {
+    if let Err(refused) = consented(&web, &thread, &artifact, "mcp").await {
+        return refused.into_response();
+    }
     ask(&web, Request::PageMcp { thread, artifact, asked }).await
 }
 
@@ -996,6 +1017,9 @@ async fn page_files(
     Path((thread, artifact)): Path<(String, String)>,
     Json(asked): Json<silt_proto::page::FilesRequest>,
 ) -> HttpResponse {
+    if let Err(refused) = consented(&web, &thread, &artifact, "files").await {
+        return refused.into_response();
+    }
     ask(&web, Request::PageFiles { thread, artifact, asked }).await
 }
 
@@ -1047,6 +1071,8 @@ struct GrantChange {
     capability: String,
     #[serde(default)]
     state: Option<String>,
+    #[serde(default)]
+    version: Option<u32>,
 }
 
 async fn set_artifact_grant(
@@ -1054,7 +1080,17 @@ async fn set_artifact_grant(
     Path((thread, artifact)): Path<(String, String)>,
     Json(change): Json<GrantChange>,
 ) -> HttpResponse {
-    ask(&web, Request::SetArtifactGrant { thread, artifact, capability: change.capability, state: change.state }).await
+    ask(
+        &web,
+        Request::SetArtifactGrant {
+            thread,
+            artifact,
+            capability: change.capability,
+            state: change.state,
+            version: change.version,
+        },
+    )
+    .await
 }
 
 /// A key that opens one version of an HTML artifact in a frame (ADR 0074).
@@ -1081,7 +1117,7 @@ async fn make_frame(
         boot: crate::frames::boot_of(ask.boot),
     };
     let key = crate::frames::new_key();
-    web.frames.lock().expect("lock").insert(key.clone(), grant);
+    web.frames.lock().expect("lock").insert(key.clone(), grant, "");
     let expires_ms = silt_proto::frames::FRAME_TTL.as_millis() as u64;
     Json(json!({ "path": format!("/f/{key}/"), "expires_in_ms": expires_ms })).into_response()
 }

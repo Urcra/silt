@@ -8,13 +8,16 @@ use std::time::{Duration, Instant};
 
 /// How long a frame key works.
 pub const FRAME_TTL: Duration = Duration::from_secs(60 * 60);
-/// The most keys kept; the oldest go first.
-const FRAME_KEYS: usize = 512;
+/// The most keys kept for one person, and for everyone; past either, the
+/// oldest go first, the person's own before anyone else's, so nobody's
+/// asking for frames closes another's.
+const PERSONS_KEYS: usize = 128;
+const FRAME_KEYS: usize = 4096;
 
-/// What each frame key opens.
+/// What each frame key opens, and whose it is.
 #[derive(Debug)]
 pub struct FrameKeys<G> {
-    grants: HashMap<String, (G, Instant)>,
+    grants: HashMap<String, (G, Instant, String)>,
 }
 
 impl<G> Default for FrameKeys<G> {
@@ -24,20 +27,30 @@ impl<G> Default for FrameKeys<G> {
 }
 
 impl<G: Clone> FrameKeys<G> {
-    /// Keeps `key`, made of random bits by the caller, for `grant`.
-    pub fn insert(&mut self, key: String, grant: G) {
-        self.insert_at(key, grant, Instant::now());
+    /// Keeps `key`, made of random bits by the caller, for `grant`, asked
+    /// for by `owner`.
+    pub fn insert(&mut self, key: String, grant: G, owner: &str) {
+        self.insert_at(key, grant, owner, Instant::now());
     }
 
-    fn insert_at(&mut self, key: String, grant: G, now: Instant) {
-        self.grants.retain(|_, (_, made)| now.duration_since(*made) < FRAME_TTL);
-        while self.grants.len() >= FRAME_KEYS {
-            let Some(oldest) = self.grants.iter().min_by_key(|(_, (_, made))| *made).map(|(key, _)| key.clone()) else {
-                break;
-            };
+    fn insert_at(&mut self, key: String, grant: G, owner: &str, now: Instant) {
+        self.grants.retain(|_, (_, used, _)| now.duration_since(*used) < FRAME_TTL);
+        let oldest = |grants: &HashMap<String, (G, Instant, String)>, mine: bool| {
+            grants
+                .iter()
+                .filter(|(_, (_, _, whose))| !mine || whose == owner)
+                .min_by_key(|(_, (_, used, _))| *used)
+                .map(|(key, _)| key.clone())
+        };
+        while self.grants.values().filter(|(_, _, whose)| whose == owner).count() >= PERSONS_KEYS {
+            let Some(oldest) = oldest(&self.grants, true) else { break };
             self.grants.remove(&oldest);
         }
-        self.grants.insert(key, (grant, now));
+        while self.grants.len() >= FRAME_KEYS {
+            let Some(oldest) = oldest(&self.grants, false) else { break };
+            self.grants.remove(&oldest);
+        }
+        self.grants.insert(key, (grant, now, owner.to_owned()));
     }
 
     /// What `key` opens, while it works. Using it starts its hour again, so
@@ -50,7 +63,7 @@ impl<G: Clone> FrameKeys<G> {
         if !is_key(key) {
             return None;
         }
-        let (grant, used) = self.grants.get_mut(key).filter(|(_, used)| now.duration_since(*used) < FRAME_TTL)?;
+        let (grant, used, _) = self.grants.get_mut(key).filter(|(_, used, _)| now.duration_since(*used) < FRAME_TTL)?;
         *used = now;
         Some(grant.clone())
     }
@@ -73,7 +86,7 @@ mod tests {
     fn a_key_opens_its_grant_for_an_hour_and_nothing_else() {
         let mut keys = FrameKeys::default();
         let now = Instant::now();
-        keys.insert_at(key(1), "first", now);
+        keys.insert_at(key(1), "first", "ada", now);
         assert_eq!(keys.get_at(&key(1), now + Duration::from_secs(60)), Some("first"));
         assert_eq!(keys.get_at(&key(1), now + FRAME_TTL), Some("first"), "using it started its hour again");
         assert_eq!(keys.get_at(&key(1), now + FRAME_TTL * 3), None, "it expires unused");
@@ -82,14 +95,17 @@ mod tests {
     }
 
     #[test]
-    fn the_oldest_keys_go_when_there_are_too_many() {
+    fn one_persons_keys_never_push_out_anothers() {
         let mut keys = FrameKeys::default();
         let now = Instant::now();
-        keys.insert_at(key(0), 0, now);
-        for at in 1..=FRAME_KEYS {
-            keys.insert_at(key(at), at, now + Duration::from_millis(at as u64));
+        keys.insert_at(key(0), 0, "ada", now);
+        for at in 1..=PERSONS_KEYS * 3 {
+            keys.insert_at(key(at), at, "mallory", now + Duration::from_millis(at as u64));
         }
-        assert_eq!(keys.grants.len(), FRAME_KEYS);
-        assert_eq!(keys.get_at(&key(0), now + Duration::from_secs(1)), None);
+        assert_eq!(keys.grants.len(), PERSONS_KEYS + 1);
+        let later = now + Duration::from_secs(1);
+        assert_eq!(keys.get_at(&key(0), later), Some(0), "ada's key stayed");
+        assert_eq!(keys.get_at(&key(1), later), None, "mallory's oldest went");
+        assert_eq!(keys.get_at(&key(PERSONS_KEYS * 3), later), Some(PERSONS_KEYS * 3));
     }
 }

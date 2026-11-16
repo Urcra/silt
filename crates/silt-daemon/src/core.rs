@@ -689,6 +689,10 @@ impl Core {
             }
             Request::PageViewer { thread } => to_response(self.page_viewer(&thread)),
             Request::ArtifactListing => return answer_later(reply, Ok(self.artifact_listing_merged())),
+            // The id becomes a directory's name, so it's checked first.
+            Request::ArtifactThumbnail { artifact, .. } if artifact.parse::<silt_types::ArtifactId>().is_err() => {
+                Response::error("not an artifact id")
+            }
             Request::ArtifactThumbnail { thread, artifact } => {
                 let kept = self.kept_thumbnail(&thread, &artifact).await;
                 let source = self.thumbnail_source(&thread, &artifact).await;
@@ -806,20 +810,27 @@ impl Core {
                 to_response(self.sample_tool_result(&thread, &artifact, &ask, call, result))
             }
             Request::ArtifactGrants { thread, artifact } => match self.find_thread(&thread) {
-                Ok(thread) => Response::ok(crate::design::artifact_grants(&self.data_dir, &thread.to_string(), &artifact)),
+                Ok(thread) => {
+                    let latest = self.declared_by(thread, &artifact, None);
+                    Response::ok(crate::design::artifact_grants(&self.data_dir, &thread.to_string(), &artifact, latest.as_ref()))
+                }
                 Err(error) => Response::failure(&error),
             },
-            Request::SetArtifactGrant { thread, artifact, capability, state } => match self.find_thread(&thread) {
-                Ok(thread) => to_response(
-                    crate::design::set_artifact_grant(
-                        &self.data_dir,
-                        &thread.to_string(),
-                        &artifact,
-                        &capability,
-                        state.as_deref(),
+            Request::SetArtifactGrant { thread, artifact, capability, state, version } => match self.find_thread(&thread) {
+                Ok(thread) => {
+                    let declared = self.declared_by(thread, &artifact, version);
+                    to_response(
+                        crate::design::set_artifact_grant(
+                            &self.data_dir,
+                            &thread.to_string(),
+                            &artifact,
+                            &capability,
+                            state.as_deref(),
+                            declared.as_ref(),
+                        )
+                        .map(|()| "saved"),
                     )
-                    .map(|()| "saved"),
-                ),
+                }
                 Err(error) => Response::failure(&error),
             },
             Request::SetProjectDesignSystem { repo, design_system } => {

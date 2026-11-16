@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM artifact_pins WHERE thread_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "1c621460334568e152dabeab3ec9dfff39ffbb074f5156316b3cd0d6eb05b2cf"
+}

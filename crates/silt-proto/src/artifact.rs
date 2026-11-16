@@ -322,6 +322,25 @@ pub fn checked_capabilities(declared: &serde_json::Map<String, serde_json::Value
     Ok(checked)
 }
 
+/// What `declared` says of `capability`, as text that compares alike
+/// however its keys were ordered. A viewer's grant holds while the latest
+/// version declares the same, so a version that widens what a page may do
+/// asks again.
+pub fn declaration(declared: Option<&Capabilities>, capability: &str) -> Option<String> {
+    fn sorted(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut keys: Vec<_> = map.keys().collect();
+                keys.sort();
+                serde_json::Value::Object(keys.into_iter().map(|key| (key.clone(), sorted(&map[key]))).collect())
+            }
+            serde_json::Value::Array(items) => serde_json::Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    declared?.get(capability).map(|config| sorted(config).to_string())
+}
+
 /// One change to a version's source: `old` occurs exactly once, and
 /// becomes `new`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -428,6 +447,19 @@ mod sample_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_declaration_reads_alike_whatever_its_order() {
+        let one: Capabilities =
+            serde_json::from_str(r#"{"mcp":{"servers":[{"tools":["a"],"server":"x"}],"z":1}}"#).expect("json");
+        let two: Capabilities =
+            serde_json::from_str(r#"{"mcp":{"z":1,"servers":[{"server":"x","tools":["a"]}]}}"#).expect("json");
+        assert_eq!(declaration(Some(&one), "mcp"), declaration(Some(&two), "mcp"));
+        let wider: Capabilities =
+            serde_json::from_str(r#"{"mcp":{"z":1,"servers":[{"server":"x","tools":["a","b"]}]}}"#).expect("json");
+        assert_ne!(declaration(Some(&one), "mcp"), declaration(Some(&wider), "mcp"));
+        assert_eq!(declaration(Some(&one), "sample"), None);
+    }
 
     #[test]
     fn a_version_keeps_its_contract_until_it_asks_for_another() {

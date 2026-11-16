@@ -157,30 +157,33 @@ impl Theme {
 /// The first script's opening, before the theme and the parent's origin.
 pub const FIRST_SCRIPT_START: &str = "(function(){var root=document.documentElement;";
 
-/// The rest of the first script: it follows the theme the page holding the
-/// frame sends, and tells that page what text is selected, for a comment to
+/// The rest of the first script: every message it sends carries `boot`'s
+/// nonce, which a document the frame navigates to lacks, and it answers the
+/// holding page's `hello?` after each load with it (ADR 0072). It follows
+/// the theme the page holding the frame sends, and tells that page what text is selected, for a comment to
 /// quote, what went wrong, and when the page has settled (ADR 0071). It
 /// hands the page's Mermaid diagrams to the holding page, which draws them
 /// and sends back images, so no library loads and nothing in them runs
 /// (ADR 0073).
-pub const FIRST_SCRIPT_END: &str = "addEventListener('message',function(e){var d=e.data;if(e.source!==parent||!d)return;\
+pub const FIRST_SCRIPT_END: &str = "var nonce=typeof boot.nonce==='string'?boot.nonce:'';function post(m){m.nonce=nonce;parent.postMessage(m,to)}\
+addEventListener('message',function(e){var d=e.data;if(e.source!==parent||!d)return;if(d.silt==='hello?')post({silt:'hello'});\
 if(d.silt==='theme'&&(d.theme==='light'||d.theme==='dark'))root.setAttribute('data-theme',d.theme);\
 if(d.silt==='mermaid-drawn'&&typeof d.src==='string'&&d.src.indexOf('data:image/svg+xml')===0){\
 var at=document.querySelector('[data-silt-mermaid=\"'+(d.i|0)+'\"]');if(!at)return;var img=document.createElement('img');\
 img.src=d.src;img.alt=at.getAttribute('aria-label')||'Diagram';img.setAttribute('data-silt-mermaid',String(d.i|0));\
 img.setAttribute('aria-label',img.alt);img.style.maxWidth='100%';at.replaceWith(img)}});\
-document.addEventListener('mouseup',function(){var t=String(getSelection()||'').trim();parent.postMessage({silt:'selection',text:t.slice(0,500)},to)});\
+document.addEventListener('mouseup',function(){var t=String(getSelection()||'').trim();post({silt:'selection',text:t.slice(0,500)})});\
 var seen={},problems=[];\
 function report(kind,text){text=String(text).slice(0,300);if(seen[kind+text]||problems.length>=20)return;seen[kind+text]=1;\
-problems.push({kind:kind,text:text});parent.postMessage({silt:'problems',problems:problems.slice()},to)}\
+problems.push({kind:kind,text:text});post({silt:'problems',problems:problems.slice()})}\
 document.addEventListener('securitypolicyviolation',function(e){report('blocked',(e.blockedURI||'inline')+' ('+e.effectiveDirective+')')});\
 addEventListener('error',function(e){if(e.message)report('error',e.message+(e.lineno?' (line '+e.lineno+')':''))});\
 addEventListener('unhandledrejection',function(e){var r=e.reason;report('error','Unhandled rejection: '+(r&&r.message||r))});\
 addEventListener('load',function(){setTimeout(function(){var w=root.scrollWidth,v=root.clientWidth;\
-if(w>v+1)report('overflow','The page is '+w+'px wide in a '+v+'px frame');parent.postMessage({silt:'checked'},to)},300);\
+if(w>v+1)report('overflow','The page is '+w+'px wide in a '+v+'px frame');post({silt:'checked'})},300);\
 var pres=document.querySelectorAll('pre.mermaid'),list=[];for(var i=0;i<pres.length&&i<20;i++){var t=pres[i].textContent||'';\
 if(t.length>65536)continue;pres[i].setAttribute('data-silt-mermaid',String(i));list.push({i:i,text:t})}\
-if(list.length)parent.postMessage({silt:'mermaid',diagrams:list},to)});";
+if(list.length)post({silt:'mermaid',diagrams:list})});";
 
 /// The bridge's frame side (ADR 0072): `silt.use`, `silt.hot`, and the
 /// viewer's own storage, inside the first script.
@@ -224,7 +227,9 @@ fn boot_json(boot: Option<&str>) -> String {
         .filter(|text| text.len() <= BOOT_BYTES)
         .filter(|text| serde_json::from_str::<serde_json::Value>(text).is_ok_and(|value| value.is_object()));
     match object {
-        Some(text) => text.replace("</", "<\\/").replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029"),
+        // No `<` at all, so neither `</script` nor `<!--` can end or
+        // re-escape the element, whatever the viewer's storage holds.
+        Some(text) => text.replace('<', "\\u003c").replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029"),
         None => "{}".to_owned(),
     }
 }

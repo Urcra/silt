@@ -589,6 +589,10 @@ pub enum Request {
         capability: String,
         #[serde(default)]
         state: Option<String>,
+        /// The version the viewer saw, whose declaration the grant is for;
+        /// the latest when none.
+        #[serde(default)]
+        version: Option<u32>,
     },
     /// The design system picked for each project on this machine.
     ProjectDesignSystems,

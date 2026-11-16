@@ -1675,6 +1675,14 @@ fn a_page_saves_itself_knows_its_viewer_and_asks_an_agent() {
     let viewer = api.ok("GET", &format!("/api/threads/{thread}/viewer"), None);
     assert_eq!((&viewer["id"], &viewer["level"]), (&"local".into(), &"owner".into()), "{viewer}");
 
+    // Nothing is asked until the person allows what the version declares.
+    let grants = format!("/api/threads/{thread}/artifacts/{id}/grants");
+    let (refused, said) =
+        api.call("POST", &format!("/api/threads/{thread}/artifacts/{id}/sample"), Some(serde_json::json!({"input": "hi"})));
+    assert!(!refused && said.to_string().contains("not_granted"), "{said}");
+    api.ok("PUT", &grants, Some(serde_json::json!({"capability": "sample", "state": "granted"})));
+    let held = api.ok("GET", &grants, None);
+    assert_eq!(held["sample"], "granted", "{held}");
     let answer = api.ok(
         "POST",
         &format!("/api/threads/{thread}/artifacts/{id}/sample"),
@@ -1822,6 +1830,10 @@ fn a_page_has_files_beside_it_takes_uploads_and_reads_the_threads_files() {
     assert_eq!(api.ok("POST", &assets, Some(serde_json::json!({"op": "list"}))).as_array().map(Vec::len), Some(0));
 
     let files = format!("/api/threads/{thread}/artifacts/{id}/files");
+    let (refused, said) = api.call("POST", &files, Some(serde_json::json!({"op": "list"})));
+    assert!(!refused && said.to_string().contains("not_granted"), "asked first: {said}");
+    let grant = serde_json::json!({"capability": "files", "state": "granted"});
+    api.ok("PUT", &format!("/api/threads/{thread}/artifacts/{id}/grants"), Some(grant));
     let listed = api.ok("POST", &files, Some(serde_json::json!({"op": "list", "recursive": true})));
     let paths: Vec<&str> =
         listed["entries"].as_array().expect("entries").iter().filter_map(|entry| entry["path"].as_str()).collect();
@@ -2024,6 +2036,8 @@ fn a_page_calls_a_ticked_tool_of_a_page_connector() {
     assert_eq!(search["read_only"], true, "{search}");
 
     let mcp = format!("/api/threads/{thread}/artifacts/{id}/mcp");
+    let grant = serde_json::json!({"capability": "mcp", "state": "granted"});
+    api.ok("PUT", &format!("/api/threads/{thread}/artifacts/{id}/grants"), Some(grant));
     let call = serde_json::json!({"op": "call", "server": "silt", "tool": "silt_history_search", "input": {"query": "Artifact"}});
     let (refused, said) = api.call("POST", &mcp, Some(call.clone()));
     assert!(!refused && said.to_string().contains("not_granted"), "not ticked yet: {said}");

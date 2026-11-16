@@ -94,6 +94,7 @@ async fn sample(
     if !latest.capabilities.as_ref().is_some_and(|declared| declared.contains_key("sample")) {
         return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare sample")));
     }
+    consented(&server, browser.user, &id, &artifact, "sample").await?;
     let question = silt_proto::artifact::sample_question(&asked.input).map_err(|why| Refused(StatusCode::BAD_REQUEST, why))?;
     silt_proto::artifact::sample_images(&asked.images).map_err(|why| Refused(StatusCode::BAD_REQUEST, why))?;
     let declared = latest.capabilities.clone().unwrap_or_default();
@@ -156,6 +157,7 @@ async fn page_files(
     if !latest.capabilities.as_ref().is_some_and(|declared| declared.contains_key("files")) {
         return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare files")));
     }
+    consented(&server, browser.user, &id, &artifact, "files").await?;
     Ok(Json(ask_any_device(&server, browser, thread, RemoteCommand::PageFiles { artifact, asked }).await?))
 }
 
@@ -172,7 +174,19 @@ async fn page_mcp(
     if !latest.capabilities.as_ref().is_some_and(|declared| declared.contains_key("mcp")) {
         return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare mcp")));
     }
+    consented(&server, browser.user, &id, &artifact, "mcp").await?;
     Ok(Json(ask_device_within(&server, browser, thread, RemoteCommand::PageMcp { artifact, asked }, SAMPLE_WAIT).await?))
+}
+
+/// Refuses a page's call of `capability` unless the person allowed what the
+/// artifact's latest version declares of it. The page holding the frame
+/// asks them; this stands behind it (ADR 0072).
+async fn consented(server: &Server, user: UserId, id: &str, artifact: &str, capability: &str) -> Result<(), Refused> {
+    let grants = crate::browse::grants_held(server, user, id, artifact).await?;
+    if grants.get(capability).is_some_and(|state| state == "granted") {
+        return Ok(());
+    }
+    Err(Refused(StatusCode::FORBIDDEN, format!("not_granted: the person hasn't allowed this page {capability}")))
 }
 
 /// How long one device's view of a merge request stands in for asking
