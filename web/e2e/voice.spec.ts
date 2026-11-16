@@ -2,7 +2,7 @@
 // for the speech helper.
 
 import { execFileSync } from 'node:child_process'
-import { rmSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
 import { type Fixture, SILT } from './fixture'
@@ -195,4 +195,43 @@ test('the composer + menu opens upwards and stays in view', async ({ page }) => 
   await page.getByRole('button', { name: 'add to the prompt' }).click()
   // The composer is docked at the bottom of a thread's page.
   await expect(page.getByRole('menuitem', { name: 'Attach files or images' })).toBeInViewport({ ratio: 1 })
+})
+
+test('a page hears the person through dictation once they agree, as the composer does (ADR 0079)', async ({ page }) => {
+  const world = start()
+  const agent = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt-fake-agent')
+  writeFileSync(join(world.siltHome, 'agents.json'), JSON.stringify([{ id: 'v1', name: 'Fake v1', command: agent }]))
+  const html =
+    '<!doctype html><button id="talk">Talk</button><button id="stop">Stop</button><p id="out"></p><script>' +
+    'let d=null;silt.use("dictation").then(function(x){d=x;if(d)d.onFinal(function(said){document.getElementById("out").textContent+=said.text})});' +
+    'document.getElementById("talk").onclick=function(){if(d)d.start().catch(function(e){document.getElementById("out").textContent="refused: "+e.code})};' +
+    'document.getElementById("stop").onclick=function(){if(d)d.stop()};</script>'
+  const page_ = join(world.work, 'dictation-page.json')
+  writeFileSync(page_, JSON.stringify({ title: 'Dictation page', kind: 'html', content: html, capabilities: { dictation: {} } }))
+  const token = new URL(world.url).hash.replace('#token=', '')
+  const origin = new URL(world.url).origin
+  const started = await page.request.post(`${origin}/api/agents/start`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { clone: join(world.work, 'repo'), agent: 'v1', prompt: `Artifact from ${page_}` },
+  })
+  expect(started.ok()).toBe(true)
+  const answer = (await started.json()) as string | { thread: string }
+  const thread = typeof answer === 'string' ? answer : answer.thread
+  await page.goto(world.url)
+  await page.goto(`${origin}/t/${thread}`)
+  await expect(page.getByText(`Done: Artifact from ${page_}`)).toBeVisible({ timeout: 30_000 })
+  // Opened beside the thread, or by its card where the panel didn't open by itself.
+  const open = page.getByRole('button', { name: /^Open the artifact Dictation page/ })
+  await expect(page.getByTestId('artifact-frame').or(open).first()).toBeVisible()
+  if (!(await page.getByTestId('artifact-frame').isVisible())) await open.click()
+  await expect(page.getByTestId('artifact-frame')).toBeVisible()
+  const frame = page.frameLocator('[data-testid="artifact-frame"]')
+  // The model is here once the person fetched it for the composer.
+  await fetchModel(page)
+  await frame.getByRole('button', { name: 'Talk' }).click()
+  // The page asks first, in the page holding it.
+  await page.getByRole('button', { name: 'Allow' }).click()
+  await expect(page.getByText('The page is listening')).toBeVisible({ timeout: 15_000 })
+  await frame.getByRole('button', { name: 'Stop' }).click()
+  await expect(frame.locator('#out')).toContainText('Hello there.', { timeout: 15_000 })
 })
