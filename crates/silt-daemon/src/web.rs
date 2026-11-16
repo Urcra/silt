@@ -38,7 +38,7 @@ struct Web {
     /// What each frame key opens (ADR 0074).
     frames: Arc<Mutex<crate::frames::FrameKeys>>,
     /// Each room socket's way to its browser, by peer (ADR 0081).
-    room_peers: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<String>>>>,
+    room_peers: Arc<Mutex<HashMap<String, mpsc::Sender<String>>>>,
 }
 
 /// Codes that each stand in for the token once, shortly. Shared between the
@@ -362,6 +362,21 @@ async fn answer(web: &Web, request: Request) -> Result<serde_json::Value, Failed
     }
 }
 
+/// Refuses a page's call of `capability` unless the person allowed what the
+/// artifact's latest version declares of it. The page holding the frame
+/// asks them; this stands behind it, for a document the frame navigated to
+/// (ADR 0072).
+async fn consented(web: &Web, thread: &str, artifact: &str, capability: &str) -> Result<(), Failed> {
+    let grants = answer(web, Request::ArtifactGrants { thread: thread.to_owned(), artifact: artifact.to_owned() }).await?;
+    if grants.get(capability).and_then(serde_json::Value::as_str) == Some("granted") {
+        return Ok(());
+    }
+    Err(Failed {
+        status: StatusCode::FORBIDDEN,
+        message: format!("not_granted: the person hasn't allowed this page {capability}"),
+    })
+}
+
 /// Asks the request `make` builds for this machine's clone of `thread`, as
 /// requests the CLI makes from a working directory need one.
 async fn ask_in_clone(web: &Web, thread: &str, make: impl FnOnce(PathBuf) -> Request) -> HttpResponse {
@@ -399,8 +414,10 @@ fn deliver(web: &Web, deliveries: &serde_json::Value) {
     let peers = web.room_peers.lock().expect("lock");
     for pair in deliveries.as_array().into_iter().flatten() {
         let (Some(peer), Some(heard)) = (pair.get(0).and_then(serde_json::Value::as_str), pair.get(1)) else { continue };
+        // A view that stops reading loses what it can't keep up with,
+        // rather than growing without end.
         if let Some(sender) = peers.get(peer) {
-            let _ = sender.send(heard.to_string());
+            let _ = sender.try_send(heard.to_string());
         }
     }
 }
@@ -420,7 +437,7 @@ async fn serve_room(mut socket: WebSocket, web: Web) {
     }
     let key = silt_proto::rooms::RoomKey { thread: join.thread, artifact: join.artifact, name: join.name };
     let peer = uuid::Uuid::new_v4().simple().to_string();
-    let (sender, mut heard) = mpsc::unbounded_channel();
+    let (sender, mut heard) = mpsc::channel(silt_proto::rooms::QUEUED);
     web.room_peers.lock().expect("lock").insert(peer.clone(), sender);
     let mut bus = web.bus.subscribe();
     match answer(&web, Request::RoomJoin { key: key.clone(), peer: peer.clone() }).await {
@@ -835,6 +852,8 @@ struct SampleAsk {
     images: Vec<silt_proto::artifact::SampleImage>,
     #[serde(default)]
     tools: Vec<silt_proto::artifact::SampleTool>,
+    #[serde(default)]
+    model: silt_proto::artifact::SampleModel,
 }
 
 /// A page's question for this machine's agent, its answer streamed on the
@@ -844,6 +863,9 @@ async fn sample(
     Path((thread, artifact)): Path<(String, String)>,
     Json(asked): Json<SampleAsk>,
 ) -> HttpResponse {
+    if let Err(refused) = consented(&web, &thread, &artifact, "sample").await {
+        return refused.into_response();
+    }
     let request = Request::Sample {
         thread,
         artifact: Some(artifact),
@@ -851,6 +873,7 @@ async fn sample(
         input: asked.input,
         images: asked.images,
         tools: asked.tools,
+        model: asked.model,
     };
     ask(&web, request).await
 }
@@ -920,6 +943,9 @@ async fn page_mcp(
     Path((thread, artifact)): Path<(String, String)>,
     Json(asked): Json<crate::connectors::McpAsk>,
 ) -> HttpResponse {
+    if let Err(refused) = consented(&web, &thread, &artifact, "mcp").await {
+        return refused.into_response();
+    }
     ask(&web, Request::PageMcp { thread, artifact, asked }).await
 }
 
@@ -993,6 +1019,9 @@ async fn page_files(
     Path((thread, artifact)): Path<(String, String)>,
     Json(asked): Json<silt_proto::page::FilesRequest>,
 ) -> HttpResponse {
+    if let Err(refused) = consented(&web, &thread, &artifact, "files").await {
+        return refused.into_response();
+    }
     ask(&web, Request::PageFiles { thread, artifact, asked }).await
 }
 
@@ -1044,6 +1073,8 @@ struct GrantChange {
     capability: String,
     #[serde(default)]
     state: Option<String>,
+    #[serde(default)]
+    version: Option<u32>,
 }
 
 async fn set_artifact_grant(
@@ -1051,7 +1082,17 @@ async fn set_artifact_grant(
     Path((thread, artifact)): Path<(String, String)>,
     Json(change): Json<GrantChange>,
 ) -> HttpResponse {
-    ask(&web, Request::SetArtifactGrant { thread, artifact, capability: change.capability, state: change.state }).await
+    ask(
+        &web,
+        Request::SetArtifactGrant {
+            thread,
+            artifact,
+            capability: change.capability,
+            state: change.state,
+            version: change.version,
+        },
+    )
+    .await
 }
 
 /// A key that opens one version of an HTML artifact in a frame (ADR 0074).
@@ -1078,7 +1119,7 @@ async fn make_frame(
         boot: crate::frames::boot_of(ask.boot),
     };
     let key = crate::frames::new_key();
-    web.frames.lock().expect("lock").insert(key.clone(), grant);
+    web.frames.lock().expect("lock").insert(key.clone(), grant, "");
     let expires_ms = silt_proto::frames::FRAME_TTL.as_millis() as u64;
     Json(json!({ "path": format!("/f/{key}/"), "expires_in_ms": expires_ms })).into_response()
 }

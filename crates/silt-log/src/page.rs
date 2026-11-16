@@ -170,8 +170,20 @@ pub fn sheet_cells(items: &[HistoryItem<'_>], graph: &CausalGraph, artifact: Art
             }
         }
     }
-    SheetCells { rows: axis(Axis::Rows), columns: axis(Axis::Columns), cells }
+    // A peer can insert rows and columns past what a sheet holds; every
+    // replica keeps the same first ones, so they all draw the same grid.
+    let mut columns = axis(Axis::Columns);
+    columns.truncate(SHEET_COLUMNS);
+    let mut rows = axis(Axis::Rows);
+    rows.truncate(SHEET_ROWS.min(SHEET_CELLS / columns.len().max(1)));
+    SheetCells { rows, columns, cells }
 }
+
+/// The most rows, columns and cells a folded sheet keeps, as `silt-sheet`
+/// computes and ADR 0077 bounds a sheet.
+pub const SHEET_ROWS: usize = 10_000;
+pub const SHEET_COLUMNS: usize = 200;
+pub const SHEET_CELLS: usize = 100_000;
 
 /// How large `docs` are together, as JSON.
 pub fn size(docs: &Documents) -> usize {

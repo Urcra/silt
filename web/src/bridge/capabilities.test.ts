@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import type { ArtifactView } from '../api'
+import { describe, expect, it, vi } from 'vitest'
+import { api, type ArtifactView } from '../api'
 import { Broker } from './broker'
 import { downloadName, handlersFor, type Holder } from './capabilities'
 
@@ -80,5 +80,19 @@ describe('the built-in permissions', () => {
     const broker = new Broker({ thread: 't', artifact: plain, emit: () => undefined }, handlersFor('t', plain, holder(true)))
     expect(await broker.answer({ id: 1, cap: 'silt', method: 'use', args: { name: 'permissions' } })).toMatchObject({ ok: true, value: { available: true } })
     expect(await broker.answer({ id: 2, cap: 'silt', method: 'use', args: { name: 'sample' } })).toMatchObject({ ok: true, value: { available: false } })
+  })
+})
+
+describe('the people a page sees', () => {
+  it('names them only when the page declares the profile scope', async () => {
+    vi.spyOn(api, 'pageViewer').mockResolvedValue({ id: 'me1', level: 'owner', people: { me1: 'Ada', p2: 'Grace' } })
+    const plain: ArtifactView = { ...artifact, capabilities: { user: {} } }
+    const named: ArtifactView = { ...artifact, capabilities: { user: { scopes: ['profile'] } } }
+    const ask = (view: ArtifactView, id: number, method: string, args: unknown) =>
+      new Broker({ thread: 't', artifact: view, emit: () => undefined }, handlersFor('t', view, holder(true))).answer({ id, cap: 'user', method, args })
+    expect(await ask(plain, 1, 'profiles', { ids: ['p2'] })).toEqual({ ok: true, value: { p2: { id: 'p2', name: '' } } })
+    expect(await ask(plain, 2, 'search', { query: 'gr' })).toMatchObject({ ok: false })
+    expect(await ask(named, 3, 'profiles', { ids: ['p2'] })).toEqual({ ok: true, value: { p2: { id: 'p2', name: 'Grace' } } })
+    expect(await ask(named, 4, 'search', { query: 'gr' })).toEqual({ ok: true, value: [{ id: 'p2', name: 'Grace' }] })
   })
 })

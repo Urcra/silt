@@ -36,7 +36,22 @@ pub(crate) struct Control {
     /// Which command answers a browser's question, by its person and the
     /// name the page gave it.
     asks: std::sync::Mutex<HashMap<(UserId, String), i64>>,
+    /// Calls of a page's tools a device's agent made, waiting for the page,
+    /// by command, and where each one's answer goes.
+    calls: std::sync::Mutex<HashMap<i64, Vec<ToolCall>>>,
+    answers: std::sync::Mutex<HashMap<(i64, u32), tokio::sync::oneshot::Sender<serde_json::Value>>>,
 }
+
+/// A call of one of a page's tools, as the page hears of it.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub(crate) struct ToolCall {
+    call: u32,
+    name: String,
+    input: serde_json::Value,
+}
+
+/// How long a page has to answer a call of one of its tools.
+const TOOL_WAIT: Duration = Duration::from_secs(60);
 
 /// The most of an answer kept as it streams, in bytes, as print mode keeps.
 const PROGRESS_BYTES: usize = 256 * 1024;
@@ -52,7 +67,30 @@ impl Control {
         let id = self.asks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&(user, ask.to_owned()));
         if let Some(id) = id {
             self.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id);
+            self.calls.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id);
+            self.answers.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(of, _), _| *of != id);
         }
+    }
+
+    fn ask_id(&self, user: UserId, ask: &str) -> Option<i64> {
+        self.asks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&(user, ask.to_owned())).copied()
+    }
+
+    /// The calls of the page's tools waiting for `user`'s page to run them.
+    pub(crate) fn calls_waiting(&self, user: UserId, ask: &str) -> Vec<ToolCall> {
+        let Some(id) = self.ask_id(user, ask) else { return Vec::new() };
+        self.calls.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&id).cloned().unwrap_or_default()
+    }
+
+    /// The page's answer to call `call` of its question `ask`; false when no
+    /// such call waits.
+    pub(crate) fn answer_call(&self, user: UserId, ask: &str, call: u32, result: serde_json::Value) -> bool {
+        let Some(id) = self.ask_id(user, ask) else { return false };
+        if let Some(calls) = self.calls.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(&id) {
+            calls.retain(|waiting| waiting.call != call);
+        }
+        let answer = self.answers.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&(id, call));
+        answer.is_some_and(|answer| answer.send(result).is_ok())
     }
 
     /// What's been said so far of `user`'s question named `ask`.
@@ -65,6 +103,42 @@ impl Control {
 #[derive(Deserialize)]
 pub(crate) struct Progress {
     text: String,
+}
+
+/// A call of one of a page's tools, from the device whose agent answers
+/// the page's question; answered once the page runs it, within a minute.
+pub(crate) async fn tool_call(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<i64>,
+    Json(call): Json<ToolCall>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let device = id_bytes(caller.device.0);
+    // A runtime query, as it's read only here.
+    let open: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM control_commands WHERE id = ? AND device_id = ? AND answered_ms IS NULL")
+            .bind(id)
+            .bind(device)
+            .fetch_optional(server.db())
+            .await
+            .map_err(ServerError::from)?;
+    if open.is_none() {
+        return Err(not_found());
+    }
+    let control = &server.shared.control;
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    control.answers.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((id, call.call), answer);
+    let number = call.call;
+    control.calls.lock().unwrap_or_else(std::sync::PoisonError::into_inner).entry(id).or_default().push(call);
+    let heard = tokio::time::timeout(TOOL_WAIT, answered).await;
+    if let Some(calls) = control.calls.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(&id) {
+        calls.retain(|waiting| waiting.call != number);
+    }
+    control.answers.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&(id, number));
+    match heard {
+        Ok(Ok(result)) => Ok(Json(result)),
+        _ => Ok(Json(serde_json::json!({"ok": false, "error": "the page didn't answer in time"}))),
+    }
 }
 
 /// What a device's agent has said so far of a command it hasn't answered
@@ -95,7 +169,12 @@ pub(crate) async fn progress(
         }
         text.truncate(end);
     }
-    server.shared.control.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id, text);
+    // Kept only for a question a page is reading as it streams, which
+    // forgets it once answered.
+    let control = &server.shared.control;
+    if control.asks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).values().any(|asked| *asked == id) {
+        control.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id, text);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -665,7 +744,12 @@ mod tests {
         let laptop = Device::sign_in(&base, "alice").await;
         let (alice, device) = device_of(&server, "alice").await;
         let phone = Device::sign_in(&base, "alice").await;
-        let command = RemoteCommand::Sample { question: "Name three rivers".into(), images: Vec::new() };
+        let command = RemoteCommand::Sample {
+            question: "Name three rivers".into(),
+            images: Vec::new(),
+            model: Default::default(),
+            tools: Vec::new(),
+        };
         let relay = Relay {
             device,
             thread: ThreadId(7),

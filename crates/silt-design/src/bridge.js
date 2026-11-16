@@ -2,13 +2,14 @@
 // holding the frame for a capability, and every call goes there by message,
 // where it's checked against what the version declared and what the viewer
 // allowed. Runs inside the first script, after `to` (the holding page's
-// origin) and `boot` (what the holding page kept for this viewer) are set.
+// origin), `boot` (what the holding page kept for this viewer) and `post`
+// (a message to it, with the load's nonce) are set.
 var seq = 0, waiting = {}, heard = {}, snapshot = null;
 function ask(cap, method, args) {
   return new Promise(function (ok, no) {
     var id = ++seq;
     waiting[id] = [ok, no];
-    parent.postMessage({ silt: 'call', id: id, cap: cap, method: method, args: args === undefined ? null : args }, to);
+    post({ silt: 'call', id: id, cap: cap, method: method, args: args === undefined ? null : args });
   });
 }
 function refusal(error) {
@@ -38,7 +39,7 @@ addEventListener('message', function (e) {
   if (d.silt === 'snapshot') {
     var data = null;
     try { data = snapshot ? snapshot() : null; } catch (x) {}
-    try { parent.postMessage({ silt: 'snapshotted', data: data }, to); } catch (x) {}
+    try { post({ silt: 'snapshotted', data: data }); } catch (x) {}
   }
 });
 
@@ -47,7 +48,7 @@ addEventListener('message', function (e) {
 function storage(kind, initial) {
   var items = {};
   for (var k in initial || {}) if (Object.prototype.hasOwnProperty.call(initial, k)) items[k] = String(initial[k]);
-  function save() { parent.postMessage({ silt: 'storage', kind: kind, items: items }, to); }
+  function save() { post({ silt: 'storage', kind: kind, items: items }); }
   var api = {
     getItem: function (key) { key = String(key); return Object.prototype.hasOwnProperty.call(items, key) ? items[key] : null; },
     setItem: function (key, value) { items[String(key)] = String(value); save(); },
@@ -187,6 +188,7 @@ function sampleClient(ns) {
     var done = function () { off(); offTools(); delete sample.last[ask]; };
     var asked = { input: input, ask: ask };
     if (opts.images) asked.images = Array.prototype.slice.call(opts.images);
+    if (opts.modelTier || opts.model) asked.model = { model_tier: opts.modelTier || null, model: opts.model || null };
     if (tools.length) {
       asked.tools = tools.map(function (tool) {
         return { name: String(tool.name), description: String(tool.description || ''), inputSchema: tool.inputSchema };
@@ -340,7 +342,8 @@ var clients = {
 };
 var made = {};
 window.silt = Object.freeze({
-  version: '1',
+  // The runtime contract the version was made with (ADR 0072).
+  version: (boot && typeof boot.contract === 'string' && boot.contract) || '1',
   // A capability's functions, or null where this view can't run it: not
   // declared, not granted, not served here, or failed. Null after 10 s
   // when nothing answers.
@@ -361,7 +364,7 @@ window.silt = Object.freeze({
     data: boot.hot === undefined ? null : boot.hot,
     snapshot: function (fn) {
       snapshot = typeof fn === 'function' ? fn : null;
-      parent.postMessage({ silt: 'hot', keeps: snapshot !== null }, to);
+      post({ silt: 'hot', keeps: snapshot !== null });
     },
     ready: function (start) { start(boot.hot || {}); }
   })

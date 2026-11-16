@@ -294,6 +294,8 @@ pub struct Core {
     pub(crate) page_clients: std::sync::Arc<crate::connectors::Clients>,
     /// When each artifact's page last asked `sample`, for its rate.
     pub(crate) samples: HashMap<String, Vec<Instant>>,
+    /// How many page questions this machine's agent answers now, across pages.
+    pub(crate) sampling: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Questions whose pages offered tools, by name (ADR 0072).
     pub(crate) sample_calls: HashMap<String, crate::sample::WaitingTools>,
     /// What changed, for browsers listening (ADR 0021).
@@ -537,6 +539,7 @@ impl Core {
             resident,
             adopted: HashSet::new(),
             samples: HashMap::new(),
+            sampling: std::sync::Arc::default(),
             sample_calls: HashMap::new(),
             page_clients: std::sync::Arc::default(),
             rooms: silt_proto::rooms::Hub::default(),
@@ -603,6 +606,24 @@ impl Core {
                 return;
             }
             if let Request::RoomAgent { artifact, emit, .. } = *asking {
+                // A thread that syncs with a server meets its views in the
+                // server's room, so the agent speaks there.
+                let remote = match self.run_thread(&token).await {
+                    Ok(thread) => {
+                        self.find_thread(&thread).ok().and_then(|id| self.remote_for(id).cloned()).map(|remote| (thread, remote))
+                    }
+                    Err(_) => None,
+                };
+                if let Some((thread, remote)) = remote {
+                    tokio::spawn(async move {
+                        let answer = remote
+                            .room_agent(&thread, &artifact, emit)
+                            .await
+                            .map_err(|error| CoreError::Invalid(error.to_string()));
+                        let _ = reply.send(to_response(answer));
+                    });
+                    return;
+                }
                 let answer = match self.run_thread(&token).await {
                     Ok(thread) => self.room_agent(&thread, &artifact, emit).map(|(deliveries, heard)| {
                         // What the agent said reaches the open views through the web server.
@@ -673,6 +694,10 @@ impl Core {
             }
             Request::PageViewer { thread } => to_response(self.page_viewer(&thread)),
             Request::ArtifactListing => return answer_later(reply, Ok(self.artifact_listing_merged())),
+            // The id becomes a directory's name, so it's checked first.
+            Request::ArtifactThumbnail { artifact, .. } if artifact.parse::<silt_types::ArtifactId>().is_err() => {
+                Response::error("not an artifact id")
+            }
             Request::ArtifactThumbnail { thread, artifact } => {
                 let kept = self.kept_thumbnail(&thread, &artifact).await;
                 let source = self.thumbnail_source(&thread, &artifact).await;
@@ -743,8 +768,9 @@ impl Core {
             Request::ArtifactFile { thread, id, version, path } => {
                 to_response(self.artifact_file(&thread, &id, version, &path).await)
             }
-            Request::Sample { thread, artifact, ask, input, images, tools } => {
-                return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, &input, images, tools));
+            Request::Sample { thread, artifact, ask, input, images, tools, model } => {
+                let asked = crate::sample::Question { input, images, tools, model };
+                return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, asked));
             }
             Request::ArtifactPdf { thread, artifact, html } => {
                 let printable = self
@@ -789,20 +815,27 @@ impl Core {
                 to_response(self.sample_tool_result(&thread, &artifact, &ask, call, result))
             }
             Request::ArtifactGrants { thread, artifact } => match self.find_thread(&thread) {
-                Ok(thread) => Response::ok(crate::design::artifact_grants(&self.data_dir, &thread.to_string(), &artifact)),
+                Ok(thread) => {
+                    let latest = self.declared_by(thread, &artifact, None);
+                    Response::ok(crate::design::artifact_grants(&self.data_dir, &thread.to_string(), &artifact, latest.as_ref()))
+                }
                 Err(error) => Response::failure(&error),
             },
-            Request::SetArtifactGrant { thread, artifact, capability, state } => match self.find_thread(&thread) {
-                Ok(thread) => to_response(
-                    crate::design::set_artifact_grant(
-                        &self.data_dir,
-                        &thread.to_string(),
-                        &artifact,
-                        &capability,
-                        state.as_deref(),
+            Request::SetArtifactGrant { thread, artifact, capability, state, version } => match self.find_thread(&thread) {
+                Ok(thread) => {
+                    let declared = self.declared_by(thread, &artifact, version);
+                    to_response(
+                        crate::design::set_artifact_grant(
+                            &self.data_dir,
+                            &thread.to_string(),
+                            &artifact,
+                            &capability,
+                            state.as_deref(),
+                            declared.as_ref(),
+                        )
+                        .map(|()| "saved"),
                     )
-                    .map(|()| "saved"),
-                ),
+                }
                 Err(error) => Response::failure(&error),
             },
             Request::SetProjectDesignSystem { repo, design_system } => {

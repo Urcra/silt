@@ -805,3 +805,54 @@ fn malformed_page_data_is_refused() {
         assert!(delta.check_shape().is_err(), "{:?}", delta.op);
     }
 }
+
+/// A page write concurrent with a revert survives it on every replica,
+/// whatever order the two arrive in.
+#[test]
+fn a_page_write_concurrent_with_a_revert_folds_alike_everywhere() {
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let mut family = Family::new();
+    let first = say(&mut family, THREAD, "one");
+    say(&mut family, THREAD, "two");
+    let head = family.thread_head(THREAD);
+    let rewind = family.delta(
+        DAEMON.derive(THREAD.0),
+        THREAD,
+        Author::User,
+        0,
+        head.clone(),
+        Op::Conv(ConvOp::Rewound { to: first.span.first() }),
+    );
+    let vote = family.delta(ActorId(42), THREAD, Author::User, 0, head, set(artifact, "votes/v", r#"{"p":1}"#));
+    let (mut a, mut b) = (family.clone(), family.clone());
+    for delta in [&rewind, &vote] {
+        assert_eq!(a.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+    }
+    for delta in [&vote, &rewind] {
+        assert_eq!(b.apply(delta.clone(), &mut bases()), Ok(Applied::New));
+    }
+    assert_eq!(a.page_documents(THREAD, artifact), b.page_documents(THREAD, artifact), "replicas agree");
+    assert!(a.page_documents(THREAD, artifact).contains_key("votes/v"), "a write the revert never saw stays");
+}
+
+/// Pulling a revert from upstream rewinds upstream's work, never the
+/// fork's own.
+#[test]
+fn pulling_an_upstream_revert_keeps_the_forks_own_page_data() {
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let mut family = Family::new();
+    let first = say(&mut family, THREAD, "one");
+    say(&mut family, THREAD, "two");
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, CHECKOUT_B, FORK, head, Op::Fork { from: THREAD });
+    let head = family.thread_head(FORK);
+    on_thread(&mut family, ActorId(9), FORK, head, set(artifact, "votes/fork", r#"{"p":1}"#));
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, DAEMON.derive(THREAD.0), THREAD, head, Op::Conv(ConvOp::Rewound { to: first.span.first() }));
+    let mut parents = family.thread_head(FORK);
+    for id in family.thread_head(THREAD).ids() {
+        parents.insert(*id);
+    }
+    on_thread(&mut family, CHECKOUT_B, FORK, parents, Op::Merge { from: THREAD, mr: None });
+    assert!(family.page_documents(FORK, artifact).contains_key("votes/fork"));
+}

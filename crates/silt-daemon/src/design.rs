@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use silt_design::{Builtin, SystemName};
 
 use crate::core::CoreError;
@@ -182,31 +183,65 @@ pub(crate) fn set_artifact_settings(data_dir: &Path, settings: ArtifactSettings)
 /// (ADR 0072), by `<thread>/<artifact>`, then capability.
 const GRANTS: &str = "artifact-grants.json";
 
-type Grants = BTreeMap<String, BTreeMap<String, String>>;
+type Grants = BTreeMap<String, BTreeMap<String, Grant>>;
 
-pub(crate) fn artifact_grants(data_dir: &Path, thread: &str, artifact: &str) -> BTreeMap<String, String> {
-    let all: Grants =
-        read_capped(&data_dir.join(GRANTS), 4 << 20).and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default();
-    all.get(&format!("{thread}/{artifact}")).cloned().unwrap_or_default()
+/// A grant, with what the version it was given for declared of its
+/// capability; one kept before declarations were recorded holds nothing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum Grant {
+    Bound { state: String, declaration: String },
+    Bare(String),
 }
 
-/// Keeps a grant, or forgets it with no `state`, so the page asks again.
+fn read_grants(data_dir: &Path) -> Grants {
+    read_capped(&data_dir.join(GRANTS), 4 << 20).and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default()
+}
+
+/// The grants on an artifact that still hold: each given for what `latest`
+/// declares of its capability now.
+pub(crate) fn artifact_grants(
+    data_dir: &Path,
+    thread: &str,
+    artifact: &str,
+    latest: Option<&silt_proto::artifact::Capabilities>,
+) -> BTreeMap<String, String> {
+    let all = read_grants(data_dir);
+    let Some(grants) = all.get(&format!("{thread}/{artifact}")) else {
+        return BTreeMap::new();
+    };
+    grants
+        .iter()
+        .filter_map(|(capability, grant)| match grant {
+            Grant::Bound { state, declaration } => (silt_proto::artifact::declaration(latest, capability).as_ref()
+                == Some(declaration))
+            .then(|| (capability.clone(), state.clone())),
+            Grant::Bare(_) => None,
+        })
+        .collect()
+}
+
+/// Keeps a grant for what `declared`, the version the viewer saw, says of
+/// `capability`, or forgets it with no `state`, so the page asks again.
 pub(crate) fn set_artifact_grant(
     data_dir: &Path,
     thread: &str,
     artifact: &str,
     capability: &str,
     state: Option<&str>,
+    declared: Option<&silt_proto::artifact::Capabilities>,
 ) -> Result<(), CoreError> {
-    if !silt_proto::artifact::CAPABILITIES.contains(&capability) || artifact.len() != 12 {
+    if !silt_proto::artifact::CAPABILITIES.contains(&capability) || artifact.parse::<silt_types::ArtifactId>().is_err() {
         return Err(CoreError::Invalid("no such capability or artifact".into()));
     }
-    let mut all: Grants =
-        read_capped(&data_dir.join(GRANTS), 4 << 20).and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default();
+    let mut all = read_grants(data_dir);
     let grants = all.entry(format!("{thread}/{artifact}")).or_default();
     match state {
         Some(state @ ("granted" | "refused")) => {
-            grants.insert(capability.to_owned(), state.to_owned());
+            let Some(declaration) = silt_proto::artifact::declaration(declared, capability) else {
+                return Err(CoreError::Invalid(format!("artifact {artifact} doesn't declare {capability}")));
+            };
+            grants.insert(capability.to_owned(), Grant::Bound { state: state.to_owned(), declaration });
         }
         Some(_) => return Err(CoreError::Invalid("a grant is granted or refused".into())),
         None => {
@@ -271,6 +306,23 @@ pub(crate) fn find(systems: &[System], name: &str) -> Result<System, CoreError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_grant_holds_until_a_version_declares_more() {
+        let dir = tempfile::tempdir().expect("dir");
+        let declared = |json: &str| serde_json::from_str::<silt_proto::artifact::Capabilities>(json).expect("json");
+        let v1 = declared(r#"{"mcp":{"servers":[{"server":"gh","tools":["search"]}]},"sample":{}}"#);
+        let (thread, artifact) = ("t", "0123456789ab");
+        set_artifact_grant(dir.path(), thread, artifact, "mcp", Some("granted"), Some(&v1)).expect("kept");
+        set_artifact_grant(dir.path(), thread, artifact, "sample", Some("granted"), Some(&v1)).expect("kept");
+        assert_eq!(artifact_grants(dir.path(), thread, artifact, Some(&v1)).len(), 2);
+        let v2 = declared(r#"{"sample":{},"mcp":{"servers":[{"server":"gh","tools":["*"]}]}}"#);
+        let held = artifact_grants(dir.path(), thread, artifact, Some(&v2));
+        assert_eq!(held.get("sample").map(String::as_str), Some("granted"), "sample declares the same");
+        assert!(!held.contains_key("mcp"), "mcp declares more, so it asks again");
+        assert!(set_artifact_grant(dir.path(), thread, artifact, "files", Some("granted"), Some(&v1)).is_err(), "undeclared");
+        assert!(set_artifact_grant(dir.path(), thread, "../x", "mcp", Some("granted"), Some(&v1)).is_err());
+    }
 
     #[test]
     fn the_one_asked_for_wins_then_the_last_versions_then_the_defaults() {

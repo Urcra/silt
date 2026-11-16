@@ -20,16 +20,28 @@ impl Core {
         let thread = self.find_thread(thread)?;
         let id = self.edited_artifact(thread, artifact, "doc")?;
         match asked {
-            DocRequest::Read => Ok(serde_json::json!({ "text": self.doc_text(thread, id) })),
-            DocRequest::Edit { edits } => {
+            DocRequest::Read => Ok(self.doc_read(thread, id)),
+            DocRequest::Edit { edits, base } => {
                 self.may_edit(thread, id)?;
+                // Counted against the text the person read, then placed by
+                // character in the text now, so what others wrote since stays.
+                let edits = match base.as_deref().filter(|base| !base.is_empty()) {
+                    Some(base) => {
+                        let base: silt_types::Frontier =
+                            base.parse().map_err(|_| CoreError::Invalid("that isn't a version".into()))?;
+                        let doc = self.doc_crdt(thread, id);
+                        let seen = doc.attribution_at_vv(&self.family_graph(thread).version_vector(&base));
+                        silt_proto::edited::rebased(&seen, &doc.attribution(), &edits).map_err(CoreError::Invalid)?
+                    }
+                    None => edits,
+                };
                 let text = self.doc_text(thread, id);
                 let ops = silt_proto::edited::doc_ops(&text, &edits).map_err(CoreError::Invalid)?;
                 let family = self.threads[&thread].family;
                 for op in ops {
                     self.append_page(family, thread, PageOp::Text { artifact: id, op }).await?;
                 }
-                Ok(serde_json::json!({ "text": self.doc_text(thread, id) }))
+                Ok(self.doc_read(thread, id))
             }
         }
     }
@@ -89,7 +101,7 @@ impl Core {
                     silt_proto::edited::AxisName::Rows => silt_sheet::ROWS,
                     silt_proto::edited::AxisName::Columns => silt_sheet::COLUMNS,
                 };
-                if count == 0 || len + count > most {
+                if count == 0 || len.checked_add(count).is_none_or(|grown| grown > most) {
                     return Err(CoreError::Invalid(format!("a sheet has at most {most} of them")));
                 }
                 let mark = if axis == silt_proto::edited::AxisName::Rows { "r" } else { "c" };
@@ -117,6 +129,27 @@ impl Core {
                 let log = self.local_log(family_id);
                 silt_log::doc_text_in(log, &crate::page::graph_of(log), thread, artifact)
             }
+        }
+    }
+
+    /// A doc's text, and the version it's at, which the person's next edit
+    /// names.
+    fn doc_read(&self, thread: ThreadId, id: ArtifactId) -> serde_json::Value {
+        let graph = self.family_graph(thread);
+        let family_id = self.threads[&thread].family;
+        let head = match self.families.get(&family_id) {
+            Some(family) => family.thread_head(thread),
+            None => silt_log::thread_head_in(self.local_log(family_id), &graph, thread),
+        };
+        serde_json::json!({ "text": self.doc_text(thread, id), "base": head.to_string() })
+    }
+
+    /// The causal graph of the thread's family, as this machine has it.
+    fn family_graph(&self, thread: ThreadId) -> std::borrow::Cow<'_, silt_crdt::CausalGraph> {
+        let family_id = self.threads[&thread].family;
+        match self.families.get(&family_id) {
+            Some(family) => std::borrow::Cow::Borrowed(family.graph()),
+            None => std::borrow::Cow::Owned(crate::page::graph_of(self.local_log(family_id))),
         }
     }
 

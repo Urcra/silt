@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chartTable, columnName, csvOf, layout, parsed, partDocument, shown, slideFromHash, splice } from './typed'
+import { canvasOf, chartTable, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
 
 describe('the artifact types', () => {
   it('opens a deck at the slide a link names, within the deck', () => {
@@ -34,12 +34,38 @@ describe('the artifact types', () => {
   })
 })
 
+describe("a peer's typed version", () => {
+  it('is drawn only once it has the shape its viewer draws', () => {
+    expect(deckOf('{"slides":[{"title":"One","html":"<p>1</p>"}]}')?.slides.length).toBe(1)
+    expect(deckOf('{"slides":[{"title":1,"html":"x"}]}')).toBeNull()
+    expect(deckOf('{"slides":"nope"}')).toBeNull()
+    expect(deckOf(JSON.stringify({ slides: Array(501).fill({ title: 't', html: 'h' }) }))).toBeNull()
+    expect(canvasOf('{"boards":[{"id":"a","name":"A","width":10,"height":10,"html":""}]}')?.boards.length).toBe(1)
+    expect(canvasOf('{"boards":[{"id":"a","name":"A","width":-1,"height":10,"html":""}]}')).toBeNull()
+    const page = { title: 'T', sources: [{ id: 's', name: 'S', kind: 'manual', detail: '', at: 'now' }], blocks: [] as unknown[] }
+    expect(dataPageOf(JSON.stringify(page))?.title).toBe('T')
+    page.blocks = [{ type: 'chart', chart: 'line', series: [{ name: 'a', points: [['x', 1], ['y', null]] }], source: 's' }]
+    expect(dataPageOf(JSON.stringify(page))).not.toBeNull()
+    page.blocks = [{ type: 'chart', chart: 'line', series: [{ name: 'a', points: [['x', 'one']] }], source: 's' }]
+    expect(dataPageOf(JSON.stringify(page))).toBeNull()
+    page.blocks = [{ type: 'table', columns: ['a'], rows: 'all of them', source: 's' }]
+    expect(dataPageOf(JSON.stringify(page))).toBeNull()
+  })
+})
+
 describe('docs and sheets', () => {
   it("sends one splice for what was typed, counting characters as the doc's text does", () => {
     expect(splice('# Plan\nship', '# Plan\n- ship')).toEqual({ pos: 7, delete: 0, insert: '- ' })
     expect(splice('abcdef', 'abXYef')).toEqual({ pos: 2, delete: 2, insert: 'XY' })
     expect(splice('é😀a', 'é😀')).toEqual({ pos: 2, delete: 1, insert: '' })
     expect(splice('same', 'same')).toBeNull()
+  })
+  it('moves what was typed during a send onto the text with the agent\'s edits', () => {
+    // The agent added a line at the top while the person kept typing at the end.
+    expect(rebaseDraft('# Plan\n- ship\n', '# Plan\n- ship\n- demo\n', 'Goals\n# Plan\n- ship\n')).toBe('Goals\n# Plan\n- ship\n- demo\n')
+    // Typed before what the agent changed: it keeps its place.
+    expect(rebaseDraft('a b c', 'a! b c', 'a b C!')).toBe('a! b C!')
+    expect(rebaseDraft('same', 'same', 'same, merged')).toBe('same, merged')
   })
   it('names columns as spreadsheets do', () => {
     expect([0, 25, 26, 701].map(columnName)).toEqual(['A', 'Z', 'AA', 'ZZ'])

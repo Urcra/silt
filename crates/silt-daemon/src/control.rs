@@ -179,12 +179,14 @@ impl Core {
             return;
         };
         let id = command.id;
+        let command_thread = command.thread.to_string();
         let streams = matches!(command.command, RemoteCommand::Sample { .. });
         let request = self.checked(server, command);
         // A page's question streams: what's said so far goes to the server
         // as it comes, for the hosted app to show.
-        let streaming =
-            (streams && request.is_ok()).then(|| tokio::spawn(stream_progress(remote.clone(), id, self.bus.subscribe())));
+        let thread = command_thread.clone();
+        let streaming = (streams && request.is_ok())
+            .then(|| tokio::spawn(stream_progress(remote.clone(), id, thread, self.bus.subscribe(), self.events.clone())));
         let (reply, response) = oneshot::channel();
         match request {
             Ok(request) => self.request(request, reply).await,
@@ -255,13 +257,14 @@ impl Core {
                 artifact,
                 asked: serde_json::from_value(asked).map_err(|error| format!("that isn't a connector call: {error}"))?,
             },
-            RemoteCommand::Sample { question, images } => Request::Sample {
+            RemoteCommand::Sample { question, images, model, tools } => Request::Sample {
                 thread,
                 artifact: None,
                 ask: Some(control_ask(id)),
                 input: serde_json::Value::String(question),
                 images,
-                tools: Vec::new(),
+                tools,
+                model,
             },
             RemoteCommand::Start { agent, preset: chosen, mode } => Request::AcpStart {
                 thread: Some(thread),
@@ -282,8 +285,15 @@ fn control_ask(id: i64) -> String {
 const PROGRESS_EVERY: Duration = Duration::from_millis(300);
 
 /// Tells the server what the agent has said so far of command `id`'s
-/// answer, at most every [`PROGRESS_EVERY`], until aborted.
-async fn stream_progress(remote: crate::remote::Remote, id: i64, mut bus: tokio::sync::broadcast::Receiver<BusEvent>) {
+/// answer, at most every [`PROGRESS_EVERY`], and passes the agent's calls
+/// of the page's tools to the page through it, until aborted.
+async fn stream_progress(
+    remote: crate::remote::Remote,
+    id: i64,
+    thread: String,
+    mut bus: tokio::sync::broadcast::Receiver<BusEvent>,
+    events: tokio::sync::mpsc::UnboundedSender<crate::core::Event>,
+) {
     let ask = control_ask(id);
     let mut latest: Option<String> = None;
     let mut sent_at = Instant::now() - PROGRESS_EVERY;
@@ -291,6 +301,28 @@ async fn stream_progress(remote: crate::remote::Remote, id: i64, mut bus: tokio:
         let wait = PROGRESS_EVERY.saturating_sub(sent_at.elapsed());
         match tokio::time::timeout(wait, bus.recv()).await {
             Ok(Ok(BusEvent::Sample { ask: of, text })) if of == ask => latest = Some(text),
+            Ok(Ok(BusEvent::SampleTool { ask: of, call, name, input })) if of == ask => {
+                let (remote, events, ask, thread) = (remote.clone(), events.clone(), ask.clone(), thread.clone());
+                tokio::spawn(async move {
+                    let answered = remote.command_tool(id, call, &name, &input).await;
+                    let result = match answered.map(serde_json::from_value::<crate::protocol::SampleToolResult>) {
+                        Ok(Ok(result)) => result,
+                        Ok(Err(error)) => crate::protocol::SampleToolResult {
+                            ok: false,
+                            value: serde_json::Value::Null,
+                            error: error.to_string(),
+                        },
+                        Err(error) => crate::protocol::SampleToolResult {
+                            ok: false,
+                            value: serde_json::Value::Null,
+                            error: error.to_string(),
+                        },
+                    };
+                    let request = Request::SampleToolResult { thread, artifact: String::new(), ask, call, result };
+                    let (reply, _) = oneshot::channel();
+                    let _ = events.send(crate::core::Event::Request(request, reply));
+                });
+            }
             Ok(Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
             Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => return,
             Err(_) => {}

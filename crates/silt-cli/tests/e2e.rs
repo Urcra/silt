@@ -1675,6 +1675,14 @@ fn a_page_saves_itself_knows_its_viewer_and_asks_an_agent() {
     let viewer = api.ok("GET", &format!("/api/threads/{thread}/viewer"), None);
     assert_eq!((&viewer["id"], &viewer["level"]), (&"local".into(), &"owner".into()), "{viewer}");
 
+    // Nothing is asked until the person allows what the version declares.
+    let grants = format!("/api/threads/{thread}/artifacts/{id}/grants");
+    let (refused, said) =
+        api.call("POST", &format!("/api/threads/{thread}/artifacts/{id}/sample"), Some(serde_json::json!({"input": "hi"})));
+    assert!(!refused && said.to_string().contains("not_granted"), "{said}");
+    api.ok("PUT", &grants, Some(serde_json::json!({"capability": "sample", "state": "granted"})));
+    let held = api.ok("GET", &grants, None);
+    assert_eq!(held["sample"], "granted", "{held}");
     let answer = api.ok(
         "POST",
         &format!("/api/threads/{thread}/artifacts/{id}/sample"),
@@ -1702,6 +1710,11 @@ fn a_page_saves_itself_knows_its_viewer_and_asks_an_agent() {
         asking.join().expect("asked")
     });
     assert_eq!(answered["text"], "Sampled: Which row? [lookup: row 42]", "{answered}");
+    // A tier picks print mode's model; a model's name must be one, never an option.
+    let quick = api.ok("POST", &sample, Some(serde_json::json!({"input": "Quickly", "model": {"model_tier": "quick"}})));
+    assert_eq!((&quick["text"], &quick["model_applied"]), (&"Sampled: Quickly (on haiku)".into(), &"haiku".into()), "{quick}");
+    let (refused, said) = api.call("POST", &sample, Some(serde_json::json!({"input": "Hi", "model": {"model": "--yolo"}})));
+    assert!(!refused && said.to_string().contains("isn't a Claude model"), "{said}");
     let (refused, _) = api.call(
         "POST",
         &format!("/api/threads/{thread}/artifacts/{}/sample", "0".repeat(12)),
@@ -1782,6 +1795,22 @@ fn a_page_has_files_beside_it_takes_uploads_and_reads_the_threads_files() {
         Some(serde_json::json!({"op": "add", "name": "x.html", "media_type": "text/html", "data": png})),
     );
     assert!(!refused, "a page's files are never pages");
+    // An SVG someone adds is kept as a picture only.
+    let svg = base64::engine::general_purpose::STANDARD.encode(
+        br#"<svg xmlns="http://www.w3.org/2000/svg" onload="steal()"><script>steal()</script><rect width="4" height="4"/></svg>"#,
+    );
+    let drawing = api.ok(
+        "POST",
+        &assets,
+        Some(serde_json::json!({"op": "add", "name": "d.svg", "media_type": "image/svg+xml", "data": svg})),
+    );
+    let kept =
+        api.ok("GET", &format!("/api/threads/{thread}/artifacts/{id}/assets/{}", drawing["id"].as_str().expect("id")), None);
+    let kept =
+        String::from_utf8(base64::engine::general_purpose::STANDARD.decode(kept["data"].as_str().expect("data")).expect("b64"))
+            .expect("utf-8");
+    assert!(kept.contains("<rect") && !kept.contains("steal"), "{kept}");
+    api.ok("POST", &assets, Some(serde_json::json!({"op": "delete", "id": drawing["id"]})));
     // The agent reads a file someone added, as text when it is text.
     let csv = base64::engine::general_purpose::STANDARD.encode(b"name,score\nada,9\n");
     let table = api.ok(
@@ -1801,6 +1830,10 @@ fn a_page_has_files_beside_it_takes_uploads_and_reads_the_threads_files() {
     assert_eq!(api.ok("POST", &assets, Some(serde_json::json!({"op": "list"}))).as_array().map(Vec::len), Some(0));
 
     let files = format!("/api/threads/{thread}/artifacts/{id}/files");
+    let (refused, said) = api.call("POST", &files, Some(serde_json::json!({"op": "list"})));
+    assert!(!refused && said.to_string().contains("not_granted"), "asked first: {said}");
+    let grant = serde_json::json!({"capability": "files", "state": "granted"});
+    api.ok("PUT", &format!("/api/threads/{thread}/artifacts/{id}/grants"), Some(grant));
     let listed = api.ok("POST", &files, Some(serde_json::json!({"op": "list", "recursive": true})));
     let paths: Vec<&str> =
         listed["entries"].as_array().expect("entries").iter().filter_map(|entry| entry["path"].as_str()).collect();
@@ -1909,8 +1942,17 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
         (&"doc".into(), &16.into(), &20.into(), &"ship".into()),
         "{moved}"
     );
+    // The person reads, the agent edits, then the person's edit, counted
+    // against what they read, lands where they meant it.
+    let seen = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));
+    assert_eq!(seen["text"], "# Plan\n- test\n- ship\n");
     prompt("Doc edit");
-    assert_eq!(api.ok("POST", &path, Some(serde_json::json!({"op": "read"})))["text"], "# Plan\n- test\n- ship on Friday\n");
+    let end = "# Plan\n- test\n- ship\n".chars().count();
+    let late =
+        serde_json::json!({"op": "edit", "base": seen["base"], "edits": [{"pos": end, "delete": 0, "insert": "- demo\n"}]});
+    let merged = api.ok("POST", &path, Some(late));
+    assert_eq!(merged["text"], "# Plan\n- test\n- ship on Friday\n- demo\n", "both edits, each where it was meant");
+    assert_ne!(merged["base"], seen["base"], "the next edit counts from here");
     // Search finds the doc's text as it stands, words the person typed too.
     let found = api.ok("GET", "/api/search?q=test%20frid", None);
     let hit = found.as_array().and_then(|hits| hits.iter().find(|hit| hit["artifact"] == doc.as_str())).expect("a doc hit");
@@ -1932,7 +1974,7 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
         "{saved}"
     );
     assert_eq!((&kept["note"], &kept["id"]), (&"Plan agreed".into(), &doc.as_str().into()), "{kept}");
-    assert_eq!(artifact_text(&api, &thread, kept), "# Plan\n- test\n- ship on Friday\n");
+    assert_eq!(artifact_text(&api, &thread, kept), "# Plan\n- test\n- ship on Friday\n- demo\n");
     // A PDF of it, printed where there's a headless browser.
     let page = serde_json::json!({"html": "<!doctype html><h1>Plan</h1><ul><li>test</li></ul>"});
     let (printed, pdf) = api.call("POST", &format!("/api/threads/{thread}/artifacts/{doc}/pdf"), Some(page));
@@ -2003,6 +2045,8 @@ fn a_page_calls_a_ticked_tool_of_a_page_connector() {
     assert_eq!(search["read_only"], true, "{search}");
 
     let mcp = format!("/api/threads/{thread}/artifacts/{id}/mcp");
+    let grant = serde_json::json!({"capability": "mcp", "state": "granted"});
+    api.ok("PUT", &format!("/api/threads/{thread}/artifacts/{id}/grants"), Some(grant));
     let call = serde_json::json!({"op": "call", "server": "silt", "tool": "silt_history_search", "input": {"query": "Artifact"}});
     let (refused, said) = api.call("POST", &mcp, Some(call.clone()));
     assert!(!refused && said.to_string().contains("not_granted"), "not ticked yet: {said}");
@@ -2049,6 +2093,7 @@ fn an_artifact_takes_the_repositorys_design_system() {
     let made = artifacts_of(&api, &thread);
     assert_eq!(made.len(), 1, "{made:?}");
     assert_eq!(made[0]["design_system"], "nous");
+    assert_eq!(made[0]["contract"], silt_proto::artifact::CONTRACT, "a page is made for the newest contract, and keeps it");
     let style = made[0]["style"].as_str().expect("a style blob");
     let css = api.ok("GET", &format!("/api/threads/{thread}/artifacts/{style}"), None);
     assert_eq!(css["media_type"], "text/css");

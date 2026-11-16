@@ -1678,6 +1678,25 @@ async fn page_data_is_written_under_the_versions_rules_by_who_wrote_it() {
     let carol = &world.people.iter().find(|(name, _)| *name == "carol").expect("carol").1;
     let as_alice = family.delta(ActorId(77), THREAD, Author::User, 6, family.thread_head(THREAD), vote("alice"));
     assert_eq!(carol.push(vec![as_alice]).await, StatusCode::FORBIDDEN, "carol can't vote as alice");
+    // A version forged under alice's actor, loosening the rules, is dropped
+    // with the push, and carol's write is judged by the real version's.
+    let loose = serde_json::json!({
+        "t": "artifact", "id": "0123456789ab", "version": 2, "title": "Lunch poll", "kind": "html",
+        "media_type": "text/html", "blob": "ab".repeat(32), "size": 1, "inline": false,
+        "capabilities": {"db": {"rules": [{"path": "votes", "read": "read", "write": "comment"}]}}
+    });
+    let session = SessionRef { agent: "acp".into(), id: "s".into() };
+    let forged = family.delta(
+        ActorId(1),
+        THREAD,
+        Author::User,
+        6,
+        family.thread_head(THREAD),
+        Op::Conv(ConvOp::Native { session, file: SessionFile::Main, line: loose.to_string() }),
+    );
+    let as_alice_again =
+        family.delta(ActorId(77), THREAD, Author::User, 7, silt_types::Frontier::single(forged.span.last()), vote("alice"));
+    assert_eq!(carol.push(vec![forged, as_alice_again]).await, StatusCode::FORBIDDEN, "a forged version loosens nothing");
     let own = applied(family, family.delta(ActorId(77), THREAD, Author::User, 6, family.thread_head(THREAD), vote("carol")));
     assert_eq!(carol.push(vec![own]).await, StatusCode::OK, "carol votes as herself");
 
@@ -1804,8 +1823,14 @@ async fn docs_and_sheets_are_edited_from_the_hosted_app_by_who_may() {
     assert_eq!(erin.post(&doc, typed.clone()).await.0, StatusCode::NOT_FOUND, "erin can't read the thread");
     let (status, after) = carol.post(&doc, typed).await;
     assert_eq!((status, &after["text"]), (StatusCode::OK, &"# Plan\n".into()), "carol may comment, so she edits: {after}");
+    let (_, read) = carol.post(&doc, serde_json::json!({"op": "read"})).await;
     let (_, after) = alice.post(&doc, serde_json::json!({"op": "edit", "edits": [{"old": "Plan", "new": "Launch plan"}]})).await;
     assert_eq!(after["text"], "# Launch plan\n");
+    // Carol's edit, counted against what she read before Alice's, lands where she meant it.
+    let late = serde_json::json!({"op": "edit", "base": read["base"], "edits": [{"pos": 7, "delete": 0, "insert": "- ship\n"}]});
+    let (status, merged) = carol.post(&doc, late).await;
+    assert_eq!((status, &merged["text"]), (StatusCode::OK, &"# Launch plan\n- ship\n".into()), "{merged}");
+    alice.post(&doc, serde_json::json!({"op": "edit", "edits": [{"old": "- ship\n", "new": ""}]})).await;
 
     let sheet = format!("/threads/{THREAD}/artifacts/ba9876543210/sheet");
     let set = serde_json::json!({"op": "set", "cells": {"A1": "2", "A2": "=A1*3"}});

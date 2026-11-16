@@ -21,14 +21,16 @@ use crate::app::Browser;
 #[derive(Default)]
 pub(crate) struct Rooms {
     hub: Hub,
-    peers: HashMap<String, mpsc::UnboundedSender<String>>,
+    peers: HashMap<String, mpsc::Sender<String>>,
 }
 
 impl Rooms {
     fn deliver(&self, deliveries: Deliveries) {
         for (peer, heard) in deliveries {
+            // A view that stops reading loses what it can't keep up with,
+            // rather than growing the server's memory.
             if let Some(sender) = self.peers.get(&peer) {
-                let _ = sender.send(serde_json::to_string(&heard).unwrap_or_default());
+                let _ = sender.try_send(serde_json::to_string(&heard).unwrap_or_default());
             }
         }
     }
@@ -38,7 +40,18 @@ pub(crate) fn routes() -> Router<Server> {
     Router::new().route("/app/api/rooms", get(socket))
 }
 
-async fn socket(State(server): State<Server>, Extension(browser): Extension<Browser>, upgrade: WebSocketUpgrade) -> Response {
+async fn socket(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    headers: axum::http::HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    use axum::response::IntoResponse as _;
+    // A browser sends no custom header on a WebSocket's handshake, so the
+    // cross-site check the API makes is made on its origin here.
+    if !crate::pages::same_origin(&server, &headers) {
+        return axum::http::StatusCode::FORBIDDEN.into_response();
+    }
     upgrade.max_message_size(64 * 1024).on_upgrade(move |socket| serve(socket, server, browser.user))
 }
 
@@ -51,6 +64,49 @@ pub(crate) async fn device_socket(
 ) -> Response {
     let user = caller.user;
     upgrade.max_message_size(64 * 1024).on_upgrade(move |socket| serve(socket, server, user))
+}
+
+/// What the thread's agent says to a page's room, from the device it runs
+/// on: it joins once as the agent, and hears what the room kept.
+#[derive(Deserialize)]
+pub(crate) struct AgentSays {
+    thread: String,
+    artifact: String,
+    #[serde(default)]
+    emit: Option<(String, serde_json::Value)>,
+}
+
+/// The thread's agent speaks in, or listens to, a page's room here, for a
+/// thread whose views meet in this server's rooms (ADR 0081).
+pub(crate) async fn agent(
+    State(server): State<Server>,
+    Extension(caller): Extension<crate::Caller>,
+    axum::Json(says): axum::Json<AgentSays>,
+) -> Result<axum::Json<serde_json::Value>, crate::ApiError> {
+    use silt_proto::rooms::Heard;
+    let artifact: silt_types::ArtifactId = says.artifact.parse().map_err(|_| crate::bad_request("not an artifact id"))?;
+    let page = crate::browse::page_of(&server, caller.user, &says.thread, artifact).await?;
+    let config = page.declared.get("room").cloned().ok_or_else(|| crate::bad_request("this page doesn't declare room"))?;
+    let key = RoomKey { thread: page.thread.to_string(), artifact: says.artifact, name: String::new() };
+    let peer = format!("agent-{}", page.thread.short());
+    let now = crate::now_ms();
+    let mut rooms = server.shared.page_rooms.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !rooms.hub.present(&key, now).iter().any(|present| present.info.peer == peer) {
+        let info = PeerInfo { peer: peer.clone(), user: page.me.clone(), kind: "agent".into() };
+        let deliveries = rooms.hub.join(key.clone(), info, page.level, silt_proto::rooms::topic_levels(&config), now);
+        rooms.deliver(deliveries);
+    }
+    if let Some((topic, data)) = says.emit {
+        let sent = rooms.hub.sent(&key, &peer, Sent::Emit { topic, data }, now);
+        if let Some((_, Heard::Refused { reason })) = sent.iter().find(|(to, _)| *to == peer) {
+            return Err(crate::bad_request(format!("the room refused it: {reason}")));
+        }
+        rooms.deliver(sent);
+    }
+    let kept: Vec<serde_json::Value> =
+        rooms.hub.kept(&key).into_iter().map(|(topic, data, from)| json!({"topic": topic, "data": data, "from": from})).collect();
+    let peers = rooms.hub.present(&key, now);
+    Ok(axum::Json(json!({ "messages": kept, "peers": peers })))
 }
 
 #[derive(Deserialize)]
@@ -79,7 +135,7 @@ async fn serve(mut socket: WebSocket, server: Server, user: crate::UserId) {
     };
     let key = RoomKey { thread: page.thread.to_string(), artifact: join.artifact, name: join.name };
     let peer = uuid::Uuid::new_v4().simple().to_string();
-    let (sender, mut heard) = mpsc::unbounded_channel();
+    let (sender, mut heard) = mpsc::channel(silt_proto::rooms::QUEUED);
     {
         let mut rooms = server.shared.page_rooms.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         rooms.peers.insert(peer.clone(), sender);

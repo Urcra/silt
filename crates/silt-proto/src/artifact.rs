@@ -104,6 +104,27 @@ pub fn asset_media_type_ok(media_type: &str) -> bool {
     )
 }
 
+/// The most the files people add to one artifact's page take on a machine,
+/// and by default on a server, whose `artifact_assets_mib` may change it.
+pub const PAGE_ASSETS_BYTES: u64 = 256 << 20;
+
+/// The runtime contract a page's `silt` is: the newest, and every one this
+/// Silt still serves. A version keeps the one it was made with until a new
+/// version asks for another (ADR 0072).
+pub const CONTRACT: &str = "1";
+pub const CONTRACTS: &[&str] = &["1"];
+
+/// The contract a new version gets: the one it asks for (`latest` for the
+/// newest), else its last version's, else the newest.
+pub fn contract_for(asked: Option<&str>, previous: Option<&str>) -> Result<String, String> {
+    match asked {
+        Some("latest") => Ok(CONTRACT.to_owned()),
+        Some(asked) if CONTRACTS.contains(&asked) => Ok(asked.to_owned()),
+        Some(asked) => Err(format!("this Silt serves contract {} only, not {asked}", CONTRACTS.join(", "))),
+        None => Ok(previous.filter(|kept| CONTRACTS.contains(kept)).unwrap_or(CONTRACT).to_owned()),
+    }
+}
+
 /// The most of a page's question to `sample`, in bytes.
 pub const SAMPLE_BYTES: usize = 256 * 1024;
 /// The most images one question shows, each at most [`SAMPLE_IMAGE_BYTES`]
@@ -147,7 +168,7 @@ pub const SAMPLE_TOOLS: usize = 16;
 
 /// A tool a page offers the agent answering its question: the page runs
 /// it, in the viewer's browser, when the agent calls it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SampleTool {
     pub name: String,
@@ -185,6 +206,37 @@ pub fn sample_tools(tools: &[SampleTool]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Which model answers a page's question: a tier, or a model the page
+/// names; Claude Code's own default when neither.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SampleModel {
+    /// `quick`, `default` or `complex`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_tier: Option<String>,
+    /// A Claude model's id, such as `claude-sonnet-5-5`; it wins over the tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+impl SampleModel {
+    /// What print mode's `--model` is given, if anything.
+    pub fn resolved(&self) -> Result<Option<String>, String> {
+        if let Some(model) = &self.model {
+            let named = model.starts_with("claude-")
+                && model.len() <= 64
+                && model.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.');
+            return if named { Ok(Some(model.clone())) } else { Err(format!("{model:?} isn't a Claude model's id")) };
+        }
+        match self.model_tier.as_deref() {
+            None | Some("default") => Ok(None),
+            Some("quick") => Ok(Some("haiku".into())),
+            Some("complex") => Ok(Some("opus".into())),
+            Some(other) => Err(format!("{other} isn't a model tier: quick, default or complex")),
+        }
+    }
 }
 
 /// Whether a version's declaration lets its page show the agent images.
@@ -268,6 +320,25 @@ pub fn checked_capabilities(declared: &serde_json::Map<String, serde_json::Value
         checked.insert(name.clone(), config);
     }
     Ok(checked)
+}
+
+/// What `declared` says of `capability`, as text that compares alike
+/// however its keys were ordered. A viewer's grant holds while the latest
+/// version declares the same, so a version that widens what a page may do
+/// asks again.
+pub fn declaration(declared: Option<&Capabilities>, capability: &str) -> Option<String> {
+    fn sorted(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut keys: Vec<_> = map.keys().collect();
+                keys.sort();
+                serde_json::Value::Object(keys.into_iter().map(|key| (key.clone(), sorted(&map[key]))).collect())
+            }
+            serde_json::Value::Array(items) => serde_json::Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    declared?.get(capability).map(|config| sorted(config).to_string())
 }
 
 /// One change to a version's source: `old` occurs exactly once, and
@@ -376,6 +447,39 @@ mod sample_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_declaration_reads_alike_whatever_its_order() {
+        let one: Capabilities =
+            serde_json::from_str(r#"{"mcp":{"servers":[{"tools":["a"],"server":"x"}],"z":1}}"#).expect("json");
+        let two: Capabilities =
+            serde_json::from_str(r#"{"mcp":{"z":1,"servers":[{"server":"x","tools":["a"]}]}}"#).expect("json");
+        assert_eq!(declaration(Some(&one), "mcp"), declaration(Some(&two), "mcp"));
+        let wider: Capabilities =
+            serde_json::from_str(r#"{"mcp":{"z":1,"servers":[{"server":"x","tools":["a","b"]}]}}"#).expect("json");
+        assert_ne!(declaration(Some(&one), "mcp"), declaration(Some(&wider), "mcp"));
+        assert_eq!(declaration(Some(&one), "sample"), None);
+    }
+
+    #[test]
+    fn a_version_keeps_its_contract_until_it_asks_for_another() {
+        assert_eq!(contract_for(None, None).as_deref(), Ok(CONTRACT));
+        assert_eq!(contract_for(None, Some("1")).as_deref(), Ok("1"));
+        assert_eq!(contract_for(Some("latest"), Some("1")).as_deref(), Ok(CONTRACT));
+        assert!(contract_for(Some("9"), None).is_err());
+    }
+
+    #[test]
+    fn a_question_names_a_tier_or_a_model() {
+        let asked = |tier: Option<&str>, model: Option<&str>| {
+            SampleModel { model_tier: tier.map(str::to_owned), model: model.map(str::to_owned) }.resolved()
+        };
+        assert_eq!(asked(None, None), Ok(None));
+        assert_eq!(asked(Some("quick"), None), Ok(Some("haiku".into())));
+        assert_eq!(asked(Some("complex"), Some("claude-sonnet-5-5")), Ok(Some("claude-sonnet-5-5".into())), "a named model wins");
+        assert!(asked(Some("huge"), None).is_err());
+        assert!(asked(None, Some("--dangerously-skip")).is_err(), "never an option");
+    }
 
     #[test]
     fn a_question_offers_few_plainly_named_tools() {

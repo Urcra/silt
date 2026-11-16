@@ -160,7 +160,7 @@ fn show_tools() -> Vec<Value> {
         }),
         json!({
             "name": "silt_artifact_room",
-            "description": "Speak in, or listen to, the room of a page that declares room (ADR 0081): the people viewing it on this machine right now. Emit a moment to a topic, and read the last 100 moments and who's present. Nothing in a room is kept; lasting changes go in page data or a new version.",
+            "description": "Speak in, or listen to, the room of a page that declares room (ADR 0081): the people viewing it right now, on every machine when the thread syncs with a server. Emit a moment to a topic, and read the last 100 moments and who's present. Nothing in a room is kept; lasting changes go in page data or a new version.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -227,7 +227,8 @@ fn show_tools() -> Vec<Value> {
                     "note": {"type": "string", "description": "What this version changed, in a few words, shown in the version menu"},
                     "description": {"type": "string", "description": "One sentence on what the artifact is, shown on its card; kept for later versions"},
                     "capabilities": {"type": "object", "description": "What the html page may use through silt.use(name), as {name: config}: db, artifact, user, downloads, comments, sample and the others silt_artifact_guide lists. Leave it out to keep the last version's; {} clears them"},
-                    "design_system": {"type": "string", "description": "The design system whose tokens an html artifact's frame gets, by name, or none; by default the last version's, else the one silt_artifact_guide says applies"}
+                    "design_system": {"type": "string", "description": "The design system whose tokens an html artifact's frame gets, by name, or none; by default the last version's, else the one silt_artifact_guide says applies"},
+                    "contract": {"type": "string", "description": "The runtime contract an html page is written for, as silt.version reads it; by default its last version's. Pass latest only when moving a page to the newest on purpose."}
                 },
                 "required": []
             }

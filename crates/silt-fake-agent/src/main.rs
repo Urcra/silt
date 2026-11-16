@@ -400,7 +400,7 @@ async fn agent() -> Result<()> {
                         let read = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("fn acp() {}"));
                         notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("read-2", read)))?;
                     }
-                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") || prompt.contains("Read asset") || prompt.contains("Doc edit") || prompt.contains("Sheet set") {
+                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") || prompt.contains("Read asset") || prompt.contains("Room say") || prompt.contains("Doc edit") || prompt.contains("Sheet set") {
                         show(&worker, &session, &state, &cwd, &prompt).await?;
                     }
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
@@ -506,6 +506,11 @@ async fn show(
         && let Some(last) = last.clone()
     {
         ("silt_artifact_sheet", serde_json::json!({"id": last, "set": {"B3": "=SUM(B1:B2)", "A3": "total"}, "read": "A1:B3"}))
+    } else if prompt.contains("Room say")
+        && let Some(last) = last.clone()
+    {
+        // The agent speaks in the page's room (ADR 0081).
+        ("silt_artifact_room", serde_json::json!({"id": last, "topic": "note", "data": {"said": "hello"}}))
     } else if let Some(asset) = prompt.split("Read asset ").nth(1).map(str::trim)
         && let Some(last) = last.clone()
     {

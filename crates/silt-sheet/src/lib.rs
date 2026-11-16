@@ -15,7 +15,15 @@ use serde::{Deserialize, Serialize};
 pub const ROWS: usize = 10_000;
 pub const COLUMNS: usize = 200;
 /// How deep a formula's references may chain before it's an error.
-const DEPTH: usize = 512;
+const DEPTH: usize = 256;
+/// How deeply one formula nests parentheses, calls and signs, so a cell
+/// can't recurse past a thread's stack.
+const NESTING: usize = 64;
+/// The longest text a value holds, in bytes, as spreadsheets cap a cell.
+pub const TEXT_BYTES: usize = 32 * 1024;
+/// How many passes `evaluate` makes over cells whose references ran deeper
+/// than [`DEPTH`], each picking up the values the last one kept.
+const PASSES: usize = 8;
 
 /// A formula's error, as a sheet shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +76,8 @@ impl fmt::Display for Value {
 }
 
 fn number_text(number: f64) -> String {
+    // A sum of nothing can come out as negative zero.
+    let number = if number == 0.0 { 0.0 } else { number };
     if number.fract() == 0.0 && number.abs() < 1e15 {
         format!("{number:.0}")
     } else {
@@ -233,7 +243,18 @@ fn lex(source: &str) -> Result<Vec<(Token, std::ops::Range<usize>)>, CellError> 
                 tokens.push((Token::Error(error), start..end_of(at)));
             }
             '0'..='9' | '.' => {
-                let text: String = chars[at..].iter().map(|(_, c)| *c).take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                let mut text: String =
+                    chars[at..].iter().map(|(_, c)| *c).take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                // An exponent, as in 1e5 or 2.5E-3.
+                let after = at + text.chars().count();
+                if chars.get(after).is_some_and(|(_, c)| matches!(c, 'e' | 'E')) {
+                    let sign = usize::from(chars.get(after + 1).is_some_and(|(_, c)| matches!(c, '+' | '-')));
+                    let digits =
+                        chars[(after + 1 + sign).min(chars.len())..].iter().take_while(|(_, c)| c.is_ascii_digit()).count();
+                    if digits > 0 {
+                        text.extend(chars[after..after + 1 + sign + digits].iter().map(|(_, c)| *c));
+                    }
+                }
                 at += text.chars().count();
                 let number = text.parse().map_err(|_| CellError::Value)?;
                 tokens.push((Token::Number(number), start..end_of(at)));
@@ -370,6 +391,8 @@ enum Expr {
 struct Parser {
     tokens: Vec<Token>,
     at: usize,
+    /// How deeply what's being read nests.
+    depth: usize,
 }
 
 impl Parser {
@@ -401,25 +424,37 @@ impl Parser {
         Ok(left)
     }
 
+    /// Exponents left to right, as spreadsheets read `2^3^2`.
     fn power(&mut self) -> Result<Expr, CellError> {
-        let base = self.unary()?;
-        if self.peek() == Some(&Token::Op("^")) {
+        let mut base = self.unary()?;
+        while self.peek() == Some(&Token::Op("^")) {
             self.at += 1;
-            let exponent = self.power()?;
-            return Ok(Expr::Binary("^", Box::new(base), Box::new(exponent)));
+            let exponent = self.unary()?;
+            base = Expr::Binary("^", Box::new(base), Box::new(exponent));
         }
         Ok(base)
+    }
+
+    /// One level deeper, refused past [`NESTING`].
+    fn deeper<T>(&mut self, read: impl FnOnce(&mut Self) -> Result<T, CellError>) -> Result<T, CellError> {
+        if self.depth >= NESTING {
+            return Err(CellError::Value);
+        }
+        self.depth += 1;
+        let read = read(self);
+        self.depth -= 1;
+        read
     }
 
     fn unary(&mut self) -> Result<Expr, CellError> {
         match self.peek() {
             Some(Token::Op("-")) => {
                 self.at += 1;
-                Ok(Expr::Negate(Box::new(self.unary()?)))
+                Ok(Expr::Negate(Box::new(self.deeper(Self::unary)?)))
             }
             Some(Token::Op("+")) => {
                 self.at += 1;
-                self.unary()
+                self.deeper(Self::unary)
             }
             _ => {
                 let mut expr = self.primary()?;
@@ -460,7 +495,7 @@ impl Parser {
                     return Ok(Expr::Call(name, args));
                 }
                 loop {
-                    args.push(self.binary(0)?);
+                    args.push(self.deeper(|parser| parser.binary(0))?);
                     match self.next() {
                         Some(Token::Comma) => continue,
                         Some(Token::Close) => break,
@@ -470,7 +505,7 @@ impl Parser {
                 Ok(Expr::Call(name, args))
             }
             Token::Open => {
-                let inner = self.binary(0)?;
+                let inner = self.deeper(|parser| parser.binary(0))?;
                 if self.next() != Some(Token::Close) {
                     return Err(CellError::Value);
                 }
@@ -481,9 +516,47 @@ impl Parser {
     }
 }
 
+/// The functions this evaluator computes, which a workbook made from a sheet
+/// may keep as formulas.
+pub const FUNCTIONS: &[&str] = &[
+    "SUM", "AVERAGE", "MIN", "MAX", "COUNT", "COUNTA", "IF", "IFS", "AND", "OR", "NOT", "ROUND", "ABS", "CONCAT", "TEXT", "LEFT",
+    "RIGHT", "LEN", "TODAY", "DATE", "VLOOKUP", "XLOOKUP", "SUMIF", "COUNTIF",
+];
+
+/// Whether `formula` (its `=` optional) is one this evaluator reads, calling
+/// only [`FUNCTIONS`]: what a workbook may keep as a live formula.
+pub fn formula_ok(formula: &str) -> bool {
+    fn calls_known(expr: &Expr) -> bool {
+        match expr {
+            Expr::Value(_) | Expr::Ref(..) | Expr::Range(..) => true,
+            Expr::Negate(inner) | Expr::Percent(inner) => calls_known(inner),
+            Expr::Binary(_, left, right) => calls_known(left) && calls_known(right),
+            Expr::Call(name, args) => FUNCTIONS.contains(&name.as_str()) && args.iter().all(calls_known),
+        }
+    }
+    parse(formula.strip_prefix('=').unwrap_or(formula)).is_ok_and(|expr| calls_known(&expr))
+}
+
+/// The cells `formula` refers to by `A1` address, by row and column.
+pub fn addresses_in(formula: &str) -> Vec<(usize, usize)> {
+    let Some(body) = formula.strip_prefix('=') else { return Vec::new() };
+    lex(body).map_or_else(
+        |_| Vec::new(),
+        |tokens| {
+            tokens
+                .into_iter()
+                .filter_map(|(token, _)| match token {
+                    Token::Ref(row, column) => Some((row, column)),
+                    _ => None,
+                })
+                .collect()
+        },
+    )
+}
+
 fn parse(formula: &str) -> Result<Expr, CellError> {
     let tokens = lex(formula)?.into_iter().map(|(token, _)| token).collect();
-    let mut parser = Parser { tokens, at: 0 };
+    let mut parser = Parser { tokens, at: 0, depth: 0 };
     let expr = parser.binary(0)?;
     if parser.at != parser.tokens.len() {
         return Err(CellError::Value);
@@ -501,13 +574,33 @@ pub struct Sheet<'a> {
 /// Every cell's value; a formula's references are `A1` addresses here (see
 /// [`from_ids`]). A cycle is an error in each cell on it, never a hang.
 pub fn evaluate(sheet: &Sheet<'_>) -> Vec<Vec<Value>> {
-    let mut evaluator = Evaluator { sheet, done: HashMap::new(), visiting: Vec::new() };
-    (0..sheet.cells.len()).map(|row| (0..sheet.cells[row].len()).map(|column| evaluator.cell(row, column)).collect()).collect()
+    let mut evaluator = Evaluator::new(sheet);
+    // A chain of references deeper than DEPTH isn't a cycle: each pass keeps
+    // what it could reach, so the next goes further, as a running total
+    // whose sum sits above it needs.
+    for _ in 0..PASSES {
+        evaluator.deep = false;
+        for row in 0..sheet.cells.len() {
+            for column in 0..sheet.cells[row].len() {
+                evaluator.cell(row, column);
+            }
+        }
+        if !evaluator.deep {
+            break;
+        }
+    }
+    (0..sheet.cells.len())
+        .map(|row| {
+            (0..sheet.cells[row].len())
+                .map(|column| evaluator.done.get(&(row, column)).cloned().unwrap_or(Value::Error(CellError::Num)))
+                .collect()
+        })
+        .collect()
 }
 
 /// One formula's value against `sheet`, as an agent asks for one.
 pub fn evaluate_formula(sheet: &Sheet<'_>, formula: &str) -> Value {
-    let mut evaluator = Evaluator { sheet, done: HashMap::new(), visiting: Vec::new() };
+    let mut evaluator = Evaluator::new(sheet);
     match parse(formula.strip_prefix('=').unwrap_or(formula)) {
         Ok(expr) => evaluator.value(&expr),
         Err(error) => Value::Error(error),
@@ -518,9 +611,30 @@ struct Evaluator<'s, 'a> {
     sheet: &'s Sheet<'a>,
     done: HashMap<(usize, usize), Value>,
     visiting: Vec<(usize, usize)>,
+    /// Whether a value since this was last cleared ran into [`DEPTH`], so
+    /// it isn't kept: a later pass may reach it.
+    deep: bool,
 }
 
-impl Evaluator<'_, '_> {
+impl<'s, 'a> Evaluator<'s, 'a> {
+    fn new(sheet: &'s Sheet<'a>) -> Self {
+        Self { sheet, done: HashMap::new(), visiting: Vec::new(), deep: false }
+    }
+
+    /// The last row, and each row's last column, a range may reach: the
+    /// sheet's own, as every cell past them is empty.
+    fn clamped(&self, top: usize, left: usize, bottom: usize, right: usize) -> Vec<(usize, std::ops::RangeInclusive<usize>)> {
+        let rows = self.sheet.cells.len().min(ROWS);
+        (top..=bottom.min(rows.saturating_sub(1)))
+            .filter(|row| *row < rows)
+            .map(|row| {
+                let columns = self.sheet.cells[row].len().min(COLUMNS);
+                (row, left..=right.min(columns.saturating_sub(1)))
+            })
+            .filter(|(row, columns)| columns.start() < &self.sheet.cells[*row].len().min(COLUMNS))
+            .collect()
+    }
+
     fn raw(&self, row: usize, column: usize) -> &str {
         self.sheet.cells.get(row).and_then(|cells| cells.get(column)).map_or("", String::as_str)
     }
@@ -529,9 +643,14 @@ impl Evaluator<'_, '_> {
         if let Some(value) = self.done.get(&(row, column)) {
             return value.clone();
         }
-        if self.visiting.contains(&(row, column)) || self.visiting.len() >= DEPTH {
+        if self.visiting.contains(&(row, column)) {
             return Value::Error(CellError::Cycle);
         }
+        if self.visiting.len() >= DEPTH {
+            self.deep = true;
+            return Value::Error(CellError::Num);
+        }
+        let deep_before = std::mem::take(&mut self.deep);
         let raw = self.raw(row, column).to_owned();
         let value = match raw.strip_prefix('=') {
             Some(formula) => {
@@ -548,7 +667,11 @@ impl Evaluator<'_, '_> {
             }
             None => Value::of_typed(&raw),
         };
-        self.done.insert((row, column), value.clone());
+        // A value that ran out of depth isn't the cell's; a later pass may reach it.
+        if !self.deep {
+            self.done.insert((row, column), value.clone());
+        }
+        self.deep |= deep_before;
         value
     }
 
@@ -556,8 +679,8 @@ impl Evaluator<'_, '_> {
         match expr {
             Expr::Range(top, left, bottom, right) => {
                 let mut values = Vec::new();
-                for row in *top..=(*bottom).min(ROWS) {
-                    for column in *left..=(*right).min(COLUMNS) {
+                for (row, columns) in self.clamped(*top, *left, *bottom, *right) {
+                    for column in columns {
                         values.push(self.cell(row, column));
                     }
                 }
@@ -570,7 +693,8 @@ impl Evaluator<'_, '_> {
     fn rows_of(&mut self, expr: &Expr) -> Result<Vec<Vec<Value>>, CellError> {
         match expr {
             Expr::Range(top, left, bottom, right) => {
-                Ok((*top..=*bottom).map(|row| (*left..=*right).map(|column| self.cell(row, column)).collect()).collect())
+                let rows = self.clamped(*top, *left, *bottom, *right);
+                Ok(rows.into_iter().map(|(row, columns)| columns.map(|column| self.cell(row, column)).collect()).collect())
             }
             Expr::Ref(row, column) => Ok(vec![vec![self.cell(*row, *column)]]),
             _ => Err(CellError::Value),
@@ -579,6 +703,8 @@ impl Evaluator<'_, '_> {
 
     fn value(&mut self, expr: &Expr) -> Value {
         match self.try_value(expr) {
+            // Nothing infinite or undefined leaves a formula.
+            Ok(Value::Number(number)) if !number.is_finite() => Value::Error(CellError::Num),
             Ok(value) => value,
             Err(error) => Value::Error(error),
         }
@@ -609,7 +735,13 @@ impl Evaluator<'_, '_> {
                     return Err(error);
                 }
                 match *op {
-                    "&" => Value::Text(format!("{}{}", a.text()?, b.text()?)),
+                    "&" => {
+                        let (a, b) = (a.text()?, b.text()?);
+                        if a.len() + b.len() > TEXT_BYTES {
+                            return Err(CellError::Value);
+                        }
+                        Value::Text(a + &b)
+                    }
                     "+" => Value::Number(a.number()? + b.number()?),
                     "-" => Value::Number(a.number()? - b.number()?),
                     "*" => Value::Number(a.number()? * b.number()?),
@@ -698,7 +830,8 @@ impl Evaluator<'_, '_> {
             }
             "NOT" => Value::Bool(!self.value(arg(0)?).truthy()?),
             "ROUND" => {
-                let digits = args.get(1).map_or(Ok(0.0), |digits| self.number(digits))?.trunc() as i32;
+                // Past 15 digits either way, rounding changes nothing a double holds.
+                let digits = (args.get(1).map_or(Ok(0.0), |digits| self.number(digits))?.trunc() as i32).clamp(-15, 15);
                 let scale = 10f64.powi(digits);
                 Value::Number((self.number(arg(0)?)? * scale).round() / scale)
             }
@@ -707,7 +840,11 @@ impl Evaluator<'_, '_> {
                 let mut text = String::new();
                 for arg in args {
                     for value in self.range(arg) {
-                        text.push_str(&value.text()?);
+                        let more = value.text()?;
+                        if text.len() + more.len() > TEXT_BYTES {
+                            return Err(CellError::Value);
+                        }
+                        text.push_str(&more);
                     }
                 }
                 Value::Text(text)
@@ -736,6 +873,10 @@ impl Evaluator<'_, '_> {
             "TODAY" => Value::Number(self.sheet.today),
             "DATE" => {
                 let (year, month, day) = (self.number(arg(0)?)?, self.number(arg(1)?)?, self.number(arg(2)?)?);
+                // Spreadsheets take years 0 to 9999; months and days roll over within reason.
+                if !(0.0..=9999.0).contains(&year) || month.abs() > 120_000.0 || day.abs() > 4_000_000.0 {
+                    return Err(CellError::Num);
+                }
                 Value::Number(date_serial(year as i64, month as i64, day as i64))
             }
             "VLOOKUP" => {
@@ -899,6 +1040,66 @@ mod tests {
             .iter()
             .map(|row| row.iter().map(ToString::to_string).collect())
             .collect()
+    }
+
+    /// `rows` evaluated on a thread with a worker's small stack, as the
+    /// server and the daemon evaluate sheets.
+    fn on_small_stack(rows: Vec<Vec<String>>) -> Vec<Vec<String>> {
+        std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || {
+                evaluate(&Sheet { cells: &rows, today: 46_000.0 })
+                    .iter()
+                    .map(|row| row.iter().map(ToString::to_string).collect())
+                    .collect()
+            })
+            .expect("spawns")
+            .join()
+            .expect("no overflow")
+    }
+
+    #[test]
+    fn deep_nesting_is_an_error_not_a_crash() {
+        let parens = format!("={}1{}", "(".repeat(10_000), ")".repeat(10_000));
+        let signs = format!("={}1", "-".repeat(10_000));
+        let calls = format!("={}1{}", "ABS(".repeat(5_000), ")".repeat(5_000));
+        let shown = on_small_stack(vec![vec![parens, signs, calls, "=((((1))))".into()]]);
+        assert_eq!(shown[0], ["#VALUE!", "#VALUE!", "#VALUE!", "1"]);
+    }
+
+    #[test]
+    fn a_long_chain_of_references_is_reached_not_called_a_cycle() {
+        // A running total over 600 rows, summed above it.
+        let mut rows = vec![vec!["1".to_owned(), "=B602".to_owned()], vec!["1".to_owned(), "=A2".to_owned()]];
+        for row in 3..=602 {
+            rows.push(vec!["1".to_owned(), format!("=B{}+A{row}", row - 1)]);
+        }
+        let shown = on_small_stack(rows);
+        assert_eq!(shown[0][1], "601");
+        assert_eq!(values(&[&["=A1"]])[0][0], "#CYCLE!", "a real cycle still is one");
+    }
+
+    #[test]
+    fn what_a_formula_could_grow_is_bounded() {
+        // Text that doubles each row stops at the cap.
+        let mut rows = vec![vec!["abcdefgh".to_owned()]];
+        for row in 2..=30 {
+            rows.push(vec![format!("=A{}&A{}", row - 1, row - 1)]);
+        }
+        let shown = on_small_stack(rows);
+        assert_eq!(shown[29][0], "#VALUE!");
+        // A range past the sheet reads only the sheet, quickly.
+        let started = std::time::Instant::now();
+        let huge = values(&[&["=SUM(A2:GS10000)+SUM(A2:GS10000)", "=VLOOKUP(2,B2:C100000000,1,FALSE)"], &["1", "2"]]);
+        assert_eq!((huge[0][0].as_str(), huge[0][1].as_str()), ("6", "2"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn numbers_read_and_show_as_spreadsheets_do() {
+        let shown =
+            values(&[&["=2^3^2", "=1e5", "=2.5E-1", "=SUM(B2:B3)", "=-0", "=ROUND(1,400)", "=DATE(1e300,1,1)", "=10^400"]]);
+        assert_eq!(shown[0], ["64", "100000", "0.25", "0", "0", "1", "#NUM!", "#NUM!"]);
     }
 
     #[test]

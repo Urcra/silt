@@ -6,6 +6,7 @@ import { bus } from '../bus'
 import { hosted } from '../served'
 import { type CapabilityHandler, Refusal } from './broker'
 import { RoomSocket } from '../rooms'
+import { consentFor } from './consent'
 import { dbHandler } from './db'
 import { dictationHandler, dictationServed, mcpHandler, ttsHandler, ttsServed } from './voiceAndTools'
 
@@ -29,7 +30,7 @@ export function handlersFor(thread: string, artifact: ArtifactView, holder: Hold
   return {
     db: dbHandler(thread, artifact),
     artifact: artifactHandler(thread, artifact),
-    user: userHandler(thread),
+    user: userHandler(thread, artifact),
     downloads: downloadsHandler(holder),
     comments: commentsHandler(thread, artifact, holder),
     sample: sampleHandler(thread, artifact, holder),
@@ -44,7 +45,7 @@ export function handlersFor(thread: string, artifact: ArtifactView, holder: Hold
 }
 
 /** The capabilities that ask the viewer before they act, which `permissions` reports on. */
-const ASKED = ['sample', 'dictation', 'mcp', 'comments']
+const ASKED = ['sample', 'dictation', 'mcp', 'comments', 'files']
 
 /** `permissions`, built in: what the viewer allowed this page, asked for at once, or forgotten so it asks again. */
 function permissionsHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
@@ -71,7 +72,7 @@ function permissionsHandler(thread: string, artifact: ArtifactView, holder: Hold
         if (pending.length > 0) {
           pending.forEach((name) => asked.add(name))
           const agreed = await holder.confirm({ title: `Let ${artifact.title} use ${pending.join(', ')}?`, detail: 'You can change this later from the page.', action: 'Allow' })
-          for (const name of pending) await api.setArtifactGrant(thread, artifact.id, name, agreed ? 'granted' : 'refused').catch(() => undefined)
+          for (const name of pending) await api.setArtifactGrant(thread, artifact.id, name, agreed ? 'granted' : 'refused', artifact.version).catch(() => undefined)
         }
         const now = await states()
         return Object.fromEntries(wanted.map((name) => [name, now[name] ?? 'unavailable']))
@@ -166,11 +167,18 @@ function assetsHandler(thread: string, artifact: ArtifactView): CapabilityHandle
 
 /** `files`: the thread's files, read from its history as the person, within what the version declares. */
 function filesHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
-  const ask = (asked: Record<string, unknown>) =>
-    api.pageFiles(thread, artifact.id, asked).catch((failure: unknown) => {
+  const consented = consentFor(thread, artifact, holder, 'files', () => {
+    const paths = (artifact.capabilities?.files as { paths?: unknown } | undefined)?.paths
+    const scope = Array.isArray(paths) && paths.length > 0 ? paths.map(String).join(', ') : "all of the thread's files its workspace allows"
+    return { title: `Let ${artifact.title} read this thread's files?`, detail: `It reads ${scope}, and can show what it reads to anyone viewing it.`, action: 'Allow' }
+  })
+  const ask = async (asked: Record<string, unknown>) => {
+    if (!(await consented())) throw new Refusal('not_granted', "the person chose not to let this page read the thread's files")
+    return api.pageFiles(thread, artifact.id, asked).catch((failure: unknown) => {
       const said = failure instanceof Error ? failure.message : String(failure)
       throw new Refusal(/not_found|no file|had no/i.test(said) ? 'refused' : refusalOf(failure).code, said)
     })
+  }
   return {
     methods: ['list', 'read', 'download'],
     perMinute: 120,
@@ -200,7 +208,7 @@ function refusalOf(failure: unknown): Refusal {
   const said = failure instanceof Error ? failure.message : String(failure)
   if (/conflict/i.test(said)) return new Refusal('conflict', said)
   if (/rate limited/i.test(said)) return new Refusal('rate_limited', said)
-  if (/owner and collaborators|may not|forbidden/i.test(said)) return new Refusal('not_granted', said)
+  if (/not_granted|owner and collaborators|may not|forbidden/i.test(said)) return new Refusal('not_granted', said)
   return new Refusal('refused', said)
 }
 
@@ -223,14 +231,17 @@ function artifactHandler(thread: string, artifact: ArtifactView): CapabilityHand
 }
 
 /** `user`: who views the page, as an id that's the same on every machine and the server, and the names behind ids. */
-function userHandler(thread: string): CapabilityHandler {
+function userHandler(thread: string, artifact: ArtifactView): CapabilityHandler {
   let viewer: Promise<PageViewer> | null = null
   const known = () => (viewer ??= api.pageViewer(thread))
+  // People's names reach a page only when it declares the `profile` scope; Silt keeps no email addresses.
+  const scopes = (artifact.capabilities?.user as { scopes?: unknown } | undefined)?.scopes
+  const names = Array.isArray(scopes) && scopes.includes('profile')
   return {
-    methods: ['id', 'me', 'isOwner', 'canEdit', 'can', 'profiles', 'search'],
+    methods: ['id', 'me', 'isOwner', 'canEdit', 'can', 'profiles', ...(names ? ['search'] : [])],
     call: async (method, args) => {
       const me = await known()
-      const name = (id: string) => me.people[id] ?? ''
+      const name = (id: string) => (names ? (me.people[id] ?? '') : '')
       switch (method) {
         case 'id':
           return me.id
@@ -324,20 +335,11 @@ function sizeText(bytes: number): string {
 /** `comments`: the page opens the artifact's own comment composer; the comments themselves stay Silt's to show. */
 function commentsHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
   const writes = !composerOnly(artifact)
-  let consent: Promise<boolean> | null = null
-  const consented = () =>
-    (consent ??= (async () => {
-      const grants = await api.artifactGrants(thread, artifact.id).catch(() => ({}) as Record<string, string>)
-      if (grants.comments === 'granted') return true
-      if (grants.comments === 'refused') return false
-      const agreed = await holder.confirm({
-        title: `Let ${artifact.title} comment as you?`,
-        detail: 'Comments it writes are yours, on this artifact, and go to the agent as yours do.',
-        action: 'Allow',
-      })
-      await api.setArtifactGrant(thread, artifact.id, 'comments', agreed ? 'granted' : 'refused').catch(() => undefined)
-      return agreed
-    })())
+  const consented = consentFor(thread, artifact, holder, 'comments', () => ({
+    title: `Let ${artifact.title} comment as you?`,
+    detail: 'Comments it writes are yours, on this artifact, and go to the agent as yours do.',
+    action: 'Allow',
+  }))
   const said = (value: unknown) => {
     const text = typeof value === 'string' ? value.trim() : ''
     if (!text || text.length > 4000) throw new Refusal('refused', 'a comment is 1 to 4,000 characters')
@@ -389,69 +391,80 @@ const SAMPLE_IMAGES = 4
 
 /** `sample`: a question for an agent, asked once the person agrees, its answer told to the page as it streams. */
 function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
+  // The page's names for its questions, each to the one minted for it.
+  const asks = new Map<string, string>()
   const takesImages = (artifact.capabilities?.sample as { images?: unknown } | undefined)?.images === true
-  let consent: Promise<boolean> | null = null
-  const consented = () =>
-    (consent ??= (async () => {
-      const grants = await api.artifactGrants(thread, artifact.id).catch(() => ({}) as Record<string, string>)
-      if (grants.sample === 'granted') return true
-      if (grants.sample === 'refused') return false
-      const agreed = await holder.confirm({
-        title: `Let ${artifact.title} ask an agent?`,
-        detail: hosted()
-          ? 'One of your computers asks its agent, with no tools, and the page reads the answer.'
-          : "This computer's agent answers, with no tools, and the page reads the answer.",
-        action: 'Allow',
-      })
-      await api.setArtifactGrant(thread, artifact.id, 'sample', agreed ? 'granted' : 'refused').catch(() => undefined)
-      return agreed
-    })())
+  const consented = consentFor(thread, artifact, holder, 'sample', () => ({
+    title: `Let ${artifact.title} ask an agent?`,
+    detail: hosted()
+      ? 'One of your computers asks its agent, which gets no tools or settings of yours, only those the page offers, and the page reads the answer.'
+      : "This computer's agent answers, with no tools or settings of yours, only those the page offers, and the page reads the answer.",
+    action: 'Allow',
+  }))
   return {
     methods: ['ask', 'limits', 'toolResult'],
     // Each question asks once; its tools' answers are many.
     perMinute: 120,
     call: async (method, args, context) => {
-      if (method === 'limits') return { images: takesImages ? SAMPLE_IMAGES : false, perMinute: 4, tools: !hosted() }
+      if (method === 'limits') return { images: takesImages ? SAMPLE_IMAGES : false, perMinute: 4, tools: true }
       if (method === 'toolResult') {
         const said = (args ?? {}) as { ask?: unknown; call?: unknown; ok?: unknown; value?: unknown; error?: unknown }
         const result = said.ok === true ? { ok: true, value: said.value ?? null } : { ok: false, error: String(said.error ?? 'the tool failed').slice(0, 2000) }
-        await api.sampleToolResult(thread, artifact.id, String(said.ask ?? ''), Number(said.call), result)
+        const minted = asks.get(String(said.ask ?? ''))
+        if (!minted) throw new Refusal('refused', 'no question by that name is waiting')
+        await api.sampleToolResult(thread, artifact.id, minted, Number(said.call), result)
         return null
       }
-      const given = (args ?? {}) as { input?: unknown; ask?: unknown; images?: unknown; tools?: unknown }
+      const given = (args ?? {}) as { input?: unknown; ask?: unknown; images?: unknown; tools?: unknown; model?: { model_tier?: unknown; model?: unknown } }
+      const model = {
+        model_tier: typeof given.model?.model_tier === 'string' ? given.model.model_tier : undefined,
+        model: typeof given.model?.model === 'string' ? given.model.model : undefined,
+      }
       const tools = sampleTools(given.tools)
-      if (tools.length > 0 && hosted()) throw new Refusal('unavailable', "a page's tools run only on your own computer's agent, not in the hosted app")
       const blobs = Array.isArray(given.images) ? given.images : []
       if (blobs.length > 0 && !takesImages) throw new Refusal('refused', 'declare {sample: {images: true}} to show the agent images')
       if (blobs.length > SAMPLE_IMAGES || !blobs.every((blob) => blob instanceof Blob)) throw new Refusal('refused', `show at most ${SAMPLE_IMAGES} images, as Blobs`)
       if (!(await consented())) throw new Refusal('not_granted', 'the person chose not to let this page ask')
       const images = await Promise.all((blobs as Blob[]).map(async (blob) => ({ media_type: blob.type, data: await base64Of(blob) })))
-      const ask = typeof given.ask === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(given.ask) ? given.ask : Math.random().toString(36).slice(2)
+      // The page's name for the question stays between it and this view; the
+      // daemon and the server hear one minted here, which no other page can pick.
+      const named = typeof given.ask === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(given.ask) ? given.ask : 'q'
+      const ask = `${artifact.id}-${crypto.randomUUID()}`
+      asks.set(named, ask)
       const unsubscribe = bus.subscribe(`sample:${ask}`)
       const unlisten = bus.listen((event) => {
         const said = event as { event?: string; ask?: string; text?: string }
-        if (said.event === 'sample' && said.ask === ask) context.emit('sample', 'text', { ask, text: said.text ?? '' })
+        if (said.event === 'sample' && said.ask === ask) context.emit('sample', 'text', { ask: named, text: said.text ?? '' })
         const called = event as { event?: string; ask?: string; call?: number; name?: string; input?: unknown }
-        if (called.event === 'sample_tool' && called.ask === ask) context.emit('sample', 'tool', { ask, call: called.call, name: called.name, input: called.input })
+        if (called.event === 'sample_tool' && called.ask === ask) context.emit('sample', 'tool', { ask: named, call: called.call, name: called.name, input: called.input })
       })
       // The hosted app has no bus: it reads what the device's agent has said so far.
       let heard = ''
+      // The calls of the page's tools already told to the page.
+      const told = new Set<number>()
       const polling = hosted()
         ? window.setInterval(() => {
             void api
               .sampleSoFar(thread, artifact.id, ask)
-              .then(({ text }) => {
-                if (text && text !== heard) context.emit('sample', 'text', { ask, text: (heard = text) })
+              .then(({ text, calls }) => {
+                if (text && text !== heard) context.emit('sample', 'text', { ask: named, text: (heard = text) })
+                for (const call of calls ?? []) {
+                  if (told.has(call.call)) continue
+                  told.add(call.call)
+                  context.emit('sample', 'tool', { ask: named, call: call.call, name: call.name, input: call.input })
+                }
               })
               .catch(() => undefined)
           }, 400)
         : null
       try {
-        return await api.sample(thread, artifact.id, ask, given.input, images, tools)
+        const answer = await api.sample(thread, artifact.id, ask, given.input, images, tools, model)
+        return { text: answer.text, truncated: answer.truncated, ...(answer.model_applied ? { modelApplied: answer.model_applied } : {}) }
       } catch (failure) {
         throw refusalOf(failure)
       } finally {
         if (polling !== null) window.clearInterval(polling)
+        if (asks.get(named) === ask) asks.delete(named)
         unlisten()
         unsubscribe()
       }

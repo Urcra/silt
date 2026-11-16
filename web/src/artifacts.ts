@@ -126,7 +126,7 @@ function bootJson(boot: string | null): string {
     return '{}'
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return '{}'
-  return boot.replace(/<\//g, '<\\/').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
+  return boot.replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
 }
 
 export type FrameOptions = {

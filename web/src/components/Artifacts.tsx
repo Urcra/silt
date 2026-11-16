@@ -170,14 +170,24 @@ export function ArtifactViewer({
   useEffect(() => {
     current.current = { group, shown: shown, comments, onCommentsChanged }
   })
+  // Asks wait their turn rather than replace the one shown, so a page can't swap what the person is about to agree to.
+  // The agreeing button waits half a second after an ask appears, so a click meant for something else isn't its answer.
+  const [armed, setArmed] = useState(false)
+  const arm = useRef(() => {
+    setArmed(false)
+    window.setTimeout(() => setArmed(true), 500)
+  })
+  const waiting = useRef<{ title: string; detail: string; action: string; answer: (agreed: boolean) => void }[]>([])
   const [holder] = useState<Holder>(() => ({
     confirm: (ask) =>
-      new Promise<boolean>((answer) =>
-        setAsking((before) => {
-          before?.answer(false)
-          return { ...ask, answer }
-        }),
-      ),
+      new Promise<boolean>((answer) => {
+        if (waiting.current.length >= 3) return answer(false)
+        waiting.current.push({ ...ask, answer })
+        if (waiting.current.length === 1) {
+          arm.current()
+          setAsking(waiting.current[0])
+        }
+      }),
     openComposer: (text) => {
       setQuote(text || null)
       composer.current?.()
@@ -196,9 +206,13 @@ export function ArtifactViewer({
     commentsChanged: () => void current.current.onCommentsChanged(),
     voice: (now, stop) => setVoice(now === 'idle' || !stop ? null : { now, stop }),
   }))
+  // A click within half a second of an ask appearing isn't taken as its answer.
   const answerAsking = (agreed: boolean) => {
-    asking?.answer(agreed)
-    setAsking(null)
+    if (!asking || (agreed && !armed)) return
+    waiting.current.shift()
+    asking.answer(agreed)
+    arm.current()
+    setAsking(waiting.current[0] ?? null)
   }
   const content = useQuery({
     queryKey: keys.artifact(thread, shown?.artifact.blob ?? ''),
@@ -273,6 +287,16 @@ export function ArtifactViewer({
         if (!file) continue
         const read = await api.artifact(thread, file.blob)
         files[path] = { media_type: file.media_type, data: read.data }
+      }
+      // Past what one HTML file carries well, the copy is the page with its files beside it, zipped.
+      const carried = Object.values(files).reduce((sum, file) => sum + (file.data.length * 3) / 4, 0)
+      if (carried > ZIP_ABOVE) {
+        const { zipOf } = await import('../zip')
+        const decoded = (data: string) => Uint8Array.from(atob(data), (char) => char.charCodeAt(0))
+        const page = new TextEncoder().encode(offlineHtml(artifact, content.data, rendered, styleText, {}))
+        const zip = zipOf([{ path: 'index.html', bytes: page }, ...Object.entries(files).map(([path, file]) => ({ path, bytes: decoded(file.data) }))])
+        download(zip, 'application/zip', fileName(artifact, 'zip'))
+        return
       }
       download(offlineHtml(artifact, content.data, rendered, styleText, files), 'text/html', fileName(artifact, 'html'))
     } catch (failure) {
@@ -469,7 +493,7 @@ export function ArtifactViewer({
             <Button size="sm" variant="ghost" onClick={() => answerAsking(false)}>
               Not now
             </Button>
-            <Button size="sm" onClick={() => answerAsking(true)}>
+            <Button size="sm" disabled={!armed} onClick={() => answerAsking(true)}>
               {asking.action}
             </Button>
           </div>
@@ -552,6 +576,19 @@ function ArtifactPage({
   // lasts an hour from its last use, so one is asked for each time the frame opens.
   // Each time the frame opens, its key carries what the viewer's page stored since (ADR 0072).
   const [opening] = useState(() => Math.random().toString(36).slice(2))
+  // Every message the frame's page sends carries this; a document the frame navigates to doesn't have it, so it's
+  // heard as nothing, and nothing is sent to it (ADR 0072).
+  const [nonce] = useState(() => crypto.randomUUID().replace(/-/g, ''))
+  const alive = useRef(true)
+  const held = useRef<unknown[]>([])
+  const send = useRef((message: unknown) => {
+    if (alive.current) frame.current?.contentWindow?.postMessage(message, '*')
+    else if (held.current.length < 200) held.current.push(message)
+  })
+  const loaded = () => {
+    alive.current = false
+    frame.current?.contentWindow?.postMessage({ silt: 'hello?' }, '*')
+  }
   const address = useQuery({
     queryKey: ['artifact-frame', thread, artifact.id, artifact.version, startTheme, opening],
     queryFn: () =>
@@ -559,7 +596,7 @@ function ArtifactPage({
         version: artifact.version,
         theme: startTheme,
         parent: window.location.origin,
-        boot: { storage: keptFor(thread, artifact.id), hot: lastSnapshot(thread, artifact.id) },
+        boot: { storage: keptFor(thread, artifact.id), hot: lastSnapshot(thread, artifact.id), contract: artifact.contract ?? '1', nonce },
       }),
     enabled: artifact.kind === 'html',
     staleTime: Infinity,
@@ -570,21 +607,22 @@ function ArtifactPage({
   const [pageHash] = useState(() => (/^#[A-Za-z0-9-]{1,64}$/.test(window.location.hash) && !window.location.hash.startsWith('#artifact-') ? window.location.hash : ''))
   // Where no frame address can be had, the page is composed here as before.
   const [framed] = useState(() =>
-    artifact.kind === 'html' ? sandboxedDocument(textOf(content), { style, theme: startTheme, vendor, parent: window.location.origin }) : '',
+    artifact.kind === 'html'
+      ? sandboxedDocument(textOf(content), { style, theme: startTheme, vendor, parent: window.location.origin, boot: JSON.stringify({ nonce }) })
+      : '',
   )
   // The page's Mermaid diagrams, drawn here in the viewer's theme and sent back as images (ADR 0073).
   const diagrams = useRef<{ i: number; text: string }[]>([])
   const drawDiagrams = useRef((shownTheme: FrameTheme) => {
-    const target = frame.current?.contentWindow
     for (const diagram of diagrams.current) {
       mermaidSvg(diagram.text, `frame-mermaid-${diagram.i}`, shownTheme === 'dark' ? 'dark' : 'neutral').then(
-        (svg) => target?.postMessage({ silt: 'mermaid-drawn', i: diagram.i, src: svgUrl(svg) }, '*'),
+        (svg) => send.current({ silt: 'mermaid-drawn', i: diagram.i, src: svgUrl(svg) }),
         () => undefined,
       )
     }
   })
   useEffect(() => {
-    frame.current?.contentWindow?.postMessage({ silt: 'theme', theme }, '*')
+    send.current({ silt: 'theme', theme })
     drawDiagrams.current(theme)
   }, [theme])
   const shownTheme = useRef(theme)
@@ -610,25 +648,29 @@ function ArtifactPage({
       {
         thread,
         artifact,
-        emit: (cap, topic, data) => frame.current?.contentWindow?.postMessage({ silt: 'event', cap, topic, data }, '*'),
+        emit: (cap, topic, data) => send.current({ silt: 'event', cap, topic, data }),
       },
       handlersFor(thread, artifact, holder),
     )
     const heard = (event: MessageEvent) => {
-      const said = event.data as { silt?: unknown; text?: unknown; problems?: unknown } | null
-      if (event.source === null || event.source !== frame.current?.contentWindow) return
+      const said = event.data as { silt?: unknown; text?: unknown; problems?: unknown; nonce?: unknown } | null
+      if (event.source === null || event.source !== frame.current?.contentWindow || said?.nonce !== nonce) return
+      if (!alive.current) {
+        alive.current = true
+        for (const message of held.current.splice(0)) send.current(message)
+      }
       if (said?.silt === 'selection') callbacks.current.onSelect(typeof said.text === 'string' ? said.text.slice(0, 500) : '')
       if (said?.silt === 'problems' && Array.isArray(said.problems)) callbacks.current.onProblems(said.problems.filter(isProblem).slice(0, 20))
       const call = callOf(said)
       if (call) {
-        void broker.answer(call).then((answer) => frame.current?.contentWindow?.postMessage({ silt: 'reply', id: call.id, ...answer }, '*'))
+        void broker.answer(call).then((answer) => send.current({ silt: 'reply', id: call.id, ...answer }))
       }
       if (said?.silt === 'storage') {
         const stored = said as { kind?: unknown; items?: unknown }
         keep(thread, artifact.id, stored.kind, stored.items)
       }
       if (said?.silt === 'hot' && (said as { keeps?: unknown }).keeps === true && snapshots.current === null) {
-        snapshots.current = window.setInterval(() => frame.current?.contentWindow?.postMessage({ silt: 'snapshot' }, '*'), 2000)
+        snapshots.current = window.setInterval(() => send.current({ silt: 'snapshot' }), 2000)
       }
       if (said?.silt === 'snapshotted') rememberSnapshot(thread, artifact.id, (said as { data?: unknown }).data)
       if (said?.silt === 'mermaid' && Array.isArray((said as { diagrams?: unknown }).diagrams)) {
@@ -646,7 +688,7 @@ function ArtifactPage({
       window.removeEventListener('message', heard)
       broker.dispose()
     }
-  }, [thread, artifact, holder])
+  }, [thread, artifact, holder, nonce])
   const selected = () => onSelect(String(window.getSelection() ?? '').trim().slice(0, 500))
   const scale = zoom / 100
   const zoomed = { transform: `scale(${scale})`, transformOrigin: '0 0', width: `${100 / scale}%`, height: `${100 / scale}%` }
@@ -666,6 +708,7 @@ function ArtifactPage({
           allow="fullscreen; clipboard-write"
           {...(address.data ? { src: address.data.path + pageHash } : address.isError ? { srcDoc: framed } : {})}
           referrerPolicy="no-referrer"
+          onLoad={loaded}
           style={zoomed}
           className="block border-0"
           data-testid="artifact-frame"
@@ -750,6 +793,9 @@ async function printDeck(thread: string, artifact: ArtifactView, html: string) {
     toast(message(failure), 'danger')
   }
 }
+
+/** Past this many bytes of files, an offline copy is a zip rather than one HTML file. */
+const ZIP_ABOVE = 32 << 20
 
 async function renderedMarkup(artifact: ArtifactView, content: ArtifactContent): Promise<string | undefined> {
   if (artifact.kind === 'markdown' || artifact.kind === 'doc') {

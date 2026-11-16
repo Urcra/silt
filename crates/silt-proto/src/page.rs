@@ -611,29 +611,51 @@ pub fn files_allowed(config: &Value, path: &str) -> bool {
     globs.iter().filter_map(Value::as_str).any(|glob| glob_matches(glob, path))
 }
 
+/// Whether `path` matches `glob`, `**` standing for any number of segments
+/// and `*` for any run within one. Both are matched by table, not by
+/// backtracking, so a peer's glob can't take exponential time.
 fn glob_matches(glob: &str, path: &str) -> bool {
-    fn segments(glob: &[&str], path: &[&str]) -> bool {
-        match (glob.first(), path.first()) {
-            (None, None) => true,
-            (Some(&"**"), _) => segments(&glob[1..], path) || (!path.is_empty() && segments(glob, &path[1..])),
-            (Some(pattern), Some(segment)) => one(pattern, segment) && segments(&glob[1..], &path[1..]),
-            _ => false,
-        }
-    }
-    fn one(pattern: &str, segment: &str) -> bool {
-        match pattern.split_once('*') {
-            None => pattern == segment,
-            Some((before, after)) => {
-                segment.len() >= before.len() + after.len() && segment.starts_with(before) && {
-                    let rest = &segment[before.len()..];
-                    (0..=rest.len()).filter(|at| rest.is_char_boundary(*at)).any(|at| one(after, &rest[at..]))
-                }
-            }
-        }
-    }
     let glob: Vec<&str> = glob.trim_matches('/').split('/').collect();
     let path: Vec<&str> = path.trim_matches('/').split('/').collect();
-    segments(&glob, &path)
+    // `matched[p]`: whether the glob's segments from `g` on match the path's from `p` on.
+    let mut matched = vec![false; path.len() + 1];
+    matched[path.len()] = true;
+    for pattern in glob.iter().rev() {
+        let mut next = vec![false; path.len() + 1];
+        for at in (0..=path.len()).rev() {
+            next[at] = if *pattern == "**" {
+                matched[at] || (at < path.len() && next[at + 1])
+            } else {
+                at < path.len() && matched[at + 1] && segment_matches(pattern, path[at])
+            };
+        }
+        matched = next;
+    }
+    matched[0]
+}
+
+/// Whether `segment` matches `pattern`, whose `*` stand for any run of
+/// characters: the usual linear wildcard walk, back to the last `*` only.
+fn segment_matches(pattern: &str, segment: &str) -> bool {
+    let (pattern, segment): (Vec<char>, Vec<char>) = (pattern.chars().collect(), segment.chars().collect());
+    let (mut p, mut s) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while s < segment.len() {
+        if p < pattern.len() && pattern[p] == '*' {
+            star = Some((p, s));
+            p += 1;
+        } else if p < pattern.len() && pattern[p] == segment[s] {
+            p += 1;
+            s += 1;
+        } else if let Some((at, from)) = star {
+            p = at + 1;
+            s = from + 1;
+            star = Some((at, from + 1));
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|char| *char == '*')
 }
 
 /// Who views an artifact's page, as its `user` capability answers it: their
@@ -674,6 +696,19 @@ mod files_tests {
         assert!(!files_allowed(&config, "target/criterion/deep/report.json"));
         assert!(!files_allowed(&config, "src/main.rs"));
         assert!(files_allowed(&json!({}), "src/main.rs"), "none names the whole tree");
+        assert!(glob_matches("src/*_test.rs", "src/a_test.rs") && !glob_matches("src/*_test.rs", "src/a.rs"));
+        assert!(glob_matches("**/*.md", "README.md") && glob_matches("a/**/b/*", "a/x/y/b/c"));
+        assert!(glob_matches("*a*b*", "xxaYYbzz") && !glob_matches("*a*b", "xxaYYbzz"));
+    }
+
+    #[test]
+    fn a_hostile_glob_takes_no_time() {
+        let started = std::time::Instant::now();
+        let glob = format!("{}x", "**/".repeat(40));
+        let path = "a/".repeat(40) + "b";
+        assert!(!glob_matches(&glob, &path));
+        assert!(!segment_matches(&"*a".repeat(30), &"a".repeat(29)));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]

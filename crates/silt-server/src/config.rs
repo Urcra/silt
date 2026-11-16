@@ -71,7 +71,7 @@ impl Default for Config {
 }
 
 fn default_artifact_assets_mib() -> u64 {
-    256
+    silt_proto::artifact::PAGE_ASSETS_BYTES >> 20
 }
 
 fn default_listen() -> String {

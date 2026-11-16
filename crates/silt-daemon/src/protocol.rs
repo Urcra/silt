@@ -437,6 +437,8 @@ pub enum Request {
         images: Vec<silt_proto::artifact::SampleImage>,
         #[serde(default)]
         tools: Vec<silt_proto::artifact::SampleTool>,
+        #[serde(default)]
+        model: silt_proto::artifact::SampleModel,
     },
     /// A doc or a deck as a PDF, printed from `html`, the page the browser
     /// drew of it, by this machine's headless browser; a deck's page says
@@ -591,6 +593,10 @@ pub enum Request {
         capability: String,
         #[serde(default)]
         state: Option<String>,
+        /// The version the viewer saw, whose declaration the grant is for;
+        /// the latest when none.
+        #[serde(default)]
+        version: Option<u32>,
     },
     /// The design system picked for each project on this machine.
     ProjectDesignSystems,
@@ -984,6 +990,10 @@ pub struct NewArtifact {
     /// The design system to style an HTML version with, or `none`.
     #[serde(default)]
     pub design_system: Option<String>,
+    /// The runtime contract an HTML version's page is written for, or
+    /// `latest`; by default its last version's.
+    #[serde(default)]
+    pub contract: Option<String>,
     /// Changes to the latest version's source, in place of `content` or
     /// `path` (ADR 0073).
     #[serde(default)]

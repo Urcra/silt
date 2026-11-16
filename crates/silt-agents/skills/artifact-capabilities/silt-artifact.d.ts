@@ -55,8 +55,12 @@ interface SiltCapabilities {
 }
 
 interface Silt {
-  /** The bridge's contract. A version runs against the contract it was made with. */
-  readonly version: '1'
+  /**
+   * The runtime contract this version was made for, kept from version to
+   * version until one passes `contract: "latest"` to `silt_artifact`. Only
+   * `'1'` exists so far.
+   */
+  readonly version: string
   /**
    * A capability's functions, or `null` where this view can't run it: not
    * declared, not served here (the offline copy, a read-only link, the
@@ -284,13 +288,15 @@ interface SiltArtifact {
 }
 
 // ---------------------------------------------------------------------------
-// user: declare `{"user": {}}`.
+// user: declare `{"user": {}}`, or `{"user": {"scopes": ["profile"]}}` for names and `search`.
 
 /**
  * Who views the page. An id is 16 hex characters, the same for one person
  * on every machine and the server, and shows no name; with no server it's
  * `local`. Store ids, never names. Names are known for the thread's owner,
- * its collaborators and the viewer; resolve them each time you render.
+ * its collaborators and the viewer, and only under the `profile` scope:
+ * without it every name is ''. Silt keeps no email addresses. Resolve
+ * names each time you render.
  * Reads never reject for a missing name. 120 calls a minute.
  */
 interface SiltUser {
@@ -383,8 +389,12 @@ interface SiltSampleTool {
 interface SiltSampleOptions {
   /** As the answer streams: `text` is the whole answer so far (assign it), `delta` what's new. */
   onText?: (said: { text: string; delta: string }) => void
-  /** Up to 16 of the page's functions the agent may call while it answers; refused in the hosted app. */
+  /** Up to 16 of the page's functions the agent may call while it answers. In the hosted app one of the person's computers answers and its calls come back through the server. */
   tools?: SiltSampleTool[]
+  /** `quick` for a short, cheap answer, `complex` for a hard one. */
+  modelTier?: 'quick' | 'default' | 'complex'
+  /** Only when the person names one, such as `claude-sonnet-5-5`; wins over `modelTier`. */
+  model?: string
   /** Up to `limits().images` PNG, JPEG, GIF or WebP images, each at most 5 MiB as base64 (about 3.7 MB). Needs `{"images": true}`, else `refused`. */
   images?: Blob[]
 }
@@ -394,11 +404,11 @@ type SiltSampleInput = string | { role: 'user' | 'assistant'; content: string }[
 
 interface SiltSample {
   /** `truncated` when the answer was cut off. Rejects `not_granted` (the viewer said no: hide the feature), `rate_limited`, `refused`, `unavailable`. */
-  (input: SiltSampleInput, opts?: SiltSampleOptions): Promise<{ text: string; truncated: boolean }>
+  (input: SiltSampleInput, opts?: SiltSampleOptions): Promise<{ text: string; truncated: boolean; modelApplied?: string }>
   /** The answer parsed as JSON, a ```json fence around it allowed. Throws a SyntaxError (no `code`) when it isn't JSON. */
   json(input: SiltSampleInput, opts?: SiltSampleOptions): Promise<any>
-  /** `images`: how many one question may show (4), or false without `{"images": true}`. `tools`: false in the hosted app. */
-  limits(): Promise<{ images: number | false; perMinute: number; tools: boolean }>
+  /** `images`: how many one question may show (4), or false without `{"images": true}`. `tools` is true everywhere. One computer answers at most three pages' questions at once. */
+  limits(): Promise<{ images: number | false; perMinute: number; tools: true }>
 }
 
 // ---------------------------------------------------------------------------
@@ -412,7 +422,8 @@ interface SiltSample {
  *
  * Types: PNG, JPEG, GIF, WebP, AVIF, SVG, MP4, WebM, MP3, WAV, Ogg, PDF,
  * WOFF, WOFF2, CSV, Markdown, plain text and JSON; never a page or a script.
- * SVG isn't cleaned: show it with `<img>`, never inline.
+ * An SVG is kept without scripts, handlers or outside links; show it with
+ * `<img>` all the same, never inline.
  */
 interface SiltAsset {
   /** 12 lowercase hex characters. */

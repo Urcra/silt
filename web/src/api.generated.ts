@@ -636,6 +636,11 @@ capabilities?: Record<string, Record<string, unknown>> | null,
  */
 by?: string | null, 
 /**
+ * An HTML version's runtime contract, which its page's `silt` is
+ * (ADR 0072).
+ */
+contract?: string | null, 
+/**
  * The files beside an HTML version's page, by path, which its frame
  * fetches relative to itself (ADR 0074).
  */

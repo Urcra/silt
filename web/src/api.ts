@@ -174,8 +174,9 @@ export const api = {
   pageData: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/data`, asked),
   /** What the person allowed or refused an artifact's page, by capability (ADR 0072). */
   artifactGrants: (id: string, artifact: string) => request<Record<string, 'granted' | 'refused'>>('GET', `${thread(id)}/artifacts/${artifact}/grants`),
-  setArtifactGrant: (id: string, artifact: string, capability: string, state: 'granted' | 'refused' | null) =>
-    request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/grants`, { capability, state }),
+  /** Kept for what `version`, the one the person saw, declares of `capability`. */
+  setArtifactGrant: (id: string, artifact: string, capability: string, state: 'granted' | 'refused' | null, version?: number) =>
+    request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/grants`, { capability, state, version: version ?? null }),
   /** A version an HTML artifact's page saves itself as; refused as a conflict unless `base` is the latest (ADR 0072). */
   publishArtifact: (id: string, artifact: string, html: string, base: number) =>
     request<{ id: string; version: number }>('POST', `${thread(id)}/artifacts/${artifact}/publish`, { html, base }),
@@ -200,8 +201,11 @@ export const api = {
   importPageConnectors: () => request<PageConnector[]>('POST', '/api/page-connectors/import'),
   connectorTools: (name: string) => request<ConnectorTool[]>('GET', `/api/page-connectors/${encodeURIComponent(name)}/tools`),
   /** A doc's text, or edits of it (ADR 0077). */
-  docData: (id: string, artifact: string, asked: { op: 'read' } | { op: 'edit'; edits: { pos: number; delete: number; insert: string }[] }) =>
-    request<{ text: string }>('POST', `${thread(id)}/artifacts/${artifact}/doc`, asked),
+  docData: (
+    id: string,
+    artifact: string,
+    asked: { op: 'read' } | { op: 'edit'; edits: { pos: number; delete: number; insert: string }[]; base?: string | null },
+  ) => request<{ text: string; base?: string }>('POST', `${thread(id)}/artifacts/${artifact}/doc`, asked),
   /** A sheet's cells and values, or changes to it (ADR 0077). */
   sheetData: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/sheet`, asked),
   sheetXlsx: (id: string, artifact: string) => requestBlob(`${thread(id)}/artifacts/${artifact}/sheet.xlsx`),
@@ -221,9 +225,26 @@ export const api = {
     request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/tools/${call}`, result),
   /** What the agent has said so far of a page's question in the hosted app, which a device answers. */
   sampleSoFar: (id: string, artifact: string, ask: string) =>
-    request<{ text: string }>('GET', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}`),
-  sample: (id: string, artifact: string, ask: string, input: unknown, images: { media_type: string; data: string }[] = [], tools: SampleTool[] = []) =>
-    request<{ text: string; truncated: boolean }>('POST', `${thread(id)}/artifacts/${artifact}/sample`, { ask, input, images, tools }),
+    request<{ text: string; calls?: { call: number; name: string; input: unknown }[] }>(
+      'GET',
+      `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}`,
+    ),
+  sample: (
+    id: string,
+    artifact: string,
+    ask: string,
+    input: unknown,
+    images: { media_type: string; data: string }[] = [],
+    tools: SampleTool[] = [],
+    model: { model_tier?: string; model?: string } = {},
+  ) =>
+    request<{ text: string; truncated: boolean; model_applied?: string }>('POST', `${thread(id)}/artifacts/${artifact}/sample`, {
+      ask,
+      input,
+      images,
+      tools,
+      model,
+    }),
   /** A key that opens one version of an HTML artifact in a frame, at the path it answers (ADR 0074). */
   artifactFrame: (id: string, artifact: string, ask: { version: number; theme: 'light' | 'dark'; parent: string; boot?: unknown }) =>
     request<{ path: string; expires_in_ms: number }>('POST', `${thread(id)}/artifacts/${artifact}/frame`, ask),

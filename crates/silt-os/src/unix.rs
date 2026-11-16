@@ -56,6 +56,11 @@ pub fn own_group(command: &mut tokio::process::Command) {
     command.process_group(0);
 }
 
+pub fn own_group_std(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt as _;
+    command.process_group(0);
+}
+
 pub fn kill_tree(pid: u32) {
     if let Some(group) = rustix::process::Pid::from_raw(pid.cast_signed()) {
         let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);

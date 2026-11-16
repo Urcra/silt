@@ -518,6 +518,7 @@ mod tests {
     #[test]
     fn an_artifact_record_reads_back_as_the_artifact_and_searches_by_title() {
         let shown = silt_proto::view::ArtifactView {
+            contract: None,
             id: "0123456789ab".into(),
             version: 2,
             title: "Rescan benchmark".into(),

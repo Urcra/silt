@@ -330,6 +330,18 @@ async fn a_rooms_moments_reach_a_view_on_another_machine() {
     let seen = heard(&mut theirs).await;
     let moment = seen.iter().find(|event| event["event"] == "moment").unwrap_or_else(|| panic!("bob hears it: {seen:?}"));
     assert_eq!((&moment["topic"], &moment["data"]["x"]), (&"move".into(), &7.into()));
+    // Alice's agent speaks where the views meet, so Bob hears it too.
+    alice.web("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": "Room say"})));
+    let mut said = Vec::new();
+    for _ in 0..10 {
+        said.extend(heard(&mut theirs).await);
+        if said.iter().any(|event| event["event"] == "moment" && event["topic"] == "note") {
+            break;
+        }
+    }
+    let note = said.iter().find(|event| event["event"] == "moment" && event["topic"] == "note");
+    let note = note.unwrap_or_else(|| panic!("bob hears the agent: {said:?}"));
+    assert_eq!((&note["data"]["said"], &note["from"]["kind"]), (&"hello".into(), &"agent".into()), "{note}");
     drop(mine);
     drop(theirs);
 }
@@ -354,4 +366,116 @@ fn a_pin_made_on_one_machine_shows_on_another() {
         listed.as_array().is_some_and(|rows| rows.iter().any(|row| row["artifact"]["id"] == id.as_str() && row["pinned"] == true))
     };
     assert!(eventually(|| pinned_on(home)), "pinned on the other machine too");
+}
+
+/// The person's browser session on the hosted app, as `curl` keeps it.
+struct HostedBrowser {
+    base: String,
+    jar: std::path::PathBuf,
+}
+
+impl HostedBrowser {
+    fn sign_in(server: &Server, user: &str, jar: std::path::PathBuf) -> Self {
+        use std::io::Write as _;
+        let mut passwd = common::silt_command()
+            .args(["server", "user", "passwd", user, "--password-stdin", "--data"])
+            .arg(&server.data)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("passwd runs");
+        writeln!(passwd.stdin.take().expect("stdin"), "correct horse battery").expect("writes");
+        assert!(passwd.wait().expect("waits").success());
+        let signed = std::process::Command::new("curl")
+            .args(["-s", "-w", "%{http_code}", "-o"])
+            .arg(jar.with_extension("page"))
+            .arg("-c")
+            .arg(&jar)
+            .args(["--data-urlencode", &format!("user={user}"), "--data-urlencode", "password=correct horse battery"])
+            .args(["--data-urlencode", "next=/app/", &format!("{}/login", server.url)])
+            .output()
+            .expect("curl runs");
+        assert_eq!(String::from_utf8_lossy(&signed.stdout), "303", "signed in");
+        Self { base: server.url.clone(), jar }
+    }
+
+    fn call(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> serde_json::Value {
+        let mut curl = std::process::Command::new("curl");
+        curl.args(["-s", "-X", method, "-b"]).arg(&self.jar).args(["-H", "x-silt-request: 1"]);
+        if let Some(body) = body {
+            curl.args(["-H", "content-type: application/json", "--data-binary", &body.to_string()]);
+        }
+        let output = curl.arg(format!("{}/app/api{path}", self.base)).output().expect("curl runs");
+        serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&output.stdout).into()))
+    }
+}
+
+/// A page's question in the hosted app is answered by one of the person's
+/// online computers, on the tier it names, and a tool the page gives it is
+/// called through the server and answered by the page (ADR 0072).
+#[test]
+fn the_hosted_app_asks_a_pages_question_of_the_persons_computer() {
+    let world = world();
+    let laptop = &world.laptop;
+    let started = laptop.web(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": laptop.repo, "agent": "v1", "prompt": "Artifact saver"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    let browser = HostedBrowser::sign_in(&world.server, "owner", world._root.path().join("cookies"));
+    let mut id = String::new();
+    assert!(
+        eventually(|| {
+            let history = browser.call("GET", &format!("/threads/{thread}/history"), None);
+            let found = history["entries"]
+                .as_array()
+                .and_then(|entries| entries.iter().find_map(|entry| entry["artifact"]["id"].as_str().map(str::to_owned)));
+            found.map(|found| id = found).is_some()
+        }),
+        "the hosted app has the artifact"
+    );
+    let sample = format!("/threads/{thread}/artifacts/{id}/sample");
+    let refused = browser.call("POST", &sample, Some(serde_json::json!({"input": "hi"})));
+    assert!(refused.to_string().contains("not_granted"), "the server asks for the grant too: {refused}");
+    let grant = serde_json::json!({"capability": "sample", "state": "granted"});
+    browser.call("PUT", &format!("/threads/{thread}/artifacts/{id}/grants"), Some(grant));
+    let mut answer = serde_json::Value::Null;
+    assert!(
+        eventually(|| {
+            answer = browser.call(
+                "POST",
+                &sample,
+                Some(serde_json::json!({"ask": "h1", "input": "Name three rivers", "model": {"model_tier": "quick"}})),
+            );
+            answer["text"].is_string()
+        }),
+        "the laptop answers: {answer}"
+    );
+    assert_eq!(answer["text"], "Sampled: Name three rivers (on haiku)", "{answer}");
+
+    let tools = serde_json::json!([{"name": "lookup", "description": "Finds a row"}]);
+    let answered = std::thread::scope(|scope| {
+        let asking = scope.spawn(|| {
+            browser.call("POST", &sample, Some(serde_json::json!({"ask": "h2", "input": "Which row?", "tools": tools})))
+        });
+        let mut call = serde_json::Value::Null;
+        assert!(
+            eventually(|| {
+                let so_far = browser.call("GET", &format!("{sample}/h2"), None);
+                call = so_far["calls"][0].clone();
+                call.is_object()
+            }),
+            "the page hears of the agent's call"
+        );
+        assert_eq!(call["name"], "lookup");
+        let result = browser.call(
+            "POST",
+            &format!("{sample}/h2/tools/{}", call["call"]),
+            Some(serde_json::json!({"ok": true, "value": "row 7"})),
+        );
+        assert!(result.is_null() || result == "", "the answer reaches the laptop: {result}");
+        asking.join().expect("asked")
+    });
+    assert_eq!(answered["text"], "Sampled: Which row? [lookup: row 7]", "{answered}");
 }

@@ -13,6 +13,31 @@ use crate::Launch;
 pub const QUESTION_BYTES: usize = 256 * 1024;
 /// The most of an answer kept, in bytes; the rest is cut.
 pub const ANSWER_BYTES: usize = 256 * 1024;
+/// How much of a run's stderr is kept, for saying why it failed.
+const STDERR_KEPT: usize = 16 * 1024;
+
+/// What print mode is started with: no built-in tools, no MCP servers but
+/// the asker's, none of the person's own settings or hooks, and nothing run
+/// without being allowed, so a page's question can't reach what the
+/// person's Claude Code otherwise could (ADR 0072).
+pub fn print_args(tools: Option<&OfferedTools>, model: Option<&str>) -> Vec<String> {
+    let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--tools", "", "--strict-mcp-config"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    args.extend(["--setting-sources".into(), "project".into(), "--permission-mode".into(), "dontAsk".into()]);
+    match tools {
+        Some(tools) => {
+            args.extend(["--mcp-config".into(), tools.mcp_config.clone(), "--allowedTools".into(), tools.allowed.join(",")])
+        }
+        None => args.extend(["--mcp-config".into(), r#"{"mcpServers":{}}"#.into(), "--allowedTools".into(), String::new()]),
+    }
+    if let Some(model) = model {
+        args.extend(["--model".into(), model.to_owned()]);
+    }
+    args
+}
+
 /// How long one question may take, under the hosted app's two minutes.
 const RUN_LIMIT: std::time::Duration = std::time::Duration::from_secs(110);
 
@@ -47,13 +72,14 @@ pub struct OfferedTools {
 }
 
 /// Asks Claude Code's print mode `question` from `cwd`, a directory of its
-/// own so no project's instructions apply, showing it `images` and offering
-/// it `tools` and no others, and telling `heard` the answer so far each
+/// own so no project's instructions apply, showing it `images`, offering it
+/// `tools` and no others, on `model` when given, and telling `heard` the answer so far each
 /// time more of it arrives.
 pub fn ask_claude(
     question: &str,
     images: &[Image<'_>],
     tools: Option<&OfferedTools>,
+    model: Option<&str>,
     cwd: &Path,
     mut heard: impl FnMut(&str),
 ) -> Result<Answer, OneShotError> {
@@ -61,16 +87,12 @@ pub fn ask_claude(
         return Err(OneShotError::TooLarge);
     }
     let launch = Launch::new("claude");
-    let mut command = Command::new(&launch.program);
-    command.args(["-p", "--output-format", "stream-json", "--verbose"]);
-    match tools {
-        Some(tools) => {
-            command.args(["--mcp-config", &tools.mcp_config, "--strict-mcp-config", "--allowedTools", &tools.allowed.join(",")]);
-        }
-        None => {
-            command.args(["--allowedTools", ""]);
-        }
-    }
+    // On Windows an npm install is `claude.cmd`, which a bare name misses.
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let program =
+        silt_os::find_program(&launch.program.to_string_lossy(), &path).unwrap_or_else(|| launch.program.clone().into());
+    let mut command = Command::new(&program);
+    command.args(print_args(tools, model));
     // Images go in a message of the stream, as plain text can't carry them.
     let message = (!images.is_empty()).then(|| {
         let mut content: Vec<Value> = images
@@ -83,33 +105,53 @@ pub fn ask_claude(
         command.args(["--input-format", "stream-json"]);
         serde_json::json!({"type": "user", "message": {"role": "user", "content": content}}).to_string() + "\n"
     });
+    silt_os::own_group_std(&mut command);
     let mut child = command
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| OneShotError::Run(format!("{}: {error}", launch.program.to_string_lossy())))?;
-    // On stdin, so a question starting with a dash isn't taken for an option.
-    if let Some(mut stdin) = child.stdin.take() {
-        let said = message.as_deref().unwrap_or(question);
-        stdin.write_all(said.as_bytes()).map_err(|error| OneShotError::Run(error.to_string()))?;
-    }
-    let stdout = child.stdout.take().ok_or_else(|| OneShotError::Run("no output".into()))?;
-    // A run that hangs is ended, so a page's question doesn't hold a thread
-    // and the person's wait forever.
-    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
+        .map_err(|error| OneShotError::Run(format!("{}: {error}", program.to_string_lossy())))?;
+    // A run that hangs is ended, with what it started, so a page's question
+    // doesn't hold a thread and the person's wait forever. The clock starts
+    // before anything is written, as a run that never reads would block it.
+    let pid = child.id();
     let (finished, finishing) = std::sync::mpsc::channel::<()>();
-    let watchdog = {
-        let child = std::sync::Arc::clone(&child);
+    let watchdog = std::thread::spawn(move || {
+        let late = finishing.recv_timeout(RUN_LIMIT).is_err();
+        if late {
+            silt_os::kill_tree(pid);
+        }
+        late
+    });
+    // On stdin, so a question starting with a dash isn't taken for an option;
+    // from a thread of its own, so a run that doesn't read can't hold this one.
+    let writing = child.stdin.take().map(|mut stdin| {
+        let said = message.unwrap_or_else(|| question.to_owned());
         std::thread::spawn(move || {
-            let late = finishing.recv_timeout(RUN_LIMIT).is_err();
-            if late && let Ok(mut child) = child.lock() {
-                let _ = child.kill();
-            }
-            late
+            let _ = stdin.write_all(said.as_bytes());
         })
-    };
+    });
+    // stderr is read as it comes, keeping its last part, so a chatty run
+    // can't fill the pipe and stall.
+    let reading = child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while let Ok(read) = std::io::Read::read(&mut stderr, &mut chunk) {
+                if read == 0 {
+                    break;
+                }
+                kept.extend_from_slice(&chunk[..read]);
+                if kept.len() > STDERR_KEPT {
+                    kept.drain(..kept.len() - STDERR_KEPT);
+                }
+            }
+            String::from_utf8_lossy(&kept).trim().to_owned()
+        })
+    });
+    let stdout = child.stdout.take().ok_or_else(|| OneShotError::Run("no output".into()))?;
     let mut answer = Streamed::default();
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else { break };
@@ -117,21 +159,21 @@ pub fn ask_claude(
             heard(&answer.text);
         }
     }
+    let status = child.wait().map_err(|error| OneShotError::Run(error.to_string()))?;
     let _ = finished.send(());
-    if watchdog.join().unwrap_or(false) {
+    let late = watchdog.join().unwrap_or(false);
+    if let Some(writing) = writing {
+        let _ = writing.join();
+    }
+    let said = reading.and_then(|reading| reading.join().ok()).unwrap_or_default();
+    if late {
         return Err(OneShotError::Failed(format!("the agent took longer than {} seconds", RUN_LIMIT.as_secs())));
     }
-    let child = std::sync::Arc::try_unwrap(child)
-        .map_err(|_| OneShotError::Run("the run is still held".into()))?
-        .into_inner()
-        .map_err(|_| OneShotError::Run("the run's lock was poisoned".into()))?;
-    let output = child.wait_with_output().map_err(|error| OneShotError::Run(error.to_string()))?;
     if let Some(error) = answer.error {
         return Err(OneShotError::Failed(error));
     }
-    if !output.status.success() && answer.text.is_empty() {
-        let said = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(OneShotError::Failed(if said.is_empty() { output.status.to_string() } else { said }));
+    if !status.success() && answer.text.is_empty() {
+        return Err(OneShotError::Failed(if said.is_empty() { status.to_string() } else { said }));
     }
     Ok(Answer { text: answer.text, truncated: answer.truncated })
 }

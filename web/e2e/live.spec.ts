@@ -1660,6 +1660,14 @@ test('a data page links each number to its source, and a canvas shows each board
   const boards = page.getByTestId('board')
   await expect(boards).toHaveCount(3)
   await expect(boards.nth(2)).toContainText('390×844')
+  // Two boards side by side at one scale.
+  await boards.nth(0).getByRole('button', { name: 'Compare' }).click()
+  await boards.nth(2).getByRole('button', { name: 'Compare' }).click()
+  const compared = page.getByTestId('boards-compared')
+  await expect(compared).toContainText('Desktop and Phone')
+  await expect(compared.locator('iframe')).toHaveCount(2)
+  await compared.getByRole('button', { name: 'Done' }).click()
+  await expect(compared).toHaveCount(0)
 })
 
 test('a doc and a sheet are edited in place, and what was typed is kept (ADR 0077)', async ({ page }) => {

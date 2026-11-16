@@ -183,6 +183,8 @@ impl Server {
             sqlx::query!("DELETE FROM touches WHERE thread_id = ?", thread).execute(&mut *tx).await?;
             sqlx::query!("DELETE FROM thread_activity WHERE thread_id = ?", thread).execute(&mut *tx).await?;
             sqlx::query!("DELETE FROM search WHERE thread_id = ?", thread).execute(&mut *tx).await?;
+            sqlx::query!("DELETE FROM artifact_grants WHERE thread_id = ?", thread).execute(&mut *tx).await?;
+            sqlx::query!("DELETE FROM artifact_pins WHERE thread_id = ?", thread).execute(&mut *tx).await?;
             sqlx::query!("DELETE FROM threads WHERE id = ?", thread).execute(&mut *tx).await?;
         }
         let families: HashSet<FamilyId> = threads.iter().map(|(_, family)| *family).collect();

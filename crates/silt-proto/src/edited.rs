@@ -32,13 +32,75 @@ pub enum DocEdit {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum DocRequest {
     Read,
-    Edit { edits: Vec<DocEdit> },
+    /// `base`, the version the edits' positions were counted against, as
+    /// a read answered it; they merge with what others wrote since. None
+    /// counts them against the text now.
+    Edit {
+        edits: Vec<DocEdit>,
+        #[serde(default)]
+        base: Option<String>,
+    },
 }
+
+/// The most edits one request of a doc makes.
+pub const DOC_EDITS: usize = 200;
+/// The most cells one request of a sheet sets.
+pub const SET_CELLS: usize = 1000;
 
 /// The text operations that make `edits` to `text`, in order, each against
 /// the text the ones before it left; all or none.
 pub fn doc_ops(text: &str, edits: &[DocEdit]) -> Result<Vec<silt_crdt::TextOp>, String> {
+    edited(text, edits).map(|(ops, _)| ops)
+}
+
+/// `edits`, counted against `seen`, the text at a version the person read
+/// with each character's id, as edits of `now`, the text with what others
+/// wrote since (ADR 0077). The change from what they read to what they
+/// meant is found by character: what they deleted that's still there goes,
+/// and what they typed goes after the last character before it that still
+/// stands, so others' edits stay and theirs lands where they meant it.
+pub fn rebased(
+    seen: &[(char, silt_crdt::CharId)],
+    now: &[(char, silt_crdt::CharId)],
+    edits: &[DocEdit],
+) -> Result<Vec<DocEdit>, String> {
+    let read: String = seen.iter().map(|(char, _)| char).collect();
+    let (_, meant) = edited(&read, edits)?;
+    let read: Vec<char> = seen.iter().map(|(char, _)| *char).collect();
+    let same_start = read.iter().zip(&meant).take_while(|(a, b)| a == b).count();
+    let same_end = read[same_start..].iter().rev().zip(meant[same_start..].iter().rev()).take_while(|(a, b)| a == b).count();
+    let (from, deleted_to) = (same_start, read.len() - same_end);
+    let typed: String = meant[same_start..meant.len() - same_end].iter().collect();
+    let at: std::collections::HashMap<silt_crdt::CharId, usize> =
+        now.iter().enumerate().map(|(index, (_, id))| (*id, index)).collect();
+    let mut gone: Vec<usize> = seen[from..deleted_to].iter().filter_map(|(_, id)| at.get(id).copied()).collect();
+    gone.sort_unstable();
+    let mut rebased = Vec::new();
+    // Runs of what's still there, last first, so each position holds.
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for index in gone {
+        match runs.last_mut() {
+            Some((start, len)) if *start + *len == index => *len += 1,
+            _ => runs.push((index, 1)),
+        }
+    }
+    for (pos, delete) in runs.into_iter().rev() {
+        rebased.push(DocEdit::Splice { pos, delete, insert: String::new() });
+    }
+    if !typed.is_empty() {
+        let before = seen[..from].iter().rev().find_map(|(_, id)| at.get(id));
+        let pos = before.map_or(0, |index| index + 1);
+        rebased.push(DocEdit::Splice { pos, delete: 0, insert: typed });
+    }
+    Ok(rebased)
+}
+
+/// [`doc_ops`], and the text they leave.
+fn edited(text: &str, edits: &[DocEdit]) -> Result<(Vec<silt_crdt::TextOp>, Vec<char>), String> {
     use silt_crdt::TextOp;
+    if edits.len() > DOC_EDITS {
+        return Err(format!("a request makes at most {DOC_EDITS} edits"));
+    }
     let mut current: Vec<char> = text.chars().collect();
     let mut ops = Vec::new();
     for (at, edit) in edits.iter().enumerate() {
@@ -71,7 +133,7 @@ pub fn doc_ops(text: &str, edits: &[DocEdit]) -> Result<Vec<silt_crdt::TextOp>, 
             return Err("the doc would be over 1 MiB".into());
         }
     }
-    Ok(ops)
+    Ok((ops, current))
 }
 
 /// What a sheet's page or an agent asks of a sheet.
@@ -176,16 +238,34 @@ pub fn sheet_view(cells: &SheetCells, today: f64) -> SheetView {
 /// What a `Set` needs first: how many rows and columns to add at the end so
 /// every address it names exists.
 pub fn sheet_growth(cells: &SheetCells, set: &BTreeMap<String, String>) -> Result<(usize, usize), String> {
+    if set.len() > SET_CELLS {
+        return Err(format!("a request sets at most {SET_CELLS} cells"));
+    }
     let mut needed = (0, 0);
-    for address in set.keys() {
+    for (address, raw) in set {
         let (row, column) = silt_sheet::parse_address(address).ok_or_else(|| format!("{address} isn't a cell's address"))?;
-        if row >= silt_sheet::ROWS || column >= silt_sheet::COLUMNS {
-            return Err(format!("{address} is past a sheet's {} rows or {} columns", silt_sheet::ROWS, silt_sheet::COLUMNS));
+        // The cells a formula names exist too, so it keeps meaning them
+        // rather than becoming #REF! (spreadsheets count rows added later).
+        for (row, column) in std::iter::once((row, column)).chain(silt_sheet::addresses_in(raw)) {
+            if row >= silt_sheet::ROWS || column >= silt_sheet::COLUMNS {
+                return Err(format!(
+                    "{address} names a cell past a sheet's {} rows or {} columns",
+                    silt_sheet::ROWS,
+                    silt_sheet::COLUMNS
+                ));
+            }
+            needed = (needed.0.max(row + 1), needed.1.max(column + 1));
         }
-        needed = (needed.0.max(row + 1), needed.1.max(column + 1));
+    }
+    let (rows, columns) = (needed.0.max(cells.rows.len()), needed.1.max(cells.columns.len()));
+    if rows.saturating_mul(columns) > SHEET_CELLS {
+        return Err(format!("a sheet holds at most {SHEET_CELLS} cells; that would make it {rows} by {columns}"));
     }
     Ok((needed.0.saturating_sub(cells.rows.len()), needed.1.saturating_sub(cells.columns.len())))
 }
+
+/// The most cells a sheet's grid holds, rows times columns (ADR 0077).
+pub const SHEET_CELLS: usize = silt_log::page::SHEET_CELLS;
 
 /// The cell writes a `Set` makes once its rows and columns exist, each
 /// formula kept with its references by ids.
@@ -217,19 +297,31 @@ pub fn read_range(view: &SheetView, range: &str) -> Result<Vec<Vec<String>>, Str
     let (Some((top, left)), Some((bottom, right))) = (silt_sheet::parse_address(start), silt_sheet::parse_address(end)) else {
         return Err(format!("{range} isn't a range"));
     };
-    Ok((top.min(bottom)..=top.max(bottom))
+    // Only what the sheet holds: past it every cell is empty.
+    let rows = view.values.len();
+    let columns = view.columns.len();
+    let (top, bottom) = (top.min(bottom), top.max(bottom).min(rows.saturating_sub(1)));
+    let (left, right) = (left.min(right), left.max(right).min(columns.saturating_sub(1)));
+    if rows == 0 || columns == 0 || top > bottom || left > right {
+        return Ok(Vec::new());
+    }
+    Ok((top..=bottom)
         .map(|row| {
-            (left.min(right)..=left.max(right))
+            (left..=right)
                 .map(|column| view.values.get(row).and_then(|cells| cells.get(column)).cloned().unwrap_or_default())
                 .collect()
         })
         .collect())
 }
 
-/// A sheet as CSV: what each cell shows.
+/// A sheet as CSV: what each cell shows. A value a spreadsheet app would run
+/// as a formula on opening starts with `'`, as OWASP advises.
 pub fn csv(view: &SheetView) -> String {
-    let cell =
-        |text: &str| if text.contains([',', '"', '\n']) { format!("\"{}\"", text.replace('"', "\"\"")) } else { text.to_owned() };
+    let cell = |text: &str| {
+        let runs = text.starts_with(['=', '+', '-', '@', '\t', '\r']) && text.trim().parse::<f64>().is_err();
+        let text = if runs { format!("'{text}") } else { text.to_owned() };
+        if text.contains([',', '"', '\n', '\r']) { format!("\"{}\"", text.replace('"', "\"\"")) } else { text }
+    };
     view.values.iter().map(|row| row.iter().map(|value| cell(value)).collect::<Vec<_>>().join(",")).collect::<Vec<_>>().join("\n")
 }
 
@@ -249,7 +341,9 @@ pub fn xlsx(view: &SheetView, name: &str) -> Result<Vec<u8>, String> {
             let (r, c) =
                 (u32::try_from(row).map_err(|_| "too many rows")?, u16::try_from(column).map_err(|_| "too many columns")?);
             let value = view.values.get(row).and_then(|values| values.get(column)).cloned().unwrap_or_default();
-            let written = if raw.starts_with('=') {
+            // Only a formula Silt computes is kept live, so a workbook never
+            // runs what a peer wrote, such as WEBSERVICE or a DDE call.
+            let written = if raw.starts_with('=') && silt_sheet::formula_ok(raw) {
                 sheet.write_formula(r, c, Formula::new(raw.as_str()).set_result(value)).map(|_| ())
             } else if raw.is_empty() {
                 Ok(())
@@ -390,6 +484,74 @@ pub fn sheet_text(cells: &SheetCells) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Text with an id for each character, `from` on.
+    fn ids(text: &str, from: u64) -> Vec<(char, silt_crdt::CharId)> {
+        let actor = silt_types::ActorId(7);
+        text.chars()
+            .zip(from..)
+            .map(|(char, at)| (char, silt_crdt::CharId::Delta(silt_types::DeltaId::new(actor, silt_types::Lamport(at)))))
+            .collect()
+    }
+
+    fn applied(now: &[(char, silt_crdt::CharId)], edits: &[DocEdit]) -> String {
+        let text: String = now.iter().map(|(char, _)| char).collect();
+        let (_, chars) = edited(&text, edits).expect("applies");
+        chars.into_iter().collect()
+    }
+
+    #[test]
+    fn an_edit_counted_against_an_older_read_lands_where_it_was_meant() {
+        let seen = ids("# Plan\n- ship\n", 0);
+        // The agent put a line at the top since.
+        let mut now = ids("Goals\n", 100);
+        now.extend(seen.iter().copied());
+        let append = [DocEdit::Splice { pos: seen.len(), delete: 0, insert: "- demo\n".into() }];
+        assert_eq!(applied(&now, &rebased(&seen, &now, &append).expect("rebased")), "Goals\n# Plan\n- ship\n- demo\n");
+        // Deleting "ship" deletes only it, though the agent typed inside it.
+        let mut split = seen.clone();
+        split.splice(10..10, ids("XX", 200));
+        let delete = [DocEdit::Splice { pos: 9, delete: 4, insert: "go".into() }];
+        assert_eq!(applied(&split, &rebased(&seen, &split, &delete).expect("rebased")), "# Plan\n- goXX\n");
+        // What the agent deleted stays deleted; the person's text goes after what's left before it.
+        let mut cut = seen.clone();
+        cut.drain(7..9);
+        let typed = [DocEdit::Splice { pos: 9, delete: 0, insert: "now ".into() }];
+        assert_eq!(applied(&cut, &rebased(&seen, &cut, &typed).expect("rebased")), "# Plan\nnow ship\n");
+    }
+
+    #[test]
+    fn the_log_folds_a_sheet_within_what_the_evaluator_computes() {
+        assert_eq!((silt_log::page::SHEET_ROWS, silt_log::page::SHEET_COLUMNS), (silt_sheet::ROWS, silt_sheet::COLUMNS));
+    }
+
+    #[test]
+    fn a_formula_naming_cells_past_the_sheet_grows_it_and_a_range_reads_only_the_sheet() {
+        let cells = SheetCells::default();
+        let set = BTreeMap::from([("A1".to_owned(), "=SUM(B2:B100)".to_owned())]);
+        assert_eq!(sheet_growth(&cells, &set), Ok((100, 2)));
+        let huge = BTreeMap::from([("A1".to_owned(), "=SUM(A1:GR10000)".to_owned())]);
+        assert!(sheet_growth(&cells, &huge).is_err(), "past the cells a sheet holds");
+        let view = SheetView {
+            rows: vec!["r".into()],
+            columns: vec!["c".into()],
+            raw: vec![vec!["1".into()]],
+            values: vec![vec!["1".into()]],
+        };
+        assert_eq!(read_range(&view, "A1:ZZZ99999999"), Ok(vec![vec!["1".to_owned()]]));
+    }
+
+    #[test]
+    fn exports_never_run_what_a_cell_holds() {
+        let view = SheetView {
+            rows: vec!["r".into()],
+            columns: vec!["a".into(), "b".into(), "c".into()],
+            raw: vec![vec!["=cmd|' /C calc'!A0".into(), "-5".into(), "@SUM(1)".into()]],
+            values: vec![vec!["=cmd|' /C calc'!A0".into(), "-5".into(), "@SUM(1)".into()]],
+        };
+        assert_eq!(csv(&view), "'=cmd|' /C calc'!A0,-5,'@SUM(1)");
+        assert!(silt_sheet::formula_ok("=SUM(A1:B2)*2") && !silt_sheet::formula_ok("=WEBSERVICE(\"https://x\")"));
+    }
     use silt_crdt::TextOp;
 
     #[test]
