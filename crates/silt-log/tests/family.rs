@@ -806,6 +806,41 @@ fn malformed_page_data_is_refused() {
     }
 }
 
+/// Writes that are each within bounds but together go past them, as a
+/// patch growing a document or a peer writing more than an artifact holds,
+/// are left out of the fold on every replica alike.
+#[test]
+fn page_data_stays_within_its_bounds() {
+    use silt_log::page::{DOC_BYTES, DOCS};
+    let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+    let mut family = Family::new();
+    say(&mut family, THREAD, "make a poll");
+    let half = "x".repeat(DOC_BYTES / 2);
+    let patch = |field: &str| {
+        Op::Page(silt_log::PageOp::Patched { artifact, path: "votes/ann".into(), fields: format!(r#"{{"{field}":"{half}"}}"#) })
+    };
+    for op in [patch("a"), patch("b"), set(artifact, "votes/bob", r#"{"p":1}"#)] {
+        let head = family.thread_head(THREAD);
+        on_thread(&mut family, DAEMON, THREAD, head, op);
+    }
+    let docs = family.page_documents(THREAD, artifact);
+    assert!(docs["votes/ann"].get("a").is_some() && docs["votes/ann"].get("b").is_none(), "the patch past 64 KiB is left out");
+    assert_eq!(docs["votes/bob"], serde_json::json!({"p": 1}), "later writes within bounds still apply");
+
+    let mut family = Family::new();
+    say(&mut family, THREAD, "make a poll");
+    for at in 0..=DOCS {
+        let head = family.thread_head(THREAD);
+        on_thread(&mut family, DAEMON, THREAD, head, set(artifact, &format!("votes/v{at}"), "1"));
+    }
+    let docs = family.page_documents(THREAD, artifact);
+    assert_eq!(docs.len(), DOCS, "the document past the most is left out");
+    assert!(!docs.contains_key(&format!("votes/v{DOCS}")));
+    let head = family.thread_head(THREAD);
+    on_thread(&mut family, DAEMON, THREAD, head, set(artifact, "votes/v0", "2"));
+    assert_eq!(family.page_documents(THREAD, artifact)["votes/v0"], serde_json::json!(2), "one already there may still change");
+}
+
 /// A page write concurrent with a revert survives it on every replica,
 /// whatever order the two arrive in.
 #[test]

@@ -224,6 +224,19 @@ mod tests {
     }
 
     #[test]
+    fn a_patch_growing_a_document_past_its_bound_is_refused() {
+        let artifact: silt_types::ArtifactId = "0123456789ab".parse().expect("an id");
+        let half = "x".repeat(silt_log::page::DOC_BYTES / 2);
+        let docs = silt_log::page::Documents::from([("notes/n1".to_owned(), json!({"a": half}))]);
+        let rules = Rules::of(None).expect("none");
+        let grow = vec![PageWrite::Update { path: "notes/n1".into(), fields: json!({"b": half}) }];
+        let refused = page_ops(artifact, &docs, grow, &rules, "me", Level::Comment).expect_err("past 64 KiB");
+        assert!(refused.contains("64 KiB"), "{refused}");
+        let small = vec![PageWrite::Update { path: "notes/n1".into(), fields: json!({"b": 1}) }];
+        assert!(page_ops(artifact, &docs, small, &rules, "me", Level::Comment).is_ok());
+    }
+
+    #[test]
     fn everyone_reads_and_each_writes_their_own() {
         let config = json!({"rules": [
             {"path": "votes", "read": "read", "write": "owner"},
@@ -778,6 +791,9 @@ pub fn page_ops(
                             target.insert(field.clone(), value.clone());
                         }
                     }
+                }
+                if doc.to_string().len() > silt_log::page::DOC_BYTES {
+                    return Err("a document is at most 64 KiB".into());
                 }
                 silt_log::PageOp::Patched { artifact, path, fields: fields.to_string() }
             }
