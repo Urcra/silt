@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { docMarkdown } from './Markdown'
+import { docMarkdown } from './markdownParts'
 
 describe("a doc's blocks", () => {
   it('become what the read view draws, and a malformed one is left to be dropped', () => {

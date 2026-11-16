@@ -12,7 +12,7 @@ import { hosted } from '../served'
 import { columnName, csvOf, rebaseDraft, splice } from '../typed'
 import { Button, Icon, IconButton, Input, Menu, Textarea, cx, toast } from '../ui'
 import { CommentThread } from './CommentThread'
-import { DocMarkdown } from './Markdown'
+import { DocMarkdown } from './DocMarkdown'
 
 /** Characters, as the doc counts them, in the first `units` UTF-16 units of `text`. */
 function characters(text: string, units: number): number {

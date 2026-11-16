@@ -106,6 +106,9 @@ pub(crate) struct Browsed {
     graph: OnceLock<silt_crdt::CausalGraph>,
     /// Docs' and sheets' text for search, worked out once per change.
     texts: std::sync::Mutex<HashMap<(ThreadId, silt_types::ArtifactId), Arc<str>>>,
+    /// Each artifact's page documents, folded once per change, for the
+    /// listing and a page's reads rather than at every request.
+    documents: std::sync::Mutex<HashMap<(ThreadId, silt_types::ArtifactId), Arc<silt_log::page::Documents>>>,
 }
 
 type ThreadEntries = Arc<Vec<(DeltaId, HistoryEntry)>>;
@@ -118,7 +121,18 @@ impl Browsed {
             entries: std::sync::Mutex::default(),
             graph: OnceLock::new(),
             texts: std::sync::Mutex::default(),
+            documents: std::sync::Mutex::default(),
         }
+    }
+
+    /// `artifact`'s page documents in `thread`, as they stand.
+    fn documents(&self, thread: ThreadId, artifact: silt_types::ArtifactId) -> Arc<silt_log::page::Documents> {
+        if let Some(docs) = self.documents.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&(thread, artifact)) {
+            return Arc::clone(docs);
+        }
+        let docs = Arc::new(silt_log::page_documents_in(&self.log, self.graph(), thread, artifact));
+        self.documents.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((thread, artifact), Arc::clone(&docs));
+        docs
     }
 
     fn requests(&self) -> &[MergeRequest] {
@@ -544,7 +558,7 @@ pub(crate) async fn page_of(
     let docs = {
         let mut slot = server.room(row.family).await.ok_or_else(not_found)?;
         let browsed = slot.browsed(row.family, &viewer);
-        silt_log::page_documents_in(&browsed.log, browsed.graph(), row.id, artifact)
+        browsed.documents(row.id, artifact).as_ref().clone()
     };
     Ok(PageOf { family: row.family, thread: row.id, declared, docs, me: silt_proto::page::person_id(&readable.me), level })
 }
@@ -773,7 +787,7 @@ async fn save_edited_version(
                 silt_proto::edited::sheet_content(sheets)
             }
             _ => {
-                let docs = silt_log::page_documents_in(&browsed.log, browsed.graph(), row.id, artifact_id);
+                let docs = browsed.documents(row.id, artifact_id);
                 let items: Vec<&serde_json::Value> = docs
                     .iter()
                     .filter(|(path, _)| path.split('/').count() == 2 && path.starts_with("items/"))
@@ -1050,11 +1064,11 @@ async fn artifact_listing(
         if latest.is_empty() {
             continue;
         }
-        let graph = browsed.graph();
         for (artifact, time_ms) in latest {
-            let archived = artifact.id.parse::<silt_types::ArtifactId>().is_ok_and(|id| {
-                silt_log::page_documents_in(&browsed.log, graph, row.id, id).get(ARCHIVED) == Some(&serde_json::Value::Bool(true))
-            });
+            let archived = artifact
+                .id
+                .parse::<silt_types::ArtifactId>()
+                .is_ok_and(|id| browsed.documents(row.id, id).get(ARCHIVED) == Some(&serde_json::Value::Bool(true)));
             rows.push(ArtifactListed {
                 pinned: pins.contains(&(crate::id_bytes(row.id.0).to_vec(), artifact.id.clone())),
                 thread: row.id.to_string(),
