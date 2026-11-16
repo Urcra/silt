@@ -334,6 +334,13 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
   })
   const [editing, setEditing] = useState<{ row: number; column: number; raw: string } | null>(null)
   const [selected, setSelected] = useState<{ row: number; column: number }>({ row: 0, column: 0 })
+  // Only the rows near what's shown are drawn, so a sheet of thousands of rows stays quick (ADR 0077).
+  const scroller = useRef<HTMLDivElement>(null)
+  const [window_, setWindow] = useState({ top: 0, height: 800 })
+  const measure = () => {
+    const box = scroller.current
+    if (box) setWindow({ top: box.scrollTop, height: box.clientHeight })
+  }
   const change = async (asked: Record<string, unknown>) => {
     try {
       await api.sheetData(thread, artifact, { sheet: tab, ...asked })
@@ -365,6 +372,11 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
   const view = sheet.data
   if (!view) return null
   const shown = view.raw[selected.row]?.[selected.column] ?? ''
+  const ROW = 29
+  const windowed = view.rows.length > 200
+  const first = windowed ? Math.max(0, Math.floor(window_.top / ROW) - 20) : 0
+  const last = windowed ? Math.min(view.rows.length, Math.ceil((window_.top + window_.height) / ROW) + 20) : view.rows.length
+  const drawn = view.rows.slice(first, last).map((id, at) => [id, first + at] as const)
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="sheet">
       <div className="flex shrink-0 items-center gap-2 border-b border-line-subtle px-2 py-1">
@@ -383,7 +395,7 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
         </Button>
         <IconButton icon="download" label="Download as .xlsx" onClick={() => void xlsx()} />
       </div>
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="min-h-0 flex-1 overflow-auto" ref={scroller} onScroll={windowed ? measure : undefined}>
         <table className="border-separate border-spacing-0 font-mono text-xs" role="grid" aria-label={title}>
           <thead className="sticky top-0 z-10 bg-surface-1">
             <tr>
@@ -396,7 +408,8 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
             </tr>
           </thead>
           <tbody>
-            {view.rows.map((id, row) => (
+            {first > 0 && <tr aria-hidden style={{ height: first * ROW }} />}
+            {drawn.map(([id, row]) => (
               <tr key={id}>
                 <th scope="row" className="sticky left-0 border-r border-b border-line bg-surface-1 px-2 text-right font-medium text-fg-2">
                   {row + 1}
@@ -434,6 +447,7 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
                 })}
               </tr>
             ))}
+            {last < view.rows.length && <tr aria-hidden style={{ height: (view.rows.length - last) * ROW }} />}
           </tbody>
         </table>
       </div>
