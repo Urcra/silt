@@ -521,6 +521,8 @@ pub enum FilesRequest {
         #[serde(default)]
         at: Option<String>,
     },
+    /// The turns that changed a file, newest last.
+    History { path: String },
 }
 
 /// The most entries one listing answers.

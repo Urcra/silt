@@ -1935,6 +1935,25 @@ async fn a_rooms_moments_reach_its_peers_by_level() {
     assert_eq!(next(&mut carol_room).await["reason"], "not_granted", "move needs a collaborator");
     carol_room.send(Message::Text(r#"{"op": "emit", "topic": "cursor", "data": [3, 4]}"#.into())).await.expect("sends");
     assert_eq!(next(&mut alice_room).await["data"], serde_json::json!([3, 4]), "the declaration opens cursor to commenters");
+
+    // Once the thread is hidden from her, carol's open socket is told and closed.
+    let private = VisibilityRequest { repo: None, thread: Some(THREAD), visibility: Visibility::Private };
+    assert_eq!(world.alice.send(world.alice.request(Method::PUT, "/v1/visibility").json(&private)).await, StatusCode::NO_CONTENT);
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        use futures_util::StreamExt as _;
+        while let Some(Ok(message)) = carol_room.next().await {
+            if let tokio_tungstenite::tungstenite::Message::Text(text) = message {
+                let heard: serde_json::Value = serde_json::from_str(&text).expect("json");
+                if heard["event"] == "refused" {
+                    return heard;
+                }
+            }
+        }
+        serde_json::Value::Null
+    })
+    .await
+    .expect("told within the recheck");
+    assert_eq!(closed["reason"], "not_found", "{closed}");
 }
 
 /// An artifact's own routes answer only someone who can read the thread;

@@ -168,6 +168,12 @@ impl Core {
                 }
                 Ok(serde_json::json!({ "path": path, "text": text, "size": text.len(), "revision": file.at }))
             }
+            FilesRequest::History { path } => {
+                if !readable(&path) {
+                    return Err(CoreError::Invalid(format!("not_found: this page may not read {path}")));
+                }
+                Ok(serde_json::json!({ "path": path, "changes": self.file_history(thread, &path)? }))
+            }
         }
     }
 

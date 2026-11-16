@@ -17,6 +17,9 @@ use tokio::sync::mpsc;
 use crate::Server;
 use crate::app::Browser;
 
+/// How often an open socket checks that its person can still read the thread.
+const RECHECK: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// The hub, and each socket's way to its browser.
 #[derive(Default)]
 pub(crate) struct Rooms {
@@ -144,8 +147,17 @@ async fn serve(mut socket: WebSocket, server: Server, user: crate::UserId) {
         rooms.deliver(deliveries);
     }
     if socket.send(Message::Text(json!({"event": "joined", "peer": peer}).to_string().into())).await.is_ok() {
+        // Someone who stops being able to read the thread stops hearing its room.
+        let mut recheck = tokio::time::interval(RECHECK);
+        recheck.tick().await;
         loop {
             tokio::select! {
+                _ = recheck.tick() => {
+                    if crate::browse::page_of(&server, user, &join.thread, artifact).await.is_err() {
+                        let _ = socket.send(Message::Text(json!({"event": "refused", "reason": "not_found"}).to_string().into())).await;
+                        break;
+                    }
+                }
                 message = socket.recv() => match message {
                     Some(Ok(Message::Text(text))) => {
                         let Ok(sent) = serde_json::from_str::<Sent>(&text) else { continue };

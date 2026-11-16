@@ -180,12 +180,13 @@ function filesHandler(thread: string, artifact: ArtifactView, holder: Holder): C
     })
   }
   return {
-    methods: ['list', 'read', 'download'],
+    methods: ['list', 'read', 'history', 'download'],
     perMinute: 120,
     call: async (method, args) => {
       const given = (args ?? {}) as { path?: unknown; recursive?: unknown; cursor?: unknown; at?: unknown }
       const path = typeof given.path === 'string' ? given.path : ''
       if (method === 'list') return ask({ op: 'list', path, recursive: given.recursive === true, cursor: typeof given.cursor === 'string' ? given.cursor : null })
+      if (method === 'history') return ask({ op: 'history', path })
       const read = (await ask({ op: 'read', path, at: typeof given.at === 'string' ? given.at : null })) as { text: string; size: number; revision: string }
       if (method === 'read') return read
       const filename = downloadName(path.split('/').pop())

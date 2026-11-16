@@ -219,6 +219,7 @@ function filesClient(ns) {
   return Object.freeze({
     list: list,
     read: read,
+    history: function (path) { return ns.history({ path: String(path) }); },
     download: function (path) { return ns.download({ path: String(path) }); },
     // Read again every few seconds, as the hosted app hears of no change;
     // `fn` hears of the file whenever its revision changes.

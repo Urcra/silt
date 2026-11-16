@@ -192,6 +192,8 @@ interface SiltFiles {
   list(opts?: { path?: string; recursive?: boolean; cursor?: string }): Promise<{ entries: { path: string; kind: 'file' | 'folder' }[]; cursor: string | null }>
   /** Text files, at most 4 MiB; `at` a version for an older one. */
   read(path: string, opts?: { at?: string }): Promise<{ path: string; text: string; size: number; revision: string }>
+  /** The turns that changed it, oldest first: whose prompt, and how much. */
+  history(path: string): Promise<{ path: string; changes: { prompt: string | null; by_agent: boolean; inserted: number; deleted: number; time_ms: number }[] }>
   /** Asks the viewer to save it. */
   download(path: string): Promise<{ saved: true }>
   /** Calls `fn` with the file now and whenever it changes, read every

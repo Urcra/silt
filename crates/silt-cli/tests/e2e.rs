@@ -1845,6 +1845,10 @@ fn a_page_has_files_beside_it_takes_uploads_and_reads_the_threads_files() {
     assert!(read["text"].as_str().is_some_and(|text| text.contains("fn main")), "{read}");
     let (outside, _) = api.call("POST", &files, Some(serde_json::json!({"op": "read", "path": "README.md"})));
     assert!(!outside, "a file outside its globs is refused");
+    let changed = api.ok("POST", &files, Some(serde_json::json!({"op": "history", "path": "src/main.rs"})));
+    assert!(changed["path"] == "src/main.rs" && changed["changes"].is_array(), "{changed}");
+    let (outside, _) = api.call("POST", &files, Some(serde_json::json!({"op": "history", "path": "README.md"})));
+    assert!(!outside, "nor its history");
 }
 
 /// A deck is a type whose content is JSON Silt checks (ADR 0076): one that
