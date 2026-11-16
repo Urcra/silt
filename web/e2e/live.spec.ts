@@ -1662,6 +1662,8 @@ test('a data page links each number to its source, and a canvas shows each board
   const boards = page.getByTestId('board')
   await expect(boards).toHaveCount(3)
   await expect(boards.nth(2)).toContainText('390×844')
+  // The phone's board grows to its page, past the screen it was drawn for.
+  await expect.poll(async () => Number(await boards.nth(2).locator('iframe').evaluate((frame) => (frame as HTMLIFrameElement).style.height.replace('px', '')))).toBeGreaterThan(1500)
   // Two boards side by side at one scale.
   await boards.nth(0).getByRole('button', { name: 'Compare' }).click()
   await boards.nth(2).getByRole('button', { name: 'Compare' }).click()

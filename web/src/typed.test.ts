@@ -38,6 +38,9 @@ describe('the artifact types', () => {
     const stepped = partDocument('<li data-step="1">a</li>', undefined, 1280, 720, null, 'light', 1)
     expect(stepped).toContain('[data-step]{visibility:hidden}[data-step="1"]{visibility:visible}')
     expect(partDocument('<li data-step="1">a</li>', undefined, 1280, 720, null, 'light')).not.toContain('visibility')
+    const grows = partDocument('<p>long</p>', undefined, 390, 844, null, 'light', undefined, true)
+    expect(grows).toContain('min-height:844px')
+    expect(grows).toContain("silt:'grown'")
   })
 })
 

@@ -24,6 +24,9 @@ pub fn is_type(kind: &str) -> bool {
 #[serde(deny_unknown_fields)]
 struct Deck {
     aspect: Option<String>,
+    /// How one slide gives way to the next: `none` or `fade`.
+    #[serde(default)]
+    transition: Option<String>,
     #[serde(default)]
     style: Option<String>,
     slides: Vec<Slide>,
@@ -62,6 +65,9 @@ struct Board {
     x: Option<f64>,
     #[serde(default)]
     y: Option<f64>,
+    /// Grows past `height` to its content, as a page that scrolls does.
+    #[serde(default)]
+    grow: Option<bool>,
     html: String,
 }
 
@@ -99,6 +105,9 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
             if deck.aspect.as_deref().is_some_and(|aspect| aspect != "16:9" && aspect != "4:3") {
                 return Err("a deck's aspect is 16:9 or 4:3".into());
             }
+            if deck.transition.as_deref().is_some_and(|transition| transition != "none" && transition != "fade") {
+                return Err("a deck's transition is none or fade".into());
+            }
             parts(deck.slides.len(), "slide")?;
             let mut ids = std::collections::HashSet::new();
             for slide in &deck.slides {
@@ -133,7 +142,7 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
                 if board.x.is_some_and(|x| !x.is_finite()) || board.y.is_some_and(|y| !y.is_finite()) {
                     return Err(format!("board {}'s position is a number", board.id));
                 }
-                let _ = (&board.name, &board.caption);
+                let _ = (&board.name, &board.caption, board.grow);
                 html(&board.html, &format!("board {}", board.id))?;
             }
             canvas.style.as_deref().map_or(Ok(()), |style| html(style, "the canvas's style"))
@@ -350,6 +359,7 @@ pub fn guide(kind: &str) -> Option<(Value, Value)> {
                 "additionalProperties": false,
                 "properties": {
                     "aspect": {"enum": ["16:9", "4:3"]},
+                    "transition": {"enum": ["none", "fade"], "description": "How one slide gives way to the next; none by default"},
                     "style": {"type": "string", "description": "CSS every slide shares"},
                     "slides": {"type": "array", "minItems": 1, "maxItems": PARTS, "items": {
                         "type": "object", "required": ["title", "html"], "additionalProperties": false,
@@ -375,6 +385,7 @@ pub fn guide(kind: &str) -> Option<(Value, Value)> {
                             "id": {"type": "string"}, "name": {"type": "string"}, "caption": {"type": "string"},
                             "width": {"type": "integer", "minimum": 1, "maximum": 8192},
                             "height": {"type": "integer", "minimum": 1, "maximum": 8192},
+                            "grow": {"type": "boolean", "description": "Grows past height to its content, for a page that scrolls: height is then the least it shows"},
                             "x": {"type": "number"}, "y": {"type": "number"}, "html": html
                         }
                     }}
@@ -452,6 +463,8 @@ mod tests {
         assert!(validate("slides", r#"{"slides": []}"#).unwrap_err().contains("at least one slide"));
         assert!(validate("slides", r#"{"slides": [{"title": "a", "html": "x", "extra": 1}]}"#).is_err());
         assert!(validate("slides", r#"{"aspect": "21:9", "slides": [{"title": "a", "html": "x"}]}"#).is_err());
+        assert!(validate("slides", r#"{"transition": "fade", "slides": [{"title": "a", "html": "x"}]}"#).is_ok());
+        assert!(validate("slides", r#"{"transition": "spin", "slides": [{"title": "a", "html": "x"}]}"#).is_err());
         let twins = r#"{"boards": [{"id": "a", "name": "A", "width": 10, "height": 10, "html": ""}, {"id": "a", "name": "B", "width": 10, "height": 10, "html": ""}]}"#;
         assert!(validate("canvas", twins).unwrap_err().contains("unique"));
         let unsourced = r#"{"title": "t", "sources": [], "blocks": [{"type": "stat", "label": "n", "value": 1, "source": "x"}]}"#;

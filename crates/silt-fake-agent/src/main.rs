@@ -618,7 +618,9 @@ document.getElementById('add').onclick=function(){db.collection('tasks').add({do
         }
         if prompt.contains("Artifact boards") {
             let board = |id: &str, width: u32, height: u32| serde_json::json!({"id": id, "name": id, "width": width, "height": height, "html": format!("<p>{id}</p>")});
-            let canvas = serde_json::json!({"boards": [board("Desktop", 1280, 800), board("Tablet", 834, 1194), board("Phone", 390, 844)]});
+            // The phone's page scrolls, so its board grows to its content.
+            let phone = serde_json::json!({"id": "Phone", "name": "Phone", "width": 390, "height": 844, "grow": true, "html": "<p>Phone</p><div style=\"height:1500px\"></div>"});
+            let canvas = serde_json::json!({"boards": [board("Desktop", 1280, 800), board("Tablet", 834, 1194), phone]});
             arguments = serde_json::json!({"title": "Settings screen", "kind": "canvas", "content": canvas.to_string()});
         }
         if prompt.contains("Artifact bad deck") {

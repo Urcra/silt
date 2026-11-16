@@ -183,7 +183,10 @@ export function SlidesView({
               theme,
               steps > 0 ? step : undefined,
             )}
-            className="absolute top-1/2 left-1/2 border-0 bg-white shadow-overlay"
+            className={cx(
+              "absolute top-1/2 left-1/2 border-0 bg-white shadow-overlay",
+              deck.transition === "fade" && "silt-fade",
+            )}
             style={{
               width,
               height,
@@ -304,7 +307,31 @@ export function CanvasView({
   onComment?: (quote: string) => void;
 }) {
   const canvas = useMemo(() => canvasOf(text), [text]);
-  const placed = useMemo(() => layout(canvas?.boards ?? []), [canvas]);
+  // How tall each board that grows says its content is, from its own frame.
+  const [grown, setGrown] = useState<Record<string, number>>({});
+  const frames = useRef(new Map<string, HTMLIFrameElement>());
+  useEffect(() => {
+    const heard = (event: MessageEvent) => {
+      const said = event.data as { silt?: unknown; height?: unknown } | null;
+      if (said?.silt !== "grown" || typeof said.height !== "number") return;
+      for (const [id, frame] of frames.current)
+        if (frame.contentWindow === event.source) {
+          const height = Math.min(Math.max(Math.round(said.height as number), 1), 8192);
+          setGrown((was) => (was[id] === height ? was : { ...was, [id]: height }));
+        }
+    };
+    window.addEventListener("message", heard);
+    return () => window.removeEventListener("message", heard);
+  }, []);
+  const placed = useMemo(
+    () =>
+      layout(
+        (canvas?.boards ?? []).map((board) =>
+          board.grow && grown[board.id] ? { ...board, height: Math.max(board.height, grown[board.id]), least: board.height } : board,
+        ),
+      ),
+    [canvas, grown],
+  );
   const box = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: 40, y: 60, scale: 0.4 });
   const drag = useRef<{ x: number; y: number; from: typeof view } | null>(null);
@@ -483,7 +510,7 @@ export function CanvasView({
                   {board.name}
                 </button>
                 <span className="truncate text-fg-2">
-                  {board.width}×{board.height}
+                  {board.width}×{(board as { least?: number }).least ?? board.height}
                   {board.caption ? ` · ${board.caption}` : ""}
                 </span>
                 {placed.length > 1 && (
@@ -519,13 +546,20 @@ export function CanvasView({
                 <iframe
                   title={board.name}
                   sandbox="allow-scripts"
+                  ref={(frame) => {
+                    if (frame) frames.current.set(board.id, frame);
+                    else frames.current.delete(board.id);
+                  }}
                   srcDoc={partDocument(
                     board.html,
                     canvas.style,
                     board.width,
-                    board.height,
+                    // The least it shows, as written, so its growing doesn't load it again.
+                    (board as { least?: number }).least ?? board.height,
                     style,
                     theme,
+                    undefined,
+                    board.grow,
                   )}
                   className="pointer-events-auto block border-0 bg-white shadow-overlay"
                   style={{ width: board.width, height: board.height }}

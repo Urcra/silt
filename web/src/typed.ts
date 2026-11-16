@@ -3,8 +3,13 @@
 
 import { sandboxedDocument, type FrameTheme } from './artifacts'
 
-export type Deck = { aspect?: '16:9' | '4:3'; style?: string; slides: { id?: string; title: string; html: string; notes?: string }[] }
-export type Board = { id: string; name: string; caption?: string; width: number; height: number; x?: number; y?: number; html: string }
+export type Deck = {
+  aspect?: '16:9' | '4:3'
+  transition?: 'none' | 'fade'
+  style?: string
+  slides: { id?: string; title: string; html: string; notes?: string }[]
+}
+export type Board = { id: string; name: string; caption?: string; width: number; height: number; x?: number; y?: number; grow?: boolean; html: string }
 export type Canvas = { style?: string; boards: Board[] }
 export type Source = { id: string; name: string; kind: string; detail: string; at: string }
 export type Series = { name: string; points: [string | number, number | null][] }
@@ -65,7 +70,12 @@ const optional = (value: unknown, check: (value: unknown) => boolean) => value =
 export function deckOf(json: string): Deck | null {
   const deck = parsed<unknown>(json)
   if (!object(deck) || !list(deck.slides, 500)) return null
-  if (!optional(deck.aspect, (aspect) => aspect === '16:9' || aspect === '4:3') || !optional(deck.style, text)) return null
+  if (
+    !optional(deck.aspect, (aspect) => aspect === '16:9' || aspect === '4:3') ||
+    !optional(deck.transition, (transition) => transition === 'none' || transition === 'fade') ||
+    !optional(deck.style, text)
+  )
+    return null
   const slides = deck.slides.every((slide) => object(slide) && optional(slide.id, (id) => text(id, 64)) && text(slide.title, 2000) && text(slide.html) && optional(slide.notes, text))
   return slides ? (deck as Deck) : null
 }
@@ -85,6 +95,7 @@ export function canvasOf(json: string): Canvas | null {
       size(board.height) &&
       optional(board.x, number) &&
       optional(board.y, number) &&
+      optional(board.grow, (grow) => typeof grow === 'boolean') &&
       optional(board.caption, text),
   )
   return boards ? (canvas as Canvas) : null
@@ -154,14 +165,20 @@ export function partDocument(
   style: string | null,
   theme: FrameTheme,
   step?: number,
+  grow?: boolean,
 ): string {
   const imports = (shared ?? '').match(/@import\s[^;]+;/g) ?? []
   const rest = imports.reduce((left, rule) => left.replace(rule, ''), shared ?? '')
   const ground = `color-scheme:${theme};background:var(--bg,Canvas);color:var(--fg,CanvasText)`
   const shown = Array.from({ length: step ?? 0 }, (_, at) => `[data-step="${at + 1}"]`).join(',')
   const steps = step === undefined ? '' : `[data-step]{visibility:hidden}${shown ? `${shown}{visibility:visible}` : ''}`
-  const css = `${imports.join('')}html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden}html{${ground}}${rest}${steps}`
-  return sandboxedDocument(`<!doctype html><html><head><style>${css.replace(/<\//g, '<\\/')}</style></head><body>${html}</body></html>`, {
+  // A board that grows says how tall its content is, which its viewer takes from that frame alone.
+  const size = grow ? `width:${width}px;min-height:${height}px` : `width:${width}px;height:${height}px`
+  const css = `${imports.join('')}html,body{margin:0;${size};overflow:hidden}html{${ground}}${rest}${steps}`
+  const tell = grow
+    ? `<script>new ResizeObserver(function(){parent.postMessage({silt:'grown',height:document.documentElement.scrollHeight},'*')}).observe(document.documentElement)</script>`
+    : ''
+  return sandboxedDocument(`<!doctype html><html><head><style>${css.replace(/<\//g, '<\\/')}</style></head><body>${html}${tell}</body></html>`, {
     style,
     theme,
     parent: window.location.origin,
