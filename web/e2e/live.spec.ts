@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import AxeBuilder from '@axe-core/playwright'
 import { type Page, expect, test } from '@playwright/test'
 import { stopAgent } from './fixture'
 
@@ -1812,4 +1813,31 @@ test('on a whiteboard people draw, connect, resize, rename and delete, and add a
   expect(saved.suggestedFilename()).toBe('Planning-board.png')
   const bytes = readFileSync((await saved.path()) ?? '')
   expect([...bytes.subarray(1, 4)].map((byte) => String.fromCharCode(byte)).join('')).toBe('PNG')
+})
+
+test('each artifact viewer has no serious accessibility problem axe finds', async ({ page }) => {
+  test.slow()
+  await startInNewThread(page, 'Fake agent')
+  const viewers: [string, string][] = [
+    ['Artifact deck', 'slides'],
+    ['Artifact numbers', 'data-page'],
+    ['Artifact doc', 'doc-editor'],
+    ['Artifact sheet', 'sheet'],
+    // Before the canvas, whose "Done: Artifact boards" would match this one's too.
+    ['Artifact board', 'whiteboard'],
+    ['Artifact boards', 'canvas'],
+  ]
+  const found: string[] = []
+  for (const [prompt, viewer] of viewers) {
+    await page.getByLabel('draft').fill(prompt)
+    await page.getByLabel('draft').press('Enter')
+    await expect(page.getByText(`Done: ${prompt}`)).toBeVisible()
+    if (!(await page.getByTestId(viewer).isVisible()))
+      await (viewer === 'canvas' ? page.getByRole('button', { name: /^Open the artifact Settings screen/ }).first() : page.getByTestId('artifact-card').last()).click()
+    await expect(page.getByTestId(viewer)).toBeVisible()
+    const checked = await new AxeBuilder({ page }).include(`[data-testid="${viewer}"]`).withTags(['wcag2a', 'wcag2aa']).analyze()
+    for (const violation of checked.violations.filter((one) => one.impact === 'serious' || one.impact === 'critical'))
+      found.push(`${viewer}: ${violation.id} (${violation.nodes.map((node) => node.target.join(' ')).slice(0, 3).join(', ')})`)
+  }
+  expect(found).toEqual([])
 })

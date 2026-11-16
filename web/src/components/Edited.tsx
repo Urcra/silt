@@ -441,7 +441,8 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
         </Button>
         <IconButton icon="download" label="Download as .xlsx" onClick={() => void xlsx()} />
       </div>
-      <div className="min-h-0 flex-1 overflow-auto" ref={scroller} onScroll={windowed ? measure : undefined}>
+      {/* Focusable, so the grid scrolls by keyboard too. */}
+      <div className="min-h-0 flex-1 overflow-auto" ref={scroller} onScroll={windowed ? measure : undefined} tabIndex={0} aria-label={`${title}'s cells`}>
         <table className="border-separate border-spacing-0 font-mono text-xs" role="grid" aria-label={title}>
           <thead className="sticky top-0 z-10 bg-surface-1">
             <tr>
@@ -522,7 +523,8 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
           </tbody>
         </table>
       </div>
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-line-subtle px-2 py-1" role="tablist" aria-label="sheets">
+      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-line-subtle px-2 py-1">
+        <div className="flex items-center gap-1" role="tablist" aria-label="sheets">
         {Array.from({ length: view.sheets ?? 1 }, (_, at) =>
           tab === at && renaming !== null ? (
             <input
@@ -557,6 +559,7 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
             </button>
           ),
         )}
+        </div>
         {(view.sheets ?? 1) < 16 && (
           <Button
             size="sm"

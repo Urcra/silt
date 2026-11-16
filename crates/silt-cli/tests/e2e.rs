@@ -1951,6 +1951,9 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     let seen = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));
     assert_eq!(seen["text"], "# Plan\n- test\n- ship\n");
     prompt("Doc edit");
+    let kept = artifacts_of(&api, &thread);
+    let after = kept.iter().rfind(|version| version["id"] == doc).expect("the doc's versions");
+    assert_eq!(after["note"], "After the agent's turn", "the agent's edit is kept as a version: {after}");
     let end = "# Plan\n- test\n- ship\n".chars().count();
     let late =
         serde_json::json!({"op": "edit", "base": seen["base"], "edits": [{"pos": end, "delete": 0, "insert": "- demo\n"}]});

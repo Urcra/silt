@@ -638,16 +638,30 @@ impl Core {
                 return;
             }
             if let Request::DocData { artifact, asked, .. } = *asking {
+                let writes = !matches!(asked, silt_proto::edited::DocRequest::Read);
                 let answer = match self.run_thread(&token).await {
-                    Ok(thread) => self.doc_data(&thread, &artifact, asked).await,
+                    Ok(thread) => {
+                        let answer = self.doc_data(&thread, &artifact, asked).await;
+                        if writes && answer.is_ok() {
+                            self.agent_edited(&thread, &artifact);
+                        }
+                        answer
+                    }
                     Err(error) => Err(error),
                 };
                 let _ = reply.send(to_response(answer));
                 return;
             }
             if let Request::SheetData { artifact, asked, .. } = *asking {
+                let writes = !matches!(asked, silt_proto::edited::SheetRequest::Read { .. });
                 let answer = match self.run_thread(&token).await {
-                    Ok(thread) => self.sheet_data(&thread, &artifact, asked).await,
+                    Ok(thread) => {
+                        let answer = self.sheet_data(&thread, &artifact, asked).await;
+                        if writes && answer.is_ok() {
+                            self.agent_edited(&thread, &artifact);
+                        }
+                        answer
+                    }
                     Err(error) => Err(error),
                 };
                 let _ = reply.send(to_response(answer));
@@ -2455,6 +2469,16 @@ impl Core {
 
     /// The actor for this daemon's own deltas in one thread. Threads of a
     /// family grow concurrently, and an actor's deltas must form one chain.
+    /// Notes that the agent running in `thread` wrote `artifact`, a doc or a
+    /// sheet, this turn.
+    fn agent_edited(&mut self, thread: &str, artifact: &str) {
+        if let Ok(thread) = self.find_thread(thread)
+            && let Some(run) = self.acp.get_mut(&thread)
+        {
+            run.edited.insert(artifact.to_owned());
+        }
+    }
+
     pub(crate) fn thread_actor(&self, thread: ThreadId) -> ActorId {
         self.actor.derive(thread.0)
     }
