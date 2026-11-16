@@ -5,7 +5,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { api } from '../api'
-import { edgeOf, within } from '../boardGeometry'
+import { route, within, type Box } from '../boardGeometry'
 import { useTopic } from '../bus'
 import { message } from '../query'
 import { RoomSocket, type PeerPresence } from '../rooms'
@@ -51,15 +51,15 @@ function boxOf(item: Item | undefined): { x: number; y: number; w: number; h: nu
   return { x: item.x, y: item.y, w, h }
 }
 
-/** An arrow's two ends, each at the edge of its item facing the other. */
-function ends(from: Item | undefined, to: Item | undefined): [[number, number], [number, number]] | null {
+/** The most items an arrow's way goes round; past it, arrows go straight. */
+const ROUTED_AMONG = 200
+
+/** An arrow's way from the edge of one item to the edge of the other, round the blocks and images between. */
+function ends(from: Item | undefined, to: Item | undefined, among: Item[]): [number, number][] | null {
   const [a, b] = [boxOf(from), boxOf(to)]
   if (!a || !b) return null
-  const [middleA, middleB]: [number, number][] = [
-    [a.x + a.w / 2, a.y + a.h / 2],
-    [b.x + b.w / 2, b.y + b.h / 2],
-  ]
-  return [edgeOf(a, middleB, 2), edgeOf(b, middleA)]
+  const others = among.length > ROUTED_AMONG ? [] : among.filter((item) => item.id !== from?.id && item.id !== to?.id).flatMap((item) => boxOf(item) ?? [])
+  return route(a, b, others as Box[])
 }
 
 /** An id for a new item, unlikely to meet another person's made at once. */
@@ -354,6 +354,8 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
     if (resizing?.id === item.id) shown = { ...shown, w: resizing.w, h: resizing.h }
     return shown
   }
+  // What an arrow's way goes round, where they are now.
+  const solid = items.filter((item) => item.type === 'block' || item.type === 'image').map(placed)
   const visibleCorner = (): [number, number] => [Math.round((-view.x + 80) / view.scale), Math.round((-view.y + 80) / view.scale)]
   const addNote = () => {
     const [x, y] = visibleCorner()
@@ -504,14 +506,17 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
               <BoardImage key={raw.id} thread={thread} artifact={artifact} item={placed(raw)} onDown={(event) => down(event, raw.id)} />
             ))}
             {items.filter((item) => item.type === 'arrow').map((item) => {
-              const joined = ends(placed(byId.get(item.from ?? '') ?? ({} as Item)), placed(byId.get(item.to ?? '') ?? ({} as Item)))
-              if (!joined) return null
-              const [from, to] = joined
+              const way = ends(placed(byId.get(item.from ?? '') ?? ({} as Item)), placed(byId.get(item.to ?? '') ?? ({} as Item)), solid)
+              if (!way) return null
+              const points = way.map(([x, y]) => `${x},${y}`).join(' ')
+              // The label sits at the middle of the way's middle stretch.
+              const middle = Math.floor((way.length - 1) / 2)
+              const [from, to] = [way[middle], way[middle + 1]]
               return (
                 <g key={item.id} onPointerDown={(event) => down(event, item.id)} data-testid="whiteboard-arrow">
                   {/* A wider line no one sees, so an arrow is easy to pick. */}
-                  <line x1={from[0]} y1={from[1]} x2={to[0]} y2={to[1]} stroke="transparent" strokeWidth={12} />
-                  <line x1={from[0]} y1={from[1]} x2={to[0]} y2={to[1]} stroke={marked(item.id) ? 'var(--color-accent, #b86a2b)' : 'currentColor'} strokeWidth={2} markerEnd="url(#whiteboard-arrow)" />
+                  <polyline points={points} fill="none" stroke="transparent" strokeWidth={12} />
+                  <polyline points={points} fill="none" strokeLinejoin="round" stroke={marked(item.id) ? 'var(--color-accent, #b86a2b)' : 'currentColor'} strokeWidth={2} markerEnd="url(#whiteboard-arrow)" />
                   {item.label && (
                     <text x={(from[0] + to[0]) / 2} y={(from[1] + to[1]) / 2 - 6} fontSize={13} textAnchor="middle" fill="currentColor">
                       {item.label}

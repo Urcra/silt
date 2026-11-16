@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canvasOf, chartColors, chartTable, pointer, runs, stepsOf, toolValue, withLive, xPositions, yDomain, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice, drawnSeries } from './typed'
+import { canvasOf, chartColors, chartTable, pointer, runs, stepsOf, toolValue, withLive, xPositions, yDomain, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice, drawnSeries, deckOffline, pagesOf, onPage } from './typed'
 
 describe('the artifact types', () => {
   it('opens a deck at the slide a link names, within the deck', () => {
@@ -64,6 +64,40 @@ describe("a data page's live numbers", () => {
     expect(shown.blocks[1]).toMatchObject({ rows: [['a', 1]] })
     expect(shown.blocks[2]).toMatchObject({ series: [{ points: [['mon', 3], ['tue', 5]] }] })
     expect(shown.blocks[3]).toMatchObject({ value: 7 })
+  })
+})
+
+describe("a deck's offline copy", () => {
+  it("holds every slide in one sealed frame, with the controls and each slide's steps outside it", () => {
+    const deck = { aspect: '4:3' as const, transition: 'fade' as const, slides: [
+      { title: 'One "quoted"', html: '<h1>One & "two"</h1>' },
+      { title: '</script>', html: '<li data-step="2">b</li>' },
+    ] }
+    const file = deckOffline(deck, 'Review <v2>', null)
+    expect(file.match(/<iframe /g)).toHaveLength(1)
+    expect(file).toContain('sandbox="allow-scripts"')
+    expect(file).toContain('<h1>One &amp; &quot;two&quot;</h1>')
+    expect(file).toContain('var steps=[0,2]')
+    expect(file).toContain('width:1024px;height:768px')
+    expect(file).toContain('fade=true')
+    expect(file).toContain('<title>Review &lt;v2&gt;</title>')
+    expect(file).toContain('\\u003c/script>')
+    expect(file).not.toContain('"</script>"')
+  })
+})
+
+describe("a canvas's notes and pages", () => {
+  const board = (id: string, page?: string) => ({ id, name: id, width: 10, height: 10, html: '', page })
+  it("takes notes beside the boards, and leaves out a note it can't draw", () => {
+    expect(canvasOf(JSON.stringify({ boards: [board('a')], notes: [{ text: 'Why', x: 0, y: 20 }] }))?.notes).toHaveLength(1)
+    expect(canvasOf(JSON.stringify({ boards: [board('a')], notes: [{ text: 'Why', x: 'left', y: 20 }] }))).toBeNull()
+  })
+  it('has a page per name, in order, with what names none on the first', () => {
+    expect(pagesOf({ boards: [board('a'), board('b')] })).toEqual([])
+    const canvas = { boards: [board('a', 'Screens'), board('b', 'Flows'), board('c')], notes: [{ text: 'n', x: 0, y: 0, page: 'Flows' }] }
+    expect(pagesOf(canvas)).toEqual(['Screens', 'Flows'])
+    expect(canvas.boards.filter((one) => onPage(one, 'Screens', pagesOf(canvas))).map((one) => one.id)).toEqual(['a', 'c'])
+    expect(pagesOf({ boards: [board('a'), board('b', 'Flows')] })).toEqual(['Flows'])
   })
 })
 

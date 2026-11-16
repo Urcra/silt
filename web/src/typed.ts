@@ -9,8 +9,9 @@ export type Deck = {
   style?: string
   slides: { id?: string; title: string; html: string; notes?: string }[]
 }
-export type Board = { id: string; name: string; caption?: string; width: number; height: number; x?: number; y?: number; grow?: boolean; html: string }
-export type Canvas = { style?: string; boards: Board[] }
+export type Board = { id: string; name: string; caption?: string; width: number; height: number; x?: number; y?: number; grow?: boolean; page?: string; html: string }
+export type CanvasNote = { id?: string; text: string; x: number; y: number; w?: number; page?: string }
+export type Canvas = { style?: string; boards: Board[]; notes?: CanvasNote[] }
 export type Source = {
   id: string
   name: string
@@ -105,9 +106,41 @@ export function canvasOf(json: string): Canvas | null {
       optional(board.x, number) &&
       optional(board.y, number) &&
       optional(board.grow, (grow) => typeof grow === 'boolean') &&
+      optional(board.page, (page) => text(page, 64)) &&
       optional(board.caption, text),
   )
-  return boards ? (canvas as Canvas) : null
+  const notes = optional(
+    canvas.notes,
+    (notes) =>
+      list(notes, 200) &&
+      notes.every(
+        (note) =>
+          object(note) &&
+          text(note.text, 2000) &&
+          number(note.x) &&
+          number(note.y) &&
+          optional(note.w, (w) => number(w) && (w as number) > 0 && (w as number) <= 4000) &&
+          optional(note.page, (page) => text(page, 64)) &&
+          optional(note.id, (id) => text(id, 64)),
+      ),
+  )
+  return boards && notes ? (canvas as Canvas) : null
+}
+
+/** A canvas's pages by name, in the order they're first named; none when no board or note names one. */
+export function pagesOf(canvas: Canvas): string[] {
+  const named = [...canvas.boards, ...(canvas.notes ?? [])].map((part) => part.page)
+  if (named.every((page) => page === undefined)) return []
+  const pages: string[] = []
+  // What names no page is on the first, which keeps its own name if something on it gives one.
+  for (const page of named) if (!pages.includes(page ?? '')) pages.push(page ?? '')
+  const first = named.find((page) => page !== undefined) ?? ''
+  return pages[0] === '' ? [first, ...pages.slice(1).filter((page) => page !== first && page !== '')] : pages.filter((page) => page !== '')
+}
+
+/** Whether `part` is on page `page` of a canvas whose pages are `pages`: what names none is on the first. */
+export function onPage(part: { page?: string }, page: string, pages: string[]): boolean {
+  return pages.length === 0 || (part.page ?? pages[0]) === page
 }
 
 /** A data page, if `json` is one. */
@@ -211,6 +244,79 @@ export function partDocument(
     theme,
     parent: window.location.origin,
   })
+}
+
+/**
+ * A deck as one HTML file that opens anywhere, with the viewer's controls (ADR 0076): its slides share one sealed
+ * frame, as the viewer would have them, shown one at a time and scaled to fit; arrows, space, a click or a swipe step
+ * through them and their click steps, and `#n` names a slide.
+ */
+export function deckOffline(deck: Deck, title: string, style: string | null): string {
+  const [width, height] = deck.aspect === '4:3' ? [1024, 768] : [1280, 720]
+  const imports = (deck.style ?? '').match(/@import\s[^;]+;/g) ?? []
+  const rest = imports.reduce((left, rule) => left.replace(rule, ''), deck.style ?? '')
+  const css =
+    `${imports.join('')}html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden}` +
+    `html{color-scheme:light;background:var(--bg,Canvas);color:var(--fg,CanvasText)}` +
+    `.silt-slide{position:absolute;inset:0;overflow:hidden;display:none}.silt-slide.silt-on{display:block}` +
+    `.silt-slide [data-step]{visibility:hidden}.silt-slide [data-step].silt-shown{visibility:visible}` +
+    `.silt-fade{animation:silt-fade .3s ease-out}@keyframes silt-fade{from{opacity:0}to{opacity:1}}${rest}`
+  const slides = deck.slides.map((slide, at) => `<section class="silt-slide" data-silt-slide="${at}">${slide.html}</section>`).join('')
+  // Inside the frame: show what the controls say, and hand them its keys and clicks.
+  const inner =
+    "<script>addEventListener('message',function(e){var d=e.data;if(e.source!==parent||!d||d.silt!=='show')return;" +
+    "var s=document.querySelectorAll('.silt-slide');for(var i=0;i<s.length;i++){var on=i===d.at;" +
+    "if(on&&d.fade&&!s[i].classList.contains('silt-on')){s[i].classList.remove('silt-fade');void s[i].offsetWidth;s[i].classList.add('silt-fade')}" +
+    "s[i].classList.toggle('silt-on',on)}var t=s[d.at]?s[d.at].querySelectorAll('[data-step]'):[];" +
+    "for(var j=0;j<t.length;j++)t[j].classList.toggle('silt-shown',Number(t[j].getAttribute('data-step'))<=d.step)});" +
+    "addEventListener('keydown',function(e){parent.postMessage({silt:'key',key:e.key},'*')});" +
+    "addEventListener('click',function(e){if(!e.target.closest('a,button,input,select,textarea'))parent.postMessage({silt:'key',key:'click'},'*')});</script>"
+  const frame = sandboxedDocument(`<!doctype html><html><head><meta charset="utf-8"><style>${css.replace(/<\//g, '<\\/')}</style></head><body>${slides}${inner}</body></html>`, {
+    probe: false,
+    style,
+  })
+  const steps = JSON.stringify(deck.slides.map((slide) => stepsOf(slide.html)))
+  const names = JSON.stringify(deck.slides.map((slide) => slide.title)).replace(/</g, '\\u003c')
+  const controls =
+    `var steps=${steps},names=${names},n=steps.length,at=0,step=0,fade=${deck.transition === 'fade'},W=${width},H=${height};` +
+    "var f=document.getElementById('deck'),stage=document.getElementById('stage'),where=document.getElementById('at');" +
+    "function fit(){var k=Math.min(stage.clientWidth/W,stage.clientHeight/H);f.style.transform='scale('+k+')'}" +
+    "function show(moved){if(!n){where.textContent='No slides';return}f.contentWindow.postMessage({silt:'show',at:at,step:step,fade:fade&&moved},'*');" +
+    "where.textContent=(at+1)+' / '+n+(names[at]?' · '+names[at]:'');try{history.replaceState(null,'','#'+(at+1))}catch(x){}}" +
+    "function next(){if(step<steps[at])step++;else if(at<n-1){at++;step=0}else return;show(true)}" +
+    "function prev(){if(step>0)step--;else if(at>0){at--;step=steps[at]}else return;show(true)}" +
+    "function go(to){at=Math.max(0,Math.min(n-1,to));step=0;show(true)}" +
+    "function key(k){if(k==='ArrowRight'||k==='ArrowDown'||k===' '||k==='PageDown'||k==='click')next();" +
+    "else if(k==='ArrowLeft'||k==='ArrowUp'||k==='PageUp'||k==='Backspace')prev();else if(k==='Home')go(0);else if(k==='End')go(n-1)}" +
+    "var named=/^#(\\d+)$/.exec(location.hash);if(named)at=Math.max(0,Math.min(n-1,Number(named[1])-1));" +
+    "f.addEventListener('load',function(){show(false)});" +
+    "addEventListener('message',function(e){if(e.source===f.contentWindow&&e.data&&e.data.silt==='key')key(String(e.data.key))});" +
+    "addEventListener('keydown',function(e){if(e.target.tagName!=='BUTTON'||(e.key!==' '&&e.key!=='Enter'))key(e.key)});" +
+    "addEventListener('hashchange',function(){var m=/^#(\\d+)$/.exec(location.hash);if(m&&Number(m[1])-1!==at)go(Number(m[1])-1)});" +
+    "document.getElementById('prev').onclick=prev;document.getElementById('next').onclick=next;" +
+    "var x0=null;stage.addEventListener('touchstart',function(e){x0=e.touches[0].clientX},{passive:true});" +
+    "stage.addEventListener('touchend',function(e){if(x0===null)return;var dx=e.changedTouches[0].clientX-x0;x0=null;if(Math.abs(dx)>40)(dx<0?next:prev)()});" +
+    "addEventListener('resize',fit);fit();"
+  const quoted = frame.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+  return [
+    '<!doctype html>',
+    '<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
+    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">`,
+    `<title>${escapeText(title)}</title>`,
+    '<style>html,body{margin:0;height:100%;background:#16161a;color:#e8e8ea;font:14px/1.4 system-ui,sans-serif}',
+    '#stage{position:absolute;inset:0 0 52px 0;display:flex;align-items:center;justify-content:center;overflow:hidden}',
+    `#deck{flex:none;width:${width}px;height:${height}px;border:0;background:#fff;transform-origin:center}`,
+    'nav{position:absolute;left:0;right:0;bottom:0;height:52px;display:flex;gap:16px;align-items:center;justify-content:center}',
+    'button{font:inherit;color:inherit;background:#2a2a30;border:1px solid #3a3a42;border-radius:6px;width:40px;height:32px;cursor:pointer}',
+    'button:focus-visible{outline:2px solid #8ab4ff;outline-offset:2px}#at{min-width:12ch;text-align:center;font-variant-numeric:tabular-nums}</style></head>',
+    `<body><main id="stage"><iframe id="deck" sandbox="allow-scripts" title="${escapeText(title)}" srcdoc="${quoted}"></iframe></main>`,
+    '<nav aria-label="slides"><button id="prev" aria-label="Previous">‹</button><span id="at" aria-live="polite"></span><button id="next" aria-label="Next">›</button></nav>',
+    `<script>${controls.replace(/<\//g, '<\\/')}</script></body></html>`,
+  ].join('')
+}
+
+function escapeText(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 /** A deck as one document to print, a slide a page at the deck's own size; scripts don't run in it. */

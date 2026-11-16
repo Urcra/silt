@@ -25,6 +25,7 @@ import {
   quoted,
 } from '../artifacts'
 import type { Opened } from '../artifactActions'
+import { deckOf, deckOffline } from '../typed'
 import { keys, message } from '../query'
 import { useNow } from '../now'
 import { usePermalink } from '../usePermalink'
@@ -280,6 +281,12 @@ export function ArtifactViewer({
   const exportHtml = async () => {
     if (!content.data) return
     try {
+      // A deck's copy is a page of its own: its slides in one frame, with the viewer's controls (ADR 0076).
+      const deck = artifact.kind === 'slides' ? deckOf(textOf(content.data)) : null
+      if (deck) {
+        download(deckOffline(deck, `${artifact.title} · v${artifact.version}`, styleText), 'text/html', fileName(artifact, 'html'))
+        return
+      }
       const rendered = await renderedMarkup(artifact, content.data)
       // The version's files go inside the copy, so it opens anywhere (ADR 0074).
       const files: InlineFiles = {}

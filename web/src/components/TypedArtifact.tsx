@@ -33,7 +33,7 @@ import {
   layout,
   partDocument,
   shown,
-  slideFromHash, drawnSeries } from "../typed";
+  slideFromHash, drawnSeries, onPage, pagesOf } from "../typed";
 import { Button, Icon, IconButton, cx } from "../ui";
 import { Markdown } from "./Markdown";
 
@@ -310,6 +310,13 @@ export function CanvasView({
   onComment?: (quote: string) => void;
 }) {
   const canvas = useMemo(() => canvasOf(text), [text]);
+  const pages = useMemo(() => (canvas ? pagesOf(canvas) : []), [canvas]);
+  const [page, setPage] = useState(0);
+  const shownPage = pages[Math.min(page, pages.length - 1)] ?? "";
+  const notes = useMemo(
+    () => (canvas?.notes ?? []).filter((note) => onPage(note, shownPage, pages)),
+    [canvas, shownPage, pages],
+  );
   // How tall each board that grows says its content is, from its own frame.
   const [grown, setGrown] = useState<Record<string, number>>({});
   const frames = useRef(new Map<string, HTMLIFrameElement>());
@@ -329,11 +336,13 @@ export function CanvasView({
   const placed = useMemo(
     () =>
       layout(
-        (canvas?.boards ?? []).map((board) =>
-          board.grow && grown[board.id] ? { ...board, height: Math.max(board.height, grown[board.id]), least: board.height } : board,
-        ),
+        (canvas?.boards ?? [])
+          .filter((board) => onPage(board, shownPage, pages))
+          .map((board) =>
+            board.grow && grown[board.id] ? { ...board, height: Math.max(board.height, grown[board.id]), least: board.height } : board,
+          ),
       ),
-    [canvas, grown],
+    [canvas, grown, shownPage, pages],
   );
   const box = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: 40, y: 60, scale: 0.4 });
@@ -346,13 +355,14 @@ export function CanvasView({
   const [size, setSize] = useState({ width: 0, height: 0 });
   const extent = useMemo(
     () => ({
-      width: Math.max(1, ...placed.map((board) => board.x + board.width)),
+      width: Math.max(1, ...placed.map((board) => board.x + board.width), ...notes.map((note) => note.x + (note.w ?? NOTE_WIDTH))),
       height: Math.max(
         1,
         ...placed.map((board) => board.y + board.height + 40),
+        ...notes.map((note) => note.y + 120),
       ),
     }),
-    [placed],
+    [placed, notes],
   );
   const fit = () => {
     const element = box.current;
@@ -400,7 +410,7 @@ export function CanvasView({
     element.addEventListener("wheel", wheel, { passive: false });
     return () => element.removeEventListener("wheel", wheel);
   }, []);
-  if (!canvas || placed.length === 0)
+  if (!canvas || canvas.boards.length === 0)
     return (
       <p className="px-5 py-6 text-sm text-danger">
         This canvas's content isn't one Silt can draw.
@@ -576,8 +586,39 @@ export function CanvasView({
               )}
             </figure>
           ))}
+          {notes.map((note, at) => (
+            <p
+              key={note.id ?? at}
+              className="absolute m-0 rounded-sm p-3 whitespace-pre-wrap shadow-overlay"
+              // A sticky note's own paper and ink, which read alike on either theme's canvas.
+              style={{ left: note.x, top: note.y, width: note.w ?? NOTE_WIDTH, fontSize: 16, lineHeight: 1.4, background: "#fff3b0", color: "#3d3a2a" }}
+              data-testid="canvas-note"
+            >
+              {note.text}
+            </p>
+          ))}
         </div>
       </div>
+      {pages.length > 1 && (
+        <div role="tablist" aria-label="pages" className="absolute top-2 left-2 flex gap-1 rounded-md border border-line bg-elevated p-1 shadow-overlay">
+          {pages.map((name, at) => (
+            <button
+              key={name}
+              type="button"
+              role="tab"
+              aria-selected={name === shownPage}
+              onClick={() => {
+                moved.current = false;
+                setComparing(null);
+                setPage(at);
+              }}
+              className={cx("rounded-sm px-2 py-1 text-xs", name === shownPage ? "bg-surface-2 text-fg-1" : "text-fg-2 hover:text-fg-1")}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="absolute right-2 bottom-2 flex items-center gap-1 rounded-md border border-line bg-elevated p-1 shadow-overlay">
         <IconButton
           icon="plus"
@@ -615,6 +656,9 @@ export function CanvasView({
     </div>
   );
 }
+
+/** A canvas note's width where it gives none. */
+const NOTE_WIDTH = 240;
 
 /** Two boards side by side at one scale, each whole, to tell them apart. */
 function BoardsCompared({

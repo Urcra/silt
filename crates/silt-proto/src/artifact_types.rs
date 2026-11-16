@@ -50,7 +50,29 @@ struct Canvas {
     #[serde(default)]
     style: Option<String>,
     boards: Vec<Board>,
+    /// Text on the canvas itself, between and beside boards.
+    #[serde(default)]
+    notes: Vec<Note>,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Note {
+    #[serde(default)]
+    id: Option<String>,
+    text: String,
+    x: f64,
+    y: f64,
+    #[serde(default)]
+    w: Option<f64>,
+    #[serde(default)]
+    page: Option<String>,
+}
+
+/// The longest a canvas note's text is, in characters.
+const NOTE_CHARS: usize = 2000;
+/// The longest a canvas page's name is, in characters.
+const PAGE_CHARS: usize = 64;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -68,6 +90,9 @@ struct Board {
     /// Grows past `height` to its content, as a page that scrolls does.
     #[serde(default)]
     grow: Option<bool>,
+    /// The canvas page it's on, by name; the first page where none is named.
+    #[serde(default)]
+    page: Option<String>,
     html: String,
 }
 
@@ -151,7 +176,24 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
                     return Err(format!("board {}'s position is a number", board.id));
                 }
                 let _ = (&board.name, &board.caption, board.grow);
+                page_name(board.page.as_deref(), &format!("board {}", board.id))?;
                 html(&board.html, &format!("board {}", board.id))?;
+            }
+            if canvas.notes.len() > PARTS {
+                return Err(format!("at most {PARTS} notes"));
+            }
+            for (at, note) in canvas.notes.iter().enumerate() {
+                let what = format!("note {}", at + 1);
+                if note.text.trim().is_empty() || note.text.chars().count() > NOTE_CHARS {
+                    return Err(format!("{what}'s text is 1 to {NOTE_CHARS} characters"));
+                }
+                if !note.x.is_finite() || !note.y.is_finite() || note.w.is_some_and(|w| !(1.0..=4000.0).contains(&w)) {
+                    return Err(format!("{what}'s position is a number, and its width 1 to 4000 pixels"));
+                }
+                if note.id.as_ref().is_some_and(|id| id.is_empty() || id.len() > 64) {
+                    return Err(format!("{what}'s id is 1 to 64 characters"));
+                }
+                page_name(note.page.as_deref(), &what)?;
             }
             canvas.style.as_deref().map_or(Ok(()), |style| html(style, "the canvas's style"))
         }
@@ -221,6 +263,15 @@ pub fn validate(kind: &str, text: &str) -> Result<(), String> {
                 return Err("a sheet's cells are text, numbers, booleans or null".into());
             }
             Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn page_name(page: Option<&str>, what: &str) -> Result<(), String> {
+    match page {
+        Some(page) if page.trim().is_empty() || page.chars().count() > PAGE_CHARS => {
+            Err(format!("{what}'s page is named in 1 to {PAGE_CHARS} characters"))
         }
         _ => Ok(()),
     }
@@ -402,7 +453,17 @@ pub fn guide(kind: &str) -> Option<(Value, Value)> {
                             "width": {"type": "integer", "minimum": 1, "maximum": 8192},
                             "height": {"type": "integer", "minimum": 1, "maximum": 8192},
                             "grow": {"type": "boolean", "description": "Grows past height to its content, for a page that scrolls: height is then the least it shows"},
+                            "page": {"type": "string", "maxLength": PAGE_CHARS, "description": "The canvas page it's on; the first page where none is named"},
                             "x": {"type": "number"}, "y": {"type": "number"}, "html": html
+                        }
+                    }},
+                    "notes": {"type": "array", "maxItems": PARTS, "description": "Text on the canvas itself, beside the boards it explains", "items": {
+                        "type": "object", "required": ["text", "x", "y"], "additionalProperties": false,
+                        "properties": {
+                            "id": {"type": "string"}, "text": {"type": "string", "maxLength": NOTE_CHARS},
+                            "x": {"type": "number"}, "y": {"type": "number"},
+                            "w": {"type": "number", "minimum": 1, "maximum": 4000, "description": "Its width, 240 when unset"},
+                            "page": {"type": "string", "maxLength": PAGE_CHARS}
                         }
                     }}
                 }
@@ -487,6 +548,12 @@ mod tests {
         assert!(validate("slides", r#"{"aspect": "21:9", "slides": [{"title": "a", "html": "x"}]}"#).is_err());
         assert!(validate("slides", r#"{"transition": "fade", "slides": [{"title": "a", "html": "x"}]}"#).is_ok());
         assert!(validate("slides", r#"{"transition": "spin", "slides": [{"title": "a", "html": "x"}]}"#).is_err());
+        let noted = r#"{"boards": [{"id": "a", "name": "A", "width": 10, "height": 10, "html": "", "page": "Flows"}], "notes": [{"text": "Why", "x": 0, "y": 20, "page": "Flows"}]}"#;
+        assert_eq!(validate("canvas", noted), Ok(()));
+        let blank = r#"{"boards": [{"id": "a", "name": "A", "width": 10, "height": 10, "html": ""}], "notes": [{"text": " ", "x": 0, "y": 0}]}"#;
+        assert!(validate("canvas", blank).unwrap_err().contains("note 1"));
+        let unnamed = r#"{"boards": [{"id": "a", "name": "A", "width": 10, "height": 10, "html": "", "page": ""}]}"#;
+        assert!(validate("canvas", unnamed).unwrap_err().contains("page"));
         let twins = r#"{"boards": [{"id": "a", "name": "A", "width": 10, "height": 10, "html": ""}, {"id": "a", "name": "B", "width": 10, "height": 10, "html": ""}]}"#;
         assert!(validate("canvas", twins).unwrap_err().contains("unique"));
         let unsourced = r#"{"title": "t", "sources": [], "blocks": [{"type": "stat", "label": "n", "value": 1, "source": "x"}]}"#;

@@ -617,10 +617,15 @@ document.getElementById('add').onclick=function(){db.collection('tasks').add({do
             arguments = serde_json::json!({"title": "Rescan numbers", "kind": "data", "content": page.to_string()});
         }
         if prompt.contains("Artifact boards") {
-            let board = |id: &str, width: u32, height: u32| serde_json::json!({"id": id, "name": id, "width": width, "height": height, "html": format!("<p>{id}</p>")});
+            let board = |id: &str, width: u32, height: u32| serde_json::json!({"id": id, "name": id, "width": width, "height": height, "page": "Screens", "html": format!("<p>{id}</p>")});
             // The phone's page scrolls, so its board grows to its content.
             let phone = serde_json::json!({"id": "Phone", "name": "Phone", "width": 390, "height": 844, "grow": true, "html": "<p>Phone</p><div style=\"height:1500px\"></div>"});
-            let canvas = serde_json::json!({"boards": [board("Desktop", 1280, 800), board("Tablet", 834, 1194), phone]});
+            let flow = serde_json::json!({"id": "Flow", "name": "Sign-in flow", "width": 600, "height": 400, "page": "Flows", "html": "<p>Flow</p>"});
+            let notes = [
+                serde_json::json!({"text": "The phone's page scrolls, so its board grows.", "x": 0, "y": 1300}),
+                serde_json::json!({"text": "One step a screen.", "x": 0, "y": 460, "page": "Flows"}),
+            ];
+            let canvas = serde_json::json!({"boards": [board("Desktop", 1280, 800), board("Tablet", 834, 1194), phone, flow], "notes": notes});
             arguments = serde_json::json!({"title": "Settings screen", "kind": "canvas", "content": canvas.to_string()});
         }
         if prompt.contains("Artifact bad deck") {

@@ -1672,6 +1672,14 @@ test('a data page links each number to its source, and a canvas shows each board
   await expect(compared.locator('iframe')).toHaveCount(2)
   await compared.getByRole('button', { name: 'Done' }).click()
   await expect(compared).toHaveCount(0)
+  // Notes sit between the boards, and each page has its own boards and notes.
+  await expect(page.getByTestId('canvas-note')).toHaveText("The phone's page scrolls, so its board grows.")
+  await page.getByRole('tab', { name: 'Flows' }).click()
+  await expect(boards).toHaveCount(1)
+  await expect(boards.first()).toContainText('Sign-in flow')
+  await expect(page.getByTestId('canvas-note')).toHaveText('One step a screen.')
+  await page.getByRole('tab', { name: 'Screens' }).click()
+  await expect(boards).toHaveCount(3)
 })
 
 test('a doc and a sheet are edited in place, and what was typed is kept (ADR 0077)', async ({ page }) => {
