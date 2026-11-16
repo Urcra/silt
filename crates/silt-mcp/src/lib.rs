@@ -228,7 +228,7 @@ fn show_tools() -> Vec<Value> {
                         }
                     },
                     "patch": {"type": "array", "description": "With id, for slides, canvas or data: an RFC 6902 JSON Patch of the latest version's content, such as [{\"op\": \"add\", \"path\": \"/slides/-\", \"value\": {...}}]", "items": {"type": "object"}},
-                    "files": {"type": "object", "description": "For an html page: files beside it, by relative path such as data.json or css/site.css, each {content}, {base64} or {path}, or null to remove one; the page fetches them relative to itself. The last version's files are kept unless named"},
+                    "files": {"type": "object", "description": "For an html page, a deck or a canvas: files beside it, by relative path such as data.json, css/site.css or images/chart.png, each {content}, {base64} or {path}, or null to remove one; a page fetches them relative to itself, and slides and boards name them in src or href. The last version's files are kept unless named"},
                     "note": {"type": "string", "description": "What this version changed, in a few words, shown in the version menu"},
                     "description": {"type": "string", "description": "One sentence on what the artifact is, shown on its card; kept for later versions"},
                     "capabilities": {"type": "object", "description": "What the html page may use through silt.use(name), as {name: config}: db, artifact, user, downloads, comments, sample and the others silt_artifact_guide lists. Leave it out to keep the last version's; {} clears them"},

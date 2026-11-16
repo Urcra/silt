@@ -266,8 +266,8 @@ impl Core {
         page_bytes: u64,
     ) -> Result<Vec<(String, silt_proto::artifact::ArtifactFile, bool)>, CoreError> {
         use silt_proto::artifact::{ArtifactFile, FILE_BYTES, FILES, VERSION_BYTES, file_media_type, file_path_ok};
-        if (!changes.is_empty() || !edited.is_empty()) && kind != "html" {
-            return Err(CoreError::Invalid("only an HTML page has files beside it".into()));
+        if (!changes.is_empty() || !edited.is_empty()) && !matches!(kind, "html" | "slides" | "canvas") {
+            return Err(CoreError::Invalid("only an HTML page, a deck or a canvas has files beside it".into()));
         }
         let mut added = std::collections::BTreeSet::new();
         let put = |bytes: Vec<u8>, path: &str| -> Result<(Vec<u8>, &'static str), CoreError> {

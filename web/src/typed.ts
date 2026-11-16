@@ -1,7 +1,7 @@
 // The pure parts of the artifact types' viewers (ADR 0076): parsing, the
 // documents slides and boards render as, layout, and tables and CSV.
 
-import { sandboxedDocument, type FrameTheme } from './artifacts'
+import { sandboxedDocument, withFilesInlined, type FrameTheme, type InlineFiles } from './artifacts'
 
 export type Deck = {
   aspect?: '16:9' | '4:3'
@@ -247,17 +247,22 @@ export function partDocument(
 }
 
 /**
- * A deck as one HTML file that opens anywhere, with the viewer's controls (ADR 0076): its slides share one sealed
- * frame, as the viewer would have them, shown one at a time and scaled to fit; arrows, space, a click or a swipe step
- * through them and their click steps, and `#n` names a slide.
+ * A deck's slides in one sealed frame's document, all of them at the deck's size, each hidden until the page holding
+ * it says `{silt: 'show', at, step, fade}`; the frame hands that page its keys and clicks. One frame per deck, so a
+ * deck's scripts and fonts load once (ADR 0076). `files` are the version's own, carried inside it.
  */
-export function deckOffline(deck: Deck, title: string, style: string | null): string {
+export function deckDocument(
+  deck: Deck,
+  style: string | null,
+  theme: FrameTheme,
+  options: { offline?: boolean; files?: InlineFiles } = {},
+): string {
   const [width, height] = deck.aspect === '4:3' ? [1024, 768] : [1280, 720]
   const imports = (deck.style ?? '').match(/@import\s[^;]+;/g) ?? []
   const rest = imports.reduce((left, rule) => left.replace(rule, ''), deck.style ?? '')
   const css =
     `${imports.join('')}html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden}` +
-    `html{color-scheme:light;background:var(--bg,Canvas);color:var(--fg,CanvasText)}` +
+    `html{color-scheme:${theme};background:var(--bg,Canvas);color:var(--fg,CanvasText)}` +
     `.silt-slide{position:absolute;inset:0;overflow:hidden;display:none}.silt-slide.silt-on{display:block}` +
     `.silt-slide [data-step]{visibility:hidden}.silt-slide [data-step].silt-shown{visibility:visible}` +
     `.silt-fade{animation:silt-fade .3s ease-out}@keyframes silt-fade{from{opacity:0}to{opacity:1}}${rest}`
@@ -271,10 +276,18 @@ export function deckOffline(deck: Deck, title: string, style: string | null): st
     "for(var j=0;j<t.length;j++)t[j].classList.toggle('silt-shown',Number(t[j].getAttribute('data-step'))<=d.step)});" +
     "addEventListener('keydown',function(e){parent.postMessage({silt:'key',key:e.key},'*')});" +
     "addEventListener('click',function(e){if(!e.target.closest('a,button,input,select,textarea'))parent.postMessage({silt:'key',key:'click'},'*')});</script>"
-  const frame = sandboxedDocument(`<!doctype html><html><head><meta charset="utf-8"><style>${css.replace(/<\//g, '<\\/')}</style></head><body>${slides}${inner}</body></html>`, {
-    probe: false,
-    style,
-  })
+  const page = `<!doctype html><html><head><meta charset="utf-8"><style>${css.replace(/<\//g, '<\\/')}</style></head><body>${slides}${inner}</body></html>`
+  return sandboxedDocument(withFilesInlined(page, options.files ?? {}), options.offline ? { probe: false, style } : { style, theme, parent: window.location.origin })
+}
+
+/**
+ * A deck as one HTML file that opens anywhere, with the viewer's controls (ADR 0076): its slides share one sealed
+ * frame, as the viewer would have them, shown one at a time and scaled to fit; arrows, space, a click or a swipe step
+ * through them and their click steps, and `#n` names a slide.
+ */
+export function deckOffline(deck: Deck, title: string, style: string | null, files: InlineFiles = {}): string {
+  const [width, height] = deck.aspect === '4:3' ? [1024, 768] : [1280, 720]
+  const frame = deckDocument(deck, style, 'light', { offline: true, files })
   const steps = JSON.stringify(deck.slides.map((slide) => stepsOf(slide.html)))
   const names = JSON.stringify(deck.slides.map((slide) => slide.title)).replace(/</g, '\\u003c')
   const controls =

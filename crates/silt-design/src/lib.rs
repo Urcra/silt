@@ -685,6 +685,7 @@ mod tests {
             let out = compile(&tokens, &BTreeMap::new());
             assert!(out.dropped.is_empty(), "{}: {:?}", system.name, out.dropped);
             assert!(out.css.contains("--bg:") && out.css.contains("--chart-6:"), "{}", system.name);
+            assert!(out.css.contains("--chart-texture: repeating-linear-gradient(45deg"), "{}: {:?}", system.name, out.dropped);
             assert!(SystemName::try_from(system.name.to_owned()).is_ok());
         }
     }

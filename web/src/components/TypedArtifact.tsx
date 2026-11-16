@@ -11,7 +11,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { api } from "../api";
-import { type FrameTheme } from "../artifacts";
+import { type FrameTheme, type InlineFiles, withFilesInlined } from "../artifacts";
 import { hosted } from "../served";
 import { useShownTheme } from "../theme";
 import {
@@ -33,7 +33,7 @@ import {
   layout,
   partDocument,
   shown,
-  slideFromHash, drawnSeries, onPage, pagesOf } from "../typed";
+  slideFromHash, drawnSeries, onPage, pagesOf, deckDocument } from "../typed";
 import { Button, Icon, IconButton, cx } from "../ui";
 import { Markdown } from "./Markdown";
 
@@ -64,6 +64,7 @@ export function SlidesView({
   style,
   theme,
   title,
+  files,
   onComment,
   onPrint,
 }: {
@@ -71,6 +72,8 @@ export function SlidesView({
   style: string | null;
   theme: FrameTheme;
   title: string;
+  /** The version's own files, which slides name by relative path. */
+  files?: InlineFiles;
   /** Opens the artifact's comment composer, quoting what the comment is on. */
   onComment?: (quote: string) => void;
   /** Prints the deck, a slide a page, where this computer can. */
@@ -116,6 +119,29 @@ export function SlidesView({
     placed.current = { at, step, deck };
     moves.current = { forward, back, go };
   });
+  // Every slide is in one frame, loaded once; it's told which to show (ADR 0076).
+  const stage = useRef<HTMLIFrameElement>(null);
+  const staged = useMemo(() => (deck ? deckDocument(deck, style, theme, { files }) : ""), [deck, style, theme, files]);
+  const tell = (moved: boolean) =>
+    stage.current?.contentWindow?.postMessage({ silt: "show", at, step, fade: deck?.transition === "fade" && moved }, "*");
+  const told = useRef(tell);
+  useEffect(() => {
+    told.current = tell;
+  });
+  useEffect(() => {
+    told.current(true);
+  }, [at, step]);
+  useEffect(() => {
+    // Keys pressed in the frame page the deck as they do outside it.
+    const heard = (event: MessageEvent) => {
+      const said = event.data as { silt?: unknown; key?: unknown } | null;
+      if (event.source !== stage.current?.contentWindow || said?.silt !== "key") return;
+      if (["ArrowRight", "PageDown", " "].includes(String(said.key))) moves.current.forward();
+      else if (["ArrowLeft", "PageUp"].includes(String(said.key))) moves.current.back();
+    };
+    window.addEventListener("message", heard);
+    return () => window.removeEventListener("message", heard);
+  }, []);
   useEffect(() => {
     const keys = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -174,22 +200,12 @@ export function SlidesView({
           aria-label={`slide ${at + 1} of ${count}`}
         >
           <iframe
-            key={`${at}-${step}`}
+            ref={stage}
             title={`${title}, slide ${at + 1}: ${slide.title}`}
             sandbox="allow-scripts"
-            srcDoc={partDocument(
-              slide.html,
-              deck.style,
-              width,
-              height,
-              style,
-              theme,
-              steps > 0 ? step : undefined,
-            )}
-            className={cx(
-              "absolute top-1/2 left-1/2 border-0 bg-white shadow-overlay",
-              deck.transition === "fade" && "silt-fade",
-            )}
+            srcDoc={staged}
+            onLoad={() => told.current(false)}
+            className="absolute top-1/2 left-1/2 border-0 bg-white shadow-overlay"
             style={{
               width,
               height,
@@ -279,7 +295,7 @@ export function SlidesView({
           <IconButton
             icon="download"
             label="Download as PDF"
-            onClick={() => onPrint(deckPrint(deck, width, height, style))}
+            onClick={() => onPrint(withFilesInlined(deckPrint(deck, width, height, style), files ?? {}))}
           />
         )}
         <Button
@@ -301,11 +317,14 @@ export function CanvasView({
   text,
   style,
   theme,
+  files,
   onComment,
 }: {
   text: string;
   style: string | null;
   theme: FrameTheme;
+  /** The version's own files, which boards name by relative path. */
+  files?: InlineFiles;
   /** Opens the artifact's comment composer, quoting what the comment is on. */
   onComment?: (quote: string) => void;
 }) {
@@ -564,7 +583,7 @@ export function CanvasView({
                     else frames.current.delete(board.id);
                   }}
                   srcDoc={partDocument(
-                    board.html,
+                    withFilesInlined(board.html, files ?? {}),
                     canvas.style,
                     board.width,
                     // The least it shows, as written, so its growing doesn't load it again.
@@ -650,6 +669,7 @@ export function CanvasView({
           shared={canvas.style}
           style={style}
           theme={theme}
+          files={files}
           onDone={() => setComparing(null)}
         />
       )}
@@ -666,12 +686,14 @@ function BoardsCompared({
   shared,
   style,
   theme,
+  files,
   onDone,
 }: {
   boards: { name: string; width: number; height: number; html: string }[];
   shared: string | undefined;
   style: string | null;
   theme: FrameTheme;
+  files?: InlineFiles;
   onDone: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -709,7 +731,7 @@ function BoardsCompared({
               <iframe
                 title={`${board.name}, compared`}
                 sandbox="allow-scripts"
-                srcDoc={partDocument(board.html, shared, board.width, board.height, style, theme)}
+                srcDoc={partDocument(withFilesInlined(board.html, files ?? {}), shared, board.width, board.height, style, theme)}
                 className="block origin-top-left border-0 bg-white"
                 style={{ width: board.width, height: board.height, transform: `scale(${scale})` }}
               />

@@ -84,6 +84,12 @@ describe("a deck's offline copy", () => {
     expect(file).toContain('\\u003c/script>')
     expect(file).not.toContain('"</script>"')
   })
+  it("carries the version's files its slides name", () => {
+    const deck = { slides: [{ title: 'Chart', html: '<img src="images/chart.png" alt="the chart">' }] }
+    const file = deckOffline(deck, 'Review', null, { 'images/chart.png': { media_type: 'image/png', data: 'iVBORw0KGgo=' } })
+    expect(file).toContain('data:image/png;base64,iVBORw0KGgo=')
+    expect(file).not.toContain('src=&quot;images/chart.png')
+  })
 })
 
 describe("a canvas's notes and pages", () => {
