@@ -322,7 +322,10 @@ pub fn format_op(
             None | Some("") => serde_json::Value::Null,
             Some(format) if silt_sheet::number_format_ok(format) => format.into(),
             Some(format) => {
-                return Err(format!("{format} isn't a number format: use 0, 0.00, #,##0, 0%, or one after $, €, £ or ¥"));
+                return Err(format!(
+                    "{format} isn't a number format: use 0, 0.00, #,##0, 0%, one after $, €, £ or ¥, or a date's, {}",
+                    silt_sheet::DATE_FORMATS.join(", ")
+                ));
             }
         };
         fields.insert(format!("f:{}", column_id(letter)?), value);

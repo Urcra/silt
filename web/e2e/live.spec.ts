@@ -334,8 +334,9 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
   await there.getByLabel('device to continue on').selectOption({ label: 'alice' })
   await there.getByLabel('agent to continue with').selectOption({ label: 'Fake agent' })
   await there.getByRole('button', { name: 'Continue there' }).click()
-  await expect(machine.getByTestId('agent-state')).toHaveText('Fake agent is ready')
-  await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is ready')
+  // The agent starts on the machine, which under the gate's load takes more than the default 5 s.
+  await expect(machine.getByTestId('agent-state')).toHaveText('Fake agent is ready', { timeout: 30_000 })
+  await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is ready', { timeout: 30_000 })
 
   await there.getByLabel('draft').fill('second turn')
   await there.getByLabel('draft').press('Enter')

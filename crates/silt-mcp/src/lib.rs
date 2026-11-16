@@ -198,7 +198,7 @@ fn show_tools() -> Vec<Value> {
                     "sheet": {"type": "integer", "minimum": 1, "maximum": 16, "description": "Which sheet, from 1; the first when left out. Writing to the one after the last adds it"},
                     "insert": {"type": "object", "description": "Rows or columns put in before one, cells and formulas below or right moving with them: {\"rows\": 4, \"count\": 2} before row 4, or {\"columns\": \"C\"}. Done before set"},
                     "remove": {"type": "object", "description": "Rows or columns taken out, cells and all, from one: {\"rows\": 4, \"count\": 2} or {\"columns\": \"C\"}; a formula naming them shows #REF!. Ask the person first"},
-                    "format": {"type": "object", "description": "The sheet's name and its columns' widths and number formats, such as {\"name\": \"Budget\", \"columns\": {\"B\": {\"width\": 120, \"format\": \"$#,##0.00\"}, \"C\": {\"format\": \"0%\"}}}. Formats: 0, 0.0, #,##0, #,##0.00, 0%, 0.0%, and those after $, €, £ or ¥; null or \"\" clears one. Formulas still name sheets by number, Sheet2!B3"}
+                    "format": {"type": "object", "description": "The sheet's name and its columns' widths and number formats, such as {\"name\": \"Budget\", \"columns\": {\"B\": {\"width\": 120, \"format\": \"$#,##0.00\"}, \"C\": {\"format\": \"0%\"}}}. Formats: 0, 0.0, #,##0, #,##0.00, 0%, 0.0%, those after $, €, £ or ¥, and dates' yyyy-mm-dd, d mmm yyyy, mmm yyyy, dd/mm/yyyy, mm/dd/yyyy; null or \"\" clears one. Formulas still name sheets by number, Sheet2!B3"}
                 },
                 "required": ["id"]
             }

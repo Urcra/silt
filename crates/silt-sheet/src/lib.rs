@@ -1124,10 +1124,51 @@ pub fn date_serial(year: i64, month: i64, day: i64) -> f64 {
     (days_from_civil(year, month, day) - days_from_civil(1899, 12, 30)) as f64
 }
 
+/// The date formats a column may show date serials in, as a spreadsheet
+/// app reads them too (ADR 0083).
+pub const DATE_FORMATS: &[&str] = &["yyyy-mm-dd", "d mmm yyyy", "mmm yyyy", "dd/mm/yyyy", "mm/dd/yyyy"];
+
+/// The year, month and day of date serial `serial`, days since 1899-12-30
+/// as spreadsheets count them; none past what a date can be.
+pub fn civil_date(serial: f64) -> Option<(i64, u32, u32)> {
+    if !serial.is_finite() || serial.abs() > 3_000_000.0 {
+        return None;
+    }
+    // Days since 1970-01-01, then Howard Hinnant's civil_from_days.
+    let z = serial.floor() as i64 - 25_569 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    Some((year, u32::try_from(month).ok()?, u32::try_from(day).ok()?))
+}
+
+fn date_text(serial: f64, format: &str) -> Option<String> {
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let (year, month, day) = civil_date(serial)?;
+    let name = MONTHS[usize::try_from(month).ok()?.checked_sub(1)?];
+    Some(match format {
+        "yyyy-mm-dd" => format!("{year:04}-{month:02}-{day:02}"),
+        "d mmm yyyy" => format!("{day} {name} {year}"),
+        "mmm yyyy" => format!("{name} {year}"),
+        "dd/mm/yyyy" => format!("{day:02}/{month:02}/{year:04}"),
+        "mm/dd/yyyy" => format!("{month:02}/{day:02}/{year:04}"),
+        _ => return None,
+    })
+}
+
 /// Whether `format` is one a column may show its numbers in (ADR 0083):
 /// decimals (`0`, `0.00`), thousands (`#,##0.0`), a percentage (`0%`,
-/// `0.0%`), and those after a currency sign (`$#,##0.00`).
+/// `0.0%`), those after a currency sign (`$#,##0.00`), and
+/// [`DATE_FORMATS`] for date serials.
 pub fn number_format_ok(format: &str) -> bool {
+    if DATE_FORMATS.contains(&format) {
+        return true;
+    }
     let body = format.strip_prefix(['$', '€', '£', '¥']).unwrap_or(format);
     let body = body.strip_suffix('%').unwrap_or(body);
     let (whole, decimals) = body.split_once('.').unwrap_or((body, ""));
@@ -1137,6 +1178,9 @@ pub fn number_format_ok(format: &str) -> bool {
 /// `number` in a column's `format`, as [`number_format_ok`] takes them;
 /// a currency's sign goes after the minus.
 pub fn format_number(number: f64, format: &str) -> String {
+    if DATE_FORMATS.contains(&format) {
+        return date_text(number, format).unwrap_or_else(|| Value::Number(number).to_string());
+    }
     match format.chars().next().filter(|c| "$€£¥".contains(*c)) {
         Some(symbol) => {
             let shown = formatted(number.abs(), &format[symbol.len_utf8()..]);
@@ -1195,9 +1239,17 @@ mod tests {
         assert_eq!(format_number(-1234.5, "$#,##0"), "-$1,235");
         assert_eq!(format_number(2.71, "0.0"), "2.7");
         assert!(number_format_ok("€#,##0.00") && number_format_ok("0.0%") && number_format_ok("0"));
-        assert!(
-            !number_format_ok("yyyy-mm-dd") && !number_format_ok("0.") && !number_format_ok("#,##0.0#") && !number_format_ok("")
-        );
+        assert!(!number_format_ok("yyyy") && !number_format_ok("0.") && !number_format_ok("#,##0.0#") && !number_format_ok(""));
+        let day = date_serial(2026, 11, 16);
+        assert_eq!(format_number(day, "yyyy-mm-dd"), "2026-11-16");
+        assert_eq!(format_number(day + 0.75, "d mmm yyyy"), "16 Nov 2026", "a time of day stays the day");
+        assert_eq!(format_number(date_serial(2024, 2, 29), "dd/mm/yyyy"), "29/02/2024");
+        assert_eq!(format_number(date_serial(1900, 3, 1), "mm/dd/yyyy"), "03/01/1900");
+        assert_eq!(format_number(date_serial(2026, 1, 5), "mmm yyyy"), "Jan 2026");
+        for serial in [-700_000.0, -1.0, 0.0, 59.0, 60.0, 45_000.0, 2_900_000.0] {
+            let (year, month, day) = civil_date(serial).expect("a date");
+            assert_eq!(date_serial(year, i64::from(month), i64::from(day)), serial, "{serial} round-trips");
+        }
     }
 
     #[test]
