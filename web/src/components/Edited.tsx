@@ -8,6 +8,8 @@ import { offlineHtml, textOf } from '../artifacts'
 import { useTopic } from '../bus'
 import { lineDiff } from '../lineDiff'
 import { keys, message } from '../query'
+import { printInBrowser } from '../printing'
+import { LiveReplica } from '../replica'
 import { hosted } from '../served'
 import { columnName, csvOf, rebaseDraft, splice } from '../typed'
 import { Button, Icon, IconButton, Input, Menu, Textarea, cx, toast } from '../ui'
@@ -184,9 +186,66 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
     }
     if (latest.current !== null) void send()
   }
+  // On this machine the doc is typed into the browser's replica, a delta a keystroke, with no request per pause; the
+  // hosted app, and a replica that couldn't open, send edits as before.
+  const live = useRef<LiveReplica | null>(null)
+  useEffect(() => {
+    if (hosted()) return
+    let gone = false
+    void LiveReplica.open(thread).then(
+      (replica) => {
+        if (!gone && replica.writable) live.current = replica
+      },
+      () => undefined,
+    )
+    return () => {
+      gone = true
+      live.current = null
+    }
+  }, [thread])
+  // What the editor showed when this burst of typing began, and whether the replica was set to it.
+  const burst = useRef<{ base: string; begun: boolean } | null>(null)
+  const typing = useRef<Promise<void>>(Promise.resolve())
+  const typeLive = (replica: LiveReplica) => {
+    typing.current = typing.current
+      .then(async () => {
+        const text = latest.current
+        const begun = burst.current
+        if (text === null || !begun) return
+        let shown = text
+        if (!begun.begun) {
+          // The replica takes in what arrived since, and the typing moves onto it.
+          await replica.sync()
+          const now = replica.pageShow(artifact)
+          begun.begun = true
+          if (now !== begun.base) {
+            shown = rebaseDraft(begun.base, text, now)
+            latest.current = shown
+            setDraft(shown)
+          }
+        }
+        await replica.pageEdit(artifact, shown)
+        if (latest.current !== shown) return
+        latest.current = null
+        burst.current = null
+        await queries.invalidateQueries({ queryKey: key })
+        if (latest.current === null) setDraft(null)
+      })
+      .catch((failure: unknown) => {
+        toast(message(failure), 'danger')
+        latest.current = null
+        burst.current = null
+        setDraft(null)
+      })
+  }
   const typed = (text: string) => {
     latest.current = text
     setDraft(text)
+    const replica = live.current
+    if (replica) {
+      burst.current ??= { base: doc.data?.text ?? '', begun: false }
+      return typeLive(replica)
+    }
     if (pending.current !== null) window.clearTimeout(pending.current)
     pending.current = window.setTimeout(() => void send(), 400)
   }
@@ -276,7 +335,9 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
           items={[
             { label: 'Markdown', onSelect: () => saveFile(text, 'text/markdown', `${named}.md`) },
             { label: 'HTML', onSelect: () => void page().then((html) => saveFile(html, 'text/html', `${named}.html`)) },
-            ...(hosted() ? [] : [{ label: 'PDF', hint: 'printed on this computer', onSelect: () => void pdf() }]),
+            hosted()
+              ? { label: 'PDF', hint: "through this browser's print dialog", onSelect: () => void page().then(printInBrowser) }
+              : { label: 'PDF', hint: 'printed on this computer', onSelect: () => void pdf() },
           ]}
         />
         {view === 'write' && (

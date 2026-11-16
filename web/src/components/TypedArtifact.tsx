@@ -12,6 +12,7 @@ import {
 } from "react";
 import { api } from "../api";
 import { type FrameTheme, type InlineFiles, withFilesInlined } from "../artifacts";
+import { printInBrowser } from "../printing";
 import { hosted } from "../served";
 import { useShownTheme } from "../theme";
 import {
@@ -291,11 +292,16 @@ export function SlidesView({
             onClick={() => onComment(`Slide ${at + 1}: ${slide.title}`)}
           />
         )}
-        {onPrint && !hosted() && (
+        {onPrint && (
           <IconButton
             icon="download"
-            label="Download as PDF"
-            onClick={() => onPrint(withFilesInlined(deckPrint(deck, width, height, style), files ?? {}))}
+            label={hosted() ? "Print, or save as PDF" : "Download as PDF"}
+            onClick={() => {
+              const deckPage = withFilesInlined(deckPrint(deck, width, height, style), files ?? {});
+              // The hosted app has no headless browser: this browser's own print dialog saves the PDF.
+              if (hosted()) printInBrowser(deckPage);
+              else onPrint(deckPage);
+            }}
           />
         )}
         <Button

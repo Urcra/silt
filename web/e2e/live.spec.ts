@@ -1719,8 +1719,11 @@ test('a doc and a sheet are edited in place, and what was typed is kept (ADR 007
   await expect(doc.getByRole('heading', { name: 'Plan' })).toBeVisible()
   await doc.getByRole('button', { name: 'Edit' }).click()
   const text = doc.getByLabel("the doc's text")
+  // Typing goes through the browser's replica, as deltas, rather than a request per pause.
+  const typedLive = page.waitForRequest((request) => request.method() === 'POST' && /\/replica$/.test(new URL(request.url()).pathname))
   await text.press('ControlOrMeta+End')
   await text.pressSequentially('- review\n')
+  await typedLive
   await expect(doc.getByText('Saved')).toBeVisible()
   // A comment on the new line, which the read view highlights.
   await text.press('ArrowLeft')

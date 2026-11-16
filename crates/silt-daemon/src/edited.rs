@@ -236,7 +236,7 @@ impl Core {
 
     /// Whether this machine's person may edit the doc or sheet: anyone who
     /// may comment, unless its version asks for a collaborator.
-    fn may_edit(&self, thread: ThreadId, artifact: ArtifactId) -> Result<(), CoreError> {
+    pub(crate) fn may_edit(&self, thread: ThreadId, artifact: ArtifactId) -> Result<(), CoreError> {
         let needs = match self.declared(thread, artifact, "edit").ok().and_then(|edit| edit.get("level").cloned()) {
             Some(serde_json::Value::String(level)) if level == "collaborator" => Level::Collaborator,
             _ => Level::Comment,
