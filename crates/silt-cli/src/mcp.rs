@@ -274,6 +274,34 @@ impl silt_mcp::Backend for DaemonTools {
                         asking: Box::new(Request::SheetData { thread: String::new(), artifact: artifact.clone(), asked }),
                     })
                 };
+                // Rows by number from 1 and columns by letter, as the person sees them.
+                let place = |value: &Value| -> Result<usize, String> {
+                    match value {
+                        Value::Number(row) => row
+                            .as_u64()
+                            .and_then(|row| usize::try_from(row).ok())
+                            .and_then(|row| row.checked_sub(1))
+                            .ok_or_else(|| "rows count from 1".to_owned()),
+                        Value::String(letter) => silt_sheet::parse_address(&format!("{letter}1"))
+                            .map(|(_, column)| column)
+                            .ok_or_else(|| format!("{letter} isn't a column")),
+                        _ => Err("give a row's number or a column's letter".into()),
+                    }
+                };
+                for (key, insert) in [("insert", true), ("remove", false)] {
+                    let Some(asked) = arguments.get(key).and_then(Value::as_object) else { continue };
+                    let count = asked.get("count").and_then(Value::as_u64).map_or(1, |count| count as usize);
+                    let (axis, at) = match (asked.get("rows"), asked.get("columns")) {
+                        (Some(row), None) => (silt_proto::edited::AxisName::Rows, place(row)?),
+                        (None, Some(column)) => (silt_proto::edited::AxisName::Columns, place(column)?),
+                        _ => return Err(format!("{key} takes rows (a row's number) or columns (a column's letter)")),
+                    };
+                    ask(if insert {
+                        silt_proto::edited::SheetRequest::Insert { sheet, axis, at, count }
+                    } else {
+                        silt_proto::edited::SheetRequest::Remove { sheet, axis, at, count }
+                    })?;
+                }
                 if let Some(set) = arguments.get("set").and_then(Value::as_object) {
                     let cells = set
                         .iter()

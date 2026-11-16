@@ -400,7 +400,7 @@ async fn agent() -> Result<()> {
                         let read = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("fn acp() {}"));
                         notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("read-2", read)))?;
                     }
-                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") || prompt.contains("Read asset") || prompt.contains("Room say") || prompt.contains("Doc edit") || prompt.contains("Sheet set") {
+                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") || prompt.contains("Read asset") || prompt.contains("Room say") || prompt.contains("Doc edit") || prompt.contains("Sheet set") || prompt.contains("Sheet grow") {
                         show(&worker, &session, &state, &cwd, &prompt).await?;
                     }
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
@@ -506,6 +506,12 @@ async fn show(
         && let Some(last) = last.clone()
     {
         ("silt_artifact_sheet", serde_json::json!({"id": last, "set": {"B3": "=SUM(B1:B2)", "A3": "total"}, "read": "A1:B3"}))
+    } else if prompt.contains("Sheet grow")
+        && let Some(last) = last.clone()
+    {
+        // A row put in at the top, and the sums' column shown with a decimal.
+        let format = serde_json::json!({"columns": {"B": {"format": "0.0"}}});
+        ("silt_artifact_sheet", serde_json::json!({"id": last, "insert": {"rows": 1}, "format": format, "read": "A5:B5"}))
     } else if prompt.contains("Room say")
         && let Some(last) = last.clone()
     {

@@ -5,7 +5,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { api } from '../api'
-import { edgeOf } from '../boardGeometry'
+import { edgeOf, within } from '../boardGeometry'
 import { useTopic } from '../bus'
 import { message } from '../query'
 import { RoomSocket, type PeerPresence } from '../rooms'
@@ -157,7 +157,8 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   const [selected, setSelected] = useState<string | null>(null)
   // The first end of an arrow being connected.
   const [connecting, setConnecting] = useState<string | null>(null)
-  const [moving, setMoving] = useState<{ id: string; dx: number; dy: number } | null>(null)
+  // What's being dragged, and what a dragged section carries with it.
+  const [moving, setMoving] = useState<{ id: string; dx: number; dy: number; carried: string[] } | null>(null)
   const [resizing, setResizing] = useState<{ id: string; w: number; h: number } | null>(null)
   const [stroke, setStroke] = useState<[number, number][] | null>(null)
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
@@ -165,7 +166,7 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   const room = useRef<RoomSocket | null>(null)
   const drag = useRef<
     | { kind: 'pan'; x: number; y: number; from: typeof view }
-    | { kind: 'item'; id: string; x: number; y: number }
+    | { kind: 'item'; id: string; x: number; y: number; carried: string[] }
     | { kind: 'resize'; id: string; x: number; y: number; w: number; h: number }
     | { kind: 'draw' }
     | null
@@ -232,6 +233,15 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
       toast(message(failure), 'danger')
     }
   }
+  // Several items' changes at once, all or none, as a section and what it holds move together.
+  const batch = async (writes: { op: string; path: string; fields: Partial<Item> }[]) => {
+    try {
+      await api.pageData(thread, artifact, { op: 'batch', writes })
+      await refresh()
+    } catch (failure) {
+      toast(message(failure), 'danger')
+    }
+  }
   // Only the fields changed, so what someone else changed meanwhile, the agent's text say, stays.
   const patch = async (id: string, fields: Partial<Item>) => {
     try {
@@ -281,7 +291,15 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
       return
     }
     setSelected(id ?? null)
-    drag.current = id ? { kind: 'item', id, x, y } : { kind: 'pan', x: event.clientX, y: event.clientY, from: view }
+    const section = id ? byId.get(id) : undefined
+    const box = section?.type === 'section' ? boxOf(section) : null
+    const carried = box
+      ? items.filter((other) => other.id !== id && other.type !== 'arrow' && other.type !== 'stroke').filter((other) => {
+          const inner = boxOf(other)
+          return inner !== null && within(inner, box)
+        }).map((other) => other.id)
+      : []
+    drag.current = id ? { kind: 'item', id, x, y, carried } : { kind: 'pan', x: event.clientX, y: event.clientY, from: view }
   }
   const startResize = (event: ReactPointerEvent, item: Item) => {
     event.stopPropagation()
@@ -299,7 +317,7 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
       moved.current = true
       setView({ ...now.from, x: now.from.x + event.clientX - now.x, y: now.from.y + event.clientY - now.y })
     }
-    else if (now.kind === 'item') setMoving({ id: now.id, dx: x - now.x, dy: y - now.y })
+    else if (now.kind === 'item') setMoving({ id: now.id, dx: x - now.x, dy: y - now.y, carried: now.carried })
     else if (now.kind === 'resize') setResizing({ id: now.id, w: Math.max(MIN_SIZE, now.w + x - now.x), h: Math.max(MIN_SIZE, now.h + y - now.y) })
     else
       setStroke((points) => {
@@ -313,7 +331,13 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
     drag.current = null
     if (now?.kind === 'item' && moving) {
       const item = byId.get(now.id)
-      if (item && (moving.dx !== 0 || moving.dy !== 0)) void patch(item.id, { x: Math.round((item.x ?? 0) + moving.dx), y: Math.round((item.y ?? 0) + moving.dy) })
+      if (item && (moving.dx !== 0 || moving.dy !== 0)) {
+        const moved = [item.id, ...moving.carried].flatMap((id) => {
+          const one = byId.get(id)
+          return one ? [{ op: 'update', path: `items/${id}`, fields: { x: Math.round((one.x ?? 0) + moving.dx), y: Math.round((one.y ?? 0) + moving.dy) } }] : []
+        })
+        void (moved.length === 1 ? patch(item.id, moved[0].fields) : batch(moved))
+      }
     }
     if (now?.kind === 'resize' && resizing) {
       const item = byId.get(now.id)
@@ -326,7 +350,7 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   }
   const placed = (item: Item): Item => {
     let shown = item
-    if (moving?.id === item.id) shown = { ...shown, x: (item.x ?? 0) + moving.dx, y: (item.y ?? 0) + moving.dy }
+    if (moving && (moving.id === item.id || moving.carried.includes(item.id))) shown = { ...shown, x: (item.x ?? 0) + moving.dx, y: (item.y ?? 0) + moving.dy }
     if (resizing?.id === item.id) shown = { ...shown, w: resizing.w, h: resizing.h }
     return shown
   }
@@ -338,7 +362,13 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   const addImage = async (file: File) => {
     if (!IMAGE_TYPES.includes(file.type)) return toast('Add a PNG, JPEG, GIF or WebP image', 'danger')
     try {
-      const added = (await api.pageAssets(thread, artifact, { op: 'add', name: file.name, media_type: file.type, data: await base64Of(file) })) as { id: string }
+      const asked = { op: 'add' as const, name: file.name, media_type: file.type, data: await base64Of(file) }
+      // A board made before it took images takes them from its next version.
+      const added = (await api.pageAssets(thread, artifact, asked).catch(async (failure: unknown) => {
+        if (!/declare assets/.test(message(failure))) throw failure
+        await api.saveVersion(thread, artifact, 'Takes images')
+        return api.pageAssets(thread, artifact, asked)
+      })) as { id: string }
       const size = await new Promise<[number, number]>((resolve) => {
         const image = new Image()
         image.onload = () => resolve([image.naturalWidth || 240, image.naturalHeight || 180])

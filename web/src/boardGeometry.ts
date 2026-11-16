@@ -2,6 +2,11 @@
 
 export type Box = { x: number; y: number; w: number; h: number }
 
+/** Whether `inner` lies wholly within `outer`, as a note in a section does. */
+export function within(inner: Box, outer: Box): boolean {
+  return inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h
+}
+
 /** The middle of `box`. */
 export function centreOf(box: Box): [number, number] {
   return [box.x + box.w / 2, box.y + box.h / 2]

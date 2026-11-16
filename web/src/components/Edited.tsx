@@ -9,7 +9,7 @@ import { useTopic } from '../bus'
 import { lineDiff } from '../lineDiff'
 import { keys, message } from '../query'
 import { hosted } from '../served'
-import { columnName, rebaseDraft, splice } from '../typed'
+import { columnName, csvOf, rebaseDraft, splice } from '../typed'
 import { Button, Icon, IconButton, Input, Menu, Textarea, cx, toast } from '../ui'
 import { CommentThread } from './CommentThread'
 import { Markdown } from './Markdown'
@@ -360,6 +360,21 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
     const ids = view && view.rows[editing.row] && view.columns[editing.column] ? { [at]: [view.rows[editing.row], view.columns[editing.column]] } : {}
     await change({ op: 'set', cells: { [at]: editing.raw }, ids })
   }
+  // The sheet shown, its values as they show, a cell that a spreadsheet app would run quoted first.
+  const csv = () => {
+    if (!view) return
+    const safe = (value: string) => (/^[=+\-@\t\r]/.test(value) && Number.isNaN(Number(value)) ? `'${value}` : value)
+    const text = csvOf(
+      view.columns.map((_id, column) => columnName(column)),
+      view.values.map((row) => row.map(safe)),
+    )
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/csv' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${(view.names?.[tab] ?? title).replace(/[^A-Za-z0-9_-]+/g, '-') || 'sheet'}.csv`
+    anchor.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
   const xlsx = async () => {
     try {
       const blob = await api.sheetXlsx(thread, artifact)
@@ -420,6 +435,9 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
         </Button>
         <Button size="sm" variant="ghost" onClick={() => void change({ op: 'insert', axis: 'columns', at: selected.column })}>
           Column left
+        </Button>
+        <Button size="sm" variant="ghost" onClick={csv}>
+          CSV
         </Button>
         <IconButton icon="download" label="Download as .xlsx" onClick={() => void xlsx()} />
       </div>

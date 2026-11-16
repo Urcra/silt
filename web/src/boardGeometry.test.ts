@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { edgeOf } from './boardGeometry'
+import { edgeOf, within } from './boardGeometry'
 
 describe("a whiteboard arrow's ends", () => {
   const box = { x: 0, y: 0, w: 100, h: 50 }
@@ -11,5 +11,13 @@ describe("a whiteboard arrow's ends", () => {
   })
   it('stay in the middle when the other end is inside the item', () => {
     expect(edgeOf(box, [60, 30])).toEqual([50, 25])
+  })
+})
+
+describe('a section', () => {
+  it('holds what lies wholly within it', () => {
+    const section = { x: 0, y: 0, w: 400, h: 300 }
+    expect(within({ x: 10, y: 10, w: 160, h: 100 }, section)).toBe(true)
+    expect(within({ x: 300, y: 10, w: 160, h: 100 }, section)).toBe(false)
   })
 })

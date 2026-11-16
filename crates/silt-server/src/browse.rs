@@ -693,6 +693,7 @@ async fn write_version(
     let blob = server.shared.blobs.put(&bytes).await.map_err(|_| bad_request("the version couldn't be kept"))?;
     let name = format!("artifact/{artifact}/v{version}/{file}");
     let attachment = Op::Conv(silt_log::ConvOp::Attachment { session: session.clone(), name, blob });
+    let capabilities = silt_proto::artifact::with_kind_defaults(&latest.kind, latest.capabilities.clone());
     let view = ArtifactView {
         version,
         media_type: media_type.into(),
@@ -700,6 +701,7 @@ async fn write_version(
         size: bytes.len() as u64,
         note: Some(note),
         by: Some(by),
+        capabilities,
         ..latest
     };
     let line = silt_agents::acp::artifact(&view);

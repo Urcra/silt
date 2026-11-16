@@ -616,23 +616,9 @@ impl Core {
             )
             .await?;
         // A doc or a sheet is edited by anyone who may comment unless it says
-        // otherwise, which the server checks by its declaration.
-        let capabilities = match capabilities {
-            Some(declared) if declared.contains_key("edit") || !silt_proto::edited::is_edited(&kind) => Some(declared),
-            _ if silt_proto::edited::is_edited(&kind) => {
-                let mut declared = capabilities.unwrap_or_default();
-                declared.insert("edit".into(), serde_json::json!({}));
-                // A whiteboard keeps its items in page data, its cursors in a
-                // room, and the images people put on it as assets (ADR 0081).
-                if kind == "whiteboard" {
-                    declared.entry("db".to_owned()).or_insert_with(|| serde_json::json!({}));
-                    declared.entry("room".to_owned()).or_insert_with(|| serde_json::json!({}));
-                    declared.entry("assets".to_owned()).or_insert_with(|| serde_json::json!({"upload": "comment"}));
-                }
-                Some(declared)
-            }
-            other => other,
-        };
+        // otherwise, which the server checks by its declaration; a whiteboard
+        // made before it took images takes them from its next version.
+        let capabilities = silt_proto::artifact::with_kind_defaults(&kind, capabilities);
         let styled = if matches!(kind.as_str(), "html" | "data") {
             let workspace_default = self.workspace_design_system(workspace);
             let repository = checkout.as_deref().and_then(design::project_default);

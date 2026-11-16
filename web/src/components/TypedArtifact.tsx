@@ -638,6 +638,11 @@ function SourceLink({ id, sources }: { id: string; sources: Source[] }) {
   );
 }
 
+/** A series' colour: the palette's in order, and past its end a grey, so no two series share a hue (ADR 0076). */
+function seriesColor(colors: string[], series: number): string {
+  return colors[series] ?? "#8a8780";
+}
+
 function Chart({
   block,
   theme,
@@ -714,7 +719,7 @@ function Chart({
             width={Math.max(each - 2, 1)}
             height={Math.max(Math.abs(y0 - y1) - 2, 1)}
             rx={2}
-            fill={colors[s % colors.length]}
+            fill={seriesColor(colors, s)}
           />,
         );
       });
@@ -740,7 +745,7 @@ function Chart({
     );
   } else {
     block.series.forEach((_one, s) => {
-      const color = colors[s % colors.length];
+      const color = seriesColor(colors, s);
       const points = rows
         .map((row, index) => [index, row[s + 1]] as const)
         .filter(
@@ -899,7 +904,7 @@ function Chart({
                 x={Math.min(L + band * hover, W - 170) + 8}
                 y={T + 30 + 16 * s}
                 fontSize={11}
-                fill={colors[s % colors.length]}
+                fill={seriesColor(colors, s)}
               >
                 {one.name}: {shown(rows[hover][s + 1])}
               </text>
@@ -1050,7 +1055,7 @@ export function DataView({ text, theme, style }: { text: string; theme: FrameThe
                           <span
                             aria-hidden="true"
                             className="h-2 w-2 rounded-full"
-                            style={{ background: colors[s % colors.length] }}
+                            style={{ background: seriesColor(colors, s) }}
                           />
                           {one.name}
                         </li>

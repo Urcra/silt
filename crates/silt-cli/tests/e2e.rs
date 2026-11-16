@@ -2000,6 +2000,14 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
     let view = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));
     assert_eq!(view["raw"][3][1], "=SUM(B2:B3)", "the formula moved with its cells: {view}");
     assert_eq!(view["values"][3][1], "8", "and means the same: {view}");
+    let said = prompt("Sheet grow");
+    assert!(
+        said.iter().any(|(_, text)| text.contains(r#"["total","8.0"]"#)),
+        "a row in at the top, and B shown with a decimal: {said:?}"
+    );
+    let grown = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));
+    assert_eq!((&grown["raw"][0][0], &grown["raw"][4][1]), (&"".into(), &"=SUM(B3:B4)".into()), "{grown}");
+    api.ok("POST", &path, Some(serde_json::json!({"op": "remove", "axis": "rows", "at": 0})));
     // A second sheet, which a read counts, search finds and the workbook holds.
     api.ok("POST", &path, Some(serde_json::json!({"op": "set", "sheet": 1, "cells": {"A1": "rhubarb", "A2": "=1+1"}})));
     let first = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));

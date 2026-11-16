@@ -341,6 +341,24 @@ pub fn declaration(declared: Option<&Capabilities>, capability: &str) -> Option<
     declared?.get(capability).map(|config| sorted(config).to_string())
 }
 
+/// What a version of `kind` declares, with what its kind always has: a doc,
+/// a sheet or a whiteboard is edited in place (`edit`), and a whiteboard
+/// keeps its items in page data, its cursors in a room and its images as
+/// assets (ADRs 0077, 0081). A version declaring them keeps its own.
+pub fn with_kind_defaults(kind: &str, declared: Option<Capabilities>) -> Option<Capabilities> {
+    if !crate::edited::is_edited(kind) {
+        return declared;
+    }
+    let mut declared = declared.unwrap_or_default();
+    declared.entry("edit".to_owned()).or_insert_with(|| serde_json::json!({}));
+    if kind == "whiteboard" {
+        declared.entry("db".to_owned()).or_insert_with(|| serde_json::json!({}));
+        declared.entry("room".to_owned()).or_insert_with(|| serde_json::json!({}));
+        declared.entry("assets".to_owned()).or_insert_with(|| serde_json::json!({"upload": "comment"}));
+    }
+    Some(declared)
+}
+
 /// The capabilities that run a page's own code with what's the person's:
 /// their agent, their connectors, their thread's files. A grant of one
 /// holds for the page it was given to, so a new page asks again.
@@ -352,6 +370,22 @@ pub fn grant_basis(version: Option<&crate::view::ArtifactView>, capability: &str
     let version = version?;
     let declared = declaration(version.capabilities.as_ref(), capability)?;
     Some(if PAGE_BOUND.contains(&capability) { format!("{declared}@{}", version.blob) } else { declared })
+}
+
+#[cfg(test)]
+mod kind_tests {
+    #[test]
+    fn a_whiteboard_always_takes_images_and_a_page_keeps_its_own() {
+        let old: super::Capabilities = serde_json::from_str(r#"{"edit": {}, "db": {}, "room": {}}"#).expect("json");
+        let now = super::with_kind_defaults("whiteboard", Some(old)).expect("some");
+        assert_eq!(now["assets"], serde_json::json!({"upload": "comment"}));
+        let sheet: super::Capabilities = serde_json::from_str(r#"{"edit": {"level": "collaborator"}}"#).expect("json");
+        assert_eq!(
+            super::with_kind_defaults("sheet", Some(sheet)).expect("some")["edit"],
+            serde_json::json!({"level": "collaborator"})
+        );
+        assert_eq!(super::with_kind_defaults("html", None), None);
+    }
 }
 
 /// One change to a version's source: `old` occurs exactly once, and
