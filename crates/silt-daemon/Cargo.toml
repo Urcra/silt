@@ -47,4 +47,4 @@ uuid = { version = "1.28.0", features = ["v4", "v7"] }
 silt-proto = { path = "../silt-proto", features = ["ts"] }
 silt-workspace = { path = "../silt-workspace", features = ["ts"] }
 tempfile = "3.27.0"
-ts-rs = "12.0.1"
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }

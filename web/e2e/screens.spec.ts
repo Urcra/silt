@@ -4,9 +4,9 @@
 // compares the new one with its board.
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
+import { teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -31,12 +31,8 @@ test.beforeAll(() => {
 })
 
 test.afterAll(() => {
-  for (const home of ['alice', 'bob', 'alice-laptop']) {
-    execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: join(world.work, home, 'silt') } })
-  }
-  process.kill(Number(readFileSync(join(world.work, 'server.pid'), 'utf8')))
-  // A daemon's agents can still be writing there for a moment after it stops.
-  rmSync(world.work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  const homes = ['alice', 'bob', 'alice-laptop'].map((home) => join(world.work, home, 'silt'))
+  teardown(SILT, world.work, homes, [join(world.work, 'server.pid')])
 })
 
 const VARIANTS = [

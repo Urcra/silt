@@ -51,6 +51,18 @@ skip() {
     echo "gate: skipping $1" >&2
 }
 
+# A full gate's builds take about 25 GB under target/, its end-to-end tests
+# a few more in /tmp, and a cloud container has about 40 GB in all. Running
+# out fails a step ten minutes in, with an error that doesn't say why.
+free_gb=$(df -Pk . | awk 'NR == 2 {print int($4 / 1048576)}')
+if [ "${free_gb:-10}" -lt 10 ]; then
+    low="gate: only $free_gb GB of disk free, which a full gate may run out of; deleting target/debug/incremental and target/perf, which rebuild, frees the most"
+    echo "$low" >&2
+    if { true >&3; } 2>/dev/null; then
+        echo "$low" >&3
+    fi
+fi
+
 has_web=false
 [ -f web/package.json ] && has_web=true
 
@@ -115,7 +127,10 @@ step "tests"
 # nextest runs every test binary at once rather than one after another,
 # which saves minutes; it has no doctests, so those run apart.
 if cargo nextest --version >/dev/null 2>&1; then
-    cargo nextest run --workspace
+    # Most tests wait on the daemons and agents they start rather than
+    # compute, so twice as many as there are cores keep the cores busy.
+    # More than that made the tests already flaky under load fail.
+    cargo nextest run --workspace --test-threads "$(($(getconf _NPROCESSORS_ONLN) * 2))"
     cargo test --workspace --doc
 else
     skip "nextest, which isn't installed (cargo install --locked cargo-nextest); cargo test runs the tests one binary at a time"

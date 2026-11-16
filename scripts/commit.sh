@@ -20,8 +20,9 @@ else
     # half over its limit, and says so (ADR 0052). The gate names each step
     # on fd 3, which goes to the terminal.
     if ! SILT_BENCH_TOLERANCE=50 ./scripts/gate.sh 3>&2 >"$log" 2>&1; then
-        grep -E '^(error|warning)|FAILED|FAIL |panicked|^over budget|✘' -A6 "$log" | head -40
-        echo "gate failed; nothing committed (full log: $log)" >&2
+        # Not warnings: clippy's are errors already, and the rest are noise.
+        grep -E '^error|FAILED|FAIL |panicked|^over budget|✘|No space left' -A6 "$log" | head -40
+        echo "gate failed at \"$(grep '^gate: \[' "$log" | tail -1 | sed 's/^gate: \[[^]]*\] //')\"; nothing committed (full log: $log)" >&2
         exit 1
     fi
     if grep -q '^slower than budget' "$log"; then

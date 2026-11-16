@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync, rmSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
-import { stopAgent } from './fixture'
+import { stopAgent, teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -24,13 +24,8 @@ test.beforeAll(() => {
 })
 
 test.afterAll(() => {
-  for (const home of ['alice', 'bob', 'alice-laptop']) {
-    execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: join(live.work, home, 'silt') } })
-  }
-  const pid = Number(readFileSync(join(live.work, 'server.pid'), 'utf8'))
-  process.kill(pid)
-  // A daemon's agents can still be writing there for a moment after it stops.
-  rmSync(live.work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  const homes = ['alice', 'bob', 'alice-laptop'].map((home) => join(live.work, home, 'silt'))
+  teardown(SILT, live.work, homes, [join(live.work, 'server.pid')])
 })
 
 /** Opens All threads from the sidebar: `/` is a new thread (ADR 0044). */
