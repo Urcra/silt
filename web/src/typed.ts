@@ -134,15 +134,33 @@ export function dataPageOf(json: string): DataPage | null {
   return sources && page.blocks.every(block) ? (page as DataPage) : null
 }
 
+/** How many click steps a slide has: the highest `data-step` of its elements, up to 20. */
+export function stepsOf(html: string): number {
+  let most = 0
+  for (const found of html.matchAll(/data-step\s*=\s*["']?(\d+)/g)) most = Math.max(most, Math.min(Number(found[1]), 20))
+  return most
+}
+
 /**
  * One slide or board as a sealed frame's document, at its own size, on the theme's ground unless it sets its own. A
- * shared style's `@import`s go first, where CSS reads them.
+ * shared style's `@import`s go first, where CSS reads them. With `step`, a slide's `data-step` elements past it are
+ * hidden, as a presenter reveals them a click at a time.
  */
-export function partDocument(html: string, shared: string | undefined, width: number, height: number, style: string | null, theme: FrameTheme): string {
+export function partDocument(
+  html: string,
+  shared: string | undefined,
+  width: number,
+  height: number,
+  style: string | null,
+  theme: FrameTheme,
+  step?: number,
+): string {
   const imports = (shared ?? '').match(/@import\s[^;]+;/g) ?? []
   const rest = imports.reduce((left, rule) => left.replace(rule, ''), shared ?? '')
   const ground = `color-scheme:${theme};background:var(--bg,Canvas);color:var(--fg,CanvasText)`
-  const css = `${imports.join('')}html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden}html{${ground}}${rest}`
+  const shown = Array.from({ length: step ?? 0 }, (_, at) => `[data-step="${at + 1}"]`).join(',')
+  const steps = step === undefined ? '' : `[data-step]{visibility:hidden}${shown ? `${shown}{visibility:visible}` : ''}`
+  const css = `${imports.join('')}html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden}html{${ground}}${rest}${steps}`
   return sandboxedDocument(`<!doctype html><html><head><style>${css.replace(/<\//g, '<\\/')}</style></head><body>${html}</body></html>`, {
     style,
     theme,

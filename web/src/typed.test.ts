@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canvasOf, chartColors, chartTable, runs, xPositions, yDomain, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
+import { canvasOf, chartColors, chartTable, runs, stepsOf, xPositions, yDomain, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
 
 describe('the artifact types', () => {
   it('opens a deck at the slide a link names, within the deck', () => {
@@ -34,6 +34,10 @@ describe('the artifact types', () => {
     const imported = partDocument('', "h1{color:red}@import url('https://fonts.googleapis.com/css2?family=Inter');", 1280, 720, null, 'light')
     expect(imported.indexOf('@import')).toBeLessThan(imported.indexOf('html,body'))
     expect(parsed('{bad')).toBeNull()
+    expect(stepsOf('<li data-step="1">a</li><li data-step=\'3\'>b</li><p>c</p>')).toBe(3)
+    const stepped = partDocument('<li data-step="1">a</li>', undefined, 1280, 720, null, 'light', 1)
+    expect(stepped).toContain('[data-step]{visibility:hidden}[data-step="1"]{visibility:visible}')
+    expect(partDocument('<li data-step="1">a</li>', undefined, 1280, 720, null, 'light')).not.toContain('visibility')
   })
 })
 

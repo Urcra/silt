@@ -19,6 +19,7 @@ import {
   chartColors,
   chartTable,
   runs,
+  stepsOf,
   xPositions,
   yDomain,
   csvOf,
@@ -83,17 +84,43 @@ export function SlidesView({
   const [width, height] = deck?.aspect === "4:3" ? [1024, 768] : [1280, 720];
   const { box, scale } = useFit(width, height);
   const room = useRef<HTMLDivElement>(null);
-  const go = (to: number) => setAt(Math.min(Math.max(to, 0), count - 1));
+  // The click steps shown of the slide, its `data-step` elements up to it.
+  const [step, setStep] = useState(0);
+  const go = (to: number) => {
+    setAt(Math.min(Math.max(to, 0), count - 1));
+    setStep(0);
+  };
+  const placed = useRef({ at, step, deck });
+  // A step forward, or the next slide once its steps are all shown; back, the same in reverse.
+  const forward = () => {
+    const { at, step, deck } = placed.current;
+    if (step < stepsOf(deck?.slides[at]?.html ?? "")) setStep(step + 1);
+    else if (at < count - 1) {
+      setAt(at + 1);
+      setStep(0);
+    }
+  };
+  const back = () => {
+    const { at, step, deck } = placed.current;
+    if (step > 0) setStep(step - 1);
+    else if (at > 0) {
+      setAt(at - 1);
+      setStep(stepsOf(deck?.slides[at - 1]?.html ?? ""));
+    }
+  };
+  const moves = useRef({ forward, back, go });
+  useEffect(() => {
+    placed.current = { at, step, deck };
+    moves.current = { forward, back, go };
+  });
   useEffect(() => {
     const keys = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
-      if (["ArrowRight", "PageDown", " "].includes(event.key))
-        setAt((was) => Math.min(was + 1, count - 1));
-      else if (["ArrowLeft", "PageUp"].includes(event.key))
-        setAt((was) => Math.max(was - 1, 0));
-      else if (event.key === "Home") setAt(0);
-      else if (event.key === "End") setAt(count - 1);
+      if (["ArrowRight", "PageDown", " "].includes(event.key)) moves.current.forward();
+      else if (["ArrowLeft", "PageUp"].includes(event.key)) moves.current.back();
+      else if (event.key === "Home") moves.current.go(0);
+      else if (event.key === "End") moves.current.go(count - 1);
       else return;
       event.preventDefault();
     };
@@ -119,6 +146,7 @@ export function SlidesView({
       </p>
     );
   const slide = deck.slides[at];
+  const steps = stepsOf(slide.html);
   const present = async () => {
     setStarted(Date.now());
     setNow(Date.now());
@@ -143,7 +171,7 @@ export function SlidesView({
           aria-label={`slide ${at + 1} of ${count}`}
         >
           <iframe
-            key={at}
+            key={`${at}-${step}`}
             title={`${title}, slide ${at + 1}: ${slide.title}`}
             sandbox="allow-scripts"
             srcDoc={partDocument(
@@ -153,6 +181,7 @@ export function SlidesView({
               height,
               style,
               theme,
+              steps > 0 ? step : undefined,
             )}
             className="absolute top-1/2 left-1/2 border-0 bg-white shadow-overlay"
             style={{
@@ -198,17 +227,18 @@ export function SlidesView({
         <IconButton
           icon="chevronLeft"
           label="Previous slide"
-          disabled={at === 0}
-          onClick={() => go(at - 1)}
+          disabled={at === 0 && step === 0}
+          onClick={back}
         />
         <span className="font-mono text-xs text-fg-2 tabular-nums">
           {at + 1} / {count}
+          {steps > 0 && ` · ${step}/${steps}`}
         </span>
         <IconButton
           icon="chevronRight"
           label="Next slide"
-          disabled={at === count - 1}
-          onClick={() => go(at + 1)}
+          disabled={at === count - 1 && step >= steps}
+          onClick={forward}
         />
         <ol
           className="flex min-w-0 flex-1 gap-1 overflow-x-auto"
