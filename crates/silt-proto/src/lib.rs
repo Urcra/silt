@@ -297,6 +297,21 @@ pub struct ProjectsReply {
 
 /// The name a project shows when nobody gave it one: its remote's last
 /// path segment.
+/// The code a page reads for a refusal (ADR 0072), from the start Silt's
+/// own refusals give their message, so both serving modes answer alike:
+/// `conflict`, `rate_limited` or `not_granted`; none for anything else.
+pub fn refusal_of(message: &str) -> Option<&'static str> {
+    if message.starts_with("conflict") {
+        Some("conflict")
+    } else if message.starts_with("rate limited") {
+        Some("rate_limited")
+    } else if message.starts_with("not_granted") {
+        Some("not_granted")
+    } else {
+        None
+    }
+}
+
 pub fn project_name(repo: &str) -> String {
     repo.trim_end_matches('/').rsplit(['/', ':']).next().filter(|name| !name.is_empty()).unwrap_or(repo).to_owned()
 }

@@ -5438,6 +5438,7 @@ dependencies = [
  "base64 0.22.1",
  "calamine",
  "json-patch",
+ "proptest",
  "quick-xml",
  "rust_xlsxwriter",
  "serde",
@@ -5507,6 +5508,7 @@ dependencies = [
 name = "silt-sheet"
 version = "0.0.1"
 dependencies = [
+ "proptest",
  "serde",
 ]
 

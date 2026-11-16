@@ -95,13 +95,30 @@ pub(crate) async fn write_all_as_with(
     also: Option<DeltaId>,
     ops: Vec<Op>,
 ) -> Result<Vec<DeltaId>, ApiError> {
-    let user = browser.user;
     if ops.is_empty() {
         return Ok(Vec::new());
     }
     // One at a time: each takes the next lamport, which a write between
     // working it out and pushing would take too.
-    let _one = server.shared.writes.lock().await;
+    let one = server.shared.writes.lock().await;
+    push_all(server, &one, browser, family, thread, also, ops).await
+}
+
+/// [`write_all_as_with`] for a caller already holding the write lock, as
+/// `one`, so what it checked before writing still holds when it writes.
+pub(crate) async fn push_all(
+    server: &Server,
+    _one: &tokio::sync::MutexGuard<'_, ()>,
+    browser: Browser,
+    family: FamilyId,
+    thread: ThreadId,
+    also: Option<DeltaId>,
+    ops: Vec<Op>,
+) -> Result<Vec<DeltaId>, ApiError> {
+    let user = browser.user;
+    if ops.is_empty() {
+        return Ok(Vec::new());
+    }
     let actor = actor_of(server, user).await?;
     let deltas = {
         let slot = server.room(family).await.ok_or_else(not_found)?;

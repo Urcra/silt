@@ -1642,7 +1642,7 @@ fn a_page_saves_itself_knows_its_viewer_and_asks_an_agent() {
         &format!("/api/threads/{thread}/artifacts/{id}/publish"),
         Some(serde_json::json!({"html": page, "base": 1})),
     );
-    assert!(!stale && said.to_string().contains("conflict"), "{said}");
+    assert!(!stale && said["refusal"] == "conflict", "the code a page reads: {said}");
 
     // The Artifacts page lists it; a pin keeps it first and archiving hides
     // it, for this machine's person, who owns the thread (ADR 0075).
@@ -1679,7 +1679,7 @@ fn a_page_saves_itself_knows_its_viewer_and_asks_an_agent() {
     let grants = format!("/api/threads/{thread}/artifacts/{id}/grants");
     let (refused, said) =
         api.call("POST", &format!("/api/threads/{thread}/artifacts/{id}/sample"), Some(serde_json::json!({"input": "hi"})));
-    assert!(!refused && said.to_string().contains("not_granted"), "{said}");
+    assert!(!refused && said["refusal"] == "not_granted", "{said}");
     api.ok("PUT", &grants, Some(serde_json::json!({"capability": "sample", "state": "granted"})));
     let held = api.ok("GET", &grants, None);
     assert_eq!(held["sample"], "granted", "{held}");

@@ -716,7 +716,7 @@ pub fn page_ops(
             return Err(format!("{path} isn't a document's path"));
         }
         if !rules.may_write(&path, me, level) {
-            return Err(format!("you may not write {path}"));
+            return Err(format!("not_granted: you may not write {path}"));
         }
         let op = match write {
             PageWrite::Set { value, .. } => {

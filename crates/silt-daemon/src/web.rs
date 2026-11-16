@@ -345,7 +345,8 @@ struct Failed {
 
 impl IntoResponse for Failed {
     fn into_response(self) -> HttpResponse {
-        (self.status, Json(json!({"error": self.message}))).into_response()
+        let refusal = silt_proto::refusal_of(&self.message);
+        (self.status, Json(json!({"error": self.message, "refusal": refusal}))).into_response()
     }
 }
 

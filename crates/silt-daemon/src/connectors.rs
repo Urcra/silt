@@ -42,6 +42,11 @@ pub struct PageConnector {
     /// it names, so no secret is kept in the file.
     #[serde(default)]
     pub header_env: BTreeMap<String, String>,
+    /// The environment variables a stdio server gets beyond the few every
+    /// program needs ([`BASE_ENV`]), by name; nothing else of the daemon's
+    /// environment reaches it.
+    #[serde(default)]
+    pub pass_env: Vec<String>,
     /// The tools pages may call, by name; every one is off until ticked.
     #[serde(default)]
     pub tools: BTreeMap<String, bool>,
@@ -101,11 +106,18 @@ pub(crate) fn from_claude(config: &Path) -> Vec<PageConnector> {
                 .and_then(serde_json::Value::as_array)
                 .map(|args| args.iter().filter_map(|arg| arg.as_str().map(str::to_owned)).collect())
                 .unwrap_or_default();
+            // The variables Claude Code sets for it, by name only: their values stay there.
+            let pass_env = server
+                .get("env")
+                .and_then(serde_json::Value::as_object)
+                .map(|env| env.keys().cloned().collect())
+                .unwrap_or_default();
             let connector = PageConnector {
                 name: name.clone(),
                 command: text("command"),
                 args,
                 url: text("url"),
+                pass_env,
                 ..PageConnector::default()
             };
             (connector.command.is_some() != connector.url.is_some()).then_some(connector)
@@ -124,6 +136,39 @@ pub(crate) fn claude_config() -> PathBuf {
 /// How long a connector has to start, and a call to answer.
 const START_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 const CALL_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// What every stdio connector gets of the daemon's environment: where
+/// programs and the person's files are, the locale, and Silt's own home,
+/// which `silt mcp` needs; never the daemon's tokens or keys.
+const BASE_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "XDG_RUNTIME_DIR",
+    "SILT_HOME",
+    "SystemRoot",
+    "SystemDrive",
+    "windir",
+    "ComSpec",
+    "PATHEXT",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramData",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+];
 
 /// The running clients, by connector, each with when it was last used.
 #[derive(Default)]
@@ -205,7 +250,12 @@ async fn start(connector: &PageConnector) -> Result<Client, String> {
         let path = std::env::var_os("PATH").unwrap_or_default();
         let found = silt_os::find_program(program, &path).unwrap_or_else(|| program.into());
         let mut command = tokio::process::Command::new(found);
-        command.args(&connector.args).stderr(std::process::Stdio::null()).kill_on_drop(true);
+        command.args(&connector.args).stderr(std::process::Stdio::null()).kill_on_drop(true).env_clear();
+        for name in BASE_ENV.iter().copied().chain(connector.pass_env.iter().map(String::as_str)) {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
         silt_os::own_group(&mut command);
         let transport =
             rmcp::transport::TokioChildProcess::new(command).map_err(|error| format!("couldn't start {program}: {error}"))?;
@@ -353,7 +403,7 @@ mod tests {
         let config = dir.path().join(".claude.json");
         std::fs::write(
             &config,
-            r#"{"mcpServers": {"gh": {"url": "https://api.example.com/mcp", "headers": {"Authorization": "Bearer x"}}, "fs": {"command": "fs-mcp", "args": ["--root", "."]}}}"#,
+            r#"{"mcpServers": {"gh": {"url": "https://api.example.com/mcp", "headers": {"Authorization": "Bearer x"}}, "fs": {"command": "fs-mcp", "args": ["--root", "."], "env": {"FS_TOKEN": "secret"}}}}"#,
         )
         .expect("write");
         let imported = from_claude(&config);
@@ -362,5 +412,8 @@ mod tests {
             imported.iter().all(|connector| connector.tools.is_empty() && connector.header_env.is_empty()),
             "no secrets, no tools on"
         );
+        let fs = imported.iter().find(|connector| connector.name == "fs").expect("fs");
+        assert_eq!(fs.pass_env, ["FS_TOKEN"], "the variable's name, never its value");
+        assert!(!serde_json::to_string(&imported).expect("json").contains("secret"));
     }
 }

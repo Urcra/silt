@@ -40,7 +40,13 @@ pub(crate) struct Control {
     /// by command, and where each one's answer goes.
     calls: std::sync::Mutex<HashMap<i64, Vec<ToolCall>>>,
     answers: std::sync::Mutex<HashMap<(i64, u32), tokio::sync::oneshot::Sender<serde_json::Value>>>,
+    /// When each person's pages last asked, for the server's own rate.
+    sampled: std::sync::Mutex<HashMap<UserId, Vec<std::time::Instant>>>,
 }
+
+/// The most page questions one person's pages relay a minute, across
+/// their devices; each device limits its own too.
+pub(crate) const SAMPLES_PER_MINUTE: usize = 8;
 
 /// A call of one of a page's tools, as the page hears of it.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
@@ -57,6 +63,19 @@ const TOOL_WAIT: Duration = Duration::from_secs(60);
 const PROGRESS_BYTES: usize = 256 * 1024;
 
 impl Control {
+    /// Counts a page question `user` relays, refused past the rate.
+    pub(crate) fn may_sample(&self, user: UserId) -> bool {
+        let now = std::time::Instant::now();
+        let mut sampled = self.sampled.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let recent = sampled.entry(user).or_default();
+        recent.retain(|at| now.duration_since(*at) < std::time::Duration::from_secs(60));
+        if recent.len() >= SAMPLES_PER_MINUTE {
+            return false;
+        }
+        recent.push(now);
+        true
+    }
+
     /// Notes that command `id` answers `user`'s question named `ask`.
     pub(crate) fn asked(&self, user: UserId, ask: String, id: i64) {
         self.asks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((user, ask), id);

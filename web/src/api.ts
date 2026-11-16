@@ -91,7 +91,10 @@ export async function takeTokenFromUrl(): Promise<void> {
   if (token || code) window.history.replaceState(null, '', window.location.pathname + window.location.search)
 }
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  /** The code a page reads for a refusal, as the daemon or server said it (ADR 0072). */
+  refusal: string | null = null
+}
 
 export function token(): string {
   return sessionStorage.getItem(TOKEN_KEY) ?? ''
@@ -110,7 +113,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   })
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
-    throw new ApiError((data as { error?: string }).error ?? `request failed (${response.status})`)
+    const said = data as { error?: string; message?: string; refusal?: string | null }
+    const failure = new ApiError(said.error ?? said.message ?? `request failed (${response.status})`)
+    failure.refusal = typeof said.refusal === 'string' ? said.refusal : null
+    throw failure
   }
   return data as T
 }

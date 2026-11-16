@@ -677,6 +677,12 @@ url: string | null,
  */
 header_env: { [key in string]: string }, 
 /**
+ * The environment variables a stdio server gets beyond the few every
+ * program needs ([`BASE_ENV`]), by name; nothing else of the daemon's
+ * environment reaches it.
+ */
+pass_env: Array<string>, 
+/**
  * The tools pages may call, by name; every one is off until ticked.
  */
 tools: { [key in string]: boolean }, };

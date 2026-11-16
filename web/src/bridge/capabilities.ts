@@ -1,7 +1,7 @@
 // The capabilities this view serves an artifact's page, by name (ADR 0072). A page that asks for one not here gets
 // null.
 
-import { api, type ArtifactView, type PageViewer, type SampleTool } from '../api'
+import { api, ApiError, type ArtifactView, type PageViewer, type SampleTool } from '../api'
 import { bus } from '../bus'
 import { hosted } from '../served'
 import { type CapabilityHandler, Refusal } from './broker'
@@ -206,10 +206,8 @@ function filesHandler(thread: string, artifact: ArtifactView, holder: Holder): C
 /** Why a request failed, as the code a page reads. */
 function refusalOf(failure: unknown): Refusal {
   const said = failure instanceof Error ? failure.message : String(failure)
-  if (/conflict/i.test(said)) return new Refusal('conflict', said)
-  if (/rate limited/i.test(said)) return new Refusal('rate_limited', said)
-  if (/not_granted|owner and collaborators|may not|forbidden/i.test(said)) return new Refusal('not_granted', said)
-  return new Refusal('refused', said)
+  const code = failure instanceof ApiError ? failure.refusal : null
+  return new Refusal(code === 'conflict' || code === 'rate_limited' || code === 'not_granted' ? code : 'refused', said)
 }
 
 /** `artifact`: the page saves a whole new document as the next version, over the one it was opened at. */

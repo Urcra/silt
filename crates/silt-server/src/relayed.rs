@@ -106,6 +106,12 @@ async fn sample(
     if !asked.tools.is_empty() && asked.ask.is_none() {
         return Err(Refused(StatusCode::BAD_REQUEST, "a question with tools has a name, for its calls to reach the page".into()));
     }
+    if !server.shared.control.may_sample(browser.user) {
+        return Err(Refused(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!("rate limited: your pages ask at most {} questions a minute", crate::control::SAMPLES_PER_MINUTE),
+        ));
+    }
     let command = RemoteCommand::Sample { question, images: asked.images, model: asked.model, tools: asked.tools };
     let ask =
         asked.ask.filter(|ask| (1..=64).contains(&ask.len()) && ask.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
@@ -360,7 +366,8 @@ pub(crate) struct Refused(StatusCode, String);
 
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({ "error": self.1 }))).into_response()
+        let refusal = silt_proto::refusal_of(&self.1).or((self.0 == StatusCode::FORBIDDEN).then_some("not_granted"));
+        (self.0, Json(json!({ "error": self.1, "refusal": refusal }))).into_response()
     }
 }
 

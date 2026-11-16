@@ -492,12 +492,16 @@ async fn page_data(
     if let Some(read) = silt_proto::page::read(&page.docs, &request, &rules, &page.me, page.level) {
         return Ok(Json(read));
     }
+    // The writes are checked against the page as it stands under the write
+    // lock, so another write can't land between checking and writing.
+    let one = server.shared.writes.lock().await;
+    let page = page_of(&server, browser.user, &id, artifact_id).await?;
     let writes = request.writes(&page.docs).map_err(bad_request)?;
     let ops =
         silt_proto::page::page_ops(artifact_id, &page.docs, writes, &rules, &page.me, page.level).map_err(crate::forbidden)?;
     let written = ops.len();
     let ops = ops.into_iter().map(Op::Page).collect();
-    crate::writes::write_all_as_with(&server, browser, page.family, page.thread, None, ops).await?;
+    crate::writes::push_all(&server, &one, browser, page.family, page.thread, None, ops).await?;
     Ok(Json(serde_json::json!({ "written": written })))
 }
 
@@ -534,11 +538,7 @@ pub(crate) async fn page_of(
     let docs = {
         let mut slot = server.room(row.family).await.ok_or_else(not_found)?;
         let browsed = slot.browsed(row.family, &viewer);
-        let mut graph = silt_crdt::CausalGraph::new();
-        for delta in &browsed.log {
-            let _ = graph.add(delta.span, &delta.parents);
-        }
-        silt_log::page_documents_in(&browsed.log, &graph, row.id, artifact)
+        silt_log::page_documents_in(&browsed.log, browsed.graph(), row.id, artifact)
     };
     Ok(PageOf { family: row.family, thread: row.id, declared, docs, me: silt_proto::page::person_id(&readable.me), level })
 }
@@ -794,15 +794,16 @@ async fn save_edited_version(
 
 /// A doc's text and a sheet's cells as the person reads them, folded from
 /// the deltas they may read (ADR 0077).
-async fn edited_log(server: &Server, user: UserId, page: &PageOf) -> Result<(Vec<Delta>, silt_crdt::CausalGraph), ApiError> {
+async fn edited<T>(
+    server: &Server,
+    user: UserId,
+    page: &PageOf,
+    read: impl FnOnce(&[Delta], &silt_crdt::CausalGraph) -> T,
+) -> Result<T, ApiError> {
     let viewer = server.viewer(user).await?;
     let mut slot = server.room(page.family).await.ok_or_else(not_found)?;
     let browsed = slot.browsed(page.family, &viewer);
-    let mut graph = silt_crdt::CausalGraph::new();
-    for delta in &browsed.log {
-        let _ = graph.add(delta.span, &delta.parents);
-    }
-    Ok((browsed.log.clone(), graph))
+    Ok(read(&browsed.log, browsed.graph()))
 }
 
 /// Whether the person may edit a doc or a sheet: anyone who may comment,
@@ -825,34 +826,36 @@ async fn doc_data(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let artifact: silt_types::ArtifactId = artifact.parse().map_err(|_| bad_request("not an artifact id"))?;
     let page = page_of(&server, browser.user, &id, artifact).await?;
-    let text = |log: &[Delta], graph: &silt_crdt::CausalGraph| silt_log::doc_text_in(log, graph, page.thread, artifact);
-    let (log, graph) = edited_log(&server, browser.user, &page).await?;
-    let head = |log: &[Delta], graph: &silt_crdt::CausalGraph| silt_log::thread_head_in(log, graph, page.thread).to_string();
+    let read = |log: &[Delta], graph: &silt_crdt::CausalGraph| {
+        let text = silt_log::doc_text_in(log, graph, page.thread, artifact);
+        serde_json::json!({ "text": text, "base": silt_log::thread_head_in(log, graph, page.thread).to_string() })
+    };
     match asked {
-        silt_proto::edited::DocRequest::Read => {
-            Ok(Json(serde_json::json!({ "text": text(&log, &graph), "base": head(&log, &graph) })))
-        }
+        silt_proto::edited::DocRequest::Read => Ok(Json(edited(&server, browser.user, &page, read).await?)),
         silt_proto::edited::DocRequest::Edit { edits, base } => {
             may_edit(&page)?;
-            // Counted against the text the person read, then placed by
-            // character in the text now, so what others wrote since stays.
-            let edits = match base.as_deref().filter(|base| !base.is_empty()) {
-                Some(base) => {
-                    let base: silt_types::Frontier = base.parse().map_err(|_| bad_request("that isn't a version"))?;
-                    let doc = silt_log::doc_crdt_in(&log, &graph, page.thread, artifact);
-                    let seen = doc.attribution_at_vv(&graph.version_vector(&base));
-                    silt_proto::edited::rebased(&seen, &doc.attribution(), &edits).map_err(bad_request)?
-                }
-                None => edits,
+            let base: Option<silt_types::Frontier> = match base.as_deref().filter(|base| !base.is_empty()) {
+                Some(base) => Some(base.parse().map_err(|_| bad_request("that isn't a version"))?),
+                None => None,
             };
-            let ops: Vec<Op> = silt_proto::edited::doc_ops(&text(&log, &graph), &edits)
-                .map_err(bad_request)?
-                .into_iter()
-                .map(|op| Op::Page(silt_log::PageOp::Text { artifact, op }))
-                .collect();
+            let ops = edited(&server, browser.user, &page, |log, graph| {
+                let doc = silt_log::doc_crdt_in(log, graph, page.thread, artifact);
+                // Counted against the text the person read, then placed by
+                // character in the text now, so what others wrote since stays.
+                let edits = match &base {
+                    Some(base) => {
+                        let seen = doc.attribution_at_vv(&graph.version_vector(base));
+                        silt_proto::edited::rebased(&seen, &doc.attribution(), &edits)?
+                    }
+                    None => edits,
+                };
+                silt_proto::edited::doc_ops(&doc.text(), &edits)
+            })
+            .await?
+            .map_err(bad_request)?;
+            let ops = ops.into_iter().map(|op| Op::Page(silt_log::PageOp::Text { artifact, op })).collect();
             crate::writes::write_all_as(&server, browser, page.family, page.thread, None, ops).await?;
-            let (log, graph) = edited_log(&server, browser.user, &page).await?;
-            Ok(Json(serde_json::json!({ "text": text(&log, &graph), "base": head(&log, &graph) })))
+            Ok(Json(edited(&server, browser.user, &page, read).await?))
         }
     }
 }
@@ -872,8 +875,8 @@ async fn sheet_data(
     let cells = |server: Server, sheet: u16| {
         let page = &page;
         async move {
-            let (log, graph) = edited_log(&server, browser.user, page).await?;
-            Ok::<_, ApiError>(silt_log::sheet_cells_in(&log, &graph, page.thread, artifact, sheet))
+            edited(&server, browser.user, page, |log, graph| silt_log::sheet_cells_in(log, graph, page.thread, artifact, sheet))
+                .await
         }
     };
     let write = |op: silt_log::PageOp| crate::writes::write_as(&server, browser, page.family, page.thread, None, Op::Page(op));
@@ -993,14 +996,10 @@ async fn artifact_listing(
         if latest.is_empty() {
             continue;
         }
-        let mut graph = silt_crdt::CausalGraph::new();
-        for delta in &browsed.log {
-            let _ = graph.add(delta.span, &delta.parents);
-        }
+        let graph = browsed.graph();
         for (artifact, time_ms) in latest {
             let archived = artifact.id.parse::<silt_types::ArtifactId>().is_ok_and(|id| {
-                silt_log::page_documents_in(&browsed.log, &graph, row.id, id).get(ARCHIVED)
-                    == Some(&serde_json::Value::Bool(true))
+                silt_log::page_documents_in(&browsed.log, graph, row.id, id).get(ARCHIVED) == Some(&serde_json::Value::Bool(true))
             });
             rows.push(ArtifactListed {
                 pinned: pins.contains(&(crate::id_bytes(row.id.0).to_vec(), artifact.id.clone())),
@@ -1909,15 +1908,13 @@ pub(crate) async fn edited_hits(
     let mut hits = Vec::new();
     for (row, kind, snippet, time_ms, artifact) in found {
         let thread_id = crate::id_bytes(row.id.0).to_vec();
-        let activity = sqlx::query("SELECT branch, COALESCE(merged, 0) AS merged, COALESCE(last_ms, 0) AS last_ms FROM thread_activity WHERE thread_id = ?")
-            .bind(thread_id)
+        let activity = sqlx::query!("SELECT branch, merged, last_ms FROM thread_activity WHERE thread_id = ?", thread_id)
             .fetch_optional(server.db())
             .await?;
-        use sqlx::Row as _;
-        let branch: Option<String> = activity.as_ref().and_then(|row| row.get("branch"));
+        let branch = activity.as_ref().and_then(|row| row.branch.clone());
         let status = match activity {
-            Some(row) if row.get::<i64, _>("merged") == 1 => silt_proto::ThreadStatus::Merged,
-            Some(row) if row.get::<i64, _>("last_ms") >= now_ms() - silt_proto::ACTIVE_MS => silt_proto::ThreadStatus::Active,
+            Some(row) if row.merged == 1 => silt_proto::ThreadStatus::Merged,
+            Some(row) if row.last_ms >= now_ms() - silt_proto::ACTIVE_MS => silt_proto::ThreadStatus::Active,
             _ => silt_proto::ThreadStatus::Idle,
         };
         if query.status.is_some_and(|wanted| wanted != status) {

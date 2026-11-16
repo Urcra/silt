@@ -437,7 +437,7 @@ fn the_hosted_app_asks_a_pages_question_of_the_persons_computer() {
     );
     let sample = format!("/threads/{thread}/artifacts/{id}/sample");
     let refused = browser.call("POST", &sample, Some(serde_json::json!({"input": "hi"})));
-    assert!(refused.to_string().contains("not_granted"), "the server asks for the grant too: {refused}");
+    assert_eq!(refused["refusal"], "not_granted", "the server asks for the grant too: {refused}");
     let grant = serde_json::json!({"capability": "sample", "state": "granted"});
     browser.call("PUT", &format!("/threads/{thread}/artifacts/{id}/grants"), Some(grant));
     let mut answer = serde_json::Value::Null;

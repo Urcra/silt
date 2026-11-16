@@ -491,7 +491,26 @@ pub(crate) struct ApiError(StatusCode, ErrorReply);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.0, Json(self.1)).into_response()
+        // The web app reads `error` and a page's `refusal` (ADR 0072); sync
+        // clients read the reply's own fields.
+        let message = match &self.1 {
+            ErrorReply::Invalid { message } | ErrorReply::Forbidden { message } => Some(message.clone()),
+            _ => None,
+        };
+        let refusal = match &self.1 {
+            ErrorReply::Forbidden { .. } => Some("not_granted"),
+            _ => message.as_deref().and_then(silt_proto::refusal_of),
+        };
+        let mut body = serde_json::to_value(&self.1).unwrap_or_default();
+        if let Some(object) = body.as_object_mut() {
+            if let Some(message) = message {
+                object.entry("error").or_insert(message.into());
+            }
+            if let Some(refusal) = refusal {
+                object.insert("refusal".into(), refusal.into());
+            }
+        }
+        (self.0, Json(body)).into_response()
     }
 }
 
