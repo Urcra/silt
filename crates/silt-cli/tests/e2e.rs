@@ -1942,8 +1942,17 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
         (&"doc".into(), &16.into(), &20.into(), &"ship".into()),
         "{moved}"
     );
+    // The person reads, the agent edits, then the person's edit, counted
+    // against what they read, lands where they meant it.
+    let seen = api.ok("POST", &path, Some(serde_json::json!({"op": "read"})));
+    assert_eq!(seen["text"], "# Plan\n- test\n- ship\n");
     prompt("Doc edit");
-    assert_eq!(api.ok("POST", &path, Some(serde_json::json!({"op": "read"})))["text"], "# Plan\n- test\n- ship on Friday\n");
+    let end = "# Plan\n- test\n- ship\n".chars().count();
+    let late =
+        serde_json::json!({"op": "edit", "base": seen["base"], "edits": [{"pos": end, "delete": 0, "insert": "- demo\n"}]});
+    let merged = api.ok("POST", &path, Some(late));
+    assert_eq!(merged["text"], "# Plan\n- test\n- ship on Friday\n- demo\n", "both edits, each where it was meant");
+    assert_ne!(merged["base"], seen["base"], "the next edit counts from here");
     // Search finds the doc's text as it stands, words the person typed too.
     let found = api.ok("GET", "/api/search?q=test%20frid", None);
     let hit = found.as_array().and_then(|hits| hits.iter().find(|hit| hit["artifact"] == doc.as_str())).expect("a doc hit");
@@ -1965,7 +1974,7 @@ fn a_doc_and_a_sheet_are_edited_in_place_by_the_person_and_the_agent() {
         "{saved}"
     );
     assert_eq!((&kept["note"], &kept["id"]), (&"Plan agreed".into(), &doc.as_str().into()), "{kept}");
-    assert_eq!(artifact_text(&api, &thread, kept), "# Plan\n- test\n- ship on Friday\n");
+    assert_eq!(artifact_text(&api, &thread, kept), "# Plan\n- test\n- ship on Friday\n- demo\n");
     // A PDF of it, printed where there's a headless browser.
     let page = serde_json::json!({"html": "<!doctype html><h1>Plan</h1><ul><li>test</li></ul>"});
     let (printed, pdf) = api.call("POST", &format!("/api/threads/{thread}/artifacts/{doc}/pdf"), Some(page));

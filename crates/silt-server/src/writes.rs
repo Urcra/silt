@@ -67,31 +67,69 @@ pub(crate) async fn write_as_with(
     also: Option<DeltaId>,
     op: Op,
 ) -> Result<DeltaId, ApiError> {
+    let written = write_all_as_with(server, browser, family, thread, also, vec![op]).await?;
+    written.first().copied().ok_or_else(|| crate::forbidden("you may not write in this thread"))
+}
+
+/// [`write_all_as_with`] when the device may comment or review.
+pub(crate) async fn write_all_as(
+    server: &Server,
+    browser: Browser,
+    family: FamilyId,
+    thread: ThreadId,
+    also: Option<DeltaId>,
+    ops: Vec<Op>,
+) -> Result<Vec<DeltaId>, ApiError> {
+    browser.may(browser.capabilities.review, "comment or review")?;
+    write_all_as_with(server, browser, family, thread, also, ops).await
+}
+
+/// Writes `ops` on `thread` as `user`, each after the one before, as one
+/// push under one turn of the write lock: none of another request's
+/// writes lands between them, and the push takes them or refuses the rest.
+pub(crate) async fn write_all_as_with(
+    server: &Server,
+    browser: Browser,
+    family: FamilyId,
+    thread: ThreadId,
+    also: Option<DeltaId>,
+    ops: Vec<Op>,
+) -> Result<Vec<DeltaId>, ApiError> {
     let user = browser.user;
+    if ops.is_empty() {
+        return Ok(Vec::new());
+    }
     // One at a time: each takes the next lamport, which a write between
     // working it out and pushing would take too.
     let _one = server.shared.writes.lock().await;
     let actor = actor_of(server, user).await?;
-    let delta = {
+    let deltas = {
         let slot = server.room(family).await.ok_or_else(not_found)?;
         let head = silt_log::thread_head_in(slot.room.deltas(), slot.room.graph(), thread);
-        let parents: Frontier = head.ids().iter().copied().chain(also).collect();
-        let span = DeltaSpan::new(actor, slot.room.graph().next_lamport(), op.units() as u64);
-        Delta { span, parents, thread, author: Author::User, time_ms: now_ms(), op }
+        let mut parents: Frontier = head.ids().iter().copied().chain(also).collect();
+        let mut lamport = slot.room.graph().next_lamport();
+        let mut deltas = Vec::with_capacity(ops.len());
+        for op in ops {
+            let span = DeltaSpan::new(actor, lamport, op.units() as u64);
+            lamport = silt_types::Lamport(lamport.0 + op.units() as u64);
+            let delta = Delta { span, parents, thread, author: Author::User, time_ms: now_ms(), op };
+            parents = Frontier::single(delta.span.last());
+            deltas.push(delta);
+        }
+        deltas
     };
-    let id = delta.span.first();
+    let ids: Vec<DeltaId> = deltas.iter().map(|delta| delta.span.first()).collect();
+    let wanted = deltas.len();
     let caller = Caller { device: DeviceId(0), user };
-    let Json(pushed) = crate::push(
-        State(server.clone()),
-        Extension(caller),
-        Path(family.to_string()),
-        Json(PushRequest { deltas: vec![delta] }),
-    )
-    .await?;
+    let Json(pushed) =
+        crate::push(State(server.clone()), Extension(caller), Path(family.to_string()), Json(PushRequest { deltas })).await?;
     if pushed.accepted == 0 {
         return Err(crate::forbidden("you may not write in this thread"));
     }
-    Ok(id)
+    if (pushed.accepted as usize) < wanted {
+        return Err(crate::forbidden("only some of that could be written"));
+    }
+    Ok(ids)
 }
 
 async fn comment_view(server: &Server, browser: Browser, thread: ThreadId, id: DeltaId) -> Result<Json<CommentView>, ApiError> {

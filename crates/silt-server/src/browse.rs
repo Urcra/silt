@@ -496,9 +496,8 @@ async fn page_data(
     let ops =
         silt_proto::page::page_ops(artifact_id, &page.docs, writes, &rules, &page.me, page.level).map_err(crate::forbidden)?;
     let written = ops.len();
-    for op in ops {
-        crate::writes::write_as_with(&server, browser, page.family, page.thread, None, Op::Page(op)).await?;
-    }
+    let ops = ops.into_iter().map(Op::Page).collect();
+    crate::writes::write_all_as_with(&server, browser, page.family, page.thread, None, ops).await?;
     Ok(Json(serde_json::json!({ "written": written })))
 }
 
@@ -688,7 +687,6 @@ async fn write_version(
     let blob = server.shared.blobs.put(&bytes).await.map_err(|_| bad_request("the version couldn't be kept"))?;
     let name = format!("artifact/{artifact}/v{version}/{file}");
     let attachment = Op::Conv(silt_log::ConvOp::Attachment { session: session.clone(), name, blob });
-    crate::writes::write_as(server, browser, row.family, row.id, None, attachment).await?;
     let view = ArtifactView {
         version,
         media_type: media_type.into(),
@@ -700,7 +698,8 @@ async fn write_version(
     };
     let line = silt_agents::acp::artifact(&view);
     let native = Op::Conv(silt_log::ConvOp::Native { session, file: silt_log::SessionFile::Main, line });
-    crate::writes::write_as(server, browser, row.family, row.id, None, native).await?;
+    // The file and the version naming it are one push, so neither lands alone.
+    crate::writes::write_all_as(server, browser, row.family, row.id, None, vec![attachment, native]).await?;
     Ok(version)
 }
 
@@ -828,17 +827,32 @@ async fn doc_data(
     let page = page_of(&server, browser.user, &id, artifact).await?;
     let text = |log: &[Delta], graph: &silt_crdt::CausalGraph| silt_log::doc_text_in(log, graph, page.thread, artifact);
     let (log, graph) = edited_log(&server, browser.user, &page).await?;
+    let head = |log: &[Delta], graph: &silt_crdt::CausalGraph| silt_log::thread_head_in(log, graph, page.thread).to_string();
     match asked {
-        silt_proto::edited::DocRequest::Read => Ok(Json(serde_json::json!({ "text": text(&log, &graph) }))),
-        silt_proto::edited::DocRequest::Edit { edits } => {
+        silt_proto::edited::DocRequest::Read => {
+            Ok(Json(serde_json::json!({ "text": text(&log, &graph), "base": head(&log, &graph) })))
+        }
+        silt_proto::edited::DocRequest::Edit { edits, base } => {
             may_edit(&page)?;
-            let ops = silt_proto::edited::doc_ops(&text(&log, &graph), &edits).map_err(bad_request)?;
-            for op in ops {
-                let op = Op::Page(silt_log::PageOp::Text { artifact, op });
-                crate::writes::write_as(&server, browser, page.family, page.thread, None, op).await?;
-            }
+            // Counted against the text the person read, then placed by
+            // character in the text now, so what others wrote since stays.
+            let edits = match base.as_deref().filter(|base| !base.is_empty()) {
+                Some(base) => {
+                    let base: silt_types::Frontier = base.parse().map_err(|_| bad_request("that isn't a version"))?;
+                    let doc = silt_log::doc_crdt_in(&log, &graph, page.thread, artifact);
+                    let seen = doc.attribution_at_vv(&graph.version_vector(&base));
+                    silt_proto::edited::rebased(&seen, &doc.attribution(), &edits).map_err(bad_request)?
+                }
+                None => edits,
+            };
+            let ops: Vec<Op> = silt_proto::edited::doc_ops(&text(&log, &graph), &edits)
+                .map_err(bad_request)?
+                .into_iter()
+                .map(|op| Op::Page(silt_log::PageOp::Text { artifact, op }))
+                .collect();
+            crate::writes::write_all_as(&server, browser, page.family, page.thread, None, ops).await?;
             let (log, graph) = edited_log(&server, browser.user, &page).await?;
-            Ok(Json(serde_json::json!({ "text": text(&log, &graph) })))
+            Ok(Json(serde_json::json!({ "text": text(&log, &graph), "base": head(&log, &graph) })))
         }
     }
 }
@@ -863,6 +877,9 @@ async fn sheet_data(
         }
     };
     let write = |op: silt_log::PageOp| crate::writes::write_as(&server, browser, page.family, page.thread, None, Op::Page(op));
+    let write_all = |ops: Vec<silt_log::PageOp>| {
+        crate::writes::write_all_as(&server, browser, page.family, page.thread, None, ops.into_iter().map(Op::Page).collect())
+    };
     let lines = |sheet, axis: AxisName, op| silt_log::PageOp::Lines { artifact, sheet, axis: axis.into(), op };
     let today = (crate::now_ms() as f64 / 86_400_000.0).floor() + 25_569.0;
     match asked {
@@ -877,22 +894,24 @@ async fn sheet_data(
         }
         SheetRequest::Set { sheet, cells: set } => {
             may_edit(&page)?;
-            let (rows, columns) =
-                silt_proto::edited::sheet_growth(&cells(server.clone(), sheet).await?, &set).map_err(bad_request)?;
+            let now = cells(server.clone(), sheet).await?;
+            let (rows, columns) = silt_proto::edited::sheet_growth(&now, &set).map_err(bad_request)?;
+            let mut growth = Vec::new();
             if rows > 0 {
-                let at = cells(server.clone(), sheet).await?.rows.len();
-                write(lines(sheet, AxisName::Rows, TextOp::Insert { pos: at, content: "r".repeat(rows) })).await?;
+                growth.push(lines(sheet, AxisName::Rows, TextOp::Insert { pos: now.rows.len(), content: "r".repeat(rows) }));
             }
             if columns > 0 {
-                let at = cells(server.clone(), sheet).await?.columns.len();
-                write(lines(sheet, AxisName::Columns, TextOp::Insert { pos: at, content: "c".repeat(columns) })).await?;
+                growth.push(lines(
+                    sheet,
+                    AxisName::Columns,
+                    TextOp::Insert { pos: now.columns.len(), content: "c".repeat(columns) },
+                ));
             }
+            write_all(growth).await?;
             let ops =
                 silt_proto::edited::cell_ops(artifact, sheet, &cells(server.clone(), sheet).await?, &set).map_err(bad_request)?;
             let written = ops.len();
-            for op in ops {
-                write(op).await?;
-            }
+            write_all(ops).await?;
             Ok(Json(serde_json::json!({ "written": written })))
         }
         SheetRequest::Insert { sheet, axis, at, count } => {

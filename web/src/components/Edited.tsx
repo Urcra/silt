@@ -9,7 +9,7 @@ import { useTopic } from '../bus'
 import { lineDiff } from '../lineDiff'
 import { keys, message } from '../query'
 import { hosted } from '../served'
-import { columnName, splice } from '../typed'
+import { columnName, rebaseDraft, splice } from '../typed'
 import { Button, Icon, IconButton, Input, Menu, Textarea, cx, toast } from '../ui'
 import { CommentThread } from './CommentThread'
 import { Markdown } from './Markdown'
@@ -146,31 +146,48 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
       box.setSelectionRange(units(box.value, start), units(box.value, end))
     })
   }
-  // What the daemon or server last said the text is, which edits are made against.
-  const synced = useRef<string | null>(null)
+  // What the daemon or server last said the text is, and the version it's at, which edits are counted against: an edit
+  // names it, so what others wrote since merges with it rather than shifting it (ADR 0077).
+  const synced = useRef<{ text: string; base: string | null } | null>(null)
   const pending = useRef<number | null>(null)
   useEffect(() => {
-    if (doc.data && draft === null) synced.current = doc.data.text
+    if (doc.data && draft === null) synced.current = { text: doc.data.text, base: doc.data.base ?? null }
   }, [doc.data, draft])
-  const send = async (text: string) => {
-    const before = synced.current ?? ''
-    const edit = splice(before, text)
-    if (!edit) return
+  // The text typed and not yet sent, and whether a send is on its way: one at a time, each counted against the last's answer.
+  const latest = useRef<string | null>(null)
+  const sending = useRef(false)
+  const send = async () => {
+    const text = latest.current
+    if (text === null || sending.current) return
+    const before = synced.current ?? { text: '', base: null }
+    const edit = splice(before.text, text)
+    if (!edit) {
+      latest.current = null
+      return setDraft(null)
+    }
+    sending.current = true
     try {
-      const after = await api.docData(thread, artifact, { op: 'edit', edits: [edit] })
-      synced.current = after.text
+      const after = await api.docData(thread, artifact, { op: 'edit', edits: [edit], base: before.base })
+      // The text with others' edits merged in, which the next edit is counted against; what was typed since moves onto it.
+      synced.current = { text: after.text, base: after.base ?? null }
       queries.setQueryData(key, after)
-      // Others' edits merged in: show the merged text unless more was typed since.
-      setDraft((now) => (now === text ? null : now))
+      const now = latest.current
+      latest.current = now === null || now === text ? null : rebaseDraft(text, now, after.text)
+      setDraft(latest.current)
     } catch (failure) {
       toast(message(failure), 'danger')
+      latest.current = null
       setDraft(null)
+    } finally {
+      sending.current = false
     }
+    if (latest.current !== null) void send()
   }
   const typed = (text: string) => {
+    latest.current = text
     setDraft(text)
     if (pending.current !== null) window.clearTimeout(pending.current)
-    pending.current = window.setTimeout(() => void send(text), 400)
+    pending.current = window.setTimeout(() => void send(), 400)
   }
   const text = draft ?? doc.data?.text ?? ''
   const saveVersion = async () => {

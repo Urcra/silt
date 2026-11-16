@@ -1823,8 +1823,14 @@ async fn docs_and_sheets_are_edited_from_the_hosted_app_by_who_may() {
     assert_eq!(erin.post(&doc, typed.clone()).await.0, StatusCode::NOT_FOUND, "erin can't read the thread");
     let (status, after) = carol.post(&doc, typed).await;
     assert_eq!((status, &after["text"]), (StatusCode::OK, &"# Plan\n".into()), "carol may comment, so she edits: {after}");
+    let (_, read) = carol.post(&doc, serde_json::json!({"op": "read"})).await;
     let (_, after) = alice.post(&doc, serde_json::json!({"op": "edit", "edits": [{"old": "Plan", "new": "Launch plan"}]})).await;
     assert_eq!(after["text"], "# Launch plan\n");
+    // Carol's edit, counted against what she read before Alice's, lands where she meant it.
+    let late = serde_json::json!({"op": "edit", "base": read["base"], "edits": [{"pos": 7, "delete": 0, "insert": "- ship\n"}]});
+    let (status, merged) = carol.post(&doc, late).await;
+    assert_eq!((status, &merged["text"]), (StatusCode::OK, &"# Launch plan\n- ship\n".into()), "{merged}");
+    alice.post(&doc, serde_json::json!({"op": "edit", "edits": [{"old": "- ship\n", "new": ""}]})).await;
 
     let sheet = format!("/threads/{THREAD}/artifacts/ba9876543210/sheet");
     let set = serde_json::json!({"op": "set", "cells": {"A1": "2", "A2": "=A1*3"}});

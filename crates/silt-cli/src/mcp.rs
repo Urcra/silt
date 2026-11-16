@@ -245,6 +245,7 @@ impl silt_mcp::Backend for DaemonTools {
                     Some(edits) => silt_proto::edited::DocRequest::Edit {
                         edits: serde_json::from_value(edits.clone())
                             .map_err(|error| format!("edits are {{old, new}}: {error}"))?,
+                        base: None,
                     },
                 };
                 let answer: Value = ask_daemon(&Request::Scoped {

@@ -32,13 +32,75 @@ pub enum DocEdit {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum DocRequest {
     Read,
-    Edit { edits: Vec<DocEdit> },
+    /// `base`, the version the edits' positions were counted against, as
+    /// a read answered it; they merge with what others wrote since. None
+    /// counts them against the text now.
+    Edit {
+        edits: Vec<DocEdit>,
+        #[serde(default)]
+        base: Option<String>,
+    },
 }
+
+/// The most edits one request of a doc makes.
+pub const DOC_EDITS: usize = 200;
+/// The most cells one request of a sheet sets.
+pub const SET_CELLS: usize = 1000;
 
 /// The text operations that make `edits` to `text`, in order, each against
 /// the text the ones before it left; all or none.
 pub fn doc_ops(text: &str, edits: &[DocEdit]) -> Result<Vec<silt_crdt::TextOp>, String> {
+    edited(text, edits).map(|(ops, _)| ops)
+}
+
+/// `edits`, counted against `seen`, the text at a version the person read
+/// with each character's id, as edits of `now`, the text with what others
+/// wrote since (ADR 0077). The change from what they read to what they
+/// meant is found by character: what they deleted that's still there goes,
+/// and what they typed goes after the last character before it that still
+/// stands, so others' edits stay and theirs lands where they meant it.
+pub fn rebased(
+    seen: &[(char, silt_crdt::CharId)],
+    now: &[(char, silt_crdt::CharId)],
+    edits: &[DocEdit],
+) -> Result<Vec<DocEdit>, String> {
+    let read: String = seen.iter().map(|(char, _)| char).collect();
+    let (_, meant) = edited(&read, edits)?;
+    let read: Vec<char> = seen.iter().map(|(char, _)| *char).collect();
+    let same_start = read.iter().zip(&meant).take_while(|(a, b)| a == b).count();
+    let same_end = read[same_start..].iter().rev().zip(meant[same_start..].iter().rev()).take_while(|(a, b)| a == b).count();
+    let (from, deleted_to) = (same_start, read.len() - same_end);
+    let typed: String = meant[same_start..meant.len() - same_end].iter().collect();
+    let at: std::collections::HashMap<silt_crdt::CharId, usize> =
+        now.iter().enumerate().map(|(index, (_, id))| (*id, index)).collect();
+    let mut gone: Vec<usize> = seen[from..deleted_to].iter().filter_map(|(_, id)| at.get(id).copied()).collect();
+    gone.sort_unstable();
+    let mut rebased = Vec::new();
+    // Runs of what's still there, last first, so each position holds.
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for index in gone {
+        match runs.last_mut() {
+            Some((start, len)) if *start + *len == index => *len += 1,
+            _ => runs.push((index, 1)),
+        }
+    }
+    for (pos, delete) in runs.into_iter().rev() {
+        rebased.push(DocEdit::Splice { pos, delete, insert: String::new() });
+    }
+    if !typed.is_empty() {
+        let before = seen[..from].iter().rev().find_map(|(_, id)| at.get(id));
+        let pos = before.map_or(0, |index| index + 1);
+        rebased.push(DocEdit::Splice { pos, delete: 0, insert: typed });
+    }
+    Ok(rebased)
+}
+
+/// [`doc_ops`], and the text they leave.
+fn edited(text: &str, edits: &[DocEdit]) -> Result<(Vec<silt_crdt::TextOp>, Vec<char>), String> {
     use silt_crdt::TextOp;
+    if edits.len() > DOC_EDITS {
+        return Err(format!("a request makes at most {DOC_EDITS} edits"));
+    }
     let mut current: Vec<char> = text.chars().collect();
     let mut ops = Vec::new();
     for (at, edit) in edits.iter().enumerate() {
@@ -71,7 +133,7 @@ pub fn doc_ops(text: &str, edits: &[DocEdit]) -> Result<Vec<silt_crdt::TextOp>, 
             return Err("the doc would be over 1 MiB".into());
         }
     }
-    Ok(ops)
+    Ok((ops, current))
 }
 
 /// What a sheet's page or an agent asks of a sheet.
@@ -176,6 +238,9 @@ pub fn sheet_view(cells: &SheetCells, today: f64) -> SheetView {
 /// What a `Set` needs first: how many rows and columns to add at the end so
 /// every address it names exists.
 pub fn sheet_growth(cells: &SheetCells, set: &BTreeMap<String, String>) -> Result<(usize, usize), String> {
+    if set.len() > SET_CELLS {
+        return Err(format!("a request sets at most {SET_CELLS} cells"));
+    }
     let mut needed = (0, 0);
     for (address, raw) in set {
         let (row, column) = silt_sheet::parse_address(address).ok_or_else(|| format!("{address} isn't a cell's address"))?;
@@ -419,6 +484,41 @@ pub fn sheet_text(cells: &SheetCells) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Text with an id for each character, `from` on.
+    fn ids(text: &str, from: u64) -> Vec<(char, silt_crdt::CharId)> {
+        let actor = silt_types::ActorId(7);
+        text.chars()
+            .zip(from..)
+            .map(|(char, at)| (char, silt_crdt::CharId::Delta(silt_types::DeltaId::new(actor, silt_types::Lamport(at)))))
+            .collect()
+    }
+
+    fn applied(now: &[(char, silt_crdt::CharId)], edits: &[DocEdit]) -> String {
+        let text: String = now.iter().map(|(char, _)| char).collect();
+        let (_, chars) = edited(&text, edits).expect("applies");
+        chars.into_iter().collect()
+    }
+
+    #[test]
+    fn an_edit_counted_against_an_older_read_lands_where_it_was_meant() {
+        let seen = ids("# Plan\n- ship\n", 0);
+        // The agent put a line at the top since.
+        let mut now = ids("Goals\n", 100);
+        now.extend(seen.iter().copied());
+        let append = [DocEdit::Splice { pos: seen.len(), delete: 0, insert: "- demo\n".into() }];
+        assert_eq!(applied(&now, &rebased(&seen, &now, &append).expect("rebased")), "Goals\n# Plan\n- ship\n- demo\n");
+        // Deleting "ship" deletes only it, though the agent typed inside it.
+        let mut split = seen.clone();
+        split.splice(10..10, ids("XX", 200));
+        let delete = [DocEdit::Splice { pos: 9, delete: 4, insert: "go".into() }];
+        assert_eq!(applied(&split, &rebased(&seen, &split, &delete).expect("rebased")), "# Plan\n- goXX\n");
+        // What the agent deleted stays deleted; the person's text goes after what's left before it.
+        let mut cut = seen.clone();
+        cut.drain(7..9);
+        let typed = [DocEdit::Splice { pos: 9, delete: 0, insert: "now ".into() }];
+        assert_eq!(applied(&cut, &rebased(&seen, &cut, &typed).expect("rebased")), "# Plan\nnow ship\n");
+    }
 
     #[test]
     fn the_log_folds_a_sheet_within_what_the_evaluator_computes() {

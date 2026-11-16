@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chartTable, columnName, csvOf, layout, parsed, partDocument, shown, slideFromHash, splice } from './typed'
+import { chartTable, columnName, csvOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
 
 describe('the artifact types', () => {
   it('opens a deck at the slide a link names, within the deck', () => {
@@ -40,6 +40,13 @@ describe('docs and sheets', () => {
     expect(splice('abcdef', 'abXYef')).toEqual({ pos: 2, delete: 2, insert: 'XY' })
     expect(splice('é😀a', 'é😀')).toEqual({ pos: 2, delete: 1, insert: '' })
     expect(splice('same', 'same')).toBeNull()
+  })
+  it('moves what was typed during a send onto the text with the agent\'s edits', () => {
+    // The agent added a line at the top while the person kept typing at the end.
+    expect(rebaseDraft('# Plan\n- ship\n', '# Plan\n- ship\n- demo\n', 'Goals\n# Plan\n- ship\n')).toBe('Goals\n# Plan\n- ship\n- demo\n')
+    // Typed before what the agent changed: it keeps its place.
+    expect(rebaseDraft('a b c', 'a! b c', 'a b C!')).toBe('a! b C!')
+    expect(rebaseDraft('same', 'same', 'same, merged')).toBe('same, merged')
   })
   it('names columns as spreadsheets do', () => {
     expect([0, 25, 26, 701].map(columnName)).toEqual(['A', 'Z', 'AA', 'ZZ'])

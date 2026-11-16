@@ -201,8 +201,11 @@ export const api = {
   importPageConnectors: () => request<PageConnector[]>('POST', '/api/page-connectors/import'),
   connectorTools: (name: string) => request<ConnectorTool[]>('GET', `/api/page-connectors/${encodeURIComponent(name)}/tools`),
   /** A doc's text, or edits of it (ADR 0077). */
-  docData: (id: string, artifact: string, asked: { op: 'read' } | { op: 'edit'; edits: { pos: number; delete: number; insert: string }[] }) =>
-    request<{ text: string }>('POST', `${thread(id)}/artifacts/${artifact}/doc`, asked),
+  docData: (
+    id: string,
+    artifact: string,
+    asked: { op: 'read' } | { op: 'edit'; edits: { pos: number; delete: number; insert: string }[]; base?: string | null },
+  ) => request<{ text: string; base?: string }>('POST', `${thread(id)}/artifacts/${artifact}/doc`, asked),
   /** A sheet's cells and values, or changes to it (ADR 0077). */
   sheetData: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/sheet`, asked),
   sheetXlsx: (id: string, artifact: string) => requestBlob(`${thread(id)}/artifacts/${artifact}/sheet.xlsx`),

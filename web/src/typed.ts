@@ -92,6 +92,29 @@ export function columnName(column: number): string {
 
 /** The one splice that turns `before` into `after`: where they first differ, what goes, and what comes in. Positions
  * count characters, as the doc's text does. */
+/**
+ * `draft`, typed on top of `sent`, moved onto `merged`, which is `sent` with others' edits merged in: the person's
+ * further change keeps its place relative to theirs, and theirs stay (ADR 0077).
+ */
+export function rebaseDraft(sent: string, draft: string, merged: string): string {
+  const mine = splice(sent, draft)
+  const theirs = splice(sent, merged)
+  if (!mine) return merged
+  if (!theirs) return draft
+  const chars = [...merged]
+  const grew = [...theirs.insert].length - theirs.delete
+  const pos =
+    mine.pos + mine.delete <= theirs.pos
+      ? mine.pos
+      : mine.pos >= theirs.pos + theirs.delete
+        ? mine.pos + grew
+        : // Overlapping: theirs stays whole, and the person's text goes after it.
+          theirs.pos + [...theirs.insert].length
+  const overlaps = !(mine.pos + mine.delete <= theirs.pos || mine.pos >= theirs.pos + theirs.delete)
+  chars.splice(pos, overlaps ? 0 : mine.delete, ...mine.insert)
+  return chars.join('')
+}
+
 export function splice(before: string, after: string): { pos: number; delete: number; insert: string } | null {
   const a = [...before]
   const b = [...after]

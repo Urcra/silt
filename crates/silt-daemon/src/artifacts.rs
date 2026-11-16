@@ -381,7 +381,7 @@ impl Core {
         if kind == "doc" {
             if !content.is_empty() {
                 let edit = silt_proto::edited::DocEdit::Splice { pos: 0, delete: 0, insert: content.to_owned() };
-                self.doc_data(&thread_id, id, silt_proto::edited::DocRequest::Edit { edits: vec![edit] }).await?;
+                self.doc_data(&thread_id, id, silt_proto::edited::DocRequest::Edit { edits: vec![edit], base: None }).await?;
             }
             return Ok(());
         }
@@ -582,7 +582,12 @@ impl Core {
                 let current = self.doc_data(&thread.to_string(), existing, silt_proto::edited::DocRequest::Read).await?;
                 let length = current["text"].as_str().unwrap_or_default().chars().count();
                 let edit = silt_proto::edited::DocEdit::Splice { pos: 0, delete: length, insert: text };
-                self.doc_data(&thread.to_string(), existing, silt_proto::edited::DocRequest::Edit { edits: vec![edit] }).await?;
+                self.doc_data(
+                    &thread.to_string(),
+                    existing,
+                    silt_proto::edited::DocRequest::Edit { edits: vec![edit], base: None },
+                )
+                .await?;
             }
             if new.content.is_none() && new.path.is_none() {
                 new.content = Some(self.edited_snapshot(thread, existing, &kind).await?);
