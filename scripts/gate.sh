@@ -1,63 +1,184 @@
 #!/bin/sh
+# Decides whether a change is done (docs/contributing.md). The cheap checks
+# come first, so most mistakes fail in a minute rather than after the tests.
+# A pass records the tree it checked in target/gate-passed, which lets
+# scripts/commit.sh commit that tree without running the gate again.
+#
+# Usage: scripts/gate.sh [--quick]
+#   --quick  formatting, lints and the workspace's tests only: for iterating,
+#            as it records no pass.
 set -eu
 cd "$(dirname "$0")/.."
 
-# The web UI is embedded in the binary, so it is built first.
-if [ -f web/package.json ]; then
+quick=false
+case "${1:-}" in
+    "") ;;
+    --quick) quick=true ;;
+    *) echo "usage: scripts/gate.sh [--quick]" >&2; exit 2 ;;
+esac
+
+started=$(date +%s)
+tree=$(scripts/tree-id.sh)
+$quick || rm -f target/gate-passed
+
+# Each step is named on stdout, and on fd 3 when the caller opened it, as
+# scripts/commit.sh does to show progress while it keeps the rest for its
+# log. The summary at the end says where the time went.
+summary=
+current=
+since=$started
+elapsed() {
+    s=$(($(date +%s) - $1))
+    printf '%d:%02d' $((s / 60)) $((s % 60))
+}
+done_step() {
+    if [ -n "$current" ]; then
+        summary="$summary$(printf '%8s  %s' "$(elapsed "$since")" "$current")
+"
+    fi
+}
+step() {
+    done_step
+    current=$1
+    since=$(date +%s)
+    line="gate: [$(elapsed "$started")] $1"
+    echo "$line"
+    if { true >&3; } 2>/dev/null; then
+        echo "$line" >&3
+    fi
+}
+skip() {
+    echo "gate: skipping $1" >&2
+}
+
+has_web=false
+[ -f web/package.json ] && has_web=true
+
+if $has_web; then
+    step "web dependencies"
     pnpm -C web install --frozen-lockfile
-    pnpm -C web lint
-    # With the mocks, which the screen references draw as the boards do (ADR 0039).
-    VITE_SILT_MOCKS=on pnpm -C web build
-    pnpm -C web test
 fi
 
+# The desktop app and the speech helper are workspaces of their own, checked
+# further down where they can be built.
+has_desktop=false
+pkg-config --exists webkit2gtk-4.1 2>/dev/null && has_desktop=true
+has_voice=false
+[ "$(uname -s)" = Linux ] && has_voice=true
+
+step "formatting"
 cargo fmt --all -- --check
-cargo build --workspace
+if $has_voice; then (cd crates/silt-voice && cargo fmt -- --check); fi
+if $has_desktop; then (cd crates/silt-desktop && cargo fmt -- --check); fi
+
+if $has_web; then
+    step "web lint"
+    pnpm -C web lint
+    # The UI is embedded in the binary, so it's built before cargo builds
+    # silt-web. With the mocks, which the screen references draw as the
+    # boards do (ADR 0039).
+    step "web build"
+    VITE_SILT_MOCKS=on pnpm -C web build
+fi
+
+step "clippy"
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
 
 # Windows (ADR 0045), cross-checked when its target and MinGW are installed;
 # CI's Windows job runs the tests there.
 if rustup target list --installed 2>/dev/null | grep -qx x86_64-pc-windows-gnu && command -v x86_64-w64-mingw32-gcc >/dev/null; then
+    step "clippy for Windows"
     cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu -- -D warnings
 else
-    echo "gate: skipping the Windows check, as the x86_64-pc-windows-gnu target or MinGW isn't installed" >&2
+    skip "the Windows check, as the x86_64-pc-windows-gnu target or MinGW isn't installed"
+fi
+
+if ! $quick; then
+    # The pure crates build for the browser (ADR 0004).
+    step "wasm32 build of the pure crates"
+    cargo build -p silt-types -p silt-sumtree -p silt-crdt -p silt-log -p silt-checkout -p silt-wasm -p silt-workspace -p silt-design --target wasm32-unknown-unknown
+fi
+
+if $has_web; then
+    step "web unit tests"
+    # `pnpm test` would build the wasm again; the web build just did.
+    pnpm -C web exec vitest run
+fi
+
+if ! $quick; then
+    # Every binary, the ones no test runs too.
+    step "build"
+    cargo build --workspace
+fi
+
+step "tests"
+# nextest runs every test binary at once rather than one after another,
+# which saves minutes; it has no doctests, so those run apart.
+if cargo nextest --version >/dev/null 2>&1; then
+    cargo nextest run --workspace
+    cargo test --workspace --doc
+else
+    skip "nextest, which isn't installed (cargo install --locked cargo-nextest); cargo test runs the tests one binary at a time"
+    cargo test --workspace
+fi
+
+if $quick; then
+    done_step
+    printf '%s' "$summary"
+    echo "gate: quick checks passed in $(elapsed "$started"); the full gate is still to run"
+    exit 0
 fi
 
 # The desktop app is its own workspace, as it needs WebKitGTK (ADR 0041).
-if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+if $has_desktop; then
+    step "desktop app"
     (
         cd crates/silt-desktop
-        cargo fmt -- --check
         cargo build
         cargo clippy --all-targets -- -D warnings
         cargo test
     )
 else
-    echo "gate: skipping crates/silt-desktop, as WebKitGTK 4.1 isn't installed (scripts/cloud-setup.sh installs it)" >&2
+    skip "crates/silt-desktop, as WebKitGTK 4.1 isn't installed (scripts/cloud-setup.sh installs it)"
 fi
 
 # The speech helper is its own workspace, as it links the speech engine's
-# native library, which its first build downloads (ADR 0061). Linux only for now.
-if [ "$(uname -s)" = Linux ]; then
+# native library, which its first build downloads (ADR 0061). Linux only for
+# now.
+if $has_voice; then
+    step "speech helper"
     (
         cd crates/silt-voice
-        cargo fmt -- --check
         cargo build
         cargo clippy --all-targets -- -D warnings
         cargo test
     )
 else
-    echo "gate: skipping crates/silt-voice, which is built on Linux only for now" >&2
+    skip "crates/silt-voice, which is built on Linux only for now"
 fi
 
 # Performance budgets (ADR 0034), timed on an optimized build.
+step "perf build"
 cargo build --profile perf -p silt-cli -p silt-bench
+step "performance budgets"
 target/perf/silt-bench check --tolerance "${SILT_BENCH_TOLERANCE:-0}"
-cargo build -p silt-types -p silt-sumtree -p silt-crdt -p silt-log -p silt-checkout -p silt-wasm -p silt-workspace -p silt-design --target wasm32-unknown-unknown
 
 # Playwright drives the built UI against a real daemon, the optimized one,
 # as `web.thread` is timed there.
-if [ -f web/package.json ]; then
+if $has_web; then
+    step "end-to-end tests"
     SILT="$PWD/target/perf/silt" pnpm -C web e2e
+fi
+
+done_step
+printf '%s' "$summary"
+# Only a tree that stayed as it was while the gate ran has passed.
+if [ "$(scripts/tree-id.sh)" = "$tree" ]; then
+    echo "$tree" >target/gate-passed
+    echo "gate: passed in $(elapsed "$started")"
+else
+    echo "gate: passed in $(elapsed "$started"), but the tree changed while it ran, so this pass isn't recorded" >&2
+fi
+if { true >&3; } 2>/dev/null; then
+    echo "gate: passed in $(elapsed "$started")" >&3
 fi

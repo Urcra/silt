@@ -35,6 +35,15 @@ pub fn io(error: std::io::Error) -> Failed {
     Failed(1, error.to_string())
 }
 
+/// Writes a hook's input to its stdin. A hook that doesn't read it, such as
+/// `true`, may exit before it's written, which the agents shrug off.
+pub fn feed(child: &mut std::process::Child, input: &str) -> Step {
+    match child.stdin.take().expect("piped").write_all(input.as_bytes()) {
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        written => written.map_err(io),
+    }
+}
+
 /// Appends `text`, making the file and its folder as an agent would, as in
 /// a chat's empty folder (ADR 0059).
 pub fn append(path: &Path, text: &str) -> Step {

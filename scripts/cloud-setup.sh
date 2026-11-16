@@ -43,6 +43,22 @@ if [ "$(wasm-bindgen --version 2>/dev/null | awk '{print $2}')" != "$WASM_BINDGE
     fi
 fi
 
+# The gate runs the tests with nextest when it's installed, every test
+# binary at once rather than one after another. The release's binary takes
+# seconds; building it takes minutes, so that's only the fallback.
+NEXTEST=0.9.152
+if [ "$(cargo nextest --version 2>/dev/null | awk 'NR == 1 {print $2}')" != "$NEXTEST" ]; then
+    step "cargo-nextest $NEXTEST"
+    bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+    mkdir -p "$bin"
+    if curl -sSfL "https://get.nexte.st/$NEXTEST/linux" | tar xz -C "$bin"; then
+        :
+    else
+        step "no release binary; building cargo-nextest $NEXTEST"
+        cargo install --locked cargo-nextest --version "$NEXTEST"
+    fi
+fi
+
 # Only needed to add migrations or change `query!`s; slow to build, so opt in.
 if [ "${SILT_SETUP_SQLX:-0}" = 1 ] && ! command -v sqlx >/dev/null; then
     step "sqlx-cli"
