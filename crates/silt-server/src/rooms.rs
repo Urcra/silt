@@ -21,14 +21,16 @@ use crate::app::Browser;
 #[derive(Default)]
 pub(crate) struct Rooms {
     hub: Hub,
-    peers: HashMap<String, mpsc::UnboundedSender<String>>,
+    peers: HashMap<String, mpsc::Sender<String>>,
 }
 
 impl Rooms {
     fn deliver(&self, deliveries: Deliveries) {
         for (peer, heard) in deliveries {
+            // A view that stops reading loses what it can't keep up with,
+            // rather than growing the server's memory.
             if let Some(sender) = self.peers.get(&peer) {
-                let _ = sender.send(serde_json::to_string(&heard).unwrap_or_default());
+                let _ = sender.try_send(serde_json::to_string(&heard).unwrap_or_default());
             }
         }
     }
@@ -38,7 +40,18 @@ pub(crate) fn routes() -> Router<Server> {
     Router::new().route("/app/api/rooms", get(socket))
 }
 
-async fn socket(State(server): State<Server>, Extension(browser): Extension<Browser>, upgrade: WebSocketUpgrade) -> Response {
+async fn socket(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    headers: axum::http::HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    use axum::response::IntoResponse as _;
+    // A browser sends no custom header on a WebSocket's handshake, so the
+    // cross-site check the API makes is made on its origin here.
+    if !crate::pages::same_origin(&server, &headers) {
+        return axum::http::StatusCode::FORBIDDEN.into_response();
+    }
     upgrade.max_message_size(64 * 1024).on_upgrade(move |socket| serve(socket, server, browser.user))
 }
 
@@ -122,7 +135,7 @@ async fn serve(mut socket: WebSocket, server: Server, user: crate::UserId) {
     };
     let key = RoomKey { thread: page.thread.to_string(), artifact: join.artifact, name: join.name };
     let peer = uuid::Uuid::new_v4().simple().to_string();
-    let (sender, mut heard) = mpsc::unbounded_channel();
+    let (sender, mut heard) = mpsc::channel(silt_proto::rooms::QUEUED);
     {
         let mut rooms = server.shared.page_rooms.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         rooms.peers.insert(peer.clone(), sender);

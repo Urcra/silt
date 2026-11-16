@@ -110,10 +110,9 @@ async fn sample(
     let ask =
         asked.ask.filter(|ask| (1..=64).contains(&ask.len()) && ask.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
     let watched = ask.clone().map(|ask| (browser.user, ask));
+    // Forgotten however this ends, a browser that went away included.
+    let _forget = ask.map(|ask| Forget { server: server.clone(), user: browser.user, ask });
     let answered = ask_device_watched(&server, browser, thread, command, SAMPLE_WAIT, watched).await;
-    if let Some(ask) = &ask {
-        server.shared.control.forget_ask(browser.user, ask);
-    }
     Ok(Json(answered?))
 }
 
@@ -176,6 +175,19 @@ async fn page_mcp(
     }
     consented(&server, browser.user, &id, &artifact, "mcp").await?;
     Ok(Json(ask_device_within(&server, browser, thread, RemoteCommand::PageMcp { artifact, asked }, SAMPLE_WAIT).await?))
+}
+
+/// Forgets a named question when its request ends.
+struct Forget {
+    server: Server,
+    user: UserId,
+    ask: String,
+}
+
+impl Drop for Forget {
+    fn drop(&mut self) {
+        self.server.shared.control.forget_ask(self.user, &self.ask);
+    }
 }
 
 /// Refuses a page's call of `capability` unless the person allowed what the

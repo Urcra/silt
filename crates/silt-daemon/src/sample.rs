@@ -16,6 +16,18 @@ use crate::protocol::{BusEvent, SampleToolResult};
 
 /// Questions each artifact may ask a minute.
 const PER_MINUTE: usize = 4;
+/// The most page questions answered at once, by every page together: each
+/// is a Claude Code process.
+const AT_ONCE: usize = 3;
+
+/// One of the questions answered now, counted until it's done.
+struct Answering(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for Answering {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct Sampled {
@@ -24,6 +36,11 @@ pub(crate) struct Sampled {
     /// The tier or model print mode was given, when the page asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) model_applied: Option<String>,
+}
+
+/// Where `silt sample-tools` reads the tools of the question named `ask`.
+fn tools_file(data_dir: &std::path::Path, ask: &str) -> std::path::PathBuf {
+    data_dir.join("sample").join("tools").join(format!("{ask}.json"))
 }
 
 impl Core {
@@ -66,6 +83,11 @@ impl Core {
         if recent.len() >= PER_MINUTE {
             return Err(CoreError::Invalid(format!("rate limited: a page asks at most {PER_MINUTE} questions a minute")));
         }
+        if self.sampling.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= AT_ONCE {
+            self.sampling.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            return Err(CoreError::Invalid(format!("rate limited: this computer answers {AT_ONCE} pages' questions at once")));
+        }
+        let answering = Answering(self.sampling.clone());
         recent.push(now);
         let ask = ask.filter(|ask| (1..=64).contains(&ask.len()) && ask.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
         let cwd = self.data_dir.join("sample");
@@ -75,6 +97,7 @@ impl Core {
             (false, Some(ask), artifact) => Some(self.offer_tools(thread_id, artifact.unwrap_or_default(), ask, &tools)?),
             (false, None, _) => return Err(CoreError::Invalid("a page's tools run only for a named question".into())),
         };
+        let tools_file = offered.as_ref().and(ask.as_ref()).map(|ask| tools_file(&self.data_dir, ask));
         let bus = self.bus.clone();
         let applied = model.clone();
         Ok(async move {
@@ -90,9 +113,14 @@ impl Core {
                     }
                 })
             })
-            .await
-            .map_err(|error| CoreError::Invalid(error.to_string()))?
-            .map_err(|error| CoreError::Invalid(error.to_string()))?;
+            .await;
+            drop(answering);
+            if let Some(file) = tools_file {
+                let _ = std::fs::remove_file(file);
+            }
+            let answer = answer
+                .map_err(|error| CoreError::Invalid(error.to_string()))?
+                .map_err(|error| CoreError::Invalid(error.to_string()))?;
             Ok(Sampled { text: answer.text, truncated: answer.truncated, model_applied: applied })
         })
     }
@@ -108,9 +136,10 @@ impl Core {
     ) -> Result<silt_agents::oneshot::OfferedTools, CoreError> {
         let now = Instant::now();
         self.sample_calls.retain(|_, waiting| now.duration_since(waiting.since) < ASKS_KEPT);
-        let dir = self.data_dir.join("sample").join("tools");
-        std::fs::create_dir_all(&dir)?;
-        let file = dir.join(format!("{ask}.json"));
+        let file = tools_file(&self.data_dir, ask);
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
         std::fs::write(&file, serde_json::json!({ "ask": ask, "tools": tools }).to_string())?;
         let silt = std::env::current_exe()?;
         let config = serde_json::json!({"mcpServers": {"page": {

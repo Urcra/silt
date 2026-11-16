@@ -15,6 +15,16 @@ pub const MESSAGE_BYTES: usize = 16 * 1024;
 pub const PRESENCE_BYTES: usize = 4 * 1024;
 /// The most moments a peer sends a second.
 pub const PER_SECOND: usize = 30;
+/// The most presence updates a peer sends a second; each goes to everyone.
+pub const PRESENCE_PER_SECOND: usize = 20;
+/// The most peers in one room.
+pub const PEERS: usize = 64;
+/// The most rooms one person's views are in at once.
+pub const ROOMS_PER_PERSON: usize = 32;
+/// The most a view's socket queues before what it hasn't read is dropped.
+pub const QUEUED: usize = 256;
+/// The longest sub-room name.
+pub const NAME_BYTES: usize = 64;
 /// How long presence lasts without a refresh, in milliseconds.
 pub const PRESENCE_MS: i64 = 15_000;
 /// The moments a room keeps for the thread's agent.
@@ -71,6 +81,7 @@ struct Peer {
     state: Value,
     seen_ms: i64,
     sent: VecDeque<i64>,
+    presence: VecDeque<i64>,
 }
 
 #[derive(Default)]
@@ -101,7 +112,9 @@ pub fn topic_levels(config: &Value) -> BTreeMap<String, Level> {
 
 impl Hub {
     /// Adds `info` to `key` at `level`, under the topics the version
-    /// declares; everyone in it hears the new list of peers.
+    /// declares; everyone in it hears the new list of peers. Past the
+    /// limits on a room, its name and one person's rooms, `info` alone
+    /// hears it was refused, and isn't in the room.
     pub fn join(
         &mut self,
         key: RoomKey,
@@ -110,10 +123,26 @@ impl Hub {
         topics: BTreeMap<String, Level>,
         now_ms: i64,
     ) -> Deliveries {
+        let refuse = |reason: &str| vec![(info.peer.clone(), Heard::Refused { reason: reason.to_owned() })];
+        if key.name.len() > NAME_BYTES {
+            return refuse("too_large");
+        }
+        if self.rooms.get(&key).is_some_and(|room| room.peers.len() >= PEERS) {
+            return refuse("room_full");
+        }
+        let theirs = self.rooms.values().filter(|room| room.peers.values().any(|peer| peer.info.user == info.user)).count();
+        if theirs >= ROOMS_PER_PERSON
+            && !self.rooms.get(&key).is_some_and(|room| room.peers.values().any(|peer| peer.info.user == info.user))
+        {
+            return refuse("too_many_rooms");
+        }
         let room = self.rooms.entry(key.clone()).or_default();
         room.topics = topics;
         let peer = info.peer.clone();
-        room.peers.insert(peer, Peer { info, level, state: Value::Null, seen_ms: now_ms, sent: VecDeque::new() });
+        room.peers.insert(
+            peer,
+            Peer { info, level, state: Value::Null, seen_ms: now_ms, sent: VecDeque::new(), presence: VecDeque::new() },
+        );
         self.peers_of(&key, now_ms)
     }
 
@@ -139,6 +168,11 @@ impl Hub {
                 if state.to_string().len() > PRESENCE_BYTES {
                     return refuse("too_large");
                 }
+                from.presence.retain(|at| now_ms - at < 1000);
+                if from.presence.len() >= PRESENCE_PER_SECOND {
+                    return refuse("rate_limited");
+                }
+                from.presence.push_back(now_ms);
                 from.state = state;
                 self.peers_of(key, now_ms)
             }
@@ -249,5 +283,28 @@ mod tests {
         }
         let too_many = hub.sent(&key(), "carol", Sent::Emit { topic: "cursor".into(), data: json!(1) }, 10);
         assert!(matches!(&too_many[0].1, Heard::Refused { reason } if reason == "rate_limited"));
+    }
+
+    #[test]
+    fn presence_rooms_and_names_are_bounded() {
+        let mut hub = Hub::default();
+        hub.join(key(), peer("ann"), Level::Owner, BTreeMap::new(), 0);
+        for at in 0..PRESENCE_PER_SECOND {
+            assert_eq!(hub.sent(&key(), "ann", Sent::Presence { state: json!(at) }, 5).len(), 1);
+        }
+        let flood = hub.sent(&key(), "ann", Sent::Presence { state: json!(0) }, 5);
+        assert!(matches!(&flood[0].1, Heard::Refused { reason } if reason == "rate_limited"));
+        let named = RoomKey { name: "n".repeat(NAME_BYTES + 1), ..key() };
+        assert!(matches!(&hub.join(named, peer("bob"), Level::Owner, BTreeMap::new(), 0)[0].1, Heard::Refused { .. }));
+        for at in 1..ROOMS_PER_PERSON {
+            hub.join(RoomKey { name: format!("r{at}"), ..key() }, peer("ann"), Level::Owner, BTreeMap::new(), 0);
+        }
+        let past = hub.join(RoomKey { name: "one-more".into(), ..key() }, peer("ann"), Level::Owner, BTreeMap::new(), 0);
+        assert!(matches!(&past[0].1, Heard::Refused { reason } if reason == "too_many_rooms"));
+        for at in 1..PEERS {
+            hub.join(key(), peer(&format!("p{at}")), Level::Owner, BTreeMap::new(), 0);
+        }
+        let full = hub.join(key(), peer("late"), Level::Owner, BTreeMap::new(), 0);
+        assert!(matches!(&full[0].1, Heard::Refused { reason } if reason == "room_full"));
     }
 }

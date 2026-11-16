@@ -169,7 +169,12 @@ pub(crate) async fn progress(
         }
         text.truncate(end);
     }
-    server.shared.control.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id, text);
+    // Kept only for a question a page is reading as it streams, which
+    // forgets it once answered.
+    let control = &server.shared.control;
+    if control.asks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).values().any(|asked| *asked == id) {
+        control.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id, text);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

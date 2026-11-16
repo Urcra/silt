@@ -121,6 +121,10 @@ pub(crate) fn claude_config() -> PathBuf {
     }
 }
 
+/// How long a connector has to start, and a call to answer.
+const START_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+const CALL_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// The running clients, by connector, each with when it was last used.
 #[derive(Default)]
 pub(crate) struct Clients(Mutex<HashMap<String, (Arc<Client>, Instant)>>);
@@ -130,22 +134,32 @@ type Client = RunningService<RoleClient, ()>;
 
 impl Clients {
     /// The connector's client, started if it isn't running; idle ones end.
+    /// The lock is held only to look and to keep: a connector slow to
+    /// start doesn't hold up every other page's calls.
     async fn client(&self, connector: &PageConnector) -> Result<Arc<Client>, String> {
-        let mut running = self.0.lock().await;
-        let now = Instant::now();
-        running.retain(|_, (_, used)| now.duration_since(*used) < IDLE);
-        if let Some((client, used)) = running.get_mut(&connector.name) {
-            *used = now;
-            return Ok(Arc::clone(client));
+        {
+            let mut running = self.0.lock().await;
+            let now = Instant::now();
+            running.retain(|_, (_, used)| now.duration_since(*used) < IDLE);
+            if let Some((client, used)) = running.get_mut(&connector.name) {
+                *used = now;
+                return Ok(Arc::clone(client));
+            }
         }
-        let client = Arc::new(start(connector).await?);
-        running.insert(connector.name.clone(), (Arc::clone(&client), now));
-        Ok(client)
+        let started = tokio::time::timeout(START_LIMIT, start(connector))
+            .await
+            .map_err(|_| format!("{} didn't start within {} seconds", connector.name, START_LIMIT.as_secs()))??;
+        let mut running = self.0.lock().await;
+        let (client, _) = running.entry(connector.name.clone()).or_insert_with(|| (Arc::new(started), Instant::now()));
+        Ok(Arc::clone(client))
     }
 
     pub(crate) async fn tools(&self, connector: &PageConnector) -> Result<Vec<ConnectorTool>, String> {
         let client = self.client(connector).await?;
-        let tools = client.list_all_tools().await.map_err(|error| error.to_string())?;
+        let tools = tokio::time::timeout(CALL_LIMIT, client.list_all_tools())
+            .await
+            .map_err(|_| format!("{} didn't list its tools in time", connector.name))?
+            .map_err(|error| error.to_string())?;
         Ok(tools
             .into_iter()
             .map(|tool| ConnectorTool {
@@ -173,7 +187,10 @@ impl Clients {
         if let Some(arguments) = arguments {
             params = params.with_arguments(arguments);
         }
-        let result = client.call_tool(params).await.map_err(|error| error.to_string())?;
+        let result = tokio::time::timeout(CALL_LIMIT, client.call_tool(params))
+            .await
+            .map_err(|_| format!("{tool} didn't answer within {} seconds", CALL_LIMIT.as_secs()))?
+            .map_err(|error| error.to_string())?;
         let value = serde_json::to_value(&result).map_err(|error| error.to_string())?;
         if value.to_string().len() > RESULT_BYTES {
             return Err(format!("the tool's result is over {} MiB", RESULT_BYTES >> 20));

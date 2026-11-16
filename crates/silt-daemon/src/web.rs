@@ -38,7 +38,7 @@ struct Web {
     /// What each frame key opens (ADR 0074).
     frames: Arc<Mutex<crate::frames::FrameKeys>>,
     /// Each room socket's way to its browser, by peer (ADR 0081).
-    room_peers: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<String>>>>,
+    room_peers: Arc<Mutex<HashMap<String, mpsc::Sender<String>>>>,
 }
 
 /// Codes that each stand in for the token once, shortly. Shared between the
@@ -414,8 +414,10 @@ fn deliver(web: &Web, deliveries: &serde_json::Value) {
     let peers = web.room_peers.lock().expect("lock");
     for pair in deliveries.as_array().into_iter().flatten() {
         let (Some(peer), Some(heard)) = (pair.get(0).and_then(serde_json::Value::as_str), pair.get(1)) else { continue };
+        // A view that stops reading loses what it can't keep up with,
+        // rather than growing without end.
         if let Some(sender) = peers.get(peer) {
-            let _ = sender.send(heard.to_string());
+            let _ = sender.try_send(heard.to_string());
         }
     }
 }
@@ -435,7 +437,7 @@ async fn serve_room(mut socket: WebSocket, web: Web) {
     }
     let key = silt_proto::rooms::RoomKey { thread: join.thread, artifact: join.artifact, name: join.name };
     let peer = uuid::Uuid::new_v4().simple().to_string();
-    let (sender, mut heard) = mpsc::unbounded_channel();
+    let (sender, mut heard) = mpsc::channel(silt_proto::rooms::QUEUED);
     web.room_peers.lock().expect("lock").insert(peer.clone(), sender);
     let mut bus = web.bus.subscribe();
     match answer(&web, Request::RoomJoin { key: key.clone(), peer: peer.clone() }).await {

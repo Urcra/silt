@@ -294,6 +294,8 @@ pub struct Core {
     pub(crate) page_clients: std::sync::Arc<crate::connectors::Clients>,
     /// When each artifact's page last asked `sample`, for its rate.
     pub(crate) samples: HashMap<String, Vec<Instant>>,
+    /// How many page questions this machine's agent answers now, across pages.
+    pub(crate) sampling: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Questions whose pages offered tools, by name (ADR 0072).
     pub(crate) sample_calls: HashMap<String, crate::sample::WaitingTools>,
     /// What changed, for browsers listening (ADR 0021).
@@ -537,6 +539,7 @@ impl Core {
             resident,
             adopted: HashSet::new(),
             samples: HashMap::new(),
+            sampling: std::sync::Arc::default(),
             sample_calls: HashMap::new(),
             page_clients: std::sync::Arc::default(),
             rooms: silt_proto::rooms::Hub::default(),

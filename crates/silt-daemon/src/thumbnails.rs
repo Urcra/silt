@@ -20,15 +20,26 @@ pub(crate) const THUMBNAIL: &str = "_meta/thumbnail";
 /// The longest a render may take.
 const RENDER_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A page at a desktop's size, light, shot at half scale as a JPEG.
+/// A page at a desktop's size, light, shot at half scale as a JPEG. The
+/// page is a peer's, so its scripts run in Chromium's own sandbox where it
+/// starts, and every request but a file from the CDNs the frame's policy
+/// names is refused, navigations included, so it can send nothing out.
 const SCRIPT: &str = r#"const fs = require('fs');
 let playwright;
 try { playwright = require('playwright'); } catch (e) { console.log(JSON.stringify({ missing: true })); process.exit(0); }
 const job = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 (async () => {
   const launch = process.env.SILT_CHROMIUM ? { executablePath: process.env.SILT_CHROMIUM } : {};
-  const browser = await playwright.chromium.launch(launch);
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 0.5, colorScheme: 'light' });
+  let browser;
+  try { browser = await playwright.chromium.launch({ ...launch, chromiumSandbox: true }); }
+  catch (e) { browser = await playwright.chromium.launch(launch); }
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 0.5, colorScheme: 'light', serviceWorkers: 'block' });
+  await context.route('**/*', (route) => {
+    const url = route.request().url();
+    const allowed = route.request().method() === 'GET' && job.allowed.some((prefix) => url.startsWith(prefix));
+    return allowed ? route.continue() : route.abort();
+  });
+  const page = await context.newPage();
   await page.setContent('<!doctype html><style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%}</style><iframe id="f" sandbox="allow-scripts"></iframe>');
   await page.$eval('#f', (frame, doc) => { frame.srcdoc = doc; }, job.page);
   await page.waitForTimeout(1500);
@@ -63,6 +74,17 @@ pub(crate) fn render(html: &str, style: Option<&str>, dir: &Path) -> Result<Opti
     run(SCRIPT, &page, dir, "thumbnail.jpg")
 }
 
+/// What a thumbnail's page may fetch: the frame policy's CDNs, by prefix.
+fn allowed() -> Vec<String> {
+    use silt_design::frame::{FONT_SOURCES, SCRIPT_SOURCES, STYLE_SOURCES};
+    SCRIPT_SOURCES
+        .iter()
+        .chain(&STYLE_SOURCES)
+        .chain(&FONT_SOURCES)
+        .map(|source| if source.ends_with('/') { (*source).to_owned() } else { format!("{source}/") })
+        .collect()
+}
+
 /// Prints the document `page` to a PDF in `dir`; none where there's no
 /// headless browser.
 pub(crate) fn pdf(page: &str, dir: &Path) -> Result<Option<Vec<u8>>, String> {
@@ -72,10 +94,14 @@ pub(crate) fn pdf(page: &str, dir: &Path) -> Result<Option<Vec<u8>>, String> {
 /// Runs `script` on `page` in Node with Playwright, which writes `name` in
 /// `dir`; none where either is missing.
 fn run(script_text: &str, page: &str, dir: &Path, name: &str) -> Result<Option<Vec<u8>>, String> {
+    // One browser at a time, whatever asks: each is a Chromium.
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     let (job, out, script) = (dir.join("job.json"), dir.join(name), dir.join(format!("{name}.cjs")));
     let _ = std::fs::remove_file(&out);
-    std::fs::write(&job, serde_json::json!({"page": page, "out": out}).to_string()).map_err(|error| error.to_string())?;
+    let job_text = serde_json::json!({"page": page, "out": out, "allowed": allowed()}).to_string();
+    std::fs::write(&job, job_text).map_err(|error| error.to_string())?;
     std::fs::write(&script, script_text).map_err(|error| error.to_string())?;
     let mut command = Command::new(program("node"));
     command.arg(&script).arg(&job).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
