@@ -119,11 +119,16 @@ impl Core {
                 self.append_page(family, thread, lines(sheet, axis.into(), op)).await?;
                 Ok(serde_json::json!({ "inserted": count }))
             }
-            SheetRequest::Format { sheet, name, widths, formats } => {
+            SheetRequest::Format { sheet, name, widths, formats, cells: cell_formats } => {
                 self.may_edit(thread, id)?;
                 let cells = self.sheet_cells(thread, id, sheet);
-                let op = silt_proto::edited::format_op(id, sheet, &cells, name.as_deref(), &widths, &formats)
-                    .map_err(CoreError::Invalid)?;
+                let asked = silt_proto::edited::Formatting {
+                    name: name.as_deref(),
+                    widths: &widths,
+                    formats: &formats,
+                    cells: &cell_formats,
+                };
+                let op = silt_proto::edited::format_op(id, sheet, &cells, asked).map_err(CoreError::Invalid)?;
                 self.append_page(family, thread, op).await?;
                 Ok(serde_json::json!({ "formatted": true }))
             }

@@ -452,6 +452,20 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
             </option>
           ))}
         </select>
+        <select
+          aria-label="number format of the selected cell"
+          value={view.cell_formats?.[`${columnName(selected.column)}${selected.row + 1}`] ?? ''}
+          onChange={(event) =>
+            void change({ op: 'format', cells: { [`${columnName(selected.column)}${selected.row + 1}`]: event.target.value || null } })
+          }
+          className="h-7 rounded-sm border border-line bg-surface-1 px-1 text-xs text-fg-1"
+        >
+          {NUMBER_FORMATS.map(([format, label]) => (
+            <option key={format} value={format}>
+              {format === '' ? 'As its column' : label}
+            </option>
+          ))}
+        </select>
         <Button size="sm" variant="ghost" onClick={() => void change({ op: 'insert', axis: 'rows', at: selected.row })}>
           Row above
         </Button>

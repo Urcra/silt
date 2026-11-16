@@ -1180,6 +1180,7 @@ async fn serve_frame(State(web): State<Web>, Path(key): Path<String>, request: H
         parent: grant.parent.as_deref(),
         policy_meta: false,
         boot: grant.boot.as_deref(),
+        frozen: None,
     };
     let page = silt_design::frame::compose(&String::from_utf8_lossy(&bytes), &parts);
     let files = format!("http://{host}/f/{key}/");

@@ -140,6 +140,8 @@ export type SheetView = {
   names?: string[]
   widths?: (number | null)[]
   formats?: (string | null)[]
+  /** Cells' own number formats by address, `B3`, which go before their column's. */
+  cell_formats?: Record<string, string>
 }
 
 /** The search form's fields, as typed; `since` is a date. */

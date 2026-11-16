@@ -33,8 +33,7 @@ import {
   layout,
   partDocument,
   shown,
-  slideFromHash,
-} from "../typed";
+  slideFromHash, drawnSeries } from "../typed";
 import { Button, Icon, IconButton, cx } from "../ui";
 import { Markdown } from "./Markdown";
 
@@ -1233,13 +1232,13 @@ export function DataView({
               </div>
               {block.type === "chart" && !asTable && (
                 <>
-                  <Chart block={block} theme={theme} palette={colors} />
+                  <Chart block={{ ...block, series: drawnSeries(block.chart, block.series) }} theme={theme} palette={colors} />
                   {block.series.length > 1 && (
                     <ul
                       className="flex flex-wrap gap-3 text-xs text-fg-2"
                       aria-label="legend"
                     >
-                      {block.series.map((one, s) => (
+                      {drawnSeries(block.chart, block.series).map((one, s) => (
                         <li
                           key={one.name}
                           className="inline-flex items-center gap-1.5"

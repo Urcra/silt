@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canvasOf, chartColors, chartTable, pointer, runs, stepsOf, toolValue, withLive, xPositions, yDomain, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice } from './typed'
+import { canvasOf, chartColors, chartTable, pointer, runs, stepsOf, toolValue, withLive, xPositions, yDomain, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice, drawnSeries } from './typed'
 
 describe('the artifact types', () => {
   it('opens a deck at the slide a link names, within the deck', () => {
@@ -64,6 +64,19 @@ describe("a data page's live numbers", () => {
     expect(shown.blocks[1]).toMatchObject({ rows: [['a', 1]] })
     expect(shown.blocks[2]).toMatchObject({ series: [{ points: [['mon', 3], ['tue', 5]] }] })
     expect(shown.blocks[3]).toMatchObject({ value: 7 })
+  })
+})
+
+describe('a chart past six series', () => {
+  const many = Array.from({ length: 8 }, (_, at) => ({ name: `s${at}`, points: [['mon', at + 1], ['tue', at === 0 ? null : 1]] as [string, number | null][] }))
+  it('folds the smallest into Other where its series add up, keeping the page order', () => {
+    const drawn = drawnSeries('bar', many)
+    expect(drawn.map((one) => one.name)).toEqual(['s3', 's4', 's5', 's6', 's7', 'Other (3)'])
+    expect(drawn[5].points).toEqual([['mon', 6], ['tue', 2]])
+  })
+  it('keeps them all on a line chart, and six or fewer anywhere', () => {
+    expect(drawnSeries('line', many)).toHaveLength(8)
+    expect(drawnSeries('bar', many.slice(0, 6))).toHaveLength(6)
   })
 })
 

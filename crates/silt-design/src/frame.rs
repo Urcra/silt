@@ -195,6 +195,26 @@ pub const FIRST_SCRIPT_BRIDGE: &str = include_str!("bridge.js");
 pub const OFFLINE_STUB: &str = "window.silt=Object.freeze({version:'1',use:function(){return Promise.resolve(null)},\
 hot:Object.freeze({data:null,snapshot:function(){},ready:function(start){start({})}})});";
 
+/// A read-only link's `silt`, after `docs` (ADR 0072).
+pub const FROZEN_DB: &str = include_str!("frozen.js");
+
+/// What a read-only link's frame gets in place of the first script: `db`
+/// reading `docs`, a JSON object of the documents its reader may read,
+/// frozen where the link is, and nothing else.
+pub fn frozen_script(docs: &str) -> String {
+    let docs = serde_json::from_str::<serde_json::Value>(docs)
+        .ok()
+        .filter(serde_json::Value::is_object)
+        .map_or_else(|| "{}".to_owned(), |_| script_safe(docs));
+    format!("(function(){{var docs={docs};{FROZEN_DB}}})();")
+}
+
+/// JSON safe inside a script element: no `<` at all, so neither `</script`
+/// nor `<!--` can end or re-escape it.
+fn script_safe(json: &str) -> String {
+    json.replace('<', "\\u003c").replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029")
+}
+
 /// The most the holding page hands a frame of a viewer's storage and kept
 /// state, as JSON.
 pub const BOOT_BYTES: usize = 2 << 20;
@@ -227,9 +247,7 @@ fn boot_json(boot: Option<&str>) -> String {
         .filter(|text| text.len() <= BOOT_BYTES)
         .filter(|text| serde_json::from_str::<serde_json::Value>(text).is_ok_and(|value| value.is_object()));
     match object {
-        // No `<` at all, so neither `</script` nor `<!--` can end or
-        // re-escape the element, whatever the viewer's storage holds.
-        Some(text) => text.replace('<', "\\u003c").replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029"),
+        Some(text) => script_safe(text),
         None => "{}".to_owned(),
     }
 }
@@ -253,11 +271,14 @@ pub struct FrameParts<'a> {
     /// What the holding page kept for this viewer, as a JSON object: their
     /// storage, and the state the last version left (ADR 0072).
     pub boot: Option<&'a str>,
+    /// Without the first script: the documents a read-only link's `db`
+    /// reads, as a JSON object (ADR 0072).
+    pub frozen: Option<&'a str>,
 }
 
 impl Default for FrameParts<'_> {
     fn default() -> Self {
-        Self { style: None, theme: None, probe: true, vendor: None, parent: None, policy_meta: true, boot: None }
+        Self { style: None, theme: None, probe: true, vendor: None, parent: None, policy_meta: true, boot: None, frozen: None }
     }
 }
 
@@ -291,6 +312,8 @@ pub fn compose(html: &str, parts: &FrameParts<'_>) -> String {
     };
     let script = if parts.probe {
         format!("<script>{}</script>", first_script(parts.theme, parts.parent, parts.boot))
+    } else if let Some(docs) = parts.frozen {
+        format!("<script>{}</script>", frozen_script(docs))
     } else {
         format!("<script>{OFFLINE_STUB}</script>")
     };
@@ -319,6 +342,17 @@ mod files_policy_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_read_only_links_frame_reads_its_frozen_documents_and_nothing_else() {
+        let docs = r#"{"votes/a": {"pick": "</script><b>"}}"#;
+        let framed = compose("<p>x</p>", &FrameParts { probe: false, frozen: Some(docs), ..FrameParts::default() });
+        assert!(framed.contains("var docs={\"votes/a\": {\"pick\": \"\\u003c/script>\\u003cb>\"}}"), "{framed}");
+        assert_eq!(framed.matches("</script>").count(), 1, "the documents can't end the script: {framed}");
+        assert!(framed.contains("'not_granted'") && !framed.contains("silt:'call'"), "writes refused, nothing asked of a parent");
+        let bad = compose("<p>x</p>", &FrameParts { probe: false, frozen: Some("[1]"), ..FrameParts::default() });
+        assert!(bad.contains("var docs={};"), "{bad}");
+    }
 
     #[test]
     fn the_policy_names_the_cdns_or_only_the_vendor_route() {
@@ -410,7 +444,7 @@ mod tests {
         let list =
             |items: &[&str]| format!("[{}] as const", items.iter().map(|item| quoted(item)).collect::<Vec<_>>().join(", "));
         let case = |html, style, theme, probe, vendor, parent, policy_meta| {
-            (html, FrameParts { style, theme, probe, vendor, parent, policy_meta, boot: None })
+            (html, FrameParts { style, theme, probe, vendor, parent, policy_meta, boot: None, frozen: None })
         };
         let cases = [
             case("<!DOCTYPE html><html><body><p>hi</p></body></html>", None, None, true, None, None, true),

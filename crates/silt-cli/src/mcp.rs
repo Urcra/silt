@@ -337,7 +337,14 @@ impl silt_mcp::Backend for DaemonTools {
                             formats.insert(letter.clone(), shown.as_str().map(str::to_owned));
                         }
                     }
-                    ask(silt_proto::edited::SheetRequest::Format { sheet, name, widths, formats })?;
+                    let cells = format
+                        .get("cells")
+                        .and_then(Value::as_object)
+                        .into_iter()
+                        .flatten()
+                        .map(|(address, shown)| (address.clone(), shown.as_str().map(str::to_owned)))
+                        .collect();
+                    ask(silt_proto::edited::SheetRequest::Format { sheet, name, widths, formats, cells })?;
                 }
                 let range = arguments.get("read").and_then(Value::as_str).map(str::to_owned);
                 let read = ask(silt_proto::edited::SheetRequest::Read { sheet, range: range.clone() })?;

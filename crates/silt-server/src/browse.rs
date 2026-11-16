@@ -981,11 +981,16 @@ async fn sheet_data(
             write(lines(sheet, axis, TextOp::Insert { pos: at.min(len), content: mark.repeat(count) })).await?;
             Ok(Json(serde_json::json!({ "inserted": count })))
         }
-        SheetRequest::Format { sheet, name, widths, formats } => {
+        SheetRequest::Format { sheet, name, widths, formats, cells: cell_formats } => {
             may_edit(&page)?;
             let now = cells(server.clone(), sheet).await?;
-            let op =
-                silt_proto::edited::format_op(artifact, sheet, &now, name.as_deref(), &widths, &formats).map_err(bad_request)?;
+            let asked = silt_proto::edited::Formatting {
+                name: name.as_deref(),
+                widths: &widths,
+                formats: &formats,
+                cells: &cell_formats,
+            };
+            let op = silt_proto::edited::format_op(artifact, sheet, &now, asked).map_err(bad_request)?;
             write(op).await?;
             Ok(Json(serde_json::json!({ "formatted": true })))
         }
@@ -1447,6 +1452,7 @@ pub(crate) async fn serve_frame(State(server): State<Server>, Path(key): Path<St
         parent: grant.parent.as_deref(),
         policy_meta: false,
         boot: grant.boot.as_deref(),
+        frozen: None,
     };
     let page = silt_design::frame::compose(&String::from_utf8_lossy(&content), &parts);
     let files = format!("{}/f/{key}/", server.config().public_url());

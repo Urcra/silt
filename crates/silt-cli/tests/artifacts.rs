@@ -264,6 +264,32 @@ fn a_polls_votes_from_two_people_both_count_and_a_fork_inherits_them() {
     assert_eq!(source["data"]["pick"], "pizza", "the source keeps its own: {source}");
     let changed = alice.web("POST", &fork_data, Some(serde_json::json!({"op": "get", "path": format!("votes/{ann}")})));
     assert_eq!(changed["data"]["pick"], "tacos");
+
+    // A read-only link's page reads the votes as they stood, and writes none (ADR 0072).
+    let mut link = serde_json::Value::Null;
+    assert!(
+        eventually(|| {
+            let body = serde_json::json!({"days": 1, "frozen": true, "artifact": {"id": id}});
+            let (status, answer) = alice.web_answer("POST", &format!("/api/threads/{thread}/links"), Some(body));
+            link = serde_json::from_str(&answer).unwrap_or_default();
+            status == "200"
+        }),
+        "a link to the poll: {link}"
+    );
+    let content = format!("{}/content", link["url"].as_str().expect("the link"));
+    let mut body = String::new();
+    assert!(
+        eventually(|| {
+            body = std::process::Command::new("curl")
+                .args(["-s", &content])
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                .unwrap_or_default();
+            body.contains("\"pick\":\"pizza\"") && body.contains("\"pick\":\"soup\"")
+        }),
+        "the link's page has both votes: {body}"
+    );
+    assert!(body.contains("'not_granted'") && !body.contains("tacos"), "its frozen db, without the fork's vote: {body}");
 }
 
 type RoomSocket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;

@@ -175,8 +175,9 @@ pub enum SheetRequest {
         #[serde(default = "one")]
         count: usize,
     },
-    /// The sheet's name, and its columns' widths and number formats by
-    /// column letter; `null`, or an empty name or format, clears one.
+    /// The sheet's name, its columns' widths and number formats by column
+    /// letter, and cells' own formats by address, which go before their
+    /// column's; `null`, or an empty name or format, clears one.
     Format {
         #[serde(default)]
         sheet: u16,
@@ -186,6 +187,8 @@ pub enum SheetRequest {
         widths: BTreeMap<String, Option<u16>>,
         #[serde(default)]
         formats: BTreeMap<String, Option<String>>,
+        #[serde(default)]
+        cells: BTreeMap<String, Option<String>>,
     },
 }
 
@@ -232,6 +235,10 @@ pub struct SheetView {
     /// Each column's number format, where someone set one.
     #[serde(default)]
     pub formats: Vec<Option<String>>,
+    /// Cells' own number formats by address, `B3`, which go before their
+    /// column's.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cell_formats: BTreeMap<String, String>,
 }
 
 /// The longest name a sheet takes.
@@ -251,6 +258,8 @@ pub struct SheetMeta {
     pub name: Option<String>,
     pub widths: BTreeMap<String, u16>,
     pub formats: BTreeMap<String, String>,
+    /// By row id and column id, `<row>/<column>`.
+    pub cells: BTreeMap<String, String>,
 }
 
 /// The settings `doc` keeps, what isn't one a sheet takes left out, as a
@@ -271,6 +280,10 @@ pub fn sheet_meta(doc: Option<&serde_json::Value>) -> SheetMeta {
             && let Some(format) = value.as_str().filter(|format| silt_sheet::number_format_ok(format))
         {
             meta.formats.insert(column.to_owned(), format.to_owned());
+        } else if let Some(cell) = field.strip_prefix("c:")
+            && let Some(format) = value.as_str().filter(|format| silt_sheet::number_format_ok(format))
+        {
+            meta.cells.insert(cell.to_owned(), format.to_owned());
         }
     }
     meta
@@ -285,17 +298,20 @@ pub fn metas_of(docs: &silt_log::page::Documents, count: usize) -> Vec<SheetMeta
     (0..count).map(|sheet| sheet_meta(u16::try_from(sheet).ok().and_then(|sheet| docs.get(&meta_path(sheet))))).collect()
 }
 
+/// What a [`SheetRequest::Format`] sets, by column letter and cell address.
+#[derive(Debug, Clone, Copy)]
+pub struct Formatting<'a> {
+    pub name: Option<&'a str>,
+    pub widths: &'a BTreeMap<String, Option<u16>>,
+    pub formats: &'a BTreeMap<String, Option<String>>,
+    pub cells: &'a BTreeMap<String, Option<String>>,
+}
+
 /// The op that names sheet `sheet` and sets its columns' widths and
-/// formats, by column letter as `cells` stands: `None`, or an empty name or
-/// format, clears one.
-pub fn format_op(
-    artifact: ArtifactId,
-    sheet: u16,
-    cells: &SheetCells,
-    name: Option<&str>,
-    widths: &BTreeMap<String, Option<u16>>,
-    formats: &BTreeMap<String, Option<String>>,
-) -> Result<PageOp, String> {
+/// formats and its cells' formats, by letter and address as `cells` stands:
+/// `None`, or an empty name or format, clears one.
+pub fn format_op(artifact: ArtifactId, sheet: u16, cells: &SheetCells, asked: Formatting<'_>) -> Result<PageOp, String> {
+    let Formatting { name, widths, formats, cells: cell_formats } = asked;
     let mut fields = serde_json::Map::new();
     if let Some(name) = name {
         if !name.is_empty() && !name_ok(name) {
@@ -317,18 +333,22 @@ pub fn format_op(
         };
         fields.insert(format!("w:{}", column_id(letter)?), value);
     }
+    let format_value = |format: Option<&str>| match format {
+        None | Some("") => Ok(serde_json::Value::Null),
+        Some(format) if silt_sheet::number_format_ok(format) => Ok(format.into()),
+        Some(format) => Err(format!(
+            "{format} isn't a number format: use 0, 0.00, #,##0, 0%, one after $, €, £ or ¥, or a date's, {}",
+            silt_sheet::DATE_FORMATS.join(", ")
+        )),
+    };
     for (letter, format) in formats {
-        let value = match format.as_deref() {
-            None | Some("") => serde_json::Value::Null,
-            Some(format) if silt_sheet::number_format_ok(format) => format.into(),
-            Some(format) => {
-                return Err(format!(
-                    "{format} isn't a number format: use 0, 0.00, #,##0, 0%, one after $, €, £ or ¥, or a date's, {}",
-                    silt_sheet::DATE_FORMATS.join(", ")
-                ));
-            }
-        };
-        fields.insert(format!("f:{}", column_id(letter)?), value);
+        fields.insert(format!("f:{}", column_id(letter)?), format_value(format.as_deref())?);
+    }
+    for (address, format) in cell_formats {
+        let (row, column) = silt_sheet::parse_address(address)
+            .and_then(|(row, column)| Some((cells.rows.get(row)?, cells.columns.get(column)?)))
+            .ok_or_else(|| format!("{address} isn't a cell in the sheet"))?;
+        fields.insert(format!("c:{}/{}", id_text(row), id_text(column)), format_value(format.as_deref())?);
     }
     if fields.is_empty() {
         return Err("give a name, widths or formats".into());
@@ -451,14 +471,28 @@ pub fn book_view_in(book: &[&SheetCells], metas: &[SheetMeta], sheet: usize, tod
     let (rows, columns) = axes.get(sheet).cloned().unwrap_or_default();
     let meta = metas.get(sheet).cloned().unwrap_or_default();
     let formats: Vec<Option<String>> = columns.iter().map(|column| meta.formats.get(column).cloned()).collect();
+    let mut cell_formats = BTreeMap::new();
+    for (at, row) in rows.iter().enumerate() {
+        for (column, id) in columns.iter().enumerate() {
+            if let Some(format) = meta.cells.get(&format!("{row}/{id}")) {
+                cell_formats.insert(format!("{}{}", silt_sheet::column_name(column), at + 1), format.clone());
+            }
+        }
+    }
     let values = silt_sheet::evaluate_in(&silt_sheet::Book { sheets: &sheets, today }, sheet)
         .into_iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(at, row)| {
             row.into_iter()
                 .enumerate()
-                .map(|(column, value)| match (&value, formats.get(column).and_then(Option::as_deref)) {
-                    (silt_sheet::Value::Number(number), Some(format)) => silt_sheet::format_number(*number, format),
-                    _ => value.to_string(),
+                .map(|(column, value)| {
+                    let own = (!cell_formats.is_empty())
+                        .then(|| cell_formats.get(&format!("{}{}", silt_sheet::column_name(column), at + 1)))
+                        .flatten();
+                    match (&value, own.or(formats.get(column).and_then(Option::as_ref)).map(String::as_str)) {
+                        (silt_sheet::Value::Number(number), Some(format)) => silt_sheet::format_number(*number, format),
+                        _ => value.to_string(),
+                    }
                 })
                 .collect()
         })
@@ -468,7 +502,17 @@ pub fn book_view_in(book: &[&SheetCells], metas: &[SheetMeta], sheet: usize, tod
         .map(|at| metas.get(at).and_then(|meta| meta.name.clone()).unwrap_or_else(|| format!("Sheet {}", at + 1)))
         .collect();
     let widths = columns.iter().map(|column| meta.widths.get(column).copied()).collect();
-    SheetView { rows, columns, raw, values, sheets: u16::try_from(book.len()).unwrap_or(SHEETS).max(1), names, widths, formats }
+    SheetView {
+        rows,
+        columns,
+        raw,
+        values,
+        sheets: u16::try_from(book.len()).unwrap_or(SHEETS).max(1),
+        names,
+        widths,
+        formats,
+        cell_formats,
+    }
 }
 
 /// What a `Set` needs first: how many rows and columns to add at the end so
@@ -674,7 +718,11 @@ fn write_sheet(sheet: &mut rust_xlsxwriter::Worksheet, view: &SheetView, titles:
             let (r, c) =
                 (u32::try_from(row).map_err(|_| "too many rows")?, u16::try_from(column).map_err(|_| "too many columns")?);
             let value = view.values.get(row).and_then(|values| values.get(column)).cloned().unwrap_or_default();
-            let format = formats.get(column).and_then(Option::as_ref);
+            let own = view
+                .cell_formats
+                .get(&format!("{}{}", silt_sheet::column_name(column), row + 1))
+                .map(|format| Format::new().set_num_format(format));
+            let format = own.as_ref().or_else(|| formats.get(column).and_then(Option::as_ref));
             // Only a formula Silt computes is kept live, so a workbook never
             // runs what a peer wrote, such as WEBSERVICE or a DDE call.
             let written = if raw.starts_with('=') && silt_sheet::formula_ok(raw) {
@@ -947,13 +995,19 @@ mod tests {
             columns: vec![id(3), id(4)],
             cells: BTreeMap::from([((id(1), id(4)), "0.25".to_owned())]),
         };
+        let none = BTreeMap::new();
+        let no_widths = BTreeMap::new();
+        let asked = |formats, cells| Formatting { name: None, widths: &no_widths, formats, cells };
         let op = format_op(
             artifact,
             0,
             &cells,
-            Some("Budget"),
-            &BTreeMap::from([("B".to_owned(), Some(120))]),
-            &BTreeMap::from([("B".to_owned(), Some("0%".to_owned()))]),
+            Formatting {
+                name: Some("Budget"),
+                widths: &BTreeMap::from([("B".to_owned(), Some(120))]),
+                formats: &BTreeMap::from([("B".to_owned(), Some("0%".to_owned()))]),
+                cells: &none,
+            },
         )
         .expect("an op");
         let PageOp::Patched { path, fields, .. } = &op else { panic!("{op:?}") };
@@ -964,14 +1018,25 @@ mod tests {
         let view = book_view_in(&[&cells], &[meta], 0, 0.0);
         assert_eq!(view.values[0][1], "25%");
         assert_eq!((view.widths.clone(), view.names.clone()), (vec![None, Some(120)], vec!["Budget".to_owned()]));
-        assert!(
-            format_op(artifact, 0, &cells, None, &BTreeMap::new(), &BTreeMap::from([("Z".to_owned(), Some("0".to_owned()))]))
-                .is_err()
-        );
-        assert!(
-            format_op(artifact, 0, &cells, None, &BTreeMap::new(), &BTreeMap::from([("A".to_owned(), Some("yyyy".to_owned()))]))
-                .is_err()
-        );
+        let bad_column = BTreeMap::from([("Z".to_owned(), Some("0".to_owned()))]);
+        assert!(format_op(artifact, 0, &cells, asked(&bad_column, &none)).is_err());
+        let bad_format = BTreeMap::from([("A".to_owned(), Some("yyyy".to_owned()))]);
+        assert!(format_op(artifact, 0, &cells, asked(&bad_format, &none)).is_err());
+        assert!(format_op(artifact, 0, &cells, asked(&none, &bad_column)).is_err(), "Z isn't a cell's address");
+
+        // A cell's own format goes before its column's, and follows the cell.
+        let own = BTreeMap::from([("B1".to_owned(), Some("0.0".to_owned()))]);
+        let PageOp::Patched { fields: cell_fields, .. } = format_op(artifact, 0, &cells, asked(&none, &own)).expect("an op")
+        else {
+            panic!("a patch")
+        };
+        let mut both: serde_json::Value = serde_json::from_str(fields).expect("json");
+        let cell: serde_json::Value = serde_json::from_str(&cell_fields).expect("json");
+        both.as_object_mut().expect("fields").extend(cell.as_object().expect("fields").clone());
+        let moved = SheetCells { rows: vec![id(2), id(1)], ..cells.clone() };
+        let view = book_view_in(&[&moved], &[sheet_meta(Some(&both))], 0, 0.0);
+        assert_eq!(view.values[1][1], "0.3", "the cell's 0.0, now in row 2, over the column's 0%");
+        assert_eq!(view.cell_formats, BTreeMap::from([("B2".to_owned(), "0.0".to_owned())]));
         let peer = serde_json::json!({"name": "\u{7}", "w:x": 5000, "f:y": "=HYPERLINK()"});
         assert_eq!(sheet_meta(Some(&peer)), SheetMeta::default(), "what a peer wrote that a sheet doesn't take is left out");
     }

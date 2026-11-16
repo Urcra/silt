@@ -253,6 +253,35 @@ export function csvOf(columns: string[], rows: unknown[][]): string {
 }
 
 /** A chart's points as a table: x, then a column per series. */
+/** The most series a chart draws in colour (ADR 0076). */
+export const SERIES_SHOWN = 6
+
+/**
+ * A chart's series as it draws them: past six on a chart whose series add up (bars, areas, a segmented bar), the
+ * largest five by total and the rest summed into "Other", in the page's own order so each keeps its colour; other
+ * charts keep them all, a grey past the sixth. The table keeps every series.
+ */
+export function drawnSeries(chart: string, series: Series[]): Series[] {
+  if (series.length <= SERIES_SHOWN || !['bar', 'area', 'segmented'].includes(chart)) return series
+  const total = (one: Series) => one.points.reduce((sum, [, y]) => sum + (typeof y === 'number' ? y : 0), 0)
+  const largest = series
+    .map((one, at) => ({ at, total: total(one) }))
+    .sort((a, b) => b.total - a.total || a.at - b.at)
+    .slice(0, SERIES_SHOWN - 1)
+  const kept = new Set(largest.map(({ at }) => at))
+  const sums = new Map<string, { x: Series['points'][number][0]; y: number | null }>()
+  series.forEach((one, at) => {
+    if (kept.has(at)) return
+    for (const [x, y] of one.points) {
+      const key = JSON.stringify(x)
+      const was = sums.get(key) ?? { x, y: null }
+      sums.set(key, { x, y: typeof y === 'number' ? (was.y ?? 0) + y : was.y })
+    }
+  })
+  const other: Series = { name: `Other (${series.length - kept.size})`, points: [...sums.values()].map(({ x, y }) => [x, y]) }
+  return [...series.filter((_, at) => kept.has(at)), other]
+}
+
 export function chartTable(series: Series[]): { columns: string[]; rows: unknown[][] } {
   const xs: (string | number)[] = []
   for (const one of series) for (const [x] of one.points) if (!xs.includes(x)) xs.push(x)
