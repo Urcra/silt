@@ -409,6 +409,10 @@ pub enum Request {
         thread: String,
         artifact: String,
         asked: silt_proto::page::PageRequest,
+        /// Read as another person at this level, to check what the rules
+        /// hide from them; writes are refused with it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_level: Option<silt_proto::page::Level>,
     },
     /// A version an HTML artifact's page saved itself as (ADR 0072); refused
     /// as a conflict when `base` isn't the latest version.

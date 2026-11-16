@@ -212,15 +212,21 @@ impl silt_mcp::Backend for DaemonTools {
             "silt_artifact_data" => {
                 let token = self.token.clone().ok_or("only an agent the web UI runs reaches its artifacts' data")?;
                 let artifact = text_arg(arguments, "id")?;
+                let as_level = match arguments.get("as_level").and_then(Value::as_str) {
+                    None => None,
+                    Some(level @ ("read" | "comment" | "collaborator")) => silt_proto::page::Level::parse(level),
+                    Some(other) => return Err(format!("as_level is read, comment or collaborator, not {other}")),
+                };
                 let mut asked = arguments.clone();
                 if let Some(object) = asked.as_object_mut() {
                     object.remove("id");
+                    object.remove("as_level");
                 }
                 let request: silt_proto::page::PageRequest =
                     serde_json::from_value(asked).map_err(|error| format!("that isn't a request of page data: {error}"))?;
                 let answer: Value = ask_daemon(&Request::Scoped {
                     token,
-                    asking: Box::new(Request::PageData { thread: String::new(), artifact, asked: request }),
+                    asking: Box::new(Request::PageData { thread: String::new(), artifact, asked: request, as_level }),
                 })?;
                 return Ok(serde_json::to_string_pretty(&answer).unwrap_or_default());
             }
@@ -492,6 +498,24 @@ fn read_back(thread: &str, read: &ArtifactRead) -> Result<String, String> {
     Ok(out)
 }
 
+/// What `silt_artifact_guide` says of a doc, sheet or whiteboard when its
+/// built-in skill can't be read.
+const DOC_GUIDE: &str = "A doc is Markdown that people edit with you, in place. Give its first text as `content`; after that, change \
+it with silt_artifact_doc's edits, which merge with what people type at the same moment, never with a new version. \
+Read it first, since people may have changed it. Lead with the point, use headings a reader can scan, and keep raw \
+HTML out: it shows as text.\n";
+const SHEET_GUIDE: &str = "A sheet is a grid with formulas that people edit with you. Give its first cells as `content`, \
+{\"rows\": [[\"Task\", \"Hours\"], [\"Design\", 3]]}, header row first; after that, write cells with \
+silt_artifact_sheet. Use formulas (=SUM(B2:B9)) rather than computed numbers, so the sheet stays right as people \
+change it, and keep one table per sheet with one header row. A cell has no number format of its own: show a share \
+or an amount with TEXT, =TEXT(C10/C9,\"0%\") or =TEXT(B2,\"#,##0.00\"), in the cell itself rather than a unit in the next.\n";
+const WHITEBOARD_GUIDE: &str = "A whiteboard is notes, arrows, sections and strokes people arrange together, live. Give its first items as \
+`content`: {\"items\": [{\"id\": \"goal\", \"type\": \"block\", \"x\": 0, \"y\": 0, \"w\": 160, \"h\": 100, \"text\": \"Ship M30\", \
+\"color\": \"yellow\"}, {\"id\": \"a1\", \"type\": \"arrow\", \"from\": \"goal\", \"to\": \"risk\", \"label\": \"blocked by\"}]}. Types: block \
+(a note; colour yellow, blue, green, pink or gray), arrow (from and to item ids, an optional label), section (a labelled \
+frame, x, y, w, h, text), stroke (points). After that, add or move items with silt_artifact_data at items/<id>, \
+and say something to the people there with silt_artifact_room. Lay items on a grid, 40 px apart, one idea per note.\n";
+
 /// What `silt_artifact_guide` answers: the design guidance for `kind`, the
 /// design system that applies and the others there are (ADR 0071).
 fn guide_text(kind: &str, guide: &ArtifactGuide, skills: &[Skill]) -> String {
@@ -540,27 +564,14 @@ with why. Revise one with `patch`, an RFC 6902 JSON Patch, rather than resending
                 );
             }
         }
-        "doc" => out.push_str(
-            "A doc is Markdown that people edit with you, in place. Give its first text as `content`; after that, change \
-it with silt_artifact_doc's edits, which merge with what people type at the same moment, never with a new version. \
-Read it first, since people may have changed it. Lead with the point, use headings a reader can scan, and keep raw \
-HTML out: it shows as text.\n",
-        ),
-        "sheet" => out.push_str(
-            "A sheet is a grid with formulas that people edit with you. Give its first cells as `content`, \
-{\"rows\": [[\"Task\", \"Hours\"], [\"Design\", 3]]}, header row first; after that, write cells with \
-silt_artifact_sheet. Use formulas (=SUM(B2:B9)) rather than computed numbers, so the sheet stays right as people \
-change it, and keep one table per sheet with one header row. A cell has no number format of its own: show a share \
-or an amount with TEXT, =TEXT(C10/C9,\"0%\") or =TEXT(B2,\"#,##0.00\"), in the cell itself rather than a unit in the next.\n",
-        ),
-        "whiteboard" => out.push_str(
-            "A whiteboard is notes, arrows, sections and strokes people arrange together, live. Give its first items as \
-`content`: {\"items\": [{\"id\": \"goal\", \"type\": \"block\", \"x\": 0, \"y\": 0, \"w\": 160, \"h\": 100, \"text\": \"Ship M30\", \
-\"color\": \"yellow\"}, {\"id\": \"a1\", \"type\": \"arrow\", \"from\": \"goal\", \"to\": \"risk\", \"label\": \"blocked by\"}]}. Types: block \
-(a note; colour yellow, blue, green, pink or gray), arrow (from and to item ids, an optional label), section (a labelled \
-frame, x, y, w, h, text), stroke (points). After that, add or move items with silt_artifact_data at items/<id>, \
-and say something to the people there with silt_artifact_room. Lay items on a grid, 40 px apart, one idea per note.\n",
-        ),
+        "doc" | "sheet" | "whiteboard" => match body(&format!("artifact-{kind}")) {
+            Some(text) => out.push_str(&text),
+            None => out.push_str(match kind {
+                "doc" => DOC_GUIDE,
+                "sheet" => SHEET_GUIDE,
+                _ => WHITEBOARD_GUIDE,
+            }),
+        },
         _ => out.push_str("An image shows as it is; give it a short title.\n"),
     }
     if !matches!(kind, "html" | "slides" | "canvas") {
@@ -611,8 +622,8 @@ from a small token set of your own, or pass `design_system` to silt_artifact wit
             writeln!(out, "Other design systems: {}. silt_artifact_guide with `design_system` reads one.\n", others.join(", "));
     }
     out.push_str(
-        "For a chart, also load the artifact-dataviz skill with silt_use_skill; for a diagram, artifact-diagramming; to \
-write a design system for this project, design-system.\n",
+        "For a chart, also load the artifact-dataviz skill with silt_use_skill; for a diagram, artifact-diagramming; for a \
+page that declares capabilities, artifact-capabilities; to write a design system for this project, design-system.\n",
     );
     out
 }
@@ -837,5 +848,20 @@ mod tests {
         assert!(guide_text("html", &none, &skills).contains("None applies"));
         let svg = guide_text("svg", &guide, &skills);
         assert!(svg.contains("artifact-dataviz") && !svg.contains("Other design systems"), "{svg}");
+    }
+
+    #[test]
+    fn the_guide_gives_each_edited_kind_its_skill_or_a_short_guide() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let root = silt_agents::builtin::builtin_skills_root(data.path()).expect("skills");
+        let checkout = tempfile::tempdir().expect("temp dir");
+        let skills = conventions::discover_skills_with(checkout.path(), None, Some(&root));
+        let guide = ArtifactGuide { system: None, why: None, systems: Vec::new() };
+        for (kind, short) in [("doc", DOC_GUIDE), ("sheet", SHEET_GUIDE), ("whiteboard", WHITEBOARD_GUIDE)] {
+            let skill = skills.iter().find(|skill| skill.name == format!("artifact-{kind}")).expect("built-in skill");
+            let body = skill.body().expect("skill body");
+            assert!(guide_text(kind, &guide, &skills).starts_with(body.as_str()), "{kind}");
+            assert!(guide_text(kind, &guide, &[]).starts_with(short), "{kind}");
+        }
     }
 }

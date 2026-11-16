@@ -2140,6 +2140,10 @@ fn an_artifact_takes_the_repositorys_design_system() {
     let read = prompt("Read back the artifact");
     let answer = read.iter().map(|(_, text)| text.as_str()).find(|text| text.contains("version 2 of 2")).unwrap_or_default();
     assert!(answer.contains("styled with the nous design system") && answer.contains("<h1>Rescan benchmark</h1>"), "{read:?}");
+
+    prompt("Artifact numbers");
+    let data = artifacts_of(&api, &thread).into_iter().find(|made| made["kind"] == "data").expect("a data page");
+    assert!(data["design_system"] == "nous" && data["style"].is_string(), "a data page's charts take its colours: {data}");
 }
 
 /// Talks to the MCP server Silt configured for the session, the way

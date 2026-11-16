@@ -276,6 +276,28 @@ mod tests {
     }
 
     #[test]
+    fn a_read_as_another_sees_only_what_the_rules_show_them() {
+        let config = json!({"rules": [{"path": "box", "read": "collaborator", "write": "comment"}]});
+        let rules = Rules::of(Some(&config)).expect("rules");
+        let docs: std::collections::BTreeMap<String, Value> =
+            [("box/a", json!({"idea": "x"})), ("data/users/local/note", json!({"n": 1})), ("open/b", json!({}))]
+                .into_iter()
+                .map(|(path, data)| (path.to_owned(), data))
+                .collect();
+        let list = |collection: &str| PageRequest::List { collection: collection.into() };
+        let count = |answer: Option<Value>| answer.and_then(|docs| docs.as_array().map(Vec::len));
+        assert_eq!(count(read(&docs, &list("box"), &rules, "local", Level::Owner)), Some(1), "the owner sees the box");
+        assert_eq!(count(read_as(&docs, &list("box"), &rules, Level::Comment, Level::Owner)), Some(0), "a commenter doesn't");
+        assert_eq!(count(read_as(&docs, &list("box"), &rules, Level::Collaborator, Level::Owner)), Some(1));
+        assert_eq!(count(read_as(&docs, &list("box"), &rules, Level::Owner, Level::Comment)), Some(0), "never above the asker");
+        let private = list("data/users/local");
+        assert_eq!(count(read(&docs, &private, &rules, "local", Level::Owner)), Some(1), "the asker's own");
+        assert_eq!(count(read_as(&docs, &private, &rules, Level::Collaborator, Level::Owner)), Some(0), "not another's");
+        let write = PageRequest::Delete { path: "open/b".into() };
+        assert!(read_as(&docs, &write, &rules, Level::Read, Level::Owner).is_none(), "writes aren't reads");
+    }
+
+    #[test]
     fn a_query_answers_a_collections_own_documents_filtered_ordered_and_limited() {
         let docs: std::collections::BTreeMap<String, Value> = [
             ("tasks/a", json!({"done": false, "rank": 2, "tags": ["x"]})),
@@ -428,6 +450,23 @@ pub fn read(
         }
         _ => return None,
     })
+}
+
+/// Whom a read `as_level` reads as: an id no person's page data is kept
+/// under, so `{self}` paths and private ones read as another person's would.
+pub const ANOTHER: &str = "~another";
+
+/// What `request` answers someone else at `level`, at most `own` (the
+/// asker's level), so the agent can check what the rules hide from them.
+/// `None` for a write, which a read as another refuses.
+pub fn read_as(
+    docs: &std::collections::BTreeMap<String, Value>,
+    request: &PageRequest,
+    rules: &Rules,
+    level: Level,
+    own: Level,
+) -> Option<Value> {
+    read(docs, request, rules, ANOTHER, level.min(own))
 }
 
 /// A person's id in page data, as `{self}` in a rule matches it: the same

@@ -367,7 +367,7 @@ impl Core {
         }
         if kind == "whiteboard" {
             let items =
-                self.page_data(&thread_id, id, silt_proto::page::PageRequest::List { collection: "items".into() }).await?;
+                self.page_data(&thread_id, id, silt_proto::page::PageRequest::List { collection: "items".into() }, None).await?;
             let items: Vec<serde_json::Value> = items.as_array().into_iter().flatten().map(|doc| doc["data"].clone()).collect();
             return Ok(serde_json::json!({ "items": items }).to_string());
         }
@@ -408,7 +408,7 @@ impl Core {
                 let request: silt_proto::page::PageRequest =
                     serde_json::from_value(serde_json::json!({"op": "batch", "writes": writes}))
                         .map_err(|error| CoreError::Invalid(error.to_string()))?;
-                self.page_data(&thread_id, id, request).await?;
+                self.page_data(&thread_id, id, request, None).await?;
             }
             return Ok(());
         }
@@ -633,7 +633,7 @@ impl Core {
             }
             other => other,
         };
-        let styled = if kind == "html" {
+        let styled = if matches!(kind.as_str(), "html" | "data") {
             let workspace_default = self.workspace_design_system(workspace);
             let repository = checkout.as_deref().and_then(design::project_default);
             let picked = design::project_choices(&self.data_dir).remove(&self.threads[&thread].repo);
