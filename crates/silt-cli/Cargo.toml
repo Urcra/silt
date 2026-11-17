@@ -23,6 +23,7 @@ silt-agents = { path = "../silt-agents" }
 silt-daemon = { path = "../silt-daemon" }
 silt-design = { path = "../silt-design" }
 silt-git = { path = "../silt-git" }
+silt-log = { path = "../silt-log" }
 silt-mcp = { path = "../silt-mcp" }
 silt-os = { path = "../silt-os" }
 silt-proto = { path = "../silt-proto" }

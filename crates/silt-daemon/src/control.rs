@@ -245,7 +245,7 @@ impl Core {
             RemoteCommand::Preset { preset: chosen } => Request::AgentPreset { thread, preset: preset(chosen)? },
             RemoteCommand::Mode { mode } => Request::AcpMode { thread, mode },
             RemoteCommand::Setting { id, value } => Request::AcpSetting { thread, id, value },
-            RemoteCommand::MrShow { mr, hide_git } => Request::MrShow { mr, hide_git },
+            RemoteCommand::MrShow { mr, hide_git, hide_others } => Request::MrShow { mr, hide_git, hide_others },
             RemoteCommand::MrSeen { mr, path, seen } => Request::MrSeen { mr, path, seen },
             RemoteCommand::FileAt { path, at } => Request::FileAt { thread, query: silt_proto::view::FileQuery { path, at } },
             RemoteCommand::SignIn { method } => Request::AcpSignIn { thread, method },
@@ -257,6 +257,9 @@ impl Core {
                 artifact,
                 asked: serde_json::from_value(asked).map_err(|error| format!("that isn't a connector call: {error}"))?,
             },
+            RemoteCommand::StopSample { relay } => {
+                Request::StopSample { thread, artifact: String::new(), ask: control_ask(relay) }
+            }
             RemoteCommand::Sample { question, images, model, tools } => Request::Sample {
                 thread,
                 artifact: None,

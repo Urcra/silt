@@ -24,6 +24,23 @@ pub enum Author {
     },
     /// Content brought in from git or another existing state.
     Import,
+    /// Made by the agent of another thread working in the same clone; one
+    /// session, or several when it's unclear which (ADR 0089).
+    Others {
+        sessions: Vec<SessionRef>,
+    },
+    /// Made by one of several agents working in the same clone, this
+    /// thread's own among them; it's unclear which (ADR 0089).
+    Agents {
+        sessions: Vec<SessionRef>,
+    },
+}
+
+impl Author {
+    /// Whether an agent made it, this thread's or another's.
+    pub fn is_agents(&self) -> bool {
+        matches!(self, Self::Agent { .. } | Self::Others { .. } | Self::Agents { .. })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,7 +199,7 @@ pub enum CommentOp {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommentTarget {
     /// A conversation delta.
     Message { delta: DeltaId },
@@ -192,6 +209,12 @@ pub enum CommentTarget {
     /// Text of an artifact's doc, anchored as code is (ADR 0077); last, as
     /// stored deltas name variants by position.
     Page { artifact: ArtifactId, start: Anchor, end: Anchor },
+    /// A sheet's cell, by its row's and column's ids, so it follows the cell
+    /// as rows and columns go in or out; last, as above.
+    Cell { artifact: ArtifactId, sheet: u16, row: silt_crdt::CharId, column: silt_crdt::CharId },
+    /// An element of an HTML artifact's page, by the anchor the page gave
+    /// it: a name of its own or a CSS path (ADR 0085); last, as above.
+    Element { artifact: ArtifactId, anchor: String },
 }
 
 /// A merge request's life (ADR 0010). It is identified by the id of its

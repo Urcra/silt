@@ -67,12 +67,13 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
         "claude,copilot",
         "--max-preset",
         "ask_before_commands",
-        "--isolated",
+        "--hide-other-workspaces",
         "on",
     ]);
     let listed = String::from_utf8_lossy(&laptop.silt(&["workspace", "list"]).stdout).into_owned();
     assert!(
-        listed.contains("Work  [work]") && listed.contains("claude, copilot only · at most Ask before commands · isolated"),
+        listed.contains("Work  [work]")
+            && listed.contains("claude, copilot only · at most Ask before commands · other workspaces' files hidden"),
         "{listed}"
     );
 

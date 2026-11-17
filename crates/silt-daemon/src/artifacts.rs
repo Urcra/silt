@@ -266,8 +266,8 @@ impl Core {
         page_bytes: u64,
     ) -> Result<Vec<(String, silt_proto::artifact::ArtifactFile, bool)>, CoreError> {
         use silt_proto::artifact::{ArtifactFile, FILE_BYTES, FILES, VERSION_BYTES, file_media_type, file_path_ok};
-        if (!changes.is_empty() || !edited.is_empty()) && kind != "html" {
-            return Err(CoreError::Invalid("only an HTML page has files beside it".into()));
+        if (!changes.is_empty() || !edited.is_empty()) && !matches!(kind, "html" | "slides" | "canvas") {
+            return Err(CoreError::Invalid("only an HTML page, a deck or a canvas has files beside it".into()));
         }
         let mut added = std::collections::BTreeSet::new();
         let put = |bytes: Vec<u8>, path: &str| -> Result<(Vec<u8>, &'static str), CoreError> {
@@ -616,23 +616,10 @@ impl Core {
             )
             .await?;
         // A doc or a sheet is edited by anyone who may comment unless it says
-        // otherwise, which the server checks by its declaration.
-        let capabilities = match capabilities {
-            Some(declared) if declared.contains_key("edit") || !silt_proto::edited::is_edited(&kind) => Some(declared),
-            _ if silt_proto::edited::is_edited(&kind) => {
-                let mut declared = capabilities.unwrap_or_default();
-                declared.insert("edit".into(), serde_json::json!({}));
-                // A whiteboard keeps its items in page data, its cursors in a
-                // room, and the images people put on it as assets (ADR 0081).
-                if kind == "whiteboard" {
-                    declared.entry("db".to_owned()).or_insert_with(|| serde_json::json!({}));
-                    declared.entry("room".to_owned()).or_insert_with(|| serde_json::json!({}));
-                    declared.entry("assets".to_owned()).or_insert_with(|| serde_json::json!({"upload": "comment"}));
-                }
-                Some(declared)
-            }
-            other => other,
-        };
+        // otherwise, which the server checks by its declaration; a whiteboard
+        // made before it took images takes them from its next version.
+        let capabilities = silt_proto::artifact::with_kind_defaults(&kind, capabilities);
+        let mut missing = None;
         let styled = if matches!(kind.as_str(), "html" | "data") {
             let workspace_default = self.workspace_design_system(workspace);
             let repository = checkout.as_deref().and_then(design::project_default);
@@ -642,11 +629,19 @@ impl Core {
                 repository: repository.as_deref(),
                 workspace: workspace_default.as_deref(),
             };
+            let asked = new.design_system.as_deref().map(str::trim).is_some_and(|name| !name.is_empty());
             match design::chosen(new.design_system.as_deref(), previous.as_deref(), defaults) {
-                Some(name) => {
-                    let system = design::find(&design::systems(checkout.as_deref(), &self.data_dir), name)?;
-                    Some((system.name.to_string(), system.compiled()?))
-                }
+                Some(name) => match design::find(&design::systems(checkout.as_deref(), &self.data_dir), name) {
+                    Ok(system) => Some((system.name.to_string(), system.compiled()?)),
+                    // A name carried over from the last version or a default
+                    // may be one this machine lacks, or one Silt no longer
+                    // ships (ADR 0087): the version goes unstyled and says so.
+                    Err(_) if !asked => {
+                        missing = Some(name.to_owned());
+                        None
+                    }
+                    Err(error) => return Err(error),
+                },
                 None => None,
             }
         } else {
@@ -725,7 +720,7 @@ impl Core {
         if version == 1 && silt_proto::edited::is_edited(&view.kind) {
             self.seed_edited(thread, &id, &view.kind, std::str::from_utf8(&bytes).unwrap_or_default()).await?;
         }
-        Ok(ArtifactPut { id, version, design_system, dropped })
+        Ok(ArtifactPut { id, version, design_system, dropped, missing })
     }
 
     /// The design system a run reads before making an artifact: the one
@@ -754,11 +749,19 @@ impl Core {
                 None => (None, ""),
             },
         };
-        let system = name.map(|name| design::find(&systems, name)).transpose()?;
+        // Only a name asked for must exist; a default naming one this
+        // machine lacks leaves none applying (ADR 0087).
+        let (system, missing) = match name.map(|name| (name, design::find(&systems, name))) {
+            None => (None, None),
+            Some((_, Ok(system))) => (Some(system), None),
+            Some((_, Err(error))) if asked.is_some() => return Err(error),
+            Some((name, Err(_))) => (None, Some((name.to_owned(), why.to_owned()))),
+        };
         Ok(ArtifactGuide {
             system: system.as_ref().map(|system| system.view(true)),
             why: system.is_some().then(|| why.to_owned()),
             systems: systems.iter().map(|system| system.view(false)).collect(),
+            missing,
         })
     }
 

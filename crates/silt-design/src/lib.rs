@@ -11,31 +11,6 @@ use std::fmt::Write as _;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-/// Built-in systems, by name: Silt's own look and a neutral one.
-pub const BUILTIN: [Builtin; 2] = [
-    Builtin {
-        name: "nous",
-        readme: include_str!("../systems/nous/README.md"),
-        tokens: include_str!("../systems/nous/tokens.json"),
-    },
-    Builtin {
-        name: "plain",
-        readme: include_str!("../systems/plain/README.md"),
-        tokens: include_str!("../systems/plain/tokens.json"),
-    },
-];
-
-#[derive(Debug, Clone, Copy)]
-pub struct Builtin {
-    pub name: &'static str,
-    pub readme: &'static str,
-    pub tokens: &'static str,
-}
-
-pub fn builtin(name: &str) -> Option<Builtin> {
-    BUILTIN.into_iter().find(|system| system.name == name)
-}
-
 /// A font file, an inlined face, may be at most this large.
 pub const FONT_BYTES: usize = 1 << 20;
 const FONTS_BYTES: usize = 4 << 20;
@@ -200,6 +175,202 @@ pub fn parse(json: &str) -> Result<Tokens, InvalidTokens> {
 pub struct Compiled {
     pub css: String,
     pub dropped: Vec<String>,
+}
+
+/// `components.css` may be at most this large (ADR 0086).
+pub const COMPONENTS_CSS_BYTES: usize = 128 << 10;
+/// One component's example, or its guidelines, may be at most this large.
+pub const COMPONENT_BYTES: usize = 16 << 10;
+/// A system holds at most this many components...
+pub const MAX_COMPONENTS: usize = 48;
+/// ...and their examples and guidelines at most this much together.
+pub const COMPONENTS_BYTES: usize = 256 << 10;
+/// `cover.html` may be at most this large (ADR 0088).
+pub const COVER_BYTES: usize = 64 << 10;
+/// One asset under `assets/` may be at most this large...
+pub const ASSET_BYTES: usize = 1 << 20;
+/// ...a system holds at most this many...
+pub const MAX_ASSETS: usize = 64;
+/// ...and at most this much together.
+pub const ASSETS_BYTES: usize = 4 << 20;
+
+impl Compiled {
+    /// Adds a system's `components.css` after its tokens. It's unlayered,
+    /// so a library's layered reset (Tailwind's preflight) doesn't undo it,
+    /// and it comes before the page, whose own rules win at equal
+    /// specificity. A file that could load anything or close the frame's
+    /// `<style>` is left out whole.
+    pub fn add_components(&mut self, css: &str) {
+        if css.trim().is_empty() {
+            return;
+        }
+        match components_css_problem(css) {
+            Some(why) => self.dropped.push(format!("components.css {why}")),
+            None => {
+                let _ = writeln!(self.css, "/* components */\n{}", css.trim_end());
+            }
+        }
+    }
+}
+
+fn components_css_problem(css: &str) -> Option<&'static str> {
+    if css.len() > COMPONENTS_CSS_BYTES {
+        return Some("is larger than 128 KiB");
+    }
+    let lower = css.to_ascii_lowercase();
+    if lower.contains("@import") {
+        Some("holds an @import")
+    } else if lower.contains("</") {
+        Some("holds `</`")
+    } else if lower
+        .match_indices("url(")
+        .any(|(at, _)| !lower[at + 4..].trim_start().trim_start_matches(['"', '\'']).starts_with("data:"))
+    {
+        Some("loads a url() that isn't a data: URI")
+    } else {
+        None
+    }
+}
+
+/// One of a system's components: its example markup, the note that heads
+/// it and its guidelines (ADR 0086, ADR 0088).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Component {
+    pub name: String,
+    pub about: String,
+    pub html: String,
+    pub guide: Option<String>,
+}
+
+/// A component's files as read: `components/<name>.html` and, when there
+/// is one, `components/<name>.md`.
+#[derive(Debug, Clone, Copy)]
+pub struct ComponentFiles<'a> {
+    pub name: &'a str,
+    pub html: &'a str,
+    pub guide: Option<&'a str>,
+}
+
+/// Whether `name` can name a component: what names a system.
+pub fn valid_component_name(name: &str) -> bool {
+    name.parse::<SystemName>().is_ok()
+}
+
+/// A system's components from their files, by name, in name order, within
+/// the limits, and what was left out and why. Guidelines too large are
+/// left out alone; the example stays.
+pub fn components<'a>(files: impl IntoIterator<Item = ComponentFiles<'a>>) -> (Vec<Component>, Vec<String>) {
+    let mut files: Vec<ComponentFiles<'a>> = files.into_iter().collect();
+    files.sort_by_key(|files| files.name);
+    let mut out = Vec::new();
+    let mut dropped = Vec::new();
+    let mut total = 0;
+    for ComponentFiles { name, html, guide } in files {
+        let guide = match guide {
+            Some(guide) if guide.len() > COMPONENT_BYTES => {
+                dropped.push(format!("the component {name}'s guidelines are larger than 16 KiB"));
+                None
+            }
+            guide => guide.map(str::trim).filter(|guide| !guide.is_empty()),
+        };
+        let size = html.len() + guide.map_or(0, str::len);
+        if !valid_component_name(name) {
+            dropped.push(format!("{name:?} isn't a component's name"));
+        } else if html.len() > COMPONENT_BYTES {
+            dropped.push(format!("the component {name} is larger than 16 KiB"));
+        } else if out.len() == MAX_COMPONENTS {
+            dropped.push(format!("the component {name} is past the {MAX_COMPONENTS} a system may hold"));
+        } else if total + size > COMPONENTS_BYTES {
+            dropped.push(format!("the component {name} is past the 256 KiB a system's components may hold together"));
+        } else {
+            total += size;
+            let about = Some(component_note(html))
+                .filter(|note| !note.is_empty())
+                .or_else(|| guide.map(first_sentence))
+                .unwrap_or_default();
+            out.push(Component { name: name.to_owned(), about, html: html.trim().to_owned(), guide: guide.map(str::to_owned) });
+        }
+    }
+    (out, dropped)
+}
+
+/// The `<!-- … -->` comment an example opens with, on one line.
+fn component_note(html: &str) -> String {
+    html.trim_start()
+        .strip_prefix("<!--")
+        .and_then(|rest| rest.split_once("-->"))
+        .map(|(note, _)| note.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default()
+}
+
+/// A guideline file's summary: its first sentence, past any heading.
+fn first_sentence(guide: &str) -> String {
+    let prose =
+        guide.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).collect::<Vec<_>>().join(" ");
+    let end = prose.find(". ").map_or(prose.len(), |at| at + 1);
+    prose[..end].to_owned()
+}
+
+/// A system's cover, or why it can't be drawn.
+pub fn cover(html: &str) -> Result<String, String> {
+    let html = html.trim();
+    if html.len() > COVER_BYTES { Err("cover.html is larger than 64 KiB".into()) } else { Ok(html.to_owned()) }
+}
+
+/// What an asset is, by its path under `assets/`: `<Group>/<file>` with
+/// plain names and a picture's, a PDF's or a group README's extension; none
+/// for anything else, which a system doesn't keep.
+pub fn asset_type(path: &str) -> Option<&'static str> {
+    let (group, file) = path.split_once('/')?;
+    let plain = |part: &str| {
+        (1..=64).contains(&part.len())
+            && part.as_bytes()[0].is_ascii_alphanumeric()
+            && part.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+            && !part.contains("..")
+    };
+    if !plain(group) || !plain(file) {
+        return None;
+    }
+    if file == "README.md" {
+        return Some("text/markdown");
+    }
+    let extension = file.rsplit_once('.')?.1.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        _ => return None,
+    })
+}
+
+/// The assets a system keeps of those found, by path and size, in path
+/// order, within the limits, and what was left out and why.
+pub fn assets(found: impl IntoIterator<Item = (String, usize)>) -> (Vec<(String, &'static str, usize)>, Vec<String>) {
+    let mut found: Vec<(String, usize)> = found.into_iter().collect();
+    found.sort();
+    let mut out = Vec::new();
+    let mut dropped = Vec::new();
+    let mut total = 0;
+    for (path, size) in found {
+        match asset_type(&path) {
+            None => dropped.push(format!("assets/{path} isn't a picture, a PDF or a group's README")),
+            Some(_) if size > ASSET_BYTES => dropped.push(format!("assets/{path} is larger than 1 MiB")),
+            Some(_) if out.len() == MAX_ASSETS => {
+                dropped.push(format!("assets/{path} is past the {MAX_ASSETS} a system may hold"))
+            }
+            Some(_) if total + size > ASSETS_BYTES => {
+                dropped.push(format!("assets/{path} is past the 4 MiB a system's assets may hold together"))
+            }
+            Some(media_type) => {
+                total += size;
+                out.push((path, media_type, size));
+            }
+        }
+    }
+    (out, dropped)
 }
 
 /// Compiles `tokens` into custom properties: the first theme's on `:root`,
@@ -581,6 +752,145 @@ fn type_class(style: &TypeStyle, group_family: Option<&str>, families: &BTreeMap
     Ok(rule)
 }
 
+/// A token as a page shows it: its family, name, value per theme with
+/// colour aliases followed to a value, and usage note (ADR 0088). A value
+/// that holds in every theme is under `*`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenRow {
+    pub family: String,
+    pub name: String,
+    pub values: BTreeMap<String, String>,
+    pub usage: String,
+}
+
+/// A type style as a page shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeRow {
+    pub name: String,
+    pub group: String,
+    pub family: String,
+    pub font_size: String,
+    pub line_height: Option<String>,
+    pub font_weight: Option<String>,
+    pub letter_spacing: Option<String>,
+    pub usage: String,
+}
+
+/// A system's themes by id and name, the first being its primary.
+pub fn theme_list(tokens: &Tokens) -> Vec<(String, String)> {
+    tokens
+        .color
+        .as_ref()
+        .map(|colors| {
+            colors
+                .themes
+                .iter()
+                .map(|theme| (theme.id.clone(), if theme.name.is_empty() { theme.id.clone() } else { theme.name.clone() }))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Every token, colours first then each other family in file order, with
+/// values for display. Nothing here is compiled or trusted: a page shows
+/// these as text.
+pub fn token_rows(tokens: &Tokens) -> Vec<TokenRow> {
+    let mut out = Vec::new();
+    if let Some(colors) = &tokens.color {
+        let themes: Vec<&str> = colors.themes.iter().map(|theme| theme.id.as_str()).collect();
+        let by_name: BTreeMap<&str, &Token> = colors.tokens.iter().map(|token| (token.name.as_str(), token)).collect();
+        let raw = |token: &Token, theme: Option<&str>| -> Option<String> {
+            match &token.value {
+                TokenValue::One(value) => Some(value.clone()),
+                TokenValue::ByTheme(values) => theme
+                    .and_then(|theme| values.get(theme))
+                    .or_else(|| themes.first().and_then(|first| values.get(*first)))
+                    .or_else(|| values.values().next())
+                    .cloned(),
+            }
+        };
+        let resolve = |mut value: String, theme: Option<&str>| {
+            for _ in 0..16 {
+                let Some(alias) = value.trim().strip_prefix('{').and_then(|rest| rest.strip_suffix('}')).map(str::to_owned)
+                else {
+                    break;
+                };
+                match by_name.get(alias.as_str()).and_then(|target| raw(target, theme)) {
+                    Some(next) => value = next,
+                    None => break,
+                }
+            }
+            value
+        };
+        for token in &colors.tokens {
+            let values: BTreeMap<String, String> = match &token.value {
+                TokenValue::One(value) if !value.trim().starts_with('{') => [("*".to_owned(), value.clone())].into(),
+                _ if themes.is_empty() => {
+                    raw(token, None).map(|value| [("*".to_owned(), resolve(value, None))].into()).unwrap_or_default()
+                }
+                _ => themes
+                    .iter()
+                    .filter_map(|theme| raw(token, Some(theme)).map(|value| ((*theme).to_owned(), resolve(value, Some(theme)))))
+                    .collect(),
+            };
+            out.push(TokenRow { family: "color".into(), name: token.name.clone(), values, usage: token.usage.clone() });
+        }
+    }
+    for (family, value) in &tokens.rest {
+        if matches!(family.as_str(), "version" | "meta" | "description") {
+            continue;
+        }
+        let Ok(family_tokens) = serde_json::from_value::<Family>(value.clone()) else {
+            continue;
+        };
+        for token in family_tokens.tokens {
+            let values = match token.value {
+                TokenValue::One(value) => [("*".to_owned(), value)].into(),
+                TokenValue::ByTheme(values) => values,
+            };
+            out.push(TokenRow { family: family.clone(), name: token.name, values, usage: token.usage });
+        }
+    }
+    out
+}
+
+/// Every type style, with its family's stack.
+pub fn type_rows(tokens: &Tokens) -> Vec<TypeRow> {
+    let Some(typography) = &tokens.typography else {
+        return Vec::new();
+    };
+    let text = |value: &Option<serde_json::Value>| {
+        value.as_ref().map(|value| match value {
+            serde_json::Value::String(text) => text.clone(),
+            other => other.to_string(),
+        })
+    };
+    typography
+        .groups
+        .iter()
+        .flat_map(|group| {
+            group.styles.iter().map(move |style| {
+                let key = style.family.as_deref().or(group.family.as_deref());
+                TypeRow {
+                    name: style.name.clone(),
+                    group: group.name.clone(),
+                    family: key.and_then(|key| typography.families.get(key)).cloned().unwrap_or_default(),
+                    font_size: style.font_size.clone(),
+                    line_height: text(&style.line_height),
+                    font_weight: text(&style.font_weight),
+                    letter_spacing: style.letter_spacing.clone(),
+                    usage: style.usage.clone(),
+                }
+            })
+        })
+        .collect()
+}
+
+/// What `tokens.json`'s `meta.source` says the system was made from.
+pub fn made_from(tokens: &Tokens) -> Option<String> {
+    tokens.rest.get("meta")?.get("source")?.as_str().map(str::to_owned)
+}
+
 /// The token names a system defines, by family, for the agent's guide.
 pub fn token_names(tokens: &Tokens) -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -609,6 +919,29 @@ mod tests {
 
     fn compiled(json: &str) -> Compiled {
         compile(&parse(json).expect("tokens"), &BTreeMap::new())
+    }
+
+    /// Silt's own system, which its repository keeps as any repository
+    /// keeps one (ADR 0087).
+    struct Nous {
+        tokens: String,
+        components_css: String,
+        components: Vec<(String, String)>,
+    }
+
+    fn nous() -> Nous {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.silt/design-systems/nous");
+        let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap_or_else(|_| panic!("{}", path.display()));
+        let mut components: Vec<(String, String)> = std::fs::read_dir(dir.join("components"))
+            .expect("components")
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().to_str()?.strip_suffix(".html")?.to_owned();
+                Some((name, read(&entry.path())))
+            })
+            .collect();
+        components.sort();
+        Nous { tokens: read(&dir.join("tokens.json")), components_css: read(&dir.join("components.css")), components }
     }
 
     #[test]
@@ -679,14 +1012,152 @@ mod tests {
     }
 
     #[test]
-    fn the_built_in_systems_compile_whole() {
-        for system in BUILTIN {
-            let tokens = parse(system.tokens).expect(system.name);
-            let out = compile(&tokens, &BTreeMap::new());
-            assert!(out.dropped.is_empty(), "{}: {:?}", system.name, out.dropped);
-            assert!(out.css.contains("--bg:") && out.css.contains("--chart-6:"), "{}", system.name);
-            assert!(SystemName::try_from(system.name.to_owned()).is_ok());
+    fn components_css_comes_after_the_tokens_unless_it_reaches_out() {
+        let mut out = compiled(r##"{"name":"A","color":{"themes":[{"id":"light"}],"tokens":[{"name":"bg","value":"#fff"}]}}"##);
+        out.add_components(".a-button { background: var(--bg); mask: url( 'data:image/svg+xml,x'); }");
+        assert!(
+            out.css.ends_with("/* components */\n.a-button { background: var(--bg); mask: url( 'data:image/svg+xml,x'); }\n"),
+            "{}",
+            out.css
+        );
+        assert!(out.dropped.is_empty(), "{:?}", out.dropped);
+        for (css, why) in [
+            ("@IMPORT 'x.css';", "@import"),
+            ("a::after { content: '</style>'; }", "`</`"),
+            ("a { background: URL(https://example.com/x.png) }", "data: URI"),
+            (&"a{}".repeat(COMPONENTS_CSS_BYTES), "128 KiB"),
+        ] {
+            let before = out.css.clone();
+            out.add_components(css);
+            assert_eq!(out.css, before, "{css:.40} left out whole");
+            assert!(out.dropped.last().is_some_and(|dropped| dropped.contains(why)), "{:?}", out.dropped);
         }
+    }
+
+    fn files<'a>(name: &'a str, html: &'a str, guide: Option<&'a str>) -> ComponentFiles<'a> {
+        ComponentFiles { name, html, guide }
+    }
+
+    #[test]
+    fn components_are_named_noted_and_kept_within_their_limits() {
+        let big = "x".repeat(COMPONENT_BYTES + 1);
+        let (kept, dropped) = components([
+            files("row", "  <!-- A list row:\n   28px tall. -->\n<a class=\"r\">x</a>\n", None),
+            files("Bad name", "<b>x</b>", None),
+            files("huge", big.as_str(), None),
+            files("button", "<button>x</button>", Some("# Button\n\nStarts an action. Use one primary per view.")),
+            files("tag", "<i>t</i>", Some(big.as_str())),
+        ]);
+        let names: Vec<&str> = kept.iter().map(|component| component.name.as_str()).collect();
+        assert_eq!(names, ["button", "row", "tag"]);
+        assert_eq!(kept[1].about, "A list row: 28px tall.");
+        assert_eq!(kept[1].html, "<!-- A list row:\n   28px tall. -->\n<a class=\"r\">x</a>");
+        assert_eq!(kept[0].about, "Starts an action.", "with no note, the guidelines' first sentence");
+        assert_eq!(kept[0].guide.as_deref(), Some("# Button\n\nStarts an action. Use one primary per view."));
+        assert_eq!(kept[2].guide, None, "guidelines too large go; the example stays");
+        assert_eq!(dropped.len(), 3, "{dropped:?}");
+
+        let names: Vec<String> = (0..=MAX_COMPONENTS).map(|n| format!("c{n:02}")).collect();
+        let (kept, dropped) = components(names.iter().map(|name| files(name, "<i></i>", None)));
+        assert_eq!((kept.len(), dropped.len()), (MAX_COMPONENTS, 1));
+        let half = "x".repeat(COMPONENT_BYTES);
+        let letters = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+        let (kept, dropped) = components(letters.iter().map(|name| files(name, &half, Some(&half))));
+        assert_eq!((kept.len(), dropped.len()), (8, 1), "{dropped:?}");
+    }
+
+    #[test]
+    fn tokens_read_for_a_page_follow_aliases_per_theme() {
+        let tokens = parse(
+            r##"{"name":"A","meta":{"source":"code"},
+              "color":{"themes":[{"id":"light","name":"Light"},{"id":"dark"}],"tokens":[
+                {"name":"accent","value":{"light":"#d9883a","dark":"#dfa055"},"usage":"Primary."},
+                {"name":"link","value":"{accent}","usage":"Links."},
+                {"name":"ink","value":"#111"}]},
+              "type":{"families":{"sans":"Inter, sans-serif"},"groups":[{"name":"Text","family":"sans","styles":[
+                {"name":"body","fontSize":"15px","lineHeight":1.6,"fontWeight":400}]}]},
+              "spacing":{"tokens":[{"name":"space-4","value":"16px","usage":"Gutters."}]}}"##,
+        )
+        .expect("tokens");
+        assert_eq!(theme_list(&tokens), [("light".to_owned(), "Light".to_owned()), ("dark".to_owned(), "dark".to_owned())]);
+        let rows = token_rows(&tokens);
+        let link = rows.iter().find(|row| row.name == "link").expect("link");
+        assert_eq!(link.values, [("dark".to_owned(), "#dfa055".to_owned()), ("light".to_owned(), "#d9883a".to_owned())].into());
+        assert_eq!(rows.iter().find(|row| row.name == "ink").expect("ink").values, [("*".to_owned(), "#111".to_owned())].into());
+        let space = rows.iter().find(|row| row.name == "space-4").expect("space");
+        assert_eq!((space.family.as_str(), space.usage.as_str()), ("spacing", "Gutters."));
+        let body = &type_rows(&tokens)[0];
+        assert_eq!(
+            (body.family.as_str(), body.line_height.as_deref(), body.font_weight.as_deref()),
+            ("Inter, sans-serif", Some("1.6"), Some("400"))
+        );
+        assert_eq!(made_from(&tokens).as_deref(), Some("code"));
+    }
+
+    #[test]
+    fn a_cover_and_assets_are_kept_within_their_limits() {
+        assert_eq!(cover("  <svg></svg>\n").as_deref(), Ok("<svg></svg>"));
+        assert!(cover(&"x".repeat(COVER_BYTES + 1)).is_err());
+
+        assert_eq!(asset_type("Logos/acme-mark.svg"), Some("image/svg+xml"));
+        assert_eq!(asset_type("Icons/README.md"), Some("text/markdown"));
+        assert_eq!(asset_type("Images/hero.JPG"), Some("image/jpeg"));
+        for refused in
+            ["mark.svg", "Logos/../x.svg", "Logos/.hidden.svg", "Logos/a b.svg", "Logos/x.html", "Logos/sub/x.svg", "Logos/x.js"]
+        {
+            assert_eq!(asset_type(refused), None, "{refused}");
+        }
+        let (kept, dropped) = assets([
+            ("Logos/b.png".to_owned(), 10),
+            ("Logos/a.svg".to_owned(), 10),
+            ("Logos/big.png".to_owned(), ASSET_BYTES + 1),
+            ("Logos/x.html".to_owned(), 1),
+        ]);
+        assert_eq!(kept, [("Logos/a.svg".to_owned(), "image/svg+xml", 10), ("Logos/b.png".to_owned(), "image/png", 10)]);
+        assert_eq!(dropped.len(), 2, "{dropped:?}");
+        let many = (0..=MAX_ASSETS).map(|n| (format!("Icons/i{n:02}.svg"), 1));
+        assert_eq!(assets(many).0.len(), MAX_ASSETS);
+        let heavy = (0..5).map(|n| (format!("Images/i{n}.png"), ASSET_BYTES));
+        assert_eq!(assets(heavy).0.len(), 4);
+    }
+
+    #[test]
+    fn nous_components_read_only_its_tokens_and_use_only_classes_it_defines() {
+        let nous = nous();
+        let tokens = parse(&nous.tokens).expect("tokens");
+        let known: BTreeSet<String> = token_names(&tokens).into_values().flatten().collect();
+        let css = nous.components_css.as_str();
+        for (at, _) in css.match_indices("var(--") {
+            let name: String = css[at + 4..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+            assert!(known.contains(&name), "components.css reads {name}, which Nous doesn't define");
+        }
+        let mut out = compile(&tokens, &BTreeMap::new());
+        out.add_components(css);
+        assert!(out.dropped.is_empty(), "{:?}", out.dropped);
+
+        let (kept, dropped) = components(nous.components.iter().map(|(name, html)| files(name, html, None)));
+        assert!(dropped.is_empty(), "{dropped:?}");
+        assert_eq!(kept.len(), nous.components.len());
+        for component in &kept {
+            assert!(!component.about.is_empty(), "{} has a note", component.name);
+            for class in component.html.split("class=\"").skip(1).filter_map(|rest| rest.split('"').next()) {
+                for class in class.split_whitespace().filter(|class| class.starts_with("n-")) {
+                    assert!(
+                        css.contains(&format!(".{class}")),
+                        "{} uses .{class}, which components.css doesn't define",
+                        component.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nous_compiles_whole() {
+        let out = compile(&parse(&nous().tokens).expect("tokens"), &BTreeMap::new());
+        assert!(out.dropped.is_empty(), "{:?}", out.dropped);
+        assert!(out.css.contains("--bg:") && out.css.contains("--chart-6:"), "{}", out.css);
+        assert!(out.css.contains("--chart-texture: repeating-linear-gradient(45deg"), "{:?}", out.dropped);
     }
 
     /// Nous's tokens are the web UI's: each colour both define has the same
@@ -711,7 +1182,7 @@ mod tests {
             }
         }
         let resolve = |value: &str| palette.get(value.trim()).cloned().unwrap_or_else(|| value.trim().to_owned());
-        let tokens = parse(builtin("nous").expect("nous").tokens).expect("tokens");
+        let tokens = parse(&nous().tokens).expect("tokens");
         let mut compared = 0;
         for token in tokens.color.expect("colours").tokens {
             let Some(pair) = defined.get(&token.name) else {
@@ -744,25 +1215,47 @@ mod tests {
         None
     }
 
-    /// The built-in systems' chart colours pass the palette checks they ask
-    /// agents to run (ADR 0073): the categorical palette in order on `bg`,
-    /// the first three for all pairs, and the sequential and diverging
-    /// scales as ordinal ramps, in both themes.
+    /// Nous's chart colours, and the default palette `artifact-dataviz`
+    /// gives a page with no system, pass the palette checks they ask agents
+    /// to run (ADR 0073): the categorical palette in order on `bg`, the
+    /// first three for all pairs, and the sequential and diverging scales
+    /// as ordinal ramps, in both themes.
     #[test]
-    fn the_built_in_chart_colours_pass_the_palette_checks() {
+    fn the_chart_colours_silt_offers_pass_the_palette_checks() {
         use crate::frame::Theme;
         use crate::palette::{Pairs, Srgb, categorical, ordinal};
-        for name in ["nous", "plain"] {
-            let tokens = parse(builtin(name).expect("built in").tokens).expect("tokens");
-            let colors = tokens.color.expect("colours").tokens;
-            for theme in [Theme::Light, Theme::Dark] {
+        let mut palettes: Vec<(&str, BTreeMap<String, [String; 2]>)> = Vec::new();
+        let nous: BTreeMap<String, [String; 2]> = parse(&nous().tokens)
+            .expect("tokens")
+            .color
+            .expect("colours")
+            .tokens
+            .into_iter()
+            .filter_map(|token| match token.value {
+                TokenValue::ByTheme(values) => Some((token.name, [values.get("light")?.clone(), values.get("dark")?.clone()])),
+                TokenValue::One(_) => None,
+            })
+            .collect();
+        palettes.push(("nous", nous));
+        // Each table row of the default palette names its token first, then
+        // its light and dark values.
+        let default: BTreeMap<String, [String; 2]> =
+            include_str!("../../silt-agents/skills/artifact-dataviz/references/palette.md")
+                .lines()
+                .filter_map(|line| {
+                    let quoted: Vec<&str> = line.split('`').skip(1).step_by(2).collect();
+                    let hexes: Vec<&str> = quoted.iter().copied().filter(|value| value.starts_with('#')).collect();
+                    let name = quoted.first().filter(|name| !name.starts_with('#'))?;
+                    (line.starts_with('|') && hexes.len() >= 2)
+                        .then(|| ((*name).to_owned(), [hexes[0].to_owned(), hexes[1].to_owned()]))
+                })
+                .collect();
+        palettes.push(("the default palette", default));
+        for (name, colors) in &palettes {
+            for (theme, index) in [(Theme::Light, 0), (Theme::Dark, 1)] {
                 let value = |token: &str| {
-                    let found =
-                        colors.iter().find(|candidate| candidate.name == token).unwrap_or_else(|| panic!("{name} has {token}"));
-                    let TokenValue::ByTheme(values) = &found.value else {
-                        panic!("{name}'s {token} has one value");
-                    };
-                    Srgb::parse(&values[theme.as_str()]).expect("a hex colour")
+                    let found = colors.get(token).unwrap_or_else(|| panic!("{name} has {token}"));
+                    Srgb::parse(&found[index]).expect("a hex colour")
                 };
                 let bg = value("bg");
                 let slots: Vec<Srgb> = (1..=6).map(|slot| value(&format!("chart-{slot}"))).collect();

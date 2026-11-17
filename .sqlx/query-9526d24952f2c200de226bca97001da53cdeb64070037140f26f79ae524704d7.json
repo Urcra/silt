@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO agent_messages (to_thread, from_thread, kind, body, created_ms) VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "9526d24952f2c200de226bca97001da53cdeb64070037140f26f79ae524704d7"
+}

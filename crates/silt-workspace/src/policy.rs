@@ -95,19 +95,43 @@ pub struct Policy {
     /// The agent runs only with its own sandbox on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sandbox: bool,
-    /// The sandbox also hides Silt's data and other workspaces; implies
-    /// `sandbox`.
+    /// "Hide other workspaces' files": the sandbox also keeps the agent out
+    /// of Silt's data and other workspaces' folders; implies `sandbox`.
+    /// History tools are scoped to their workspace without it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub isolated: bool,
     /// Projects keep the workspace's server: no other, and not this machine
     /// only.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub home_locked: bool,
+    /// The page connectors its artifacts' pages may call, by name; any
+    /// when unset (ADR 0080).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connectors: Option<BTreeSet<String>>,
+}
+
+/// Which of a workspace's sandbox rules Silt can hold an agent to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SandboxSupport {
+    None,
+    /// Its own sandbox, turned on per run.
+    Sandbox,
+    /// Its sandbox, and paths it denies reading.
+    Isolate,
 }
 
 impl Policy {
     pub fn sandbox_required(&self) -> bool {
         self.sandbox || self.isolated
+    }
+
+    /// Whether an agent with `support` can be held to these sandbox rules.
+    pub fn sandboxes(&self, support: SandboxSupport) -> bool {
+        match support {
+            SandboxSupport::Isolate => true,
+            SandboxSupport::Sandbox => !self.isolated,
+            SandboxSupport::None => !self.sandbox_required(),
+        }
     }
 
     pub fn allows_full_access(&self) -> bool {
@@ -132,6 +156,10 @@ impl Policy {
             sandbox: self.sandbox || other.sandbox,
             isolated: self.isolated || other.isolated,
             home_locked: self.home_locked || other.home_locked,
+            connectors: match (&self.connectors, &other.connectors) {
+                (Some(mine), Some(theirs)) => Some(mine.intersection(theirs).cloned().collect()),
+                (one, other) => one.clone().or_else(|| other.clone()),
+            },
         }
     }
 }
@@ -199,10 +227,11 @@ pub enum Broken {
     Preset { asked: Preset, cap: Preset },
     Mode { mode: String, cap: Preset },
     Flag { flag: String, agent: String, cap: Preset },
-    Sandbox { agent: String },
+    Sandbox { agent: String, hides_others: bool },
     Home,
     Move { project: String, servers: Vec<String>, to: Option<String> },
     WaitingForPolicy,
+    Connector { connector: String, allowed: Vec<String> },
 }
 
 /// A start or a change the rules refuse, saying which rule and whose.
@@ -238,7 +267,10 @@ impl Refusal {
                 "{flag} stops {agent} asking before it acts, which {workspace} doesn't allow: {source} {allows} at most {}",
                 cap.label()
             ),
-            Broken::Sandbox { agent } => {
+            Broken::Sandbox { agent, hides_others: true } => format!(
+                "{workspace} hides other workspaces' files from its agents, which needs a sandbox Silt can't set up for {agent} ({source})"
+            ),
+            Broken::Sandbox { agent, hides_others: false } => {
                 format!("{workspace} needs the agent's own sandbox, which Silt can't turn on for {agent} ({source})")
             }
             Broken::Home => format!("{workspace}'s projects sync with its server only ({source})"),
@@ -252,6 +284,12 @@ impl Refusal {
                 )
             }
             Broken::WaitingForPolicy => format!("{workspace} is waiting for {source}; signing in to it fetches it"),
+            Broken::Connector { connector, allowed } if allowed.is_empty() => {
+                format!("pages in {workspace} may not call {connector}: {source} {allows} no connector")
+            }
+            Broken::Connector { connector, allowed } => {
+                format!("pages in {workspace} may not call {connector}: {source} {allows} {}", allowed.join(", "))
+            }
         }
     }
 }
@@ -302,7 +340,7 @@ impl Rules<'_> {
     }
 
     /// Whether this agent may start here, sandboxed if the rules say so.
-    pub fn check_agent(&self, agent: &AgentChoice, can_sandbox: bool) -> Result<(), Refusal> {
+    pub fn check_agent(&self, agent: &AgentChoice, support: SandboxSupport) -> Result<(), Refusal> {
         self.check(|policy| match agent {
             AgentChoice::Known { key, name } => policy
                 .agents
@@ -317,7 +355,8 @@ impl Rules<'_> {
             },
         })?;
         self.check(|policy| {
-            (policy.sandbox_required() && !can_sandbox).then(|| Broken::Sandbox { agent: agent.name().to_owned() })
+            (!policy.sandboxes(support))
+                .then(|| Broken::Sandbox { agent: agent.name().to_owned(), hides_others: policy.isolated })
         })
     }
 
@@ -348,6 +387,17 @@ impl Rules<'_> {
         })
     }
 
+    /// Whether a page here may call page connector `connector`.
+    pub fn check_connector(&self, connector: &str) -> Result<(), Refusal> {
+        self.check(|policy| {
+            policy
+                .connectors
+                .as_ref()
+                .filter(|allowed| !allowed.contains(connector))
+                .map(|allowed| Broken::Connector { connector: connector.to_owned(), allowed: allowed.iter().cloned().collect() })
+        })
+    }
+
     /// Whether a project's home may be set apart from the workspace's server.
     pub fn check_home(&self) -> Result<(), Refusal> {
         self.check(|policy| policy.home_locked.then_some(Broken::Home))
@@ -372,6 +422,28 @@ pub fn check_move(project: &str, servers: &[String], workspace: &str, to: Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_workspace_or_its_org_may_name_the_connectors_its_pages_call() {
+        let local =
+            Policy { connectors: Some(BTreeSet::from(["tracker".to_owned(), "calendar".to_owned()])), ..Policy::default() };
+        let org = OrgPolicy {
+            org: "acme".into(),
+            server: "https://silt.example".into(),
+            policy: Policy { connectors: Some(BTreeSet::from(["tracker".to_owned()])), ..Policy::default() },
+        };
+        let rules = Rules { workspace: "Work", local: &local, org: Some(Ok(&org)) };
+        assert!(rules.check_connector("tracker").is_ok());
+        let refused = rules.check_connector("calendar").expect_err("the org's list leaves it out");
+        assert!(
+            refused.message().contains("may not call calendar") && refused.message().contains("tracker"),
+            "{}",
+            refused.message()
+        );
+        assert_eq!(rules.effective().connectors, Some(BTreeSet::from(["tracker".to_owned()])));
+        let open = Rules { workspace: "Personal", local: &Policy::default(), org: None };
+        assert!(open.check_connector("anything").is_ok(), "unset allows any");
+    }
 
     fn keys(keys: &[&str]) -> Option<BTreeSet<AgentKey>> {
         Some(keys.iter().map(|key| AgentKey::new(*key)).collect())
@@ -415,13 +487,16 @@ mod tests {
         let org = acme(Policy { agents: keys(&["copilot"]), max_preset: Some(Preset::AskBeforeCommands), ..Policy::default() });
         let rules = Rules { workspace: "Work", local: &local, org: Some(Ok(&org)) };
 
-        let refusal = rules.check_agent(&known("claude", "Claude Code"), true).unwrap_err();
+        let refusal = rules.check_agent(&known("claude", "Claude Code"), SandboxSupport::Isolate).unwrap_err();
         assert_eq!(refusal.to_string(), "Claude Code isn't allowed in Work: acme's policy on silt.acme.dev allows copilot");
-        assert_eq!(rules.check_agent(&known("copilot", "GitHub Copilot"), true), Ok(()));
+        assert_eq!(rules.check_agent(&known("copilot", "GitHub Copilot"), SandboxSupport::Isolate), Ok(()));
         // Isolated is the person's own rule, and Copilot can't sandbox here.
-        let refusal = rules.check_agent(&known("copilot", "GitHub Copilot"), false).unwrap_err();
+        let refusal = rules.check_agent(&known("copilot", "GitHub Copilot"), SandboxSupport::None).unwrap_err();
         assert_eq!(refusal.origin, Source::Local);
-        assert!(matches!(*refusal.broken, Broken::Sandbox { .. }));
+        assert_eq!(
+            refusal.to_string(),
+            "Work hides other workspaces' files from its agents, which needs a sandbox Silt can't set up for GitHub Copilot (your rules)"
+        );
 
         assert_eq!(rules.check_preset(Preset::Plan), Ok(()));
         assert_eq!(
@@ -434,6 +509,27 @@ mod tests {
         );
         assert_eq!(rules.effective().agents, keys(&["copilot"]));
         assert!(rules.effective().isolated);
+    }
+
+    #[test]
+    fn a_sandbox_refusal_names_the_rule_the_agent_cannot_meet() {
+        let local = Policy { isolated: true, ..Policy::default() };
+        let org = acme(Policy { sandbox: true, ..Policy::default() });
+        let rules = Rules { workspace: "Work", local: &local, org: Some(Ok(&org)) };
+        let refusal = rules.check_agent(&known("codex", "Codex"), SandboxSupport::Sandbox).unwrap_err();
+        assert_eq!(refusal.origin, Source::Local, "Codex can sandbox, as the org asks, but not hide other workspaces");
+        assert_eq!(rules.check_agent(&known("codex", "Codex"), SandboxSupport::Isolate), Ok(()));
+        let refusal = rules.check_agent(&known("copilot", "GitHub Copilot"), SandboxSupport::None).unwrap_err();
+        assert_eq!(
+            refusal.to_string(),
+            "Work needs the agent's own sandbox, which Silt can't turn on for GitHub Copilot (acme's policy on silt.acme.dev)"
+        );
+
+        let local = Policy { sandbox: true, ..Policy::default() };
+        let org = acme(Policy { isolated: true, ..Policy::default() });
+        let rules = Rules { workspace: "Work", local: &local, org: Some(Ok(&org)) };
+        let refusal = rules.check_agent(&known("codex", "Codex"), SandboxSupport::Sandbox).unwrap_err();
+        assert!(matches!(refusal.origin, Source::Org { .. }));
     }
 
     #[test]
@@ -460,12 +556,12 @@ mod tests {
     fn custom_agents_and_the_home() {
         let local = Policy { custom_agents: Some(false), home_locked: true, ..Policy::default() };
         let rules = Rules { workspace: "Work", local: &local, org: None };
-        let refusal = rules.check_agent(&AgentChoice::Custom { name: "My agent".into() }, true).unwrap_err();
+        let refusal = rules.check_agent(&AgentChoice::Custom { name: "My agent".into() }, SandboxSupport::Isolate).unwrap_err();
         assert_eq!(refusal.to_string(), "My agent isn't allowed in Work: your rules allow no custom agents");
         assert_eq!(rules.check_home().unwrap_err().to_string(), "Work's projects sync with its server only (your rules)");
         let listed = Policy { agents: keys(&["copilot"]), ..Policy::default() };
         let rules = Rules { workspace: "Work", local: &listed, org: None };
-        let refusal = rules.check_agent(&AgentChoice::Custom { name: "My agent".into() }, true).unwrap_err();
+        let refusal = rules.check_agent(&AgentChoice::Custom { name: "My agent".into() }, SandboxSupport::Isolate).unwrap_err();
         assert_eq!(
             refusal.to_string(),
             "My agent isn't allowed in Work: your rules allow copilot",

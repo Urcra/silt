@@ -4,7 +4,7 @@
 import type { ArtifactView } from '../api'
 
 /** Why a call was refused, as a page reads it from the rejection's `code`. */
-export type RefusalCode = 'not_granted' | 'rate_limited' | 'conflict' | 'too_large' | 'refused' | 'unavailable'
+export type RefusalCode = 'not_granted' | 'rate_limited' | 'conflict' | 'too_large' | 'refused' | 'unavailable' | 'busy' | 'viewer_stopped'
 
 export class Refusal extends Error {
   code: RefusalCode
@@ -25,6 +25,8 @@ export type CapabilityHandler = {
   perMinute?: number
   /** The largest call it takes, when more than [`MESSAGE_BYTES`], as a download's file may be. */
   callBytes?: number
+  /** The largest answer it gives, when more than [`MESSAGE_BYTES`], as a file read or a query may be. */
+  answerBytes?: number
   /** Ends what the handler started, such as watches, when the frame goes. */
   dispose?: () => void
 }
@@ -105,7 +107,7 @@ export class Broker {
     if (!handler.methods.includes(call.method)) throw new Refusal('refused', `${call.cap} has no ${call.method}`)
     this.spend(call.cap, handler.perMinute ?? 120)
     const value = await handler.call(call.method, call.args, this.context)
-    if (sizeOf(value) > MESSAGE_BYTES) throw new Refusal('too_large', 'the answer is too large to send to the page')
+    if (sizeOf(value) > Math.max(MESSAGE_BYTES, handler.answerBytes ?? 0)) throw new Refusal('too_large', 'the answer is too large to send to the page')
     return value
   }
 

@@ -47,6 +47,28 @@ pub struct Start {
     pub sign_in_first: Option<String>,
 }
 
+impl Start {
+    /// Moves Silt's MCP server onto the command line of an agent that
+    /// refuses it in `session/new`: Copilot, by its registry id, takes only
+    /// HTTP servers from an ACP client and drops a stdio one with a warning.
+    pub fn for_agent(mut self, agent: &str) -> Self {
+        if agent != "github-copilot-cli" {
+            return self;
+        }
+        let Some(mcp) = self.mcp.take() else { return self };
+        let env: serde_json::Map<String, Value> = mcp.env.into_iter().map(|(name, value)| (name, Value::String(value))).collect();
+        let config = serde_json::json!({"mcpServers": {NAME: {
+            "type": "local",
+            "command": mcp.command.to_string_lossy(),
+            "args": mcp.args,
+            "env": env,
+            "tools": ["*"],
+        }}});
+        self.args.extend(["--additional-mcp-config".to_owned(), config.to_string()]);
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Prompt {
@@ -505,4 +527,51 @@ async fn run(
     }
     let _ = child.kill().await;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn start() -> Start {
+        Start {
+            program: "npx".into(),
+            args: vec!["@github/copilot".into(), "--acp".into()],
+            env: Vec::new(),
+            cwd: PathBuf::from("/work"),
+            mcp: Some(McpStart {
+                command: PathBuf::from("/bin/silt"),
+                args: vec!["mcp".into(), "--token".into(), "t".into()],
+                env: vec![("SILT_HOME".into(), "/data".into())],
+            }),
+            load: None,
+            sign_in_first: None,
+        }
+    }
+
+    #[test]
+    fn copilot_gets_silts_mcp_server_on_its_command_line() {
+        let start = start().for_agent("github-copilot-cli");
+        assert!(start.mcp.is_none(), "it would refuse it in session/new");
+        let [acp, flag, config] = &start.args[1..] else { panic!("{:?}", start.args) };
+        assert_eq!((acp.as_str(), flag.as_str()), ("--acp", "--additional-mcp-config"));
+        let config: Value = serde_json::from_str(config).expect("json");
+        assert_eq!(
+            config["mcpServers"]["silt"],
+            serde_json::json!({
+                "type": "local",
+                "command": "/bin/silt",
+                "args": ["mcp", "--token", "t"],
+                "env": {"SILT_HOME": "/data"},
+                "tools": ["*"],
+            })
+        );
+    }
+
+    #[test]
+    fn other_agents_get_silts_mcp_server_in_the_session() {
+        let start = start().for_agent("claude-acp");
+        assert!(start.mcp.is_some());
+        assert_eq!(start.args, ["@github/copilot", "--acp"]);
+    }
 }

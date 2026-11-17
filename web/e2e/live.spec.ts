@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import AxeBuilder from '@axe-core/playwright'
 import { type Page, expect, test } from '@playwright/test'
 import { stopAgent, teardown } from './fixture'
 
@@ -330,8 +332,9 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
   await there.getByLabel('device to continue on').selectOption({ label: 'alice' })
   await there.getByLabel('agent to continue with').selectOption({ label: 'Fake agent' })
   await there.getByRole('button', { name: 'Continue there' }).click()
-  await expect(machine.getByTestId('agent-state')).toHaveText('Fake agent is ready', { timeout: 15_000 })
-  await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is ready', { timeout: 15_000 })
+  // The agent starts on the machine, which under the gate's load takes more than the default 5 s.
+  await expect(machine.getByTestId('agent-state')).toHaveText('Fake agent is ready', { timeout: 30_000 })
+  await expect(there.getByTestId('agent-state')).toHaveText('Fake agent is ready', { timeout: 30_000 })
 
   await there.getByLabel('draft').fill('second turn')
   await there.getByLabel('draft').press('Enter')
@@ -1657,6 +1660,8 @@ test('a data page links each number to its source, and a canvas shows each board
   const boards = page.getByTestId('board')
   await expect(boards).toHaveCount(3)
   await expect(boards.nth(2)).toContainText('390×844')
+  // The phone's board grows to its page, past the screen it was drawn for.
+  await expect.poll(async () => Number(await boards.nth(2).locator('iframe').evaluate((frame) => (frame as HTMLIFrameElement).style.height.replace('px', '')))).toBeGreaterThan(1500)
   // Two boards side by side at one scale.
   await boards.nth(0).getByRole('button', { name: 'Compare' }).click()
   await boards.nth(2).getByRole('button', { name: 'Compare' }).click()
@@ -1665,6 +1670,40 @@ test('a data page links each number to its source, and a canvas shows each board
   await expect(compared.locator('iframe')).toHaveCount(2)
   await compared.getByRole('button', { name: 'Done' }).click()
   await expect(compared).toHaveCount(0)
+  // Notes sit between the boards, and each page has its own boards and notes.
+  await expect(page.getByTestId('canvas-note')).toHaveText("The phone's page scrolls, so its board grows.")
+  await page.getByRole('tab', { name: 'Flows' }).click()
+  await expect(boards).toHaveCount(1)
+  await expect(boards.first()).toContainText('Sign-in flow')
+  await expect(page.getByTestId('canvas-note')).toHaveText('One step a screen.')
+  await page.getByRole('tab', { name: 'Screens' }).click()
+  await expect(boards).toHaveCount(3)
+})
+
+test("a page's comment on one of its elements says so, and shows the element when asked (ADR 0085)", async ({ page }) => {
+  const html =
+    '<!doctype html><p style="margin-top:1200px" id="total" data-comment-anchor="total-row">Total: 42</p><button id="c" style="position:fixed;top:8px">Comment on the total</button>' +
+    '<script>silt.use("comments").then(function(c){document.getElementById("c").onclick=function(){c.openComposer({element:document.getElementById("total")})}})</script>'
+  const file = join(mkdtempSync(join(tmpdir(), 'silt-element-')), 'page.json')
+  writeFileSync(file, JSON.stringify({ title: 'Totals', kind: 'html', content: html, capabilities: { comments: { composer_only: true } } }))
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill(`Artifact from ${file}`)
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText(`Done: Artifact from ${file}`)).toBeVisible()
+  const open = page.getByRole('button', { name: /^Open the artifact Totals/ })
+  await expect(page.getByTestId('artifact-frame').or(open).first()).toBeVisible()
+  if (!(await page.getByTestId('artifact-frame').isVisible())) await open.click()
+  const frame = page.frameLocator('[data-testid="artifact-frame"]')
+  await frame.getByRole('button', { name: 'Comment on the total' }).click()
+  await expect(page.getByText('On total-row')).toBeVisible()
+  await expect(page.getByText('Total: 42', { exact: true })).toBeVisible()
+  await page.getByLabel('comment on the artifact').fill('Round it')
+  await page.getByRole('button', { name: 'Comment', exact: true }).click()
+  const shown = page.getByRole('button', { name: 'On total-row' })
+  await expect(shown).toBeVisible()
+  await shown.click()
+  // The frame scrolls to the element and outlines it.
+  await expect.poll(() => frame.locator('#total').evaluate((element) => (element as HTMLElement).style.outline)).toContain('2px')
 })
 
 test('a doc and a sheet are edited in place, and what was typed is kept (ADR 0077)', async ({ page }) => {
@@ -1677,11 +1716,24 @@ test('a doc and a sheet are edited in place, and what was typed is kept (ADR 007
   await expect(doc.getByRole('heading', { name: 'Plan' })).toBeVisible()
   await doc.getByRole('button', { name: 'Edit' }).click()
   const text = doc.getByLabel("the doc's text")
+  // Typing goes through the browser's replica, as deltas, rather than a request per pause.
+  const typedLive = page.waitForRequest((request) => request.method() === 'POST' && /\/replica$/.test(new URL(request.url()).pathname))
   await text.press('ControlOrMeta+End')
   await text.pressSequentially('- review\n')
+  await typedLive
   await expect(doc.getByText('Saved')).toBeVisible()
+  // A comment on the new line, which the read view highlights.
+  await text.press('ArrowLeft')
+  for (let at = 0; at < 'review'.length; at++) await text.press('Shift+ArrowLeft')
+  await doc.getByRole('button', { name: 'Comment' }).click()
+  await doc.getByLabel('comment on the selected text').fill('Who reviews?')
+  await doc.getByRole('button', { name: 'Comment', exact: true }).last().click()
+  await expect(doc.getByTestId('doc-comments')).toContainText('Who reviews?')
   await doc.getByRole('button', { name: 'Read' }).click()
-  await expect(doc.getByText('review')).toBeVisible()
+  await expect(doc.getByText('review', { exact: true })).toBeVisible()
+  await expect
+    .poll(() => page.evaluate(() => (CSS as unknown as { highlights: Map<string, { size: number }> }).highlights.get('silt-doc-comments')?.size ?? 0))
+    .toBe(1)
   // The first version against the doc now, then the doc kept as a version of its own.
   await doc.getByRole('button', { name: 'Compare with a version' }).click()
   await page.getByRole('menuitem', { name: /^v1/ }).click()
@@ -1690,6 +1742,16 @@ test('a doc and a sheet are edited in place, and what was typed is kept (ADR 007
   await doc.getByLabel('what this version is').fill('Reviewed')
   await doc.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(page.getByText('Saved as v2')).toBeVisible()
+  // Rich text edits the heading as it reads, and writes back that block alone.
+  await doc.getByRole('button', { name: 'Rich text' }).click()
+  const heading = doc.getByTestId('doc-rich').getByRole('heading', { name: 'Plan' })
+  await heading.click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' for Q4')
+  await doc.getByRole('button', { name: 'Rich text' }).click()
+  await expect(doc.getByText('Saved')).toBeVisible()
+  await doc.getByRole('button', { name: 'Edit' }).click()
+  await expect(doc.getByLabel("the doc's text")).toHaveValue(/^# Plan for Q4\n[\s\S]*- review/)
 
   await page.getByLabel('draft').fill('Artifact sheet')
   await page.getByLabel('draft').press('Enter')
@@ -1814,4 +1876,31 @@ test('on a whiteboard people draw, connect, resize, rename and delete, and add a
   expect(saved.suggestedFilename()).toBe('Planning-board.png')
   const bytes = readFileSync((await saved.path()) ?? '')
   expect([...bytes.subarray(1, 4)].map((byte) => String.fromCharCode(byte)).join('')).toBe('PNG')
+})
+
+test('each artifact viewer has no serious accessibility problem axe finds', async ({ page }) => {
+  test.slow()
+  await startInNewThread(page, 'Fake agent')
+  const viewers: [string, string][] = [
+    ['Artifact deck', 'slides'],
+    ['Artifact numbers', 'data-page'],
+    ['Artifact doc', 'doc-editor'],
+    ['Artifact sheet', 'sheet'],
+    // Before the canvas, whose "Done: Artifact boards" would match this one's too.
+    ['Artifact board', 'whiteboard'],
+    ['Artifact boards', 'canvas'],
+  ]
+  const found: string[] = []
+  for (const [prompt, viewer] of viewers) {
+    await page.getByLabel('draft').fill(prompt)
+    await page.getByLabel('draft').press('Enter')
+    await expect(page.getByText(`Done: ${prompt}`)).toBeVisible()
+    if (!(await page.getByTestId(viewer).isVisible()))
+      await (viewer === 'canvas' ? page.getByRole('button', { name: /^Open the artifact Settings screen/ }).first() : page.getByTestId('artifact-card').last()).click()
+    await expect(page.getByTestId(viewer)).toBeVisible()
+    const checked = await new AxeBuilder({ page }).include(`[data-testid="${viewer}"]`).withTags(['wcag2a', 'wcag2aa']).analyze()
+    for (const violation of checked.violations.filter((one) => one.impact === 'serious' || one.impact === 'critical'))
+      found.push(`${viewer}: ${violation.id} (${violation.nodes.map((node) => node.target.join(' ')).slice(0, 3).join(', ')})`)
+  }
+  expect(found).toEqual([])
 })

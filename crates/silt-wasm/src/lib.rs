@@ -7,8 +7,8 @@ use std::collections::{HashMap, VecDeque};
 use std::str::FromStr;
 
 use silt_checkout::text_edits;
-use silt_log::{Author, Delta, Family, FileView, LogError, Op};
-use silt_types::{ActorId, Frontier, GitOid, ParseIdError, ThreadId};
+use silt_log::{Author, Delta, Family, FileView, LogError, Op, PageOp};
+use silt_types::{ActorId, ArtifactId, Frontier, GitOid, ParseIdError, ThreadId};
 use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -141,6 +141,48 @@ impl Core {
         self.shown.insert(path.to_owned(), (parents, text.to_owned()));
         Ok(made)
     }
+
+    /// Where what the editor shows of a doc is kept, apart from any file's.
+    fn page_key(artifact: ArtifactId) -> String {
+        format!("\0doc:{artifact}")
+    }
+
+    /// A doc artifact's text in the thread as it is now (ADR 0077).
+    pub fn page_text(&self, artifact: &str) -> Result<String, ReplicaError> {
+        Ok(self.family.doc_text(self.thread, ArtifactId::from_str(artifact)?))
+    }
+
+    /// The doc's text as it is now, shown in the editor; later edits are
+    /// made against it.
+    pub fn page_show(&mut self, artifact: &str) -> Result<String, ReplicaError> {
+        let id = ArtifactId::from_str(artifact)?;
+        let text = self.family.doc_text(self.thread, id);
+        self.shown.insert(Self::page_key(id), (self.family.thread_head(self.thread), text.clone()));
+        Ok(text)
+    }
+
+    /// The editor turned what it showed of the doc into `text`: makes those
+    /// edits as this replica's actor, at the version it showed, so what
+    /// others wrote since stays, and returns them. A doc edits at typing
+    /// speed this way, with no request per pause.
+    pub fn page_edit(&mut self, artifact: &str, text: &str, time_ms: i64) -> Result<Vec<Delta>, ReplicaError> {
+        let id = ArtifactId::from_str(artifact)?;
+        let key = Self::page_key(id);
+        let (mut parents, old) = match self.shown.get(&key) {
+            Some(shown) => shown.clone(),
+            None => (self.family.thread_head(self.thread), self.family.doc_text(self.thread, id)),
+        };
+        let mut made = Vec::new();
+        for op in text_edits(&old, text) {
+            let page = Op::Page(PageOp::Text { artifact: id, op });
+            let delta = self.family.delta(self.actor, self.thread, Author::User, time_ms, parents.clone(), page);
+            self.family.apply(delta.clone(), &mut self.bases)?;
+            parents = Frontier::single(delta.span.last());
+            made.push(delta);
+        }
+        self.shown.insert(key, (parents, text.to_owned()));
+        Ok(made)
+    }
 }
 
 /// The replica as the web UI sees it; deltas travel postcard-encoded.
@@ -219,6 +261,25 @@ impl Replica {
         self.0.version()
     }
 
+    /// A doc artifact's text in the thread as it is now.
+    pub fn page_text(&self, artifact: &str) -> Result<String, JsError> {
+        self.0.page_text(artifact).map_err(js)
+    }
+
+    /// The doc's text as it is now, to show in the editor; later edits are
+    /// made against it.
+    pub fn page_show(&mut self, artifact: &str) -> Result<String, JsError> {
+        self.0.page_show(artifact).map_err(js)
+    }
+
+    /// The editor's text of the doc is now `text`; returns the deltas that
+    /// make it so, to send to the daemon.
+    pub fn page_edit(&mut self, artifact: &str, text: &str, time_ms: f64) -> Result<Vec<u8>, JsError> {
+        #[expect(clippy::cast_possible_truncation, reason = "milliseconds since the epoch fit in an i64")]
+        let made = self.0.page_edit(artifact, text, time_ms as i64).map_err(js)?;
+        postcard::to_allocvec(&made).map_err(js)
+    }
+
     /// The editor's text of `path` is now `text`; returns the deltas that
     /// make it so, to send to the daemon.
     pub fn edit(&mut self, path: &str, text: &str, time_ms: f64) -> Result<Vec<u8>, JsError> {
@@ -260,6 +321,26 @@ mod tests {
         );
         family.apply(delta.clone(), &mut HashMap::new()).expect("applies");
         (vec![delta], oid)
+    }
+
+    #[test]
+    fn two_browsers_type_in_one_doc_and_converge() {
+        const DOC: &str = "0123456789ab";
+        let mut alice = Core::new(THREAD, "000000000000000000000000000000a1").expect("replica");
+        let mut bob = Core::new(THREAD, "000000000000000000000000000000b2").expect("replica");
+        let seed = alice.page_edit(DOC, "# Plan\n", 1).expect("the doc's first words");
+        bob.receive(0, seed.clone()).expect("receives");
+        alice.received = seed.len();
+        assert_eq!(bob.page_show(DOC).as_deref(), Ok("# Plan\n"));
+        assert_eq!(alice.page_show(DOC).as_deref(), Ok("# Plan\n"));
+        let from_alice = alice.page_edit(DOC, "# Plan\n- ship\n", 2).expect("types");
+        let from_bob = bob.page_edit(DOC, "# The plan\n", 2).expect("types");
+        bob.receive(seed.len(), from_alice).expect("receives");
+        alice.receive(seed.len(), from_bob).expect("receives");
+        let merged = "# The plan\n- ship\n";
+        assert_eq!(alice.page_text(DOC).as_deref(), Ok(merged));
+        assert_eq!(bob.page_text(DOC).as_deref(), Ok(merged));
+        assert!(alice.page_text("not-an-id").is_err());
     }
 
     #[test]

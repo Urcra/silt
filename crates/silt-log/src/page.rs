@@ -67,24 +67,24 @@ fn page_ops<'a>(items: &'a [HistoryItem<'a>], artifact: ArtifactId) -> Vec<(Stam
     ops
 }
 
-/// `artifact`'s documents, folded from `items`.
+/// `artifact`'s documents, folded from `items`. A write that would take a
+/// document past [`DOC_BYTES`], or the artifact past [`DOCS`] or
+/// [`PAGE_BYTES`], is left out, as a patch or a peer may write past what
+/// each op's own size shows; every replica leaves out the same ones.
 pub fn documents(items: &[HistoryItem<'_>], artifact: ArtifactId) -> Documents {
     let mut docs = Documents::new();
+    let mut total = 0;
     for (_, op) in page_ops(items, artifact) {
-        match op {
+        let (path, next) = match op {
             PageOp::Set { path, value, .. } => {
-                if let Ok(value) = serde_json::from_str(value) {
-                    docs.insert(path.clone(), value);
-                }
+                let Ok(value) = serde_json::from_str(value) else { continue };
+                (path.clone(), Some(value))
             }
             PageOp::Patched { path, fields, .. } => {
                 let Ok(serde_json::Value::Object(fields)) = serde_json::from_str::<serde_json::Value>(fields) else {
                     continue;
                 };
-                let doc = docs.entry(path.clone()).or_insert_with(|| serde_json::json!({}));
-                if !doc.is_object() {
-                    *doc = serde_json::json!({});
-                }
+                let mut doc = docs.get(path).filter(|doc| doc.is_object()).cloned().unwrap_or_else(|| serde_json::json!({}));
                 if let Some(object) = doc.as_object_mut() {
                     for (field, value) in fields {
                         if value.is_null() {
@@ -94,15 +94,30 @@ pub fn documents(items: &[HistoryItem<'_>], artifact: ArtifactId) -> Documents {
                         }
                     }
                 }
+                (path.clone(), Some(doc))
             }
-            PageOp::Deleted { path, .. } => {
-                docs.remove(path);
-            }
+            PageOp::Deleted { path, .. } => (path.clone(), None),
             PageOp::Asset { asset, blob, name, media_type, size, .. } => {
                 let doc = serde_json::json!({"blob": blob.to_string(), "name": name, "media_type": media_type, "size": size});
-                docs.insert(format!("_assets/{asset}"), doc);
+                (format!("_assets/{asset}"), Some(doc))
             }
-            PageOp::Text { .. } | PageOp::Lines { .. } | PageOp::Cell { .. } => {}
+            PageOp::Text { .. } | PageOp::Lines { .. } | PageOp::Cell { .. } => continue,
+        };
+        let before = docs.get(&path).map_or(0, |doc| path.len() + doc.to_string().len());
+        match next {
+            None => {
+                if docs.remove(&path).is_some() {
+                    total -= before;
+                }
+            }
+            Some(doc) => {
+                let length = doc.to_string().len();
+                let after = total - before + path.len() + length;
+                if length <= DOC_BYTES && after <= PAGE_BYTES && (before > 0 || docs.len() < DOCS) {
+                    docs.insert(path, doc);
+                    total = after;
+                }
+            }
         }
     }
     docs

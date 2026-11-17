@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use silt_fake_agent::{
-    Failed, Step, Utc, append, cwd, env_dir, env_or, exit, expect_words, feed, has, io, main_rs, read, records, write,
+    Failed, Step, Utc, append, cwd, env_dir, env_or, exit, expect_words, feed_hook, has, io, main_rs, read, records, write,
 };
 
 struct Session {
@@ -104,7 +104,7 @@ impl Session {
         let output = fs::File::create(self.home.join(format!("hook-{name}"))).map_err(io)?;
         let mut child = run.stdin(Stdio::piped()).stdout(output).spawn().map_err(io)?;
         let input = json!({"sessionId": self.id, "timestamp": self.time, "cwd": self.cwd, "prompt": prompt});
-        feed(&mut child, &input.to_string())?;
+        feed_hook(&mut child, input.to_string().as_bytes())?;
         match child.wait().map_err(io)?.code() {
             Some(0) => Ok(()),
             code => Err(Failed(code.and_then(|code| u8::try_from(code).ok()).unwrap_or(1), String::new())),
@@ -121,11 +121,9 @@ impl Session {
             &json!({"content": "", "toolRequests": [{"toolCallId": call, "name": "edit", "arguments": {"path": path}}]}),
         )?;
         self.event("assistant.turn_end", &json!({"turnId": "0"}))?;
-        // Like Copilot, events reach the file a little after they happen:
-        // longer than the daemon waits for a transcript to catch up, so the
-        // edit lands before its tool reads as started on any machine.
+        // Like Copilot, events reach the file a little after they happen.
         append(&path, &format!("{added}\n"))?;
-        std::thread::sleep(Duration::from_millis(1000));
+        std::thread::sleep(Duration::from_millis(100));
         self.event("tool.execution_start", &json!({"toolCallId": call, "toolName": "edit"}))?;
         self.event("tool.execution_complete", &json!({"toolCallId": call, "success": true, "result": {"content": "edited"}}))?;
         self.event("assistant.turn_start", &json!({"turnId": "1"}))?;

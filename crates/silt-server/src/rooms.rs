@@ -69,6 +69,150 @@ pub(crate) async fn device_socket(
     upgrade.max_message_size(64 * 1024).on_upgrade(move |socket| serve(socket, server, user))
 }
 
+/// Every view's room on one of the person's machines, over one socket: each
+/// frame names the channel it's for (ADR 0081).
+pub(crate) async fn device_mux(
+    State(server): State<Server>,
+    Extension(caller): Extension<crate::Caller>,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    let user = caller.user;
+    upgrade.max_message_size(64 * 1024).on_upgrade(move |socket| serve_mux(socket, server, user))
+}
+
+/// What a shared socket's frame says: a view joins on its channel, sends on
+/// it, or leaves it.
+#[derive(Deserialize)]
+struct MuxFrame {
+    ch: u32,
+    #[serde(default)]
+    join: Option<Join>,
+    #[serde(default)]
+    sent: Option<Sent>,
+    #[serde(default)]
+    leave: bool,
+}
+
+/// One view's room on a shared socket.
+struct Joined {
+    key: RoomKey,
+    peer: String,
+    thread: String,
+    artifact: silt_types::ArtifactId,
+    forward: tokio::task::JoinHandle<()>,
+}
+
+fn on(ch: u32, heard: &str) -> Message {
+    Message::Text(format!("{{\"ch\":{ch},\"heard\":{heard}}}").into())
+}
+
+/// A view joins its room, as `serve` joins one, its hearing tagged with its channel.
+async fn join_on(
+    server: &Server,
+    user: crate::UserId,
+    ch: u32,
+    join: Join,
+    out: &mpsc::Sender<Message>,
+) -> Result<Joined, String> {
+    let artifact = join.artifact.parse::<silt_types::ArtifactId>().map_err(|_| "not an artifact".to_owned())?;
+    let page = crate::browse::page_of(server, user, &join.thread, artifact).await.map_err(|_| "not_found".to_owned())?;
+    let config = page.declared.get("room").cloned().ok_or_else(|| "this page doesn't declare room".to_owned())?;
+    let key = RoomKey { thread: page.thread.to_string(), artifact: join.artifact, name: join.name };
+    let peer = uuid::Uuid::new_v4().simple().to_string();
+    let (sender, mut heard) = mpsc::channel::<String>(silt_proto::rooms::QUEUED);
+    let tagged = out.clone();
+    let forward = tokio::spawn(async move {
+        while let Some(text) = heard.recv().await {
+            if tagged.send(on(ch, &text)).await.is_err() {
+                break;
+            }
+        }
+    });
+    let mut rooms = server.shared.page_rooms.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    rooms.peers.insert(peer.clone(), sender);
+    let info = PeerInfo { peer: peer.clone(), user: page.me.clone(), kind: "person".into() };
+    let deliveries = rooms.hub.join(key.clone(), info, page.level, silt_proto::rooms::topic_levels(&config), crate::now_ms());
+    rooms.deliver(deliveries);
+    Ok(Joined { key, peer, thread: join.thread, artifact, forward })
+}
+
+fn leave_on(server: &Server, joined: Joined) {
+    joined.forward.abort();
+    let mut rooms = server.shared.page_rooms.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    rooms.peers.remove(&joined.peer);
+    let deliveries = rooms.hub.leave(&joined.key, &joined.peer, crate::now_ms());
+    rooms.deliver(deliveries);
+}
+
+async fn serve_mux(mut socket: WebSocket, server: Server, user: crate::UserId) {
+    let (out, mut outgoing) = mpsc::channel::<Message>(silt_proto::rooms::QUEUED * 4);
+    let mut joined: HashMap<u32, Joined> = HashMap::new();
+    let mut recheck = tokio::time::interval(RECHECK);
+    recheck.tick().await;
+    loop {
+        tokio::select! {
+            _ = recheck.tick() => {
+                // Someone who stops being able to read a thread stops hearing its rooms.
+                let mut lost = Vec::new();
+                for (ch, view) in &joined {
+                    if crate::browse::page_of(&server, user, &view.thread, view.artifact).await.is_err() {
+                        lost.push(*ch);
+                    }
+                }
+                for ch in lost {
+                    if let Some(view) = joined.remove(&ch) {
+                        leave_on(&server, view);
+                        let _ = socket.send(on(ch, &json!({"event": "refused", "reason": "not_found"}).to_string())).await;
+                    }
+                }
+            }
+            message = socket.recv() => match message {
+                Some(Ok(Message::Text(text))) => {
+                    let Ok(frame) = serde_json::from_str::<MuxFrame>(&text) else { continue };
+                    if let Some(join) = frame.join {
+                        if joined.contains_key(&frame.ch) {
+                            continue;
+                        }
+                        let said = if joined.len() >= silt_proto::rooms::MUX_ROOMS {
+                            Err(format!("rate_limited: a socket carries at most {} rooms", silt_proto::rooms::MUX_ROOMS))
+                        } else {
+                            join_on(&server, user, frame.ch, join, &out).await
+                        };
+                        let event = match said {
+                            Ok(view) => {
+                                let event = json!({"event": "joined", "peer": view.peer});
+                                joined.insert(frame.ch, view);
+                                event
+                            }
+                            Err(reason) => json!({"event": "refused", "reason": reason}),
+                        };
+                        if socket.send(on(frame.ch, &event.to_string())).await.is_err() {
+                            break;
+                        }
+                    } else if frame.leave {
+                        if let Some(view) = joined.remove(&frame.ch) {
+                            leave_on(&server, view);
+                        }
+                    } else if let (Some(sent), Some(view)) = (frame.sent, joined.get(&frame.ch)) {
+                        let mut rooms = server.shared.page_rooms.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let deliveries = rooms.hub.sent(&view.key, &view.peer, sent, crate::now_ms());
+                        rooms.deliver(deliveries);
+                    }
+                }
+                Some(Ok(_)) => continue,
+                Some(Err(_)) | None => break,
+            },
+            heard = outgoing.recv() => match heard {
+                Some(message) => if socket.send(message).await.is_err() { break },
+                None => break,
+            },
+        }
+    }
+    for (_, view) in joined.drain() {
+        leave_on(&server, view);
+    }
+}
+
 /// What the thread's agent says to a page's room, from the device it runs
 /// on: it joins once as the agent, and hears what the room kept.
 #[derive(Deserialize)]
@@ -77,6 +221,8 @@ pub(crate) struct AgentSays {
     artifact: String,
     #[serde(default)]
     emit: Option<(String, serde_json::Value)>,
+    #[serde(default)]
+    presence: Option<serde_json::Value>,
 }
 
 /// The thread's agent speaks in, or listens to, a page's room here, for a
@@ -99,8 +245,13 @@ pub(crate) async fn agent(
         let deliveries = rooms.hub.join(key.clone(), info, page.level, silt_proto::rooms::topic_levels(&config), now);
         rooms.deliver(deliveries);
     }
-    if let Some((topic, data)) = says.emit {
-        let sent = rooms.hub.sent(&key, &peer, Sent::Emit { topic, data }, now);
+    let said = says
+        .emit
+        .map(|(topic, data)| Sent::Emit { topic, data })
+        .into_iter()
+        .chain(says.presence.map(|state| Sent::Presence { state }));
+    for sent in said {
+        let sent = rooms.hub.sent(&key, &peer, sent, now);
         if let Some((_, Heard::Refused { reason })) = sent.iter().find(|(to, _)| *to == peer) {
             return Err(crate::bad_request(format!("the room refused it: {reason}")));
         }

@@ -223,6 +223,41 @@ test('projects', async ({ page }) => {
   })
 })
 
+test('design systems (ADR 0088)', async ({ page }) => {
+  await open(page, '/settings/design-systems')
+  await shoot(page, 'design-systems', async (shown) => {
+    await expect(shown.getByRole('link', { name: /Harbor/ })).toBeVisible()
+  })
+})
+
+test('a new design system (ADR 0088)', async ({ page }) => {
+  await open(page, '/settings/design-systems')
+  await shoot(page, 'new-design-system', async (shown) => {
+    if (!(await shown.getByRole('dialog', { name: 'New design system' }).isVisible())) await shown.getByRole('button', { name: 'New design system' }).first().click()
+    await shown.getByRole('textbox', { name: 'Name' }).fill('Harbor')
+    await expect(shown.getByRole('button', { name: 'Start building' })).toBeVisible()
+  })
+})
+
+test("a design system's page (ADR 0088)", async ({ page }) => {
+  await open(page, '/settings/design-systems/system?source=personal&name=harbor')
+  await shoot(page, 'design-system', async (shown) => {
+    await expect(shown.frameLocator('iframe[title="button preview"]').getByRole('button', { name: 'Set sail' })).toBeVisible()
+    await expect(shown.frameLocator('iframe[title="tag preview"]').getByText('Docked')).toBeVisible()
+    // Each frame sizes itself to its content once drawn.
+    await shown.waitForTimeout(300)
+  })
+})
+
+test("a design system's tokens (ADR 0088)", async ({ page }) => {
+  await open(page, '/settings/design-systems/system?source=personal&name=harbor')
+  await shoot(page, 'design-system-tokens', async (shown) => {
+    await shown.getByRole('tab', { name: 'Tokens' }).click()
+    await expect(shown.frameLocator('iframe[title="type scale"]').getByText('Sphinx of black quartz, judge my vow').first()).toBeVisible()
+    await shown.waitForTimeout(300)
+  })
+})
+
 test('adding a project', async ({ page }) => {
   await open(page, '/settings/add')
   await shoot(page, 'add-project', async (shown) => {

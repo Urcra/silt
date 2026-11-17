@@ -20,6 +20,10 @@ use crate::{ApiError, Caller, Server, UserId, id_bytes, id_from};
 
 /// How long the browser waits for the daemon to answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
+/// How long a stop waits to reach the device answering the question.
+const STOP_WAIT: Duration = Duration::from_secs(10);
+/// How long a page's read of the thread's files waits on a device before the server reads them itself.
+const FILES_WAIT: Duration = Duration::from_secs(8);
 /// How long a page's question waits for an agent's answer (ADR 0072).
 const SAMPLE_WAIT: Duration = Duration::from_secs(120);
 /// How long a prompt left for an offline device waits for it.
@@ -47,6 +51,7 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads/{id}/files/at", get(file_at))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sample/{ask}", get(sample_so_far))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/sample/{ask}/stop", post(sample_stop))
         .route("/app/api/threads/{id}/artifacts/{artifact}/sample/{ask}/tools/{call}", post(sample_tool_result))
         .route("/app/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
         .route("/app/api/threads/{id}/artifacts/{artifact}/mcp", post(page_mcp))
@@ -122,6 +127,25 @@ async fn sample(
     Ok(Json(answered?))
 }
 
+/// The page stopped asking its question named `ask`: the device answering
+/// it hears so and ends its agent's run. Nothing is waited for.
+async fn sample_stop(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, _, ask)): Path<(String, String, String)>,
+) -> Result<StatusCode, Refused> {
+    let thread = thread_for(&server, browser.user, &id).await?;
+    let Some((relay, device)) = server.shared.control.asked_on(browser.user, &ask) else { return Ok(StatusCode::NO_CONTENT) };
+    let command = RemoteCommand::StopSample { relay };
+    if let Err(needs) = browser.capabilities.allow(&command) {
+        return Err(Refused(StatusCode::FORBIDDEN, format!("this phone may not {needs}; change that on the Devices page")));
+    }
+    let stop =
+        Relay { device, thread, sender: browser.user, from: None, capabilities: browser.capabilities, command, ttl: STOP_WAIT };
+    control::relay(&server, stop).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// What the agent has said so far of a page's question named `ask`, while
 /// a device answers it.
 async fn sample_so_far(
@@ -150,7 +174,8 @@ async fn sample_tool_result(
 }
 
 /// The thread's files for a page, read by one of the person's devices that
-/// holds the family (ADR 0078): the server projects no file text itself.
+/// holds the family (ADR 0078), or, when none answers, folded here from the
+/// family's deltas and its git mirror.
 async fn page_files(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,
@@ -163,7 +188,16 @@ async fn page_files(
         return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare files")));
     }
     consented(&server, browser.user, &id, &artifact, "files").await?;
-    Ok(Json(ask_any_device(&server, browser, thread, RemoteCommand::PageFiles { artifact, asked }).await?))
+    let config = latest.capabilities.as_ref().and_then(|declared| declared.get("files")).cloned().unwrap_or_default();
+    // A device reads its own files at once, so one that's slow to answer has likely gone, and the server answers instead.
+    match ask_device_within(&server, browser, thread, RemoteCommand::PageFiles { artifact, asked: asked.clone() }, FILES_WAIT)
+        .await
+    {
+        Err(Refused(StatusCode::CONFLICT, _)) => {
+            Ok(Json(crate::browse::projected_files(&server, browser.user, &id, config, asked).await?))
+        }
+        answered => Ok(Json(answered?)),
+    }
 }
 
 /// A page's call of the person's page connectors, run by one of their own
@@ -256,7 +290,7 @@ async fn ask_device_watched(
         };
         let id = control::relay(server, relay).await?;
         if let Some((user, ask)) = &watched {
-            server.shared.control.asked(*user, ask.clone(), id);
+            server.shared.control.asked(*user, ask.clone(), id, device.id);
         }
         match control::answer_of(server, id, wait).await? {
             Some(answer) if answer.ok => return Ok(answer.data),
@@ -267,13 +301,14 @@ async fn ask_device_watched(
     Err(Refused(StatusCode::CONFLICT, last))
 }
 
-/// Whose view of which merge request, with git's rewrites left out or not
-/// (ADR 0069).
+/// Whose view of which merge request, with git's rewrites and other
+/// agents' edits left out or not (ADR 0069, ADR 0089).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct MrView {
     user: crate::UserId,
     mr: String,
     hide_git: bool,
+    hide_others: bool,
 }
 
 /// A merge request as the server holds it, with its files and diff from
@@ -284,22 +319,21 @@ async fn mr_details(
     Path(id): Path<String>,
     Query(query): Query<silt_proto::view::GitQuery>,
 ) -> Result<Json<Value>, Refused> {
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let Json(own) = crate::browse::merge_request(State(server.clone()), Extension(browser), Path(id.clone())).await?;
     let mut details = serde_json::to_value(&own).map_err(crate::ServerError::from)?;
     if !browser.capabilities.review {
         return Ok(Json(details));
     }
     let (_, request, _) = crate::browse::seen_request(&server, browser.user, &id).await?;
-    let key = MrView { user: browser.user, mr: request.id.to_string(), hide_git };
+    let key = MrView { user: browser.user, mr: request.id.to_string(), hide_git, hide_others };
     let cached =
         server.shared.mr_views.lock().await.get(&key).filter(|(at, _)| at.elapsed() < MR_VIEW_FOR).map(|(_, view)| view.clone());
     let view = match cached {
         Some(view) => Some(view),
         None => {
-            let asked =
-                ask_any_device(&server, browser, request.target, RemoteCommand::MrShow { mr: request.id.to_string(), hide_git })
-                    .await;
+            let command = RemoteCommand::MrShow { mr: request.id.to_string(), hide_git, hide_others };
+            let asked = ask_any_device(&server, browser, request.target, command).await;
             let view = asked.ok();
             if let Some(view) = &view {
                 server.shared.mr_views.lock().await.insert(key, (std::time::Instant::now(), view.clone()));
@@ -332,8 +366,8 @@ async fn mr_seen(
     let command = RemoteCommand::MrSeen { mr: request.id.to_string(), path: body.path, seen: body.seen };
     let answer = ask_any_device(&server, browser, request.target, command).await?;
     let mut views = server.shared.mr_views.lock().await;
-    for hide_git in [false, true] {
-        views.remove(&MrView { user: browser.user, mr: request.id.to_string(), hide_git });
+    for (hide_git, hide_others) in [(false, false), (true, false), (false, true), (true, true)] {
+        views.remove(&MrView { user: browser.user, mr: request.id.to_string(), hide_git, hide_others });
     }
     drop(views);
     Ok(Json(answer))

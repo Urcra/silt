@@ -4,6 +4,7 @@ mod delta;
 mod family;
 mod git_made;
 mod graph;
+mod hidden;
 mod notes;
 pub mod page;
 mod purge;
@@ -23,6 +24,7 @@ pub use family::{
 };
 pub use git_made::GitMade;
 pub use graph::{GraphEvent, GraphItem, graph_of};
+pub use hidden::{Hidden, Hide};
 pub use notes::{NOTE_FORMAT, Note, NoteAuthor, NoteError, NoteFile, Run, runs_of};
 pub use purge::kept_after_purge;
 pub use stored::{DELTA_FORMAT, StoredError, decode_stored, encode_stored, stored_len};

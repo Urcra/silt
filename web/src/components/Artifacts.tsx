@@ -25,6 +25,7 @@ import {
   quoted,
 } from '../artifacts'
 import type { Opened } from '../artifactActions'
+import { deckOf, deckOffline } from '../typed'
 import { keys, message } from '../query'
 import { useNow } from '../now'
 import { usePermalink } from '../usePermalink'
@@ -158,6 +159,9 @@ export function ArtifactViewer({
   const [reloads, setReloads] = useState(0)
   // What's selected in the page, for a comment to quote.
   const [quote, setQuote] = useState<string | null>(null)
+  // The page's element a new comment is on, when the page opened the composer on one (ADR 0085).
+  const [anchor, setAnchor] = useState<string | null>(null)
+  const revealing = useRef<((anchor: string) => void) | null>(null)
   const [sharing, setSharing] = useState(false)
   // What a page asks the person to agree to, such as saving a file, until they answer.
   const [asking, setAsking] = useState<{ title: string; detail: string; action: string; answer: (agreed: boolean) => void } | null>(null)
@@ -188,14 +192,16 @@ export function ArtifactViewer({
           setAsking(waiting.current[0])
         }
       }),
-    openComposer: (text) => {
+    openComposer: (text, anchor) => {
       setQuote(text || null)
+      setAnchor(anchor ?? null)
       composer.current?.()
     },
-    addComment: async (text, quote) => {
+    addComment: async (text, quote, anchor) => {
       const { shown, onCommentsChanged } = current.current
       if (!shown) throw new Error('no version is shown')
-      const made = await api.addComment(thread, { on: 'entry', index: shown.entry.index }, quoted(text, quote))
+      const on = anchor ? ({ on: 'element', artifact: shown.artifact.id, anchor } as const) : ({ on: 'entry', index: shown.entry.index } as const)
+      const made = await api.addComment(thread, on, quoted(text, quote))
       await onCommentsChanged()
       return made.id
     },
@@ -204,6 +210,9 @@ export function ArtifactViewer({
       return group ? commentsOn(group, comments).map((comment) => comment.id) : []
     },
     commentsChanged: () => void current.current.onCommentsChanged(),
+    revealer: (reveal) => {
+      revealing.current = reveal
+    },
     voice: (now, stop) => setVoice(now === 'idle' || !stop ? null : { now, stop }),
   }))
   // A click within half a second of an ask appearing isn't taken as its answer.
@@ -280,14 +289,15 @@ export function ArtifactViewer({
   const exportHtml = async () => {
     if (!content.data) return
     try {
-      const rendered = await renderedMarkup(artifact, content.data)
       // The version's files go inside the copy, so it opens anywhere (ADR 0074).
-      const files: InlineFiles = {}
-      for (const [path, file] of Object.entries(artifact.files ?? {})) {
-        if (!file) continue
-        const read = await api.artifact(thread, file.blob)
-        files[path] = { media_type: file.media_type, data: read.data }
+      const files = await inlineFilesOf(thread, artifact)
+      // A deck's copy is a page of its own: its slides in one frame, with the viewer's controls (ADR 0076).
+      const deck = artifact.kind === 'slides' ? deckOf(textOf(content.data)) : null
+      if (deck) {
+        download(deckOffline(deck, `${artifact.title} · v${artifact.version}`, styleText, files), 'text/html', fileName(artifact, 'html'))
+        return
       }
+      const rendered = await renderedMarkup(artifact, content.data)
       // Past what one HTML file carries well, the copy is the page with its files beside it, zipped.
       const carried = Object.values(files).reduce((sum, file) => sum + (file.data.length * 3) / 4, 0)
       if (carried > ZIP_ABOVE) {
@@ -444,11 +454,16 @@ export function ArtifactViewer({
           shown={shown}
           comments={comments}
           quote={quote}
-          onClearQuote={() => setQuote(null)}
+          anchor={anchor}
+          onClearQuote={() => {
+            setQuote(null)
+            setAnchor(null)
+          }}
           onChanged={onCommentsChanged}
           opener={(open) => {
             composer.current = open
           }}
+          onReveal={(shownAnchor) => revealing.current?.(shownAnchor)}
         />
         {onFull && (
           <IconButton icon={full ? 'collapse' : 'expand'} label={full ? 'Leave the full view (F)' : 'Full view (F)'} onClick={onFull} className="max-lg:hidden" />
@@ -684,12 +699,21 @@ function ArtifactPage({
       }
     }
     window.addEventListener('message', heard)
+    holder.revealer?.((anchor) => send.current({ silt: 'event', cap: 'comments', topic: 'reveal', data: { anchor } }))
     return () => {
       window.removeEventListener('message', heard)
+      holder.revealer?.(null)
       broker.dispose()
     }
   }, [thread, artifact, holder, nonce])
   const selected = () => onSelect(String(window.getSelection() ?? '').trim().slice(0, 500))
+  // A deck's or a canvas's own files, carried into their frames, which can't reach Silt (ADR 0074).
+  const files = useQuery({
+    queryKey: ['artifact-files', thread, artifact.id, artifact.version],
+    queryFn: () => inlineFilesOf(thread, artifact),
+    enabled: (artifact.kind === 'slides' || artifact.kind === 'canvas') && Object.keys(artifact.files ?? {}).length > 0,
+    staleTime: Infinity,
+  })
   const scale = zoom / 100
   const zoomed = { transform: `scale(${scale})`, transformOrigin: '0 0', width: `${100 / scale}%`, height: `${100 / scale}%` }
   if (source)
@@ -733,13 +757,15 @@ function ArtifactPage({
         style={style}
         theme={startTheme}
         title={artifact.title}
+        files={files.data}
         onComment={(quote) => holder.openComposer(quote)}
         onPrint={(html) => void printDeck(thread, artifact, html)}
       />,
     )
   if (artifact.kind === 'canvas')
-    return typed(<CanvasView text={textOf(content)} style={style} theme={startTheme} onComment={(quote) => holder.openComposer(quote)} />)
-  if (artifact.kind === 'data') return typed(<DataView text={textOf(content)} theme={theme} style={style} />)
+    return typed(<CanvasView text={textOf(content)} style={style} theme={startTheme} files={files.data} onComment={(quote) => holder.openComposer(quote)} />)
+  if (artifact.kind === 'data')
+    return typed(<DataView text={textOf(content)} theme={theme} style={style} live={{ thread, artifact: artifact.id, version: artifact.version }} />)
   // Docs and sheets show as they stand now, edited in place (ADR 0077).
   if (artifact.kind === 'doc') return typed(<DocEditor thread={thread} artifact={artifact.id} title={artifact.title} versions={versions} />)
   if (artifact.kind === 'sheet') return typed(<SheetGrid thread={thread} artifact={artifact.id} title={artifact.title} />)
@@ -792,6 +818,17 @@ async function printDeck(thread: string, artifact: ArtifactView, html: string) {
   } catch (failure) {
     toast(message(failure), 'danger')
   }
+}
+
+/** A version's files, read whole, as a frame or an offline copy carries them. */
+async function inlineFilesOf(thread: string, artifact: ArtifactView): Promise<InlineFiles> {
+  const files: InlineFiles = {}
+  for (const [path, file] of Object.entries(artifact.files ?? {})) {
+    if (!file) continue
+    const read = await api.artifact(thread, file.blob)
+    files[path] = { media_type: file.media_type, data: read.data }
+  }
+  return files
 }
 
 /** Past this many bytes of files, an offline copy is a zip rather than one HTML file. */

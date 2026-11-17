@@ -61,8 +61,13 @@ pub fn show(lines: &[ShowLine]) -> String {
                 other => writeln!(out, "[{other}] {}", clip(text, 160)),
             },
             ShowLine::ToolCall { name, input, .. } => writeln!(out, "  ⚙ {name} {}", clip(input, 140)),
-            ShowLine::Edits { tool_use_id, files } => {
-                let who = if tool_use_id.is_some() { "    ✎" } else { "  ✎ outside tool calls:" };
+            ShowLine::Edits { tool_use_id, files, shared } => {
+                let who = match shared {
+                    Some(shared) if shared.others => format!("  ✎ by another agent ({}):", shared.agents.join(", ")),
+                    Some(shared) => format!("  ✎ by one of these agents ({}):", shared.agents.join(", ")),
+                    None if tool_use_id.is_some() => "    ✎".to_owned(),
+                    None => "  ✎ outside tool calls:".to_owned(),
+                };
                 let files: Vec<String> =
                     files.iter().map(|file| format!("{} +{} -{}", file.path, file.inserted, file.deleted)).collect();
                 writeln!(out, "{who} {}", files.join(", "))
@@ -139,6 +144,9 @@ pub fn comment_location(location: &CommentLocation) -> String {
         CommentLocation::Entry { index, excerpt } => format!("entry {index} ({})", clip(excerpt, 60)),
         CommentLocation::Doc { artifact, outdated: true, .. } => format!("doc {artifact} (outdated: the text was deleted)"),
         CommentLocation::Doc { artifact, excerpt, .. } => format!("doc {artifact} (\"{}\")", clip(excerpt, 60)),
+        CommentLocation::Cell { artifact, outdated: true, .. } => format!("sheet {artifact} (outdated: the cell was taken out)"),
+        CommentLocation::Cell { artifact, sheet, address, .. } => format!("sheet {artifact}, sheet {} {address}", sheet + 1),
+        CommentLocation::Element { artifact, anchor } => format!("page {artifact}, {}", clip(anchor, 60)),
         CommentLocation::Unknown => "an unknown place".into(),
     }
 }

@@ -24,8 +24,13 @@ pub mod view;
 /// diff may leave out (ADR 0069). 12: a person's own design systems, synced
 /// through each server they use (ADR 0071). 13: an artifact's page data
 /// (`Op::Page`) and comments on a doc's text (ADR 0072, ADR 0077). 14:
-/// rooms that span machines through `/v1/rooms` (ADR 0081).
-pub const PROTOCOL: u32 = 14;
+/// rooms that span machines through `/v1/rooms` (ADR 0081). 15: a room's
+/// presence sent as it changes, and comments on a sheet's cells. 16: a
+/// design system's components (ADR 0086). 17: its components' guidelines,
+/// cover and assets (ADR 0088). 18: edits by another agent in the same
+/// clone, or by one of several (`Author::Others`, `Author::Agents`,
+/// ADR 0089).
+pub const PROTOCOL: u32 = 18;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -239,27 +244,86 @@ pub struct DesignSystemCopy {
     /// Its font files, by their name under `fonts/`, in base64.
     #[serde(default)]
     pub fonts: std::collections::BTreeMap<String, String>,
+    /// Its `components.css` (ADR 0086).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub components_css: String,
+    /// Its components' examples, by their name under `components/`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub components: std::collections::BTreeMap<String, String>,
+    /// Its components' guidelines, by name (ADR 0088).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub component_guides: std::collections::BTreeMap<String, String>,
+    /// Its `cover.html`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cover: String,
+    /// Its assets, by their path under `assets/` (`<Group>/<file>`), in
+    /// base64.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub assets: std::collections::BTreeMap<String, String>,
 }
 
 /// The most a design system's copy may hold, its fonts in base64 included.
-pub const DESIGN_SYSTEM_BYTES: usize = 8 << 20;
+pub const DESIGN_SYSTEM_BYTES: usize = 16 << 20;
 
 impl DesignSystemCopy {
     /// Whether a device may take it as it is: a system's name, font files
-    /// named plainly, and no more than [`DESIGN_SYSTEM_BYTES`].
+    /// and components named plainly, and no more than
+    /// [`DESIGN_SYSTEM_BYTES`] and [`DESIGN_COMPONENTS`].
     pub fn valid(&self) -> bool {
-        let name = (1..=64).contains(&self.name.len())
-            && self.name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-            && !self.name.starts_with('-');
+        let named = |name: &str| {
+            (1..=64).contains(&name.len())
+                && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                && !name.starts_with('-')
+        };
         let fonts = self.fonts.keys().all(|file| {
             (1..=128).contains(&file.len())
                 && !file.starts_with('.')
                 && file.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
         });
-        let size = self.readme.len() + self.tokens.len() + self.fonts.values().map(String::len).sum::<usize>();
-        name && fonts && size <= DESIGN_SYSTEM_BYTES && self.fonts.len() <= 64
+        let components = self.components.len() <= DESIGN_COMPONENTS
+            && self.components.keys().all(|name| named(name))
+            && self.components_css.len() <= DESIGN_COMPONENTS_CSS_BYTES
+            && self.components.values().all(|html| html.len() <= DESIGN_COMPONENT_BYTES)
+            && self.component_guides.keys().all(|name| self.components.contains_key(name))
+            && self.component_guides.values().all(|guide| guide.len() <= DESIGN_COMPONENT_BYTES);
+        // An asset's path is `<Group>/<file>`, each a plain name, so it
+        // can't leave the system's `assets/` when written out.
+        let plain = |part: &str| {
+            (1..=64).contains(&part.len())
+                && part.as_bytes()[0].is_ascii_alphanumeric()
+                && part.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+                && !part.contains("..")
+        };
+        let assets = self.assets.len() <= DESIGN_ASSETS
+            && self.assets.keys().all(|path| path.split_once('/').is_some_and(|(group, file)| plain(group) && plain(file)))
+            && self.assets.values().all(|data| data.len() <= DESIGN_ASSET_BYTES.div_ceil(3) * 4);
+        let size = self.readme.len()
+            + self.tokens.len()
+            + self.fonts.values().map(String::len).sum::<usize>()
+            + self.components_css.len()
+            + self.components.values().map(String::len).sum::<usize>()
+            + self.component_guides.values().map(String::len).sum::<usize>()
+            + self.cover.len()
+            + self.assets.values().map(String::len).sum::<usize>();
+        named(&self.name)
+            && fonts
+            && components
+            && assets
+            && self.cover.len() <= DESIGN_COVER_BYTES
+            && size <= DESIGN_SYSTEM_BYTES
+            && self.fonts.len() <= 64
     }
 }
+
+/// The most components a copy holds, and how large they may be; what
+/// `silt_design` keeps of a system's folder (ADR 0086).
+pub const DESIGN_COMPONENTS: usize = 48;
+pub const DESIGN_COMPONENT_BYTES: usize = 16 << 10;
+pub const DESIGN_COMPONENTS_CSS_BYTES: usize = 128 << 10;
+/// A copy's cover and assets, as `silt_design` keeps them (ADR 0088).
+pub const DESIGN_COVER_BYTES: usize = 64 << 10;
+pub const DESIGN_ASSETS: usize = 64;
+pub const DESIGN_ASSET_BYTES: usize = 1 << 20;
 
 /// A person's marks on one thread's files (ADR 0067).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1306,6 +1370,9 @@ pub enum RemoteCommand {
         /// Leave out what git itself rewrote (ADR 0069).
         #[serde(default)]
         hide_git: bool,
+        /// Leave out other agents' edits (ADR 0089).
+        #[serde(default)]
+        hide_others: bool,
     },
     /// Marks one of a merge request's files seen, or not, as it is now.
     MrSeen {
@@ -1342,6 +1409,11 @@ pub enum RemoteCommand {
         /// server while it answers.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tools: Vec<crate::artifact::SampleTool>,
+    },
+    /// Stops the page's question this device answers for the command
+    /// `relay`, ending its agent's run.
+    StopSample {
+        relay: i64,
     },
     /// The thread's files for a page that declares `files` (ADR 0078), as
     /// the device that holds the family reads them.
@@ -1404,7 +1476,7 @@ impl Capabilities {
             | RemoteCommand::PageFiles { .. } => {
                 (self.review, "review merge requests")
             }
-            RemoteCommand::Sample { .. } => (self.sample, "ask an agent a page's question"),
+            RemoteCommand::Sample { .. } | RemoteCommand::StopSample { .. } => (self.sample, "ask an agent a page's question"),
             RemoteCommand::PageMcp { .. } => (self.page_tools, "call your page connectors"),
         };
         if allowed { Ok(()) } else { Err(needs) }

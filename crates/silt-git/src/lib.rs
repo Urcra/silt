@@ -132,7 +132,9 @@ impl Repo {
             return Ok(from_reflog);
         }
         let before = format!("--before={seconds}");
-        let older = self.git(&["rev-list", "-1", &before, "HEAD"], None).unwrap_or_default();
+        // git reads a date of 0 as none at all, and so as now.
+        let older =
+            if seconds > 0 { self.git(&["rev-list", "-1", &before, "HEAD"], None).unwrap_or_default() } else { Vec::new() };
         match String::from_utf8_lossy(&older).trim().parse() {
             Ok(commit) => Ok(Some(commit)),
             Err(_) => self.head_commit(),

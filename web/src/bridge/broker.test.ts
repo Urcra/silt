@@ -30,6 +30,15 @@ describe('the bridge broker', () => {
     expect(await broker.answer({ id: 5, cap: 'db', method: 'echo', args: 4 })).toEqual({ ok: true, value: 4 })
   })
 
+  it('lets a capability take and give more than a message where it says so', async () => {
+    const big = 'x'.repeat(MESSAGE_BYTES + 1)
+    const roomy: CapabilityHandler = { methods: ['echo'], call: async (_method, args) => args, callBytes: 4 * MESSAGE_BYTES, answerBytes: 4 * MESSAGE_BYTES }
+    const broker = new Broker({ thread: 't', artifact: artifact({ db: {}, files: {} }), emit: () => undefined }, { db: roomy, files: echo })
+    expect(await broker.answer({ id: 1, cap: 'db', method: 'echo', args: big })).toEqual({ ok: true, value: big })
+    const files = await broker.answer({ id: 2, cap: 'files', method: 'echo', args: big })
+    expect(files).toMatchObject({ ok: false, error: { code: 'too_large' } })
+  })
+
   it('reads only well-formed calls', () => {
     expect(callOf({ silt: 'call', id: 1, cap: 'db', method: 'get', args: { path: 'a/b' } })).toEqual({ id: 1, cap: 'db', method: 'get', args: { path: 'a/b' } })
     expect(callOf({ silt: 'call', id: '1', cap: 'db', method: 'get' })).toBeNull()

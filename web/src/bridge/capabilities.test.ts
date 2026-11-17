@@ -81,6 +81,13 @@ describe('the built-in permissions', () => {
     expect(await broker.answer({ id: 1, cap: 'silt', method: 'use', args: { name: 'permissions' } })).toMatchObject({ ok: true, value: { available: true } })
     expect(await broker.answer({ id: 2, cap: 'silt', method: 'use', args: { name: 'sample' } })).toMatchObject({ ok: true, value: { available: false } })
   })
+  it('says a capability that never asks is granted wherever it is served', async () => {
+    vi.spyOn(api, 'artifactGrants').mockResolvedValue({})
+    const page: ArtifactView = { ...artifact, capabilities: { db: {}, sample: {}, dictation: {} } }
+    const broker = new Broker({ thread: 't', artifact: page, emit: () => undefined }, handlersFor('t', page, holder(true)))
+    const answered = await broker.answer({ id: 1, cap: 'permissions', method: 'state', args: {} })
+    expect(answered).toMatchObject({ ok: true, value: { db: 'granted', sample: 'prompt' } })
+  })
 })
 
 describe('the people a page sees', () => {

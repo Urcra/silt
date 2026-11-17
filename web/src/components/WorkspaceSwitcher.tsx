@@ -124,7 +124,7 @@ function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => numb
           ...(view.org_policy ? [`${view.org_policy.org}'s rules`] : []),
           ...(policy.agents ? [policy.agents.map((key) => KNOWN_AGENTS.find((agent) => agent.key === key)?.name ?? key).join(', ') + ' only'] : []),
           ...(policy.max_preset && policy.max_preset !== 'full_access' ? ['asks first'] : []),
-          ...(policy.isolated ? ['isolated'] : policy.sandbox ? ['sandboxed'] : []),
+          ...(policy.isolated ? ['others hidden'] : policy.sandbox ? ['sandboxed'] : []),
         ]
         const isDefault = view.workspace.id === workspaces.data.default
         return {

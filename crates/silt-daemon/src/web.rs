@@ -39,6 +39,8 @@ struct Web {
     frames: Arc<Mutex<crate::frames::FrameKeys>>,
     /// Each room socket's way to its browser, by peer (ADR 0081).
     room_peers: Arc<Mutex<HashMap<String, mpsc::Sender<String>>>>,
+    /// Each server's one socket for every view's room here.
+    room_mux: crate::room_mux::Upstreams,
 }
 
 /// Codes that each stand in for the token once, shortly. Shared between the
@@ -108,6 +110,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         vendor: Arc::new(silt_vendor::Vendor::new(&crate::paths::data_dir().join("vendor"))),
         frames: Arc::default(),
         room_peers: Arc::default(),
+        room_mux: Arc::default(),
     };
     let api = Router::new()
         .route("/api/events", get(events_socket))
@@ -152,6 +155,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/page-connectors", get(page_connectors).put(set_page_connectors))
         .route("/api/page-connectors/import", post(import_page_connectors))
         .route("/api/page-connectors/{name}/tools", get(connector_tools))
+        .route("/api/page-connectors/{name}/secret", put(set_connector_secret))
         .route("/api/threads/{id}/artifacts/{artifact}/sheet", post(sheet_data))
         .route("/api/threads/{id}/artifacts/{artifact}/sheet.xlsx", get(sheet_xlsx))
         .route(
@@ -166,6 +170,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
             post(artifact_pdf).layer(DefaultBodyLimit::max(PAGE_FILE_BODY_BYTES)),
         )
         .route("/api/threads/{id}/artifacts/{artifact}/sample/{ask}/tools/{call}", post(sample_tool_result))
+        .route("/api/threads/{id}/artifacts/{artifact}/sample/{ask}/stop", post(stop_sample))
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
@@ -192,6 +197,11 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/chats/settings", get(chat_settings).put(set_chat_settings))
         .route("/api/workspaces", get(workspaces).put(set_workspaces))
         .route("/api/design-systems", get(design_systems))
+        .route("/api/design-systems/catalog", get(design_catalog))
+        .route("/api/design-systems/system", get(design_system))
+        .route("/api/design-systems/asset", get(design_asset))
+        .route("/api/design-systems/start", post(design_start))
+        .route("/api/threads/{id}/design-system", get(thread_design))
         .route("/api/artifact-settings", get(artifact_settings).put(set_artifact_settings))
         .route("/api/projects/design-systems", get(project_design_systems).put(set_project_design_system))
         .route("/api/workspaces/assign", post(assign_project))
@@ -433,7 +443,11 @@ async fn serve_room(mut socket: WebSocket, web: Web) {
     if let Ok(route) = answer(&web, Request::RoomRoute { thread: join.thread.clone() }).await
         && let (Some(url), Some(token)) = (route["url"].as_str(), route["token"].as_str())
     {
-        relay_room(socket, url, token, first.to_string()).await;
+        // Every view here shares one socket to the server; one of its own where the server has none.
+        match crate::room_mux::join(&web.room_mux, url, token, &first).await {
+            Some(channel) => relay_on(socket, channel).await,
+            None => relay_room(socket, url, token, first.to_string()).await,
+        }
         return;
     }
     let key = silt_proto::rooms::RoomKey { thread: join.thread, artifact: join.artifact, name: join.name };
@@ -484,6 +498,24 @@ async fn serve_room(mut socket: WebSocket, web: Web) {
     web.room_peers.lock().expect("lock").remove(&peer);
     if let Ok(deliveries) = answer(&web, Request::RoomLeave { key, peer }).await {
         deliver(&web, &deliveries);
+    }
+}
+
+/// Relays one view's room on the server's shared socket, both ways until
+/// either side closes.
+async fn relay_on(mut socket: WebSocket, mut channel: crate::room_mux::Channel) {
+    loop {
+        tokio::select! {
+            message = socket.recv() => match message {
+                Some(Ok(Message::Text(text))) => if !channel.send(&text).await { break },
+                Some(Ok(_)) => continue,
+                Some(Err(_)) | None => break,
+            },
+            heard = channel.heard.recv() => match heard {
+                Some(text) => if socket.send(Message::Text(text.into())).await.is_err() { break },
+                None => break,
+            },
+        }
     }
 }
 
@@ -632,32 +664,35 @@ struct DiffQuery {
     /// `hide` leaves out what git itself rewrote (ADR 0069).
     #[serde(default)]
     git: Option<String>,
+    /// `hide` leaves out other agents' edits (ADR 0089).
+    #[serde(default)]
+    others: Option<String>,
 }
 
 impl DiffQuery {
-    fn hide_git(&self) -> bool {
-        silt_proto::view::GitQuery { git: self.git.clone() }.hide_git()
+    fn hide(&self) -> silt_log::Hide {
+        silt_proto::view::GitQuery { git: self.git.clone(), others: self.others.clone() }.hide()
     }
 }
 
 async fn diff(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
     let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let base = query.base.filter(|base| !base.is_empty());
     let path = query.path.filter(|path| !path.is_empty());
-    ask(&web, Request::Diff { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git }).await
+    ask(&web, Request::Diff { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git, hide_others }).await
 }
 
 async fn diff_stats(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let base = query.base.filter(|base| !base.is_empty());
-    ask(&web, Request::DiffStats { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git }).await
+    ask(&web, Request::DiffStats { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git, hide_others }).await
 }
 
 async fn thread_seen(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let base = query.base.filter(|base| !base.is_empty());
-    ask(&web, Request::ThreadSeen { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git }).await
+    ask(&web, Request::ThreadSeen { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git, hide_others }).await
 }
 
 async fn mark_thread_seen(
@@ -670,10 +705,11 @@ async fn mark_thread_seen(
 
 async fn diff_turns(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
     let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let base = query.base.filter(|base| !base.is_empty());
     let path = query.path.filter(|path| !path.is_empty());
-    ask(&web, Request::DiffTurns { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git }).await
+    ask(&web, Request::DiffTurns { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git, hide_others })
+        .await
 }
 
 /// The web UI has no clone of its own; comments that need one say so.
@@ -687,12 +723,16 @@ struct CommentsQuery {
     /// `hide` places them as a diff without git's rewrites shows the lines.
     #[serde(default)]
     git: Option<String>,
+    /// `hide`, and without other agents' edits.
+    #[serde(default)]
+    others: Option<String>,
 }
 
 async fn comments(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<CommentsQuery>) -> HttpResponse {
-    let hide_git = silt_proto::view::GitQuery { git: query.git }.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } =
+        silt_proto::view::GitQuery { git: query.git, others: query.others }.hide();
     let base = query.base.filter(|base| !base.is_empty());
-    ask(&web, Request::Comments { thread, base, hide_git, cwd: no_clone() }).await
+    ask(&web, Request::Comments { thread, base, hide_git, hide_others, cwd: no_clone() }).await
 }
 
 #[derive(Deserialize)]
@@ -919,6 +959,11 @@ async fn save_edited_version(
     ask(&web, Request::SaveEditedVersion { thread, artifact, note: save.note }).await
 }
 
+/// A page stops asking its question, which ends its agent's run.
+async fn stop_sample(State(web): State<Web>, Path((thread, artifact, ask_name)): Path<(String, String, String)>) -> HttpResponse {
+    ask(&web, Request::StopSample { thread, artifact, ask: ask_name }).await
+}
+
 /// A page's answer to the agent's call of one of the tools it gave a
 /// question (ADR 0072).
 async fn sample_tool_result(
@@ -969,6 +1014,21 @@ async fn connector_tools(State(web): State<Web>, Path(name): Path<String>) -> Ht
     ask(&web, Request::ConnectorTools { name }).await
 }
 
+#[derive(serde::Deserialize)]
+struct ConnectorSecret {
+    header: String,
+    #[serde(default)]
+    value: Option<String>,
+}
+
+async fn set_connector_secret(
+    State(web): State<Web>,
+    Path(name): Path<String>,
+    Json(secret): Json<ConnectorSecret>,
+) -> HttpResponse {
+    ask(&web, Request::SetConnectorSecret { name, header: secret.header, value: secret.value }).await
+}
+
 /// A doc's text, or edits of it (ADR 0077).
 async fn doc_data(
     State(web): State<Web>,
@@ -1002,7 +1062,8 @@ async fn sheet_xlsx(State(web): State<Web>, Path((thread, artifact)): Path<(Stri
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         };
         count = view.sheets;
-        sheets.push((format!("Sheet{}", sheet + 1), view));
+        let name = view.names.get(usize::from(sheet)).cloned().unwrap_or_else(|| format!("Sheet{}", sheet + 1));
+        sheets.push((name, view));
         sheet += 1;
     }
     match silt_proto::edited::xlsx_book(&sheets) {
@@ -1137,7 +1198,8 @@ async fn make_frame(
 /// its policy as a header that also makes its origin opaque.
 async fn serve_frame(State(web): State<Web>, Path(key): Path<String>, request: HttpRequest) -> HttpResponse {
     let not_found = || (StatusCode::NOT_FOUND, "this frame's key expired or never existed").into_response();
-    let Some(grant) = web.frames.lock().expect("lock").get(&key) else {
+    // The viewer's storage goes into the page once, and isn't kept with the key after (ADR 0072).
+    let Some(grant) = web.frames.lock().expect("lock").open(&key, |grant| grant.boot = None) else {
         return not_found();
     };
     let request_version =
@@ -1163,6 +1225,7 @@ async fn serve_frame(State(web): State<Web>, Path(key): Path<String>, request: H
         parent: grant.parent.as_deref(),
         policy_meta: false,
         boot: grant.boot.as_deref(),
+        frozen: None,
     };
     let page = silt_design::frame::compose(&String::from_utf8_lossy(&bytes), &parts);
     let files = format!("http://{host}/f/{key}/");
@@ -1309,6 +1372,40 @@ struct DesignSystemsQuery {
 
 async fn design_systems(State(web): State<Web>, Query(query): Query<DesignSystemsQuery>) -> HttpResponse {
     ask(&web, Request::DesignSystems { clone: query.clone }).await
+}
+
+async fn design_catalog(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::DesignCatalog).await
+}
+
+#[derive(Deserialize)]
+struct DesignSystemQuery {
+    source: crate::protocol::DesignSource,
+    name: String,
+    #[serde(default)]
+    clone: Option<PathBuf>,
+    #[serde(default)]
+    thread: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+async fn design_system(State(web): State<Web>, Query(query): Query<DesignSystemQuery>) -> HttpResponse {
+    ask(&web, Request::DesignSystem { source: query.source, name: query.name, clone: query.clone, thread: query.thread }).await
+}
+
+async fn design_asset(State(web): State<Web>, Query(query): Query<DesignSystemQuery>) -> HttpResponse {
+    let path = query.path.unwrap_or_default();
+    ask(&web, Request::DesignAsset { source: query.source, name: query.name, clone: query.clone, thread: query.thread, path })
+        .await
+}
+
+async fn design_start(State(web): State<Web>, Json(start): Json<crate::protocol::DesignStart>) -> HttpResponse {
+    ask(&web, Request::DesignStart(start)).await
+}
+
+async fn thread_design(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::ThreadDesignSystem { thread }).await
 }
 
 async fn project_design_systems(State(web): State<Web>) -> HttpResponse {
@@ -1692,7 +1789,8 @@ async fn merge_request(
     Path(mr): Path<String>,
     Query(query): Query<silt_proto::view::GitQuery>,
 ) -> HttpResponse {
-    ask(&web, Request::MrShow { mr, hide_git: query.hide_git() }).await
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
+    ask(&web, Request::MrShow { mr, hide_git, hide_others }).await
 }
 
 async fn approve(State(web): State<Web>, Path(mr): Path<String>) -> HttpResponse {
@@ -1850,7 +1948,8 @@ async fn file_at(
 
 /// Other threads of the thread's repository that changed the path.
 async fn in_flight(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<PathQuery>) -> HttpResponse {
-    ask_in_clone(&web, &thread, |cwd| Request::InFlight { cwd, path: query.path }).await
+    let caller = Some(thread.clone());
+    ask_in_clone(&web, &thread, |cwd| Request::InFlight { cwd, path: query.path, thread: caller }).await
 }
 
 #[derive(Deserialize)]
@@ -1884,6 +1983,7 @@ mod tests {
             vendor: Arc::new(silt_vendor::Vendor::new(std::path::Path::new("vendor"))),
             frames: Arc::default(),
             room_peers: Arc::default(),
+            room_mux: Arc::default(),
         };
         let url = info.one_time_url(None);
         assert!(!url.contains("secret"), "{url}");

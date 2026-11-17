@@ -85,14 +85,14 @@ function namespace(cap, methods) {
 // `db` as a page writes it (ADR 0072): documents at even paths, in
 // collections at odd ones, read once or watched.
 function database(ns) {
-  function watch(request, fn) {
+  function watch(request, fn, onError) {
     var id = null, gone = false;
     var off = ns.on('snapshot', function (d) { if (d && d.watch === id) fn(d.data); });
     ns.watch({ request: request }).then(function (answer) {
       if (gone) { ns.unwatch({ watch: answer.watch }); return; }
       id = answer.watch;
       fn(answer.data);
-    }, function () {});
+    }, function (refusal) { off(); if (!gone && typeof onError === 'function') onError(refusal); });
     return function () { gone = true; off(); if (id !== null) ns.unwatch({ watch: id }); };
   }
   function doc(path) {
@@ -104,7 +104,7 @@ function database(ns) {
       update: function (fields) { return ns.update({ path: path, fields: fields }); },
       delete: function () { return ns['delete']({ path: path }); },
       strReplace: function (field, old, now) { return ns.str_replace({ path: path, field: field, old: old, new: now }); },
-      onSnapshot: function (fn) { return watch({ op: 'get', path: path }, fn); }
+      onSnapshot: function (fn, onError) { return watch({ op: 'get', path: path }, fn, onError); }
     });
   }
   function collection(path, query) {
@@ -125,7 +125,7 @@ function database(ns) {
       orderBy: function (field, direction) { return also(function (q) { q.order_by = field; q.descending = direction === 'desc'; }); },
       limit: function (n) { return also(function (q) { q.limit = n; }); },
       get: function () { return ns.query({ collection: path, query: query }); },
-      onSnapshot: function (fn) { return watch({ op: 'query', collection: path, query: query }, fn); }
+      onSnapshot: function (fn, onError) { return watch({ op: 'query', collection: path, query: query }, fn, onError); }
     });
   }
   return Object.freeze({
@@ -152,9 +152,17 @@ function userClient(ns) {
     search: function (query) { return ns.search({ query: String(query || '') }); }
   });
 }
+function aborted() {
+  var e = new Error('the page stopped asking');
+  e.name = 'AbortError';
+  e.code = 'aborted';
+  return e;
+}
 function sampleClient(ns) {
   function sample(input, opts) {
     opts = opts || {};
+    var signal = opts.signal;
+    if (signal && signal.aborted) return Promise.reject(aborted());
     var ask = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     var off = typeof opts.onText === 'function'
       ? ns.on('text', function (d) {
@@ -185,8 +193,9 @@ function sampleClient(ns) {
             .catch(function () {});
         })
       : function () {};
-    var done = function () { off(); offTools(); delete sample.last[ask]; };
-    var asked = { input: input, ask: ask };
+    var stop = function () {};
+    var done = function () { off(); offTools(); stop(); delete sample.last[ask]; };
+    var asked = { input: input, ask: ask, cache: opts.cache !== false };
     if (opts.images) asked.images = Array.prototype.slice.call(opts.images);
     if (opts.modelTier || opts.model) asked.model = { model_tier: opts.modelTier || null, model: opts.model || null };
     if (tools.length) {
@@ -194,7 +203,14 @@ function sampleClient(ns) {
         return { name: String(tool.name), description: String(tool.description || ''), inputSchema: tool.inputSchema };
       });
     }
-    return ns.ask(asked).then(function (answer) { done(); return answer; }, function (e) { done(); throw e; });
+    var answered = ns.ask(asked).then(function (answer) { done(); return answer; }, function (e) { done(); throw e; });
+    if (!signal || typeof signal.addEventListener !== 'function') return answered;
+    // Stopping ends the page's wait and its stream at once; the agent's run ends on its own.
+    return Promise.race([answered, new Promise(function (_, no) {
+      var quit = function () { done(); no(aborted()); if (ns.stop) ns.stop({ ask: ask }).catch(function () {}); };
+      signal.addEventListener('abort', quit, { once: true });
+      stop = function () { signal.removeEventListener('abort', quit); };
+    })]);
   }
   sample.last = {};
   sample.json = function (input, opts) {
@@ -284,8 +300,10 @@ function ttsClient(ns) {
     pause: function () { return ns.pause(); },
     resume: function () { return ns.resume(); },
     setRate: function (rate) { return ns.setRate({ rate: rate }); },
+    voices: function () { return ns.voices(); },
     onState: function (fn) { return ns.on('state', fn); },
-    onLine: function (fn) { return ns.on('line', fn); }
+    onLine: function (fn) { return ns.on('line', fn); },
+    onPosition: function (fn) { return ns.on('position', fn); }
   });
 }
 function mcpClient(ns) {
@@ -295,18 +313,90 @@ function mcpClient(ns) {
     describeTool: function (server, tool) { return ns.describeTool({ server: server, tool: tool }); },
     listTools: function (server) { return ns.listTools({ server: server }); },
     // Reads a tool that only reads now and then again, no faster than every 30 s.
+    // What the viewer's app read last for the same call comes first, then a fresh read when it's past 30 s old.
     watchTool: function (server, tool, input, handler, opts) {
       var every = Math.max(30000, (opts && opts.refetchInterval) || 0), timer = null, gone = false;
+      var asked = { server: server, tool: tool, input: input || {} };
+      function later() { if (!gone && opts && opts.refetchInterval) timer = setTimeout(read, every); }
       function read() {
-        ns.callTool({ server: server, tool: tool, input: input || {}, read: true }).then(function (result) {
-          if (!gone) handler({ type: 'data', data: result, cache: { storedAt: Date.now() } });
+        ns.callTool({ server: server, tool: tool, input: asked.input, read: true }).then(function (result) {
+          if (!gone) handler({ type: 'data', data: result, cache: { storedAt: Date.now(), stale: false } });
         }, function (error) { if (!gone) handler({ type: 'error', error: error }); });
-        if (!gone && opts && opts.refetchInterval) timer = setTimeout(read, every);
+        later();
       }
-      read();
+      (typeof ns.cached === 'function' ? ns.cached(asked) : Promise.resolve(null)).then(function (hit) {
+        if (gone) return;
+        var stale = !hit || Date.now() - hit.storedAt > 30000;
+        if (hit) handler({ type: 'data', data: hit.data, cache: { storedAt: hit.storedAt, stale: stale } });
+        if (stale) read(); else later();
+      }, function () { if (!gone) read(); });
       return function () { gone = true; if (timer) clearTimeout(timer); };
     }
   });
+}
+// An element's anchor for a comment (ADR 0085): the name the page gave it or
+// an ancestor with `data-comment-anchor`, else its id, else a CSS path.
+function anchorFor(element) {
+  if (!element || element.nodeType !== 1) throw refusal({ code: 'refused', message: 'anchorFor takes an element' });
+  var named = element.closest('[data-comment-anchor]');
+  if (named) return String(named.getAttribute('data-comment-anchor')).slice(0, 300);
+  var parts = [];
+  for (var n = element; n && n.nodeType === 1 && n !== document.body && n !== document.documentElement && parts.length < 12; n = n.parentElement) {
+    if (n.id) { parts.unshift('#' + CSS.escape(n.id)); break; }
+    var at = 1;
+    for (var s = n.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === n.tagName) at++;
+    parts.unshift(n.tagName.toLowerCase() + ':nth-of-type(' + at + ')');
+  }
+  return parts.join('>').slice(0, 300) || 'body';
+}
+function anchored(anchor) {
+  try {
+    return document.querySelector('[data-comment-anchor="' + CSS.escape(anchor) + '"]') || document.querySelector(anchor);
+  } catch (x) { return null; }
+}
+// A page that places its own pins says so, and hears which anchor to show;
+// otherwise Silt scrolls the element into view and outlines it.
+var revealing = null;
+listen('comments', 'reveal', function (d) {
+  var anchor = d && typeof d.anchor === 'string' ? d.anchor : '';
+  if (!anchor) return;
+  if (revealing) { try { revealing({ anchor: anchor }); } catch (x) {} return; }
+  var el = anchored(anchor);
+  if (!el) return;
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  var was = el.style.outline, offset = el.style.outlineOffset;
+  el.style.outline = '2px solid #e0a030';
+  el.style.outlineOffset = '2px';
+  setTimeout(function () { el.style.outline = was; el.style.outlineOffset = offset; }, 1600);
+});
+function commentsClient(ns) {
+  function where(at) {
+    at = at || {};
+    var element = at.element && at.element.nodeType === 1 ? at.element : null;
+    var anchor = element ? anchorFor(element) : typeof at.anchor === 'string' ? at.anchor : null;
+    var quote = typeof at.quote === 'string' ? at.quote : element ? String(element.textContent || '').trim().replace(/\s+/g, ' ') : null;
+    return { anchor: anchor, quote: quote === null ? null : quote.slice(0, 500) };
+  }
+  var client = {
+    anchorFor: anchorFor,
+    openComposer: function (at) {
+      var placed = where(at);
+      return ns.openComposer({ text: typeof (at && at.text) === 'string' ? at.text : placed.quote || '', anchor: placed.anchor });
+    },
+    customAnchors: function (onReveal) {
+      revealing = typeof onReveal === 'function' ? onReveal : null;
+      return function () { revealing = null; };
+    }
+  };
+  if (ns.add) {
+    client.add = function (at) {
+      var placed = where(at);
+      return ns.add({ text: at && at.text, quote: placed.quote, anchor: placed.anchor });
+    };
+    client.reply = function (id, text) { return ns.reply(typeof id === 'object' ? id : { id: id, text: text }); };
+    client.resolve = function (id) { return ns.resolve(typeof id === 'object' ? id : { id: id }); };
+  }
+  return Object.freeze(client);
 }
 // A room's moments and presence (ADR 0081); `join(name)` gives a sub-room
 // with the same functions. Presence is sent whole, as the latest state.
@@ -324,6 +414,7 @@ function roomClient(ns) {
         return ns.presence({ room: name, state: state });
       },
       onPeers: function (fn) { return ns.on('peers', function (d) { if (d && d.room === name) fn(d.peers); }); },
+      onRefused: function (fn) { return ns.on('refused', function (d) { if (d && d.room === name) fn({ code: String(d.reason) }); }); },
       join: function (sub) { return room(String(sub)); },
       leave: function () { return ns.leave({ room: name }); }
     });
@@ -332,7 +423,7 @@ function roomClient(ns) {
 }
 var clients = {
   db: database, artifact: artifactClient, user: userClient, sample: sampleClient, assets: assetsClient, files: filesClient,
-  dictation: dictationClient, tts: ttsClient, mcp: mcpClient, room: roomClient,
+  dictation: dictationClient, tts: ttsClient, mcp: mcpClient, room: roomClient, comments: commentsClient,
   permissions: function (ns) {
     return Object.freeze({
       state: function (name) { return ns.state({ name: name }); },

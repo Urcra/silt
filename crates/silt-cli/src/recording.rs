@@ -30,6 +30,34 @@ pub(crate) struct Recording {
     signals: Signals,
 }
 
+/// The hangup and termination the wrapper passes on, listened for from the
+/// start: one that comes before the agent runs is passed on once it does,
+/// rather than ending the wrapper with the session unrecorded.
+#[cfg(unix)]
+struct Signals {
+    hangup: tokio::signal::unix::Signal,
+    terminate: tokio::signal::unix::Signal,
+}
+
+#[cfg(unix)]
+impl Signals {
+    fn listen(runtime: &tokio::runtime::Runtime) -> io::Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        let _entered = runtime.enter();
+        Ok(Self { hangup: signal(SignalKind::hangup())?, terminate: signal(SignalKind::terminate())? })
+    }
+}
+
+#[cfg(windows)]
+struct Signals;
+
+#[cfg(windows)]
+impl Signals {
+    fn listen(_runtime: &tokio::runtime::Runtime) -> io::Result<Self> {
+        Ok(Self)
+    }
+}
+
 struct Local {
     thread: String,
     /// While the daemon records the session, its recorder here, if any, is
@@ -46,7 +74,7 @@ impl Recording {
     pub(crate) fn by_daemon(thread: &str) -> Result<Self, Exn<CliError>> {
         let local = Local { thread: thread.to_owned(), recorder: None, by_daemon: true, hand_over: true, ended: false };
         let runtime = runtime()?;
-        let signals = Signals::register(&runtime)?;
+        let signals = listen(&runtime)?;
         Ok(Self { runtime, local, signals })
     }
 
@@ -60,6 +88,7 @@ impl Recording {
         hand_over: bool,
     ) -> Result<(SessionStarted, Self), Exn<CliError>> {
         let runtime = runtime()?;
+        let signals = listen(&runtime)?;
         let run = silt_daemon::NewRun { cwd, agent: agent.id(), session_id, isolated };
         let (recorder, started) = runtime
             .block_on(silt_daemon::Recorder::start(&paths::data_dir(), run))
@@ -71,7 +100,6 @@ impl Recording {
             hand_over,
             ended: false,
         };
-        let signals = Signals::register(&runtime)?;
         Ok((started, Self { runtime, local, signals }))
     }
 
@@ -116,6 +144,10 @@ impl Drop for Recording {
     fn drop(&mut self) {
         let _ = self.end_once();
     }
+}
+
+fn listen(runtime: &tokio::runtime::Runtime) -> Result<Signals, Exn<CliError>> {
+    Signals::listen(runtime).or_raise(|| CliError("cannot listen for signals".into()))
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime, Exn<CliError>> {
@@ -171,60 +203,17 @@ async fn adopted(thread: &str) -> bool {
     matches!(sent.await, Ok(Ok(Response::Ok { .. })))
 }
 
-/// The signals the wrapper handles, caught from when the recording starts,
-/// before the run's scratch directory is made: one that came earlier than
-/// the agent's start would otherwise end the wrapper without cleaning up.
-#[cfg(unix)]
-struct Signals {
-    interrupt: tokio::signal::unix::Signal,
-    quit: tokio::signal::unix::Signal,
-    hangup: tokio::signal::unix::Signal,
-    terminate: tokio::signal::unix::Signal,
-}
-
-#[cfg(unix)]
-impl Signals {
-    fn register(runtime: &tokio::runtime::Runtime) -> Result<Self, Exn<CliError>> {
-        use tokio::signal::unix::{SignalKind, signal};
-        let _entered = runtime.enter();
-        let catch = |kind| signal(kind).or_raise(|| CliError("cannot catch signals".into()));
-        Ok(Self {
-            interrupt: catch(SignalKind::interrupt())?,
-            quit: catch(SignalKind::quit())?,
-            hangup: catch(SignalKind::hangup())?,
-            terminate: catch(SignalKind::terminate())?,
-        })
-    }
-
-    /// The signal that came before the agent started, if any.
-    fn came(&mut self) -> Option<rustix::process::Signal> {
-        use rustix::process::Signal;
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        [
-            (&mut self.interrupt, Signal::INT),
-            (&mut self.quit, Signal::QUIT),
-            (&mut self.hangup, Signal::HUP),
-            (&mut self.terminate, Signal::TERM),
-        ]
-        .into_iter()
-        .find_map(|(caught, signal)| caught.poll_recv(&mut context).is_ready().then_some(signal))
-    }
-}
-
 /// Runs the agent until it exits. Ctrl-C and Ctrl-\ reach the agent from
 /// the terminal, which handles them; this wrapper stays to record the end of
 /// the session. A hangup or termination is passed on to the agent, and the
 /// wrapper still waits for it to exit. It steps every `STEP_INTERVAL`
-/// meanwhile. A signal that came before the agent started ends the run as
-/// it would have ended the agent, without starting it.
+/// meanwhile.
 #[cfg(unix)]
 async fn run_until_exit(command: Command, local: &mut Local, signals: &mut Signals) -> io::Result<std::process::ExitStatus> {
-    use std::os::unix::process::ExitStatusExt as _;
-    if let Some(signal) = signals.came() {
-        return Ok(std::process::ExitStatus::from_raw(signal.as_raw()));
-    }
+    use tokio::signal::unix::{SignalKind, signal};
     let mut child = tokio::process::Command::from(command).spawn()?;
-    let Signals { interrupt, quit, hangup, terminate } = signals;
+    let (mut interrupt, mut quit) = (signal(SignalKind::interrupt())?, signal(SignalKind::quit())?);
+    let Signals { hangup, terminate } = signals;
     let pass_on = |child: &tokio::process::Child, sent: rustix::process::Signal| {
         if let Some(pid) = child.id().and_then(|id| rustix::process::Pid::from_raw(id.cast_signed())) {
             let _ = rustix::process::kill_process(pid, sent);
@@ -247,17 +236,7 @@ async fn run_until_exit(command: Command, local: &mut Local, signals: &mut Signa
 /// On Windows, Ctrl-C and Ctrl-Break reach every process on the console,
 /// the agent's too; this wrapper only stays to record the end.
 #[cfg(windows)]
-struct Signals;
-
-#[cfg(windows)]
-impl Signals {
-    fn register(_: &tokio::runtime::Runtime) -> Result<Self, Exn<CliError>> {
-        Ok(Self)
-    }
-}
-
-#[cfg(windows)]
-async fn run_until_exit(command: Command, local: &mut Local, _: &mut Signals) -> io::Result<std::process::ExitStatus> {
+async fn run_until_exit(command: Command, local: &mut Local, _signals: &mut Signals) -> io::Result<std::process::ExitStatus> {
     use tokio::signal::windows::{ctrl_break, ctrl_c};
     let mut child = tokio::process::Command::from(command).spawn()?;
     let (mut interrupt, mut break_key) = (ctrl_c()?, ctrl_break()?);

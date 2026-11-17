@@ -59,6 +59,17 @@ impl<G: Clone> FrameKeys<G> {
         self.get_at(key, Instant::now())
     }
 
+    /// What `key` opens, as [`FrameKeys::get`] answers, and then `spend`
+    /// applied to what's kept: a page's load takes what's for it alone, such
+    /// as the viewer's storage, which then isn't held with the key.
+    pub fn open(&mut self, key: &str, spend: impl FnOnce(&mut G)) -> Option<G> {
+        let grant = self.get(key)?;
+        if let Some((kept, _, _)) = self.grants.get_mut(key) {
+            spend(kept);
+        }
+        Some(grant)
+    }
+
     fn get_at(&mut self, key: &str, now: Instant) -> Option<G> {
         if !is_key(key) {
             return None;
@@ -77,6 +88,15 @@ pub fn is_key(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frames_first_load_takes_what_was_kept_for_it_alone() {
+        let mut keys = FrameKeys::default();
+        let key = "a".repeat(64);
+        keys.insert(key.clone(), (1, Some("storage")), "me");
+        assert_eq!(keys.open(&key, |grant| grant.1 = None), Some((1, Some("storage"))));
+        assert_eq!(keys.get(&key), Some((1, None)), "the key still opens the page, without the storage");
+    }
 
     fn key(n: usize) -> String {
         format!("{n:064x}")

@@ -61,8 +61,18 @@ impl Recorder {
         let mut core = Core::visiting(store, actor, data_dir).await?;
         let thread = core.find_thread(thread)?;
         let recording = RecordingLock::hold(data_dir, thread)?;
-        core.hold_family(core.threads[&thread].family).await?;
-        let sessions = core.store.sessions().await?.into_iter().filter(|record| record.thread == thread).collect();
+        let family = core.threads[&thread].family;
+        core.hold_family(family).await?;
+        // The family's every session, not only this thread's: what this
+        // brings into the family's other checkouts is credited as their own
+        // recorders would, to a tool the log says is open there.
+        let sessions = core
+            .store
+            .sessions()
+            .await?
+            .into_iter()
+            .filter(|record| core.threads.get(&record.thread).is_some_and(|other| other.family == family))
+            .collect();
         core.take_sessions(sessions).await?;
         core.take_over_sessions(thread).await?;
         core.end_turn().await?;

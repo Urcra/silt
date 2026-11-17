@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { ThreadSummary } from './api'
-import { old, section, sections, unread } from './sections'
+import { byActivity, old, section, sections, unread } from './sections'
 
 function thread(id: string, overrides: Partial<ThreadSummary> = {}, mine: Partial<ThreadSummary['mine']> = {}): ThreadSummary {
   return {
@@ -11,6 +11,7 @@ function thread(id: string, overrides: Partial<ThreadSummary> = {}, mine: Partia
     created_ms: 0,
     messages: 0,
     edits: 0,
+    shared: false,
     location: 'here',
     forked_from: null,
     owner: '',
@@ -62,6 +63,15 @@ test('a thread is unread only after the person once looked and something happene
   expect(unread(thread('c', { last_ms: 100 }, { seen_ms: 100 }))).toBe(false)
   const ordered = sections([thread('old', { last_ms: 1 }), thread('new', { last_ms: 9 })], 0).active.map((one) => one.id)
   expect(ordered).toEqual(['new', 'old'])
+})
+
+test('threads with the same last activity keep one order, the newest first', () => {
+  const source = thread('source', { created_ms: 1, last_ms: 9 })
+  const fork = thread('fork', { created_ms: 5, last_ms: 9 })
+  expect([source, fork].sort(byActivity).map((one) => one.id)).toEqual(['fork', 'source'])
+  expect([fork, source].sort(byActivity).map((one) => one.id)).toEqual(['fork', 'source'])
+  const twin = thread('twin', { created_ms: 5, last_ms: 9 })
+  expect([twin, fork].sort(byActivity).map((one) => one.id)).toEqual(['fork', 'twin'])
 })
 
 test('a thread is old after two weeks untouched, unless something runs or waits in it or it is pinned', () => {

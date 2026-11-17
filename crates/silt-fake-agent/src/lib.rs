@@ -35,12 +35,12 @@ pub fn io(error: std::io::Error) -> Failed {
     Failed(1, error.to_string())
 }
 
-/// Writes a hook's input to its stdin. A hook that doesn't read it, such as
-/// `true`, may exit before it's written, which the agents shrug off.
-pub fn feed(child: &mut std::process::Child, input: &str) -> Step {
-    match child.stdin.take().expect("piped").write_all(input.as_bytes()) {
+/// Gives a hook its input. A hook may exit without reading it, as `true`
+/// does, and the agent goes on, so a closed pipe is no failure.
+pub fn feed_hook(child: &mut std::process::Child, input: &[u8]) -> Step {
+    match child.stdin.take().expect("piped").write_all(input) {
         Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
-        written => written.map_err(io),
+        other => other.map_err(io),
     }
 }
 

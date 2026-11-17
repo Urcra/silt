@@ -111,7 +111,7 @@ test("workspaces keep work and personal apart, with the org's rules on work (ADR
   ada(['workspace', 'new', 'Work', '--server', fixture.work, '--org', 'acme', '--folder', join(fixture.dir, 'ada', 'app')])
   ada(['workspace', 'new', 'Personal', '--server', fixture.oss, '--folder', join(fixture.dir, 'ada', 'tools'), '--default'])
   ada(['workspace', 'remove', 'default'])
-  ada(['workspace', 'policy', 'Work', '--isolated', 'on'])
+  ada(['workspace', 'policy', 'Work', '--hide-other-workspaces', 'on'])
   ada(['workspace', 'env', 'Work', `CLAUDE_CONFIG_DIR=${join(fixture.dir, 'ada', 'work-claude')}`])
   await expect.poll(() => ada(['workspace', 'list']), { timeout: 15_000 }).toContain("acme's policy")
   expect(ada(['workspace', 'which'])).toContain('Work (by rule folder')
@@ -150,7 +150,7 @@ test("workspaces keep work and personal apart, with the org's rules on work (ADR
   await page.getByRole('dialog', { name: 'Pick a project' }).getByRole('option', { name: /app/ }).click()
   const line = page.getByLabel('workspace', { exact: true })
   await expect(line).toContainText('In Work')
-  await expect(line).toContainText('GitHub Copilot only · at most Ask before commands · isolated history · home locked')
+  await expect(line).toContainText("GitHub Copilot only · at most Ask before commands · other workspaces' files hidden · home locked")
   await expect(page.getByRole('form', { name: 'new thread' })).toContainText('No agent installed here is allowed in Work')
   await shoot(page, '3-new-thread')
 

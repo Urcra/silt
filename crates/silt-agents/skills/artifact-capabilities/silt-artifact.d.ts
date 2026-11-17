@@ -30,6 +30,10 @@ type SiltRefusalCode =
   | 'refused'
   /** This view can't do it now (no speech model, a connector that isn't running, tools in the hosted app). */
   | 'unavailable'
+  /** `tts`: the viewer is dictating, so nothing is spoken over them. */
+  | 'busy'
+  /** `tts`: the viewer stopped the reading. */
+  | 'viewer_stopped'
 
 interface SiltRefusal extends Error {
   code: SiltRefusalCode
@@ -206,7 +210,7 @@ interface SiltDocRef<T = any> {
   get(): Promise<SiltDoc<T> | null>
   /** Replaces the whole document. */
   set(value: T): Promise<SiltWritten>
-  /** Merges top-level fields; a `null` field removes it. A missing document starts as `{}`. */
+  /** Merges `fields` in, nested objects too; a `null` removes a field. A missing document starts as `{}`. */
   update(fields: Partial<T>): Promise<SiltWritten>
   delete(): Promise<SiltWritten>
   /**
@@ -218,11 +222,10 @@ interface SiltDocRef<T = any> {
   strReplace(field: keyof T & string, old: string, now: string): Promise<SiltWritten>
   /**
    * Calls `fn` with the document now and again whenever it changes (null
-   * while there's none). Returns a function that stops it. A watch that's
-   * refused never calls `fn`, so time-limit the loading state yourself.
-   * At most 32 watches per page.
+   * while there's none). Returns a function that stops it. A refused watch
+   * calls `onError` instead, with `rate_limited` past 32 watches a page.
    */
-  onSnapshot(fn: (doc: SiltDoc<T> | null) => void): () => void
+  onSnapshot(fn: (doc: SiltDoc<T> | null) => void, onError?: (refusal: SiltRefusal) => void): () => void
 }
 
 /** Ops for `where`: equality, order, `in` (the field is one of a list), `contains` (an array field holds the value). */
@@ -245,7 +248,7 @@ interface SiltCollection<T = any> {
   /** The documents the viewer may read, in order. */
   get(): Promise<SiltDoc<T>[]>
   /** As a document's `onSnapshot`, for the query's documents. */
-  onSnapshot(fn: (docs: SiltDoc<T>[]) => void): () => void
+  onSnapshot(fn: (docs: SiltDoc<T>[]) => void, onError?: (refusal: SiltRefusal) => void): () => void
 }
 
 type SiltDbWrite =
@@ -343,10 +346,26 @@ interface SiltDownloads {
  * artifact (kept; `not_granted` if they said no). 20 calls a minute.
  */
 interface SiltComments {
-  /** Opens the composer on this version, quoting `text` (500 characters at most). */
-  openComposer(at: { text?: string }): Promise<null>
-  /** A comment as the viewer on the version shown: `text` 1 to 4,000 characters, `quote` at most 500. */
-  add(comment: { text: string; quote?: string }): Promise<{ id: string }>
+  /**
+   * Opens the composer, quoting `text` (500 characters at most). With
+   * `element` (or an `anchor` of the page's own), the comment is on that
+   * element, quoting its text when no `text` is given; without, on this version.
+   */
+  openComposer(at: { text?: string; element?: Element; anchor?: string }): Promise<null>
+  /**
+   * An element's anchor: the `data-comment-anchor` of it or an ancestor,
+   * else `#id`, else a CSS path. Give elements people comment on a
+   * `data-comment-anchor` (or an id) so comments keep to them across versions.
+   */
+  anchorFor(element: Element): string
+  /**
+   * For a page that draws what it's commented on itself (a canvas, a chart):
+   * `onReveal` hears the anchor of a comment the viewer asks to see, in place
+   * of Silt scrolling to the element and outlining it. Returns what stops it.
+   */
+  customAnchors(onReveal: (comment: { anchor: string }) => void): () => void
+  /** A comment as the viewer, on the version shown or on `element`/`anchor`: `text` 1 to 4,000 characters, `quote` at most 500. */
+  add(comment: { text: string; quote?: string; element?: Element; anchor?: string }): Promise<{ id: string }>
   /** `id` must be a comment on this artifact, else `refused`. */
   reply(to: { id: string; text: string }): Promise<{ id: string }>
   resolve(comment: { id: string }): Promise<{ id: string }>
@@ -397,13 +416,17 @@ interface SiltSampleOptions {
   model?: string
   /** Up to `limits().images` PNG, JPEG, GIF or WebP images, each at most 5 MiB as base64 (about 3.7 MB). Needs `{"images": true}`, else `refused`. */
   images?: Blob[]
+  /** The same question, with no tools or images, asked again within five minutes gets the answer it had, unless this is `false`, as a chat's turns should be. */
+  cache?: boolean
+  /** Aborting it rejects the call with `aborted` (an `AbortError`), stops `onText`, and ends the viewer's agent's run. Use a new `AbortController` per call. */
+  signal?: AbortSignal
 }
 
 /** Text, or a conversation that ends on the user's turn. At most 256 KiB, and not empty. */
 type SiltSampleInput = string | { role: 'user' | 'assistant'; content: string }[]
 
 interface SiltSample {
-  /** `truncated` when the answer was cut off. Rejects `not_granted` (the viewer said no: hide the feature), `rate_limited`, `refused`, `unavailable`. */
+  /** `truncated` when the answer was cut off. Rejects `not_granted` (the viewer said no: hide the feature), `rate_limited`, `refused`, `unavailable`, `aborted`. */
   (input: SiltSampleInput, opts?: SiltSampleOptions): Promise<{ text: string; truncated: boolean; modelApplied?: string }>
   /** The answer parsed as JSON, a ```json fence around it allowed. Throws a SyntaxError (no `code`) when it isn't JSON. */
   json(input: SiltSampleInput, opts?: SiltSampleOptions): Promise<any>
@@ -463,8 +486,8 @@ interface SiltFiles {
   list(opts?: { path?: string; recursive?: boolean; cursor?: string }): Promise<{ entries: { path: string; kind: 'file' | 'folder' }[]; cursor: string | null }>
   /**
    * A text file at the thread's head, or `at` an earlier revision. Rejects
-   * `refused` for a path the page may not read, a binary file or one over
-   * 4 MiB, and `too_large` for an answer over the bridge's 1 MiB.
+   * `refused` for a path the page may not read or a binary file, and
+   * `too_large` for one over 4 MiB.
    */
   read(path: string, opts?: { at?: string }): Promise<{ path: string; text: string; size: number; revision: string }>
   /**
@@ -546,8 +569,8 @@ interface SiltTts {
   /**
    * Reads `text` (with `opts`), or each line in turn, replacing any reading
    * under way, whose promise then rejects. Resolves once the last line is
-   * spoken. Rejects `refused` with a message starting `busy` while the
-   * viewer dictates, and `refused` with `viewer_stopped` when stopped.
+   * spoken. Rejects `busy` while the viewer dictates, and `viewer_stopped`
+   * when they stop it.
    */
   speak(text: string | SiltTtsLine[], opts?: Omit<SiltTtsLine, 'text' | 'id'>): Promise<null>
   /** As `speak`, but queued after what's being read. */
@@ -561,6 +584,10 @@ interface SiltTts {
   onState(fn: (said: { state: 'speaking' | 'paused' | 'idle'; reason?: 'completed' | 'viewer_stopped' }) => void): () => void
   /** As each line starts: its index, and its `id` if it had one. */
   onLine(fn: (said: { line: number; id: string | null }) => void): () => void
+  /** Milliseconds heard of the line being spoken, about four times a second; paused time isn't counted. There's no seek and no total length. */
+  onPosition(fn: (said: { ms: number; line: number }) => void): () => void
+  /** The browser's own voices, by name and language; `speak`'s `voice` takes a name from here as well as Silt's four. */
+  voices(): Promise<{ name: string; language: string }[]>
 }
 
 // ---------------------------------------------------------------------------
@@ -598,13 +625,15 @@ interface SiltMcp {
    * Reads a read-only tool now, then again every `refetchInterval` ms (at
    * least 30 s) when given; without it, once. Errors arrive as events.
    * Returns a function that stops it. A tool that isn't marked as only
-   * reading is refused. `storedAt` is when this read came back.
+   * reading is refused. `storedAt` is when this read came back. What the
+   * viewer's app read last for the same call comes first, `stale` when it's
+   * more than 30 s old, and a fresh read follows it then.
    */
   watchTool(
     server: string,
     tool: string,
     input: object,
-    handler: (event: { type: 'data'; data: SiltMcpResult; cache: { storedAt: number } } | { type: 'error'; error: SiltRefusal }) => void,
+    handler: (event: { type: 'data'; data: SiltMcpResult; cache: { storedAt: number; stale: boolean } } | { type: 'error'; error: SiltRefusal }) => void,
     opts?: { refetchInterval?: number },
   ): () => void
   /** The tool's description, whether it only reads, and its input schema, from the server. */
@@ -628,7 +657,7 @@ interface SiltMcp {
  * level. A moment's topic is 1 to 64 characters and its data at most
  * 16 KiB; each view sends at most 30 a second. A view never hears its own
  * moments. A refused moment (`not_granted`, `too_large`, `rate_limited`)
- * is dropped, and the page isn't told. 1,800 calls a minute.
+ * is dropped, and `onRefused` hears why. 1,800 calls a minute.
  */
 interface SiltRoomPeer {
   /** This connection, unique in the room. */
@@ -656,6 +685,8 @@ interface SiltRoom {
   presence(patch: object): Promise<null>
   /** Everyone here, this view included, whenever someone comes, goes or changes their presence. */
   onPeers(fn: (peers: SiltRoomPeer[]) => void): () => void
+  /** Why a moment or presence this view sent was dropped: `not_granted` for a topic its level may not send, `too_large`, `rate_limited`. */
+  onRefused(fn: (refusal: { code: 'not_granted' | 'too_large' | 'rate_limited' | string }) => void): () => void
   /** A sub-room, by a name of at most 64 characters, heard only by those who join it. Names aren't secret. */
   join(name: string): SiltRoom
   leave(): Promise<null>
