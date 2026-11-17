@@ -10,7 +10,7 @@ use hyper_util::rt::TokioIo;
 use silt_gateway::{Ca, Credential, Gateway, Rules};
 use silt_workspace::Network;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::{TcpListener, UnixListener, UnixStream};
+use tokio::net::{TcpListener, TcpStream};
 
 /// A TLS server for `localhost` that answers each request with the
 /// `authorization` header it got.
@@ -48,16 +48,23 @@ async fn echo_server() -> (u16, rustls::pki_types::CertificateDer<'static>) {
     (port, der)
 }
 
-async fn gateway(rules: Rules, root: rustls::pki_types::CertificateDer<'static>) -> (tempfile::TempDir, Arc<Ca>) {
+/// A gateway answering on the returned port.
+async fn gateway(rules: Rules, root: rustls::pki_types::CertificateDer<'static>) -> (tempfile::TempDir, Arc<Ca>, u16) {
     let dir = tempfile::tempdir().unwrap();
     let ca = Arc::new(Ca::load_or_create(&dir.path().join("ca")).unwrap());
-    let listener = UnixListener::bind(dir.path().join("gateway.sock")).unwrap();
-    tokio::spawn(Arc::new(Gateway::trusting(rules, ca.clone(), root)).serve(listener));
-    (dir, ca)
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let gateway = Arc::new(Gateway::trusting(rules, ca.clone(), root));
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(gateway.clone().answer(stream));
+        }
+    });
+    (dir, ca, port)
 }
 
 /// Sends `head` and returns the answer's first line and what followed it.
-async fn ask(stream: &mut UnixStream, head: &str) -> String {
+async fn ask(stream: &mut TcpStream, head: &str) -> String {
     stream.write_all(head.as_bytes()).await.unwrap();
     let mut answer = vec![0u8; 4096];
     let read = stream.read(&mut answer).await.unwrap();
@@ -65,8 +72,8 @@ async fn ask(stream: &mut UnixStream, head: &str) -> String {
 }
 
 /// A request through a CONNECT tunnel, trusting the gateway's authority.
-async fn through_tunnel(dir: &std::path::Path, ca: &Ca, port: u16, path: &str) -> String {
-    let mut stream = UnixStream::connect(dir.join("gateway.sock")).await.unwrap();
+async fn through_tunnel(gateway: u16, ca: &Ca, port: u16, path: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", gateway)).await.unwrap();
     let said = ask(&mut stream, &format!("CONNECT localhost:{port} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n")).await;
     assert!(said.starts_with("HTTP/1.1 200"), "{said}");
     let mut roots = rustls::RootCertStore::empty();
@@ -106,9 +113,9 @@ async fn a_credential_is_added_on_the_way_out_and_only_where_it_belongs() {
             value: "Bearer s3cret".into(),
         }],
     };
-    let (dir, ca) = gateway(rules, root).await;
-    assert_eq!(through_tunnel(dir.path(), &ca, port, "/repos/acme/api").await, "Bearer s3cret");
-    assert_eq!(through_tunnel(dir.path(), &ca, port, "/repos/other/x").await, "Bearer silt-placeholder", "not its path");
+    let (_dir, ca, at) = gateway(rules, root).await;
+    assert_eq!(through_tunnel(at, &ca, port, "/repos/acme/api").await, "Bearer s3cret");
+    assert_eq!(through_tunnel(at, &ca, port, "/repos/other/x").await, "Bearer silt-placeholder", "not its path");
 }
 
 #[tokio::test]
@@ -120,11 +127,11 @@ async fn what_sandboxes_never_reach_is_refused_with_the_reason() {
         blocked: silt_workspace::subtract(&silt_workspace::ALWAYS_BLOCKED.map(str::to_owned), &[]),
         credentials: Vec::new(),
     };
-    let (dir, _ca) = gateway(rules, root).await;
-    let mut stream = UnixStream::connect(dir.path().join("gateway.sock")).await.unwrap();
+    let (_dir, _ca, at) = gateway(rules, root).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", at)).await.unwrap();
     let said = ask(&mut stream, "CONNECT evil.example:443 HTTP/1.1\r\nHost: evil.example:443\r\n\r\n").await;
     assert!(said.starts_with("HTTP/1.1 403") && said.contains("isn't among the hosts"), "{said}");
-    let mut stream = UnixStream::connect(dir.path().join("gateway.sock")).await.unwrap();
+    let mut stream = TcpStream::connect(("127.0.0.1", at)).await.unwrap();
     let said = ask(&mut stream, "GET http://169.254.169.254/latest/meta-data HTTP/1.1\r\nHost: 169.254.169.254\r\n\r\n").await;
     assert!(said.starts_with("HTTP/1.1 403"), "{said}");
 }

@@ -5,7 +5,9 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use silt_workspace::{Mount, MountKind, Network, Reach, RunPaths};
+#[cfg(unix)]
+use silt_workspace::{Mount, MountKind, Network};
+use silt_workspace::{Reach, RunPaths};
 
 use crate::CoreError;
 
@@ -45,17 +47,14 @@ pub struct Sandboxed {
     pub missing: Vec<String>,
 }
 
-/// What answers a sandbox's relay outside it.
+/// What answers a sandbox's relay outside it. There are none where the
+/// sandbox doesn't run, as relays are Unix sockets.
 pub enum Outside {
-    Gateway {
-        listener: std::os::unix::net::UnixListener,
-        gateway: std::sync::Arc<silt_gateway::Gateway>,
-    },
+    #[cfg(unix)]
+    Gateway { listener: std::os::unix::net::UnixListener, gateway: std::sync::Arc<silt_gateway::Gateway> },
     /// A port on this machine the workspace hands its sandboxes.
-    Port {
-        listener: std::os::unix::net::UnixListener,
-        port: u16,
-    },
+    #[cfg(unix)]
+    Port { listener: std::os::unix::net::UnixListener, port: u16 },
 }
 
 impl Outside {
@@ -63,18 +62,32 @@ impl Outside {
     pub fn spawn(self, handle: &tokio::runtime::Handle) -> std::io::Result<tokio::task::JoinHandle<()>> {
         let _entered = handle.enter();
         match self {
+            #[cfg(unix)]
             Self::Gateway { listener, gateway } => {
-                listener.set_nonblocking(true)?;
-                let listener = tokio::net::UnixListener::from_std(listener)?;
-                Ok(handle.spawn(gateway.serve(listener)))
+                let listener = accepting(listener)?;
+                Ok(handle.spawn(async move {
+                    while let Ok((stream, _)) = listener.accept().await {
+                        tokio::spawn(gateway.clone().answer(stream));
+                    }
+                }))
             }
+            #[cfg(unix)]
             Self::Port { listener, port } => {
-                listener.set_nonblocking(true)?;
-                let listener = tokio::net::UnixListener::from_std(listener)?;
-                Ok(handle.spawn(silt_gateway::forward_port(listener, port)))
+                let listener = accepting(listener)?;
+                Ok(handle.spawn(async move {
+                    while let Ok((stream, _)) = listener.accept().await {
+                        tokio::spawn(silt_gateway::forward_port(stream, port));
+                    }
+                }))
             }
         }
     }
+}
+
+#[cfg(unix)]
+fn accepting(listener: std::os::unix::net::UnixListener) -> std::io::Result<tokio::net::UnixListener> {
+    listener.set_nonblocking(true)?;
+    tokio::net::UnixListener::from_std(listener)
 }
 
 impl Sandboxed {
@@ -125,7 +138,10 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
         read_only: run.read_only.clone(),
         data_dir: Some(run.data_dir.to_owned()),
         scratch: run.scratch.to_owned(),
+        #[cfg(unix)]
         run_socket: Some(crate::paths::agents_socket_in(run.data_dir)),
+        #[cfg(not(unix))]
+        run_socket: None,
         ssh_agent_socket: lookup("SSH_AUTH_SOCK").map(PathBuf::from),
     };
     // What's mounted must exist: an agent's home it hasn't made yet would
@@ -143,45 +159,7 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     std::fs::create_dir_all(run.checkout.join(".silt"))?;
     let mut plan = silt_workspace::plan(&paths, run.reach);
     std::fs::create_dir_all(run.scratch)?;
-    let mut extra_env = Vec::new();
-    let mut outside = Vec::new();
-    let mut missing = Vec::new();
-    #[cfg(unix)]
-    {
-        let (credentials, placeholders, unresolved) = crate::credentials::resolve(run.data_dir, run.workspace);
-        missing.extend(unresolved);
-        let gateway = run.reach.network == Network::Gateway || (run.reach.network == Network::Full && !credentials.is_empty());
-        if gateway {
-            let socket = short_socket(run.scratch, "gateway.sock")?;
-            let ca = std::sync::Arc::new(silt_gateway::Ca::load_or_create(&run.data_dir.join("gateway"))?);
-            trust(&mut plan, &mut extra_env, run.scratch, ca.pem())?;
-            let rules = silt_gateway::Rules {
-                network: run.reach.network,
-                hosts: run.reach.hosts.clone(),
-                blocked: silt_workspace::subtract(&plan.blocked, &plan.allowed),
-                credentials,
-            };
-            let log = Some(run.scratch.join("gateway.jsonl"));
-            let gateway = std::sync::Arc::new(silt_gateway::Gateway::new(rules, ca, log));
-            outside.push(Outside::Gateway { listener: listen(&socket)?, gateway });
-            plan.relays.push(silt_workspace::Relay { port: GATEWAY_PORT, socket: socket.clone() });
-            plan.mounts.push(Mount { kind: MountKind::ReadWrite, path: socket, source: None });
-            let proxy = format!("http://127.0.0.1:{GATEWAY_PORT}");
-            for name in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-                extra_env.push((name.to_owned(), proxy.clone()));
-            }
-            for name in ["NO_PROXY", "no_proxy"] {
-                extra_env.push((name.to_owned(), "localhost,127.0.0.1,::1".to_owned()));
-            }
-            extra_env.extend(placeholders);
-        }
-        for port in &run.reach.ports {
-            let socket = short_socket(run.scratch, &format!("port-{port}.sock"))?;
-            outside.push(Outside::Port { listener: listen(&socket)?, port: *port });
-            plan.relays.push(silt_workspace::Relay { port: *port, socket: socket.clone() });
-            plan.mounts.push(Mount { kind: MountKind::ReadWrite, path: socket, source: None });
-        }
-    }
+    let Relays { outside, env: extra_env, missing } = relays(run, &mut plan)?;
     let plan_path = run.scratch.join("sandbox.json");
     std::fs::write(&plan_path, serde_json::to_vec(&plan).map_err(|error| CoreError::Invalid(error.to_string()))?)?;
     let launcher =
@@ -198,12 +176,69 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     Ok(Sandboxed { launcher, env, outside, missing })
 }
 
+/// What a run's relays out of the sandbox add to it.
+#[derive(Default)]
+struct Relays {
+    outside: Vec<Outside>,
+    env: Vec<(String, String)>,
+    /// Credentials the workspace names whose secret couldn't be had.
+    missing: Vec<String>,
+}
+
+/// The relays the run's rules give it: to the gateway, and to the ports its
+/// workspace hands it.
+#[cfg(unix)]
+fn relays(run: &Run<'_>, plan: &mut silt_workspace::SandboxPlan) -> Result<Relays, CoreError> {
+    let mut relays = Relays::default();
+    let (credentials, placeholders, unresolved) = crate::credentials::resolve(run.data_dir, run.workspace);
+    relays.missing = unresolved;
+    let gateway = run.reach.network == Network::Gateway || (run.reach.network == Network::Full && !credentials.is_empty());
+    if gateway {
+        let socket = short_socket(run.scratch, "gateway.sock")?;
+        let ca = std::sync::Arc::new(silt_gateway::Ca::load_or_create(&run.data_dir.join("gateway"))?);
+        trust(plan, &mut relays.env, run.scratch, ca.pem())?;
+        let rules = silt_gateway::Rules {
+            network: run.reach.network,
+            hosts: run.reach.hosts.clone(),
+            blocked: silt_workspace::subtract(&plan.blocked, &plan.allowed),
+            credentials,
+        };
+        let log = Some(run.scratch.join("gateway.jsonl"));
+        let gateway = std::sync::Arc::new(silt_gateway::Gateway::new(rules, ca, log));
+        relays.outside.push(Outside::Gateway { listener: listen(&socket)?, gateway });
+        plan.relays.push(silt_workspace::Relay { port: GATEWAY_PORT, socket: socket.clone() });
+        plan.mounts.push(Mount { kind: MountKind::ReadWrite, path: socket, source: None });
+        let proxy = format!("http://127.0.0.1:{GATEWAY_PORT}");
+        for name in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            relays.env.push((name.to_owned(), proxy.clone()));
+        }
+        for name in ["NO_PROXY", "no_proxy"] {
+            relays.env.push((name.to_owned(), "localhost,127.0.0.1,::1".to_owned()));
+        }
+        relays.env.extend(placeholders);
+    }
+    for port in &run.reach.ports {
+        let socket = short_socket(run.scratch, &format!("port-{port}.sock"))?;
+        relays.outside.push(Outside::Port { listener: listen(&socket)?, port: *port });
+        plan.relays.push(silt_workspace::Relay { port: *port, socket: socket.clone() });
+        plan.mounts.push(Mount { kind: MountKind::ReadWrite, path: socket, source: None });
+    }
+    Ok(relays)
+}
+
+#[cfg(not(unix))]
+fn relays(_run: &Run<'_>, _plan: &mut silt_workspace::SandboxPlan) -> Result<Relays, CoreError> {
+    Ok(Relays::default())
+}
+
 /// Where the system keeps the certificates it trusts, by distribution.
+#[cfg(unix)]
 const TRUST_STORES: [&str; 4] =
     ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem"];
 
 /// Makes the sandbox trust the gateway's authority: in the system's store,
 /// shown with it added, and in the variables tools read a store from.
+#[cfg(unix)]
 fn trust(
     plan: &mut silt_workspace::SandboxPlan,
     env: &mut Vec<(String, String)>,
@@ -354,12 +389,13 @@ mod tests {
         assert_eq!(sandboxed.launcher[1], "sandbox-run");
         let plan: silt_workspace::SandboxPlan =
             serde_json::from_slice(&std::fs::read(data.path().join("runs/x/sandbox.json")).unwrap()).unwrap();
-        let socket = crate::paths::agents_socket_in(data.path());
-        assert_eq!(plan.sees(&socket), Some(true));
+        #[cfg(unix)]
+        assert_eq!(plan.sees(&crate::paths::agents_socket_in(data.path())), Some(true));
         assert_eq!(plan.sees(&crate::paths::socket_path_in(data.path())), None, "never the person's socket");
         assert_eq!(plan.sees(&data.path().join("silt.sqlite")), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn through_silt_only_relays_to_a_gateway_the_sandbox_trusts() {
         let data = tempfile::tempdir().unwrap();
