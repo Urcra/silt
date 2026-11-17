@@ -128,8 +128,12 @@ pub fn bwrap_args(plan: &SandboxPlan, ids: Ids, seccomp: &File, resolv: Option<&
         let path = mount.path.as_os_str();
         if let Some(source) = &mount.source {
             // Something else shown in its place: a relay's terminal for a
-            // device, else read-only.
-            let how = if mount.kind == MountKind::Device { "--dev-bind" } else { "--ro-bind" };
+            // device, a run's own copy writable, else read-only.
+            let how = match mount.kind {
+                MountKind::Device => "--dev-bind",
+                MountKind::ReadWrite => "--bind",
+                _ => "--ro-bind",
+            };
             push(&[how.as_ref(), source.as_os_str(), path]);
             continue;
         }
@@ -230,7 +234,8 @@ pub fn inherit(file: &File) -> io::Result<()> {
 /// The seccomp filter every sandbox runs under, as bubblewrap reads it: it
 /// refuses pushing input into the terminal (`TIOCSTI`, `TIOCLINUX`), which
 /// would type into the person's shell, `io_uring`, which slips past other
-/// filters, and vsock sockets, which reach virtual machines' hosts.
+/// filters, the kernel's keyrings, and vsock sockets, which reach virtual
+/// machines' hosts.
 pub fn seccomp_program() -> io::Result<Vec<u8>> {
     use seccompiler::{
         BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter, SeccompRule, TargetArch,
@@ -245,7 +250,16 @@ pub fn seccomp_program() -> io::Result<Vec<u8>> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| invalid(&error))?;
     rules.insert(rustix_sys::SYS_IOCTL, ioctls);
-    for call in [rustix_sys::SYS_IO_URING_SETUP, rustix_sys::SYS_IO_URING_ENTER, rustix_sys::SYS_IO_URING_REGISTER] {
+    // The kernel's keyrings aren't namespaced away: the session keyring the
+    // person's login made, with what it holds, is otherwise read from inside.
+    for call in [
+        rustix_sys::SYS_IO_URING_SETUP,
+        rustix_sys::SYS_IO_URING_ENTER,
+        rustix_sys::SYS_IO_URING_REGISTER,
+        rustix_sys::SYS_ADD_KEY,
+        rustix_sys::SYS_REQUEST_KEY,
+        rustix_sys::SYS_KEYCTL,
+    ] {
         rules.insert(call, Vec::new());
     }
     let vsock = arg(0, 40).and_then(|condition| SeccompRule::new(vec![condition])).map_err(|error| invalid(&error))?;
@@ -273,6 +287,18 @@ mod rustix_sys {
     pub const SYS_IOCTL: i64 = 29;
     #[cfg(target_arch = "aarch64")]
     pub const SYS_SOCKET: i64 = 198;
+    #[cfg(target_arch = "x86_64")]
+    pub const SYS_ADD_KEY: i64 = 248;
+    #[cfg(target_arch = "x86_64")]
+    pub const SYS_REQUEST_KEY: i64 = 249;
+    #[cfg(target_arch = "x86_64")]
+    pub const SYS_KEYCTL: i64 = 250;
+    #[cfg(target_arch = "aarch64")]
+    pub const SYS_ADD_KEY: i64 = 217;
+    #[cfg(target_arch = "aarch64")]
+    pub const SYS_REQUEST_KEY: i64 = 218;
+    #[cfg(target_arch = "aarch64")]
+    pub const SYS_KEYCTL: i64 = 219;
     pub const SYS_IO_URING_SETUP: i64 = 425;
     pub const SYS_IO_URING_ENTER: i64 = 426;
     pub const SYS_IO_URING_REGISTER: i64 = 427;
@@ -437,7 +463,10 @@ mod tests {
 
     #[test]
     fn a_relative_resolver_symlink_folds_to_an_absolute_target() {
-        assert_eq!(normalize(Path::new("/etc/../run/systemd/resolve/stub-resolv.conf")), Path::new("/run/systemd/resolve/stub-resolv.conf"));
+        assert_eq!(
+            normalize(Path::new("/etc/../run/systemd/resolve/stub-resolv.conf")),
+            Path::new("/run/systemd/resolve/stub-resolv.conf")
+        );
         assert_eq!(normalize(Path::new("/mnt/wsl/resolv.conf")), Path::new("/mnt/wsl/resolv.conf"));
     }
 
@@ -482,6 +511,57 @@ mod tests {
         assert!(!said.contains("SECRET-OAUTH-TOKEN"), "the sign-in must be hidden: {said}");
         assert!(said.contains("TOKEN=[]"), "the sign-in file reads empty: {said}");
         assert_eq!(std::fs::read_to_string(checkout.join(".git/commondir")).unwrap(), ".", "the real file is unchanged");
+    }
+
+    #[test]
+    fn git_cant_be_swapped_and_other_projects_and_keyrings_stay_out() {
+        let Some(tools) = tools(Network::None).ok().filter(|tools| check(tools).is_ok()) else {
+            eprintln!("skipped: bubblewrap can't make a sandbox here");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = dir.path().join("app");
+        std::fs::create_dir_all(checkout.join(".git/hooks")).unwrap();
+        std::fs::write(checkout.join(".git/config"), "[core]\n").unwrap();
+        let claude = dir.path().join("home/.claude");
+        let own = claude.join("projects/-app");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::create_dir_all(claude.join("projects/-taxes")).unwrap();
+        std::fs::write(claude.join("projects/-taxes/s.jsonl"), "OTHER-PROJECT").unwrap();
+        std::fs::write(claude.join("history.jsonl"), "OTHER-PROMPTS").unwrap();
+        let fresh = dir.path().join("run/fresh-0");
+        std::fs::create_dir_all(fresh.parent().unwrap()).unwrap();
+        std::fs::write(&fresh, "").unwrap();
+        let paths = RunPaths {
+            checkout: checkout.clone(),
+            silt: "/bin/sh".into(),
+            scratch: dir.path().join("run"),
+            agent_homes: vec![claude.clone()],
+            other_projects: vec![claude.join("projects")],
+            own_project: vec![own.clone()],
+            fresh: vec![(claude.join("history.jsonl"), fresh.clone())],
+            ..RunPaths::default()
+        };
+        let plan = plan(&paths, &Reach::of(&Policy { network: Some(Network::None), ..Policy::default() }));
+        std::fs::write(dir.path().join("seccomp.bpf"), seccomp_program().unwrap()).unwrap();
+        let seccomp = File::open(dir.path().join("seccomp.bpf")).unwrap();
+        inherit(&seccomp).unwrap();
+        let c = claude.display();
+        let script = format!(
+            "mv .git .git-moved 2>/dev/null && echo SWAPPED; cat {c}/projects/-taxes/s.jsonl {c}/history.jsonl 2>/dev/null; \
+             echo mine > {c}/projects/-app/s.jsonl && echo OWN; echo prompt >> {c}/history.jsonl && echo HISTORY; \
+             if command -v keyctl >/dev/null; then keyctl show @s >/dev/null 2>&1 && echo KEYRING; fi"
+        );
+        let args = bwrap_args(&plan, Ids::here(), &seccomp, None, &["/bin/sh".into(), "-c".into(), script.into()]);
+        let output = std::process::Command::new(&tools.bwrap).args(&args).output().unwrap();
+        let said = String::from_utf8_lossy(&output.stdout);
+        assert!(!said.contains("SWAPPED") && checkout.join(".git/config").exists(), "{said}");
+        assert!(!said.contains("OTHER-"), "{said}");
+        assert!(said.contains("OWN") && said.contains("HISTORY"), "{said}");
+        assert!(!said.contains("KEYRING"), "{said}");
+        assert_eq!(std::fs::read_to_string(own.join("s.jsonl")).unwrap(), "mine\n");
+        assert_eq!(std::fs::read_to_string(claude.join("history.jsonl")).unwrap(), "OTHER-PROMPTS", "the run wrote its own copy");
+        assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "prompt\n");
     }
 
     #[test]

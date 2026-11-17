@@ -66,12 +66,11 @@ const ENV_ALLOW: [&str; 44] = [
     "MAKEFLAGS",
 ];
 
-/// Prefixes of variables a sandbox also gets: Silt's own, locale categories,
-/// and the per-toolchain settings builds read. None of these name a prefix a
-/// credential hides under (`AWS_`, `GITHUB_`); those fall through the
-/// allowlist. `npm_config_` is lower-case, so `NPM_TOKEN` is not caught by it.
-const ENV_ALLOW_PREFIXES: [&str; 18] = [
-    "SILT_",
+/// Prefixes of variables a sandbox also gets (Silt's own, `SILT_`, always): locale categories,
+/// and the per-toolchain settings builds read, but for names that say they
+/// hold a secret ([`SECRET_WORDS`]). Prefixes a credential hides under
+/// (`AWS_`, `GITHUB_`) aren't here at all.
+const ENV_ALLOW_PREFIXES: [&str; 17] = [
     "LC_",
     "CARGO_",
     "RUSTUP_",
@@ -189,8 +188,12 @@ pub struct Run<'a> {
     pub reach: &'a Reach,
     /// The run's token, which the sandbox reaches the daemon with.
     pub token: &'a str,
-    /// The variables the agent would get unsandboxed.
+    /// The variables the agent would get unsandboxed from the environment it
+    /// was started from, which only the allowlist passes.
     pub env: Vec<(String, String)>,
+    /// Those Silt, the agent's adapter or the workspace set for it on
+    /// purpose, which go in as they are, but for model keys.
+    pub given: Vec<(String, String)>,
     /// More that the sandbox shows read-only, such as the agent's program.
     pub read_only: Vec<PathBuf>,
     /// The devices Silt relays to the thread's sandbox.
@@ -208,7 +211,9 @@ impl Run<'_> {
 
 /// Writes the run's plan and works out how to start it sandboxed.
 pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
-    let lookup = |name: &str| run.env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone());
+    let lookup = |name: &str| {
+        run.given.iter().rev().chain(run.env.iter().rev()).find(|(key, _)| key == name).map(|(_, value)| value.clone())
+    };
     let home = silt_os::home_dir();
     let (git_dir, git_shared) = git_paths(run.checkout);
     let mut paths = RunPaths {
@@ -230,6 +235,9 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
             _ => Vec::new(),
         },
         git_protect: Vec::new(),
+        other_projects: Vec::new(),
+        own_project: Vec::new(),
+        fresh: Vec::new(),
         path_dirs: lookup("PATH").map(|path| std::env::split_paths(&path).map(path_dir).collect()).unwrap_or_default(),
         silt: std::env::current_exe()?,
         read_only: run.read_only.clone(),
@@ -254,7 +262,9 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     // create in its writable home and have run on the host later; create an
     // empty one so pinning it read-only closes that (ADR 0093).
     for config in &paths.pin_config {
-        if !config.exists() {
+        if !config.exists() && config.extension().is_none() {
+            std::fs::create_dir_all(config)?;
+        } else if !config.exists() {
             if let Some(parent) = config.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -268,8 +278,28 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
         paths.git_protect = git_protect(&git_dir)?;
     }
     std::fs::create_dir_all(run.checkout.join(".silt"))?;
-    let mut plan = silt_workspace::plan(&paths, run.reach);
     std::fs::create_dir_all(run.scratch)?;
+    if let (Some(agent), Some(home)) = (run.agent, &home) {
+        let state = agent.project_state(home, &lookup, run.checkout);
+        // Made now, as what's hidden is hidden only where it exists, and the
+        // run's own folder must be there to show it.
+        for dir in state.hide.iter().chain(&state.own) {
+            std::fs::create_dir_all(dir)?;
+        }
+        for (index, file) in state.fresh.iter().enumerate() {
+            let own = run.scratch.join(format!("fresh-{index}"));
+            std::fs::write(&own, "")?;
+            paths.fresh.push((file.clone(), own));
+        }
+        for (index, file) in state.copied.iter().enumerate().filter(|(_, file)| file.is_file()) {
+            let own = run.scratch.join(format!("copy-{index}"));
+            std::fs::copy(file, &own)?;
+            paths.fresh.push((file.clone(), own));
+        }
+        paths.other_projects = state.hide;
+        paths.own_project = state.own;
+    }
+    let mut plan = silt_workspace::plan(&paths, run.reach);
     let Relays { outside, env: mut extra_env, missing } = relays(run, &mut plan)?;
     extra_env.extend(devices(run, &mut plan));
     if run.seatbelt() {
@@ -279,10 +309,25 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
         extra_env.push(("TMPDIR".to_owned(), tmp.to_string_lossy().into_owned()));
     }
     let plan_path = run.scratch.join("sandbox.json");
+    // What `silt sandbox-run` reads to make the sandbox, read-only inside it;
+    // the last two it writes there before starting bubblewrap.
+    for file in ["sandbox.json", "seccomp.bpf", "resolv.conf"] {
+        let path = run.scratch.join(file);
+        plan.mounts.push(silt_workspace::Mount { kind: silt_workspace::MountKind::ReadOnly, path, source: None });
+    }
     std::fs::write(&plan_path, serde_json::to_vec(&plan).map_err(|error| CoreError::Invalid(error.to_string()))?)?;
     let launcher =
         vec![paths.silt.into_os_string(), "sandbox-run".into(), "--plan".into(), plan_path.into_os_string(), "--".into()];
-    let mut env: Vec<(String, String)> = run.env.iter().filter(|(name, _)| keeps(name, run.reach)).cloned().collect();
+    // Names the person lists in `<data>/agent-env` go to every agent, here too.
+    let listed = silt_acp::registry::listed_variables(run.data_dir);
+    let mut env: Vec<(String, String)> = run
+        .env
+        .iter()
+        .filter(|(name, _)| keeps(name, run.reach) || listed.contains(name))
+        .filter(|(name, _)| !run.given.iter().any(|(given, _)| given == name))
+        .cloned()
+        .collect();
+    env.extend(run.given.iter().cloned());
     env.retain(|(name, _)| name != "SILT_RUN_SOCKET" && name != "SILT_RUN_TOKEN");
     if let Some(socket) = &paths.run_socket {
         env.push(("SILT_RUN_SOCKET".into(), socket.to_string_lossy().into_owned()));
@@ -367,8 +412,9 @@ fn relays(run: &Run<'_>, plan: &mut silt_workspace::SandboxPlan) -> Result<Relay
     // The agent's own model key goes on at the gateway too, so the sandbox
     // holds a placeholder rather than the key.
     if matches!(run.reach.network, Network::Gateway | Network::Full) {
-        let (model_credentials, model_placeholders) =
-            model_keys(run.agent, &|name| run.env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone()));
+        let (model_credentials, model_placeholders) = model_keys(run.agent, &|name| {
+            run.given.iter().rev().chain(run.env.iter().rev()).find(|(key, _)| key == name).map(|(_, value)| value.clone())
+        });
         credentials.extend(model_credentials);
         placeholders.extend(model_placeholders);
     }
@@ -549,8 +595,17 @@ fn keeps(name: &str, reach: &Reach) -> bool {
     if name == "SSH_AUTH_SOCK" {
         return reach.ssh_agent;
     }
-    ENV_ALLOW.contains(&name) || ENV_ALLOW_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+    if ENV_ALLOW.contains(&name) || name.starts_with("SILT_") {
+        return true;
+    }
+    // A toolchain's prefix also carries its registry tokens, such as
+    // `CARGO_REGISTRY_TOKEN`, `NODE_AUTH_TOKEN` and `npm_config__authToken`.
+    let upper = name.to_ascii_uppercase();
+    ENV_ALLOW_PREFIXES.iter().any(|prefix| name.starts_with(prefix)) && !SECRET_WORDS.iter().any(|word| upper.contains(word))
 }
+
+/// Words in a variable's name that say it holds a secret.
+const SECRET_WORDS: [&str; 8] = ["TOKEN", "SECRET", "PASSWORD", "PASSWD", "AUTH", "CREDENTIAL", "APIKEY", "_KEY"];
 
 /// A checkout's own git dir when it's elsewhere, as a managed checkout's
 /// is, and the objects it borrows through alternates.
@@ -697,6 +752,11 @@ mod tests {
     fn credentials_stay_out_and_the_run_reaches_its_channel() {
         let data = tempfile::tempdir().unwrap();
         let checkout = tempfile::tempdir().unwrap();
+        // Claude's folder of its own, so the test leaves the person's alone.
+        let claude = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(claude.path().join("projects/-elsewhere")).unwrap();
+        std::fs::write(claude.path().join(".claude.json"), r#"{"mcpServers":{}}"#).unwrap();
+        let claude_dir = claude.path().to_string_lossy().into_owned();
         let reach = Reach::of(&silt_workspace::Policy::default());
         let run = Run {
             data_dir: data.path(),
@@ -710,6 +770,7 @@ mod tests {
             relayed: Vec::new(),
             env: vec![
                 ("PATH".into(), "/usr/bin:/bin".into()),
+                ("CLAUDE_CONFIG_DIR".into(), claude_dir.clone()),
                 ("LANG".into(), "en_US.UTF-8".into()),
                 ("CARGO_HOME".into(), "/home/a/.cargo".into()),
                 ("ANTHROPIC_API_KEY".into(), "sk".into()),
@@ -718,9 +779,16 @@ mod tests {
                 ("GH_TOKEN".into(), "ghp_secret".into()),
                 ("DATABASE_URL".into(), "postgres://u:p@prod/db".into()),
                 ("MY_COMPANY_SECRET".into(), "s3cr3t".into()),
+                ("CARGO_REGISTRY_TOKEN".into(), "cio".into()),
+                ("CARGO_REGISTRIES_ACME_TOKEN".into(), "acme".into()),
+                ("NODE_AUTH_TOKEN".into(), "npm".into()),
+                ("npm_config__authToken".into(), "npm".into()),
+                ("YARN_NPM_AUTH_TOKEN".into(), "yarn".into()),
+                ("NODE_OPTIONS".into(), "--max-old-space-size=4096".into()),
                 ("SSH_AUTH_SOCK".into(), "/run/agent".into()),
             ],
             read_only: Vec::new(),
+            given: Vec::new(),
         };
         let sandboxed = prepare(&run).unwrap();
         let names: Vec<&str> = sandboxed.env.iter().map(|(name, _)| name.as_str()).collect();
@@ -734,7 +802,17 @@ mod tests {
         assert!(!names.contains(&"AWS_SECRET_ACCESS_KEY") && !names.contains(&"GOOGLE_APPLICATION_CREDENTIALS"));
         // The allowlist drops a token or URL from the launching shell, named or
         // not, rather than trusting a denylist to know every secret's name.
-        for dropped in ["GH_TOKEN", "DATABASE_URL", "MY_COMPANY_SECRET"] {
+        assert!(names.contains(&"NODE_OPTIONS"), "a toolchain's own settings still go in: {names:?}");
+        for dropped in [
+            "GH_TOKEN",
+            "DATABASE_URL",
+            "MY_COMPANY_SECRET",
+            "CARGO_REGISTRY_TOKEN",
+            "CARGO_REGISTRIES_ACME_TOKEN",
+            "NODE_AUTH_TOKEN",
+            "npm_config__authToken",
+            "YARN_NPM_AUTH_TOKEN",
+        ] {
             assert!(!names.contains(&dropped), "{dropped} leaked into the sandbox: {names:?}");
         }
         assert!(!names.contains(&"SSH_AUTH_SOCK"), "only when the rules hand ssh-agent over");
@@ -746,10 +824,23 @@ mod tests {
         assert_eq!(plan.sees(&socket), Some(true));
         assert_eq!(plan.sees(&crate::paths::socket_path_in(data.path())), None, "never the person's socket");
         assert_eq!(plan.sees(&data.path().join("silt.sqlite")), None);
-        if let Some(home) = silt_os::home_dir() {
-            assert_eq!(plan.sees(&home.join(".claude/.credentials.json")), None, "the agent's sign-in is hidden");
-            assert_eq!(plan.sees(&home.join(".claude/settings.json")), Some(false), "the agent's hooks config is read-only");
+        assert_eq!(plan.sees(&data.path().join("runs/x/sandbox.json")), Some(false), "its own plan can't be rewritten");
+        assert_eq!(plan.sees(&data.path().join("runs/x/settings.json")), Some(true));
+        let claude = claude.path();
+        assert_eq!(plan.sees(&claude.join(".credentials.json")), None, "the agent's sign-in is hidden");
+        assert_eq!(plan.sees(&claude.join("settings.json")), Some(false), "the agent's hooks config is read-only");
+        for pinned in ["CLAUDE.md", "plugins/x/hooks.json", "hooks/on-stop.sh", "commands/x.md", "skills/x/SKILL.md"] {
+            assert_eq!(plan.sees(&claude.join(pinned)), Some(false), "{pinned}");
         }
+        assert_eq!(plan.sees(&claude.join("projects/-elsewhere/s.jsonl")), None, "another project's sessions");
+        let own = claude.join("projects").join(silt_agents::claude::project_slug(checkout.path()));
+        assert_eq!(plan.sees(&own.join("s.jsonl")), Some(true));
+        assert!(own.is_dir(), "made, so it's there to show");
+        let copy = plan.mounts.iter().find(|mount| mount.path == claude.join(".claude.json")).expect("its own copy");
+        assert_eq!(copy.kind, MountKind::ReadWrite);
+        let copied = copy.source.as_deref().expect("a copy");
+        assert!(copied.starts_with(data.path().join("runs/x")));
+        assert_eq!(std::fs::read_to_string(copied).unwrap(), r#"{"mcpServers":{}}"#);
     }
 
     #[test]
@@ -802,6 +893,7 @@ mod tests {
             token: "t",
             env: vec![("PATH".into(), "/usr/bin".into())],
             read_only: Vec::new(),
+            given: Vec::new(),
             relayed: vec![
                 Relayed::Serial { device: "/dev/cu.usbserial-1".into(), pts: "/dev/ttys012".into() },
                 Relayed::Adb { serial: "R58M".into(), socket: scratch.join("adb.sock") },
@@ -865,6 +957,7 @@ mod tests {
             token: "t",
             env: vec![("PATH".into(), "/usr/bin".into())],
             read_only: Vec::new(),
+            given: Vec::new(),
             relayed: vec![
                 Relayed::Serial { device: "/dev/ttyUSB0".into(), pts: "/dev/pts/9".into() },
                 Relayed::Adb { serial: "R58M".into(), socket: scratch.join("adb.sock") },

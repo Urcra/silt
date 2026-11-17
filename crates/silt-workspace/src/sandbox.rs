@@ -112,6 +112,15 @@ pub struct RunPaths {
     /// read-only so an agent can't make git run its code on the host later
     /// (B2.3, CVE-2026-25725). Worked out with I/O before the plan.
     pub git_protect: Vec<PathBuf>,
+    /// Folders in the agent's homes that hold every project's sessions and
+    /// file backups, hidden so a run reads only its own project's (ADR 0065).
+    pub other_projects: Vec<PathBuf>,
+    /// This project's own folders inside those, shown again writable.
+    pub own_project: Vec<PathBuf>,
+    /// Files in the agent's homes shown as a run's own copy, the second path,
+    /// at the first: such as a prompt history of every project, started
+    /// empty, or settings it would otherwise rewrite for later runs.
+    pub fresh: Vec<(PathBuf, PathBuf)>,
     /// Each folder of the run's `PATH`.
     pub path_dirs: Vec<PathDir>,
     /// The `silt` its hooks and MCP server run.
@@ -278,8 +287,16 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
         mounts.at(MountKind::ReadOnly, dir.clone());
     }
     mounts.at(MountKind::ReadWrite, paths.checkout.clone());
-    if let Some(git_dir) = &paths.git_dir {
-        mounts.at(MountKind::ReadWrite, git_dir.clone());
+    // `.git` a mount point of its own, so it can't be renamed away and
+    // replaced with one whose config runs code on the host (B2.3); in a
+    // managed checkout, the `.git` file naming its git dir, read-only.
+    let dot_git = paths.checkout.join(".git");
+    match &paths.git_dir {
+        None => mounts.at(MountKind::ReadWrite, dot_git),
+        Some(git_dir) => {
+            mounts.at(MountKind::ReadOnly, dot_git);
+            mounts.at(MountKind::ReadWrite, git_dir.clone());
+        }
     }
     for dir in &paths.agent_homes {
         mounts.at(MountKind::ReadWrite, dir.clone());
@@ -292,6 +309,15 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
     }
     for file in &paths.pin_config {
         mounts.at(MountKind::ReadOnly, file.clone());
+    }
+    for dir in &paths.other_projects {
+        mounts.at(MountKind::Hide, dir.clone());
+    }
+    for dir in &paths.own_project {
+        mounts.at(MountKind::ReadWrite, dir.clone());
+    }
+    for (path, own) in &paths.fresh {
+        mounts.add(Mount { kind: MountKind::ReadWrite, path: path.clone(), source: Some(own.clone()) });
     }
     mounts.at(MountKind::ReadWrite, paths.scratch.clone());
     for (path, writable) in &reach.paths {
@@ -417,6 +443,9 @@ mod tests {
                 "/home/ana/work/api/.git/silt/clones/t1/commondir".into(),
                 "/home/ana/work/api/.git/silt/clones/t1/config".into(),
             ],
+            other_projects: vec!["/home/ana/.claude/projects".into()],
+            own_project: vec!["/home/ana/.claude/projects/-home-ana-work-api--silt-checkouts-t1".into()],
+            fresh: vec![("/home/ana/.claude/history.jsonl".into(), "/home/ana/.local/share/silt/runs/t1-1/history.jsonl".into())],
             path_dirs: vec!["/home/ana/.local/bin".into(), "/home/ana".into(), "/home".into(), "/usr/bin".into()],
             silt: "/home/ana/.cargo/bin/silt".into(),
             read_only: Vec::new(),
@@ -447,7 +476,7 @@ mod tests {
             assert_eq!(plan.sees(Path::new(secret)), None, "{secret}");
         }
         assert_eq!(plan.sees(Path::new("/home/ana/work/api/.silt/checkouts/t1/src/main.rs")), Some(true));
-        assert_eq!(plan.sees(Path::new("/home/ana/.claude/projects/x.jsonl")), Some(true));
+        assert_eq!(plan.sees(Path::new("/home/ana/.claude/projects/-home-ana-work-api--silt-checkouts-t1/x.jsonl")), Some(true));
         assert_eq!(plan.sees(Path::new("/home/ana/.cargo/registry/index")), Some(true));
         assert_eq!(plan.sees(Path::new("/home/ana/.cargo/bin/cargo")), Some(false));
         assert_eq!(plan.sees(Path::new("/usr/bin/git")), Some(false));
@@ -472,6 +501,27 @@ mod tests {
         assert_eq!(plan.sees(Path::new("/home/ana/work/api/.git/config")), Some(false));
         assert_eq!(plan.sees(Path::new("/home/ana/work/api/.git/hooks/post-checkout")), Some(false));
         assert_eq!(plan.sees(Path::new("/home/ana/work/api/.silt/checkouts/other/x")), Some(false));
+        let dot_git = plan.mounts.iter().find(|mount| mount.path == Path::new("/home/ana/work/api/.git"));
+        assert_eq!(dot_git.map(|mount| mount.kind), Some(MountKind::ReadWrite), "a mount point, so it can't be swapped");
+    }
+
+    #[test]
+    fn a_managed_checkouts_pointer_to_its_git_dir_is_read_only() {
+        let plan = plan(&paths(), &Reach::of(&Policy::default()));
+        assert_eq!(plan.sees(Path::new("/home/ana/work/api/.silt/checkouts/t1/.git")), Some(false));
+        assert_eq!(plan.sees(Path::new("/home/ana/work/api/.silt/checkouts/t1/src/main.rs")), Some(true));
+    }
+
+    #[test]
+    fn a_run_sees_its_own_projects_sessions_only() {
+        let plan = plan(&paths(), &Reach::of(&Policy::default()));
+        let own = Path::new("/home/ana/.claude/projects/-home-ana-work-api--silt-checkouts-t1/s.jsonl");
+        assert_eq!(plan.sees(own), Some(true));
+        assert_eq!(plan.sees(Path::new("/home/ana/.claude/projects/-home-ana-taxes/s.jsonl")), None);
+        assert_eq!(plan.sees(Path::new("/home/ana/.claude/settings.json")), Some(false));
+        let history = plan.mounts.iter().find(|mount| mount.path == Path::new("/home/ana/.claude/history.jsonl")).unwrap();
+        assert_eq!(history.kind, MountKind::ReadWrite);
+        assert_eq!(history.source.as_deref(), Some(Path::new("/home/ana/.local/share/silt/runs/t1-1/history.jsonl")));
     }
 
     #[test]
@@ -531,7 +581,7 @@ mod tests {
             (real_home.clone(), "/var/home"),
             (real_home, "/var/home/ana/.config"),
         ] {
-            let paths = RunPaths { path_dirs: vec![linked("/run/x", target)], ..paths };
+            let paths = RunPaths { path_dirs: vec![linked("/run/x", target)], fresh: Vec::new(), ..paths };
             let plan = plan(&paths, &Reach::of(&Policy::default()));
             assert!(!plan.mounts.iter().any(|mount| mount.source.is_some()), "{target}: {:?}", plan.mounts);
             assert!(!plan.mounts.iter().any(|mount| mount.path == Path::new("/run/x")), "{target}");

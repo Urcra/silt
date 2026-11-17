@@ -1381,6 +1381,13 @@ impl Core {
         self.checkouts.values().filter(move |checkout| checkout.record.path == path).map(|checkout| checkout.record.id)
     }
 
+    /// Whether a hook names a session Silt knows in a thread other than
+    /// `thread`, as a run's channel must not send.
+    pub(crate) fn hook_session_elsewhere(&self, input: &serde_json::Value, thread: &str) -> bool {
+        let session = input.get("session_id").and_then(serde_json::Value::as_str).and_then(|id| self.session(id));
+        session.is_some_and(|session| session.record.thread.to_string() != thread)
+    }
+
     pub(crate) async fn hook(&mut self, event: &str, input: serde_json::Value) -> Response {
         match serde_json::from_value::<silt_agents::claude::HookInput>(input) {
             Ok(input) => to_response(self.capture(event, &input).await),

@@ -288,6 +288,20 @@ pub struct OnDisk {
 }
 
 /// One agent CLI.
+/// What [`Agent::project_state`] keeps from a sandboxed run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectState {
+    /// Folders holding every project's state, hidden.
+    pub hide: Vec<PathBuf>,
+    /// This project's own folders inside them, shown again.
+    pub own: Vec<PathBuf>,
+    /// Files every project writes to, each run given an empty one of its own.
+    pub fresh: Vec<PathBuf>,
+    /// Files each run gets its own copy of, never written back: what it
+    /// writes there would otherwise configure later runs outside the sandbox.
+    pub copied: Vec<PathBuf>,
+}
+
 pub trait Agent: Send + Sync {
     /// The name recorded with its sessions.
     fn id(&self) -> &'static str;
@@ -381,6 +395,12 @@ pub trait Agent: Send + Sync {
     /// state stay writable. `env` reads the run's variables.
     fn read_only_home(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         Vec::new()
+    }
+    /// What in its homes belongs to every project, which a run in `cwd`
+    /// mustn't read: other projects' sessions are another workspace's history
+    /// (ADR 0065). `env` reads the run's variables.
+    fn project_state(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>, _cwd: &Path) -> ProjectState {
+        ProjectState::default()
     }
     /// The model APIs it calls with a key from a variable, which Silt's
     /// gateway adds instead, so its sandbox never holds the key (ADR 0093).

@@ -58,6 +58,19 @@ impl Rules {
 
     /// Whether an address a host resolved to may be connected to.
     pub fn address_allowed(&self, address: IpAddr) -> bool {
+        // IPv4 written as IPv6 (`::ffff:127.0.0.1`, or NAT64's `64:ff9b::/96`)
+        // and the unspecified address reach this machine and its networks past
+        // the IPv4 ranges.
+        let address = match address.to_canonical() {
+            IpAddr::V6(v6) if v6.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0] => {
+                let [.., a, b] = v6.segments();
+                IpAddr::V4(std::net::Ipv4Addr::from((u32::from(a) << 16) | u32::from(b)))
+            }
+            canonical => canonical,
+        };
+        if address.is_unspecified() {
+            return false;
+        }
         let Some(address) = Cidr::parse(&address.to_string()) else { return false };
         !self.blocked.iter().any(|range| range.contains(address))
     }
@@ -127,6 +140,11 @@ mod tests {
         }
         assert!(full.address_allowed("140.82.112.3".parse().unwrap()));
         assert!(full.address_allowed("10.20.4.12".parse().unwrap()), "an allowed range");
+        for address in ["::ffff:127.0.0.1", "::ffff:7f00:1", "::ffff:169.254.169.254", "::", "0.0.0.0", "64:ff9b::a9fe:a9fe"] {
+            assert!(!full.address_allowed(address.parse().unwrap()), "IPv4 by another name: {address}");
+        }
+        assert!(full.address_allowed("::ffff:140.82.112.3".parse().unwrap()));
+        assert!(full.address_allowed("2606:4700::1111".parse().unwrap()));
     }
 
     #[test]
