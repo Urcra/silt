@@ -127,8 +127,10 @@ pub fn bwrap_args(plan: &SandboxPlan, ids: Ids, seccomp: &File, resolv: Option<&
     for mount in &plan.mounts {
         let path = mount.path.as_os_str();
         if let Some(source) = &mount.source {
-            // Something else shown in its place, read-only.
-            push(&["--ro-bind".as_ref(), source.as_os_str(), path]);
+            // Something else shown in its place: a relay's terminal for a
+            // device, else read-only.
+            let how = if mount.kind == MountKind::Device { "--dev-bind" } else { "--ro-bind" };
+            push(&[how.as_ref(), source.as_os_str(), path]);
             continue;
         }
         match mount.kind {

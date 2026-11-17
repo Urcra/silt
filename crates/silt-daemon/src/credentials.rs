@@ -101,8 +101,28 @@ pub fn resolve_named(data_dir: &Path, workspace: &str, name: &str) -> Option<sil
         .and_then(|stored| secret_of(&stored))
 }
 
+/// Workspace `workspace`'s credential `name`'s secret alone, for a plugin's
+/// program that reads it from a variable.
+pub fn secret_named(data_dir: &Path, workspace: &str, name: &str) -> Option<String> {
+    load(data_dir)
+        .into_iter()
+        .find(|stored| stored.workspace == workspace && stored.name == name)
+        .and_then(|stored| raw_secret(&stored))
+}
+
 fn secret_of(stored: &StoredCredential) -> Option<silt_gateway::Credential> {
-    let secret = match &stored.source {
+    let secret = raw_secret(stored)?;
+    let value = if stored.scheme.is_empty() { secret } else { format!("{} {secret}", stored.scheme) };
+    Some(silt_gateway::Credential {
+        host: stored.host.clone(),
+        path: stored.path.clone(),
+        header: stored.header.to_ascii_lowercase(),
+        value,
+    })
+}
+
+fn raw_secret(stored: &StoredCredential) -> Option<String> {
+    match &stored.source {
         Source::Keyring => silt_os::secret(&keyring_name(&stored.name)).ok().flatten(),
         // Run outside every sandbox, as the person, with what the run's
         // own environment wouldn't hold.
@@ -114,14 +134,7 @@ fn secret_of(stored: &StoredCredential) -> Option<silt_gateway::Credential> {
                 .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
                 .filter(|secret| !secret.is_empty())
         }),
-    }?;
-    let value = if stored.scheme.is_empty() { secret } else { format!("{} {secret}", stored.scheme) };
-    Some(silt_gateway::Credential {
-        host: stored.host.clone(),
-        path: stored.path.clone(),
-        header: stored.header.to_ascii_lowercase(),
-        value,
-    })
+    }
 }
 
 #[cfg(test)]

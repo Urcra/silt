@@ -5798,6 +5798,7 @@ dependencies = [
 name = "silt-gateway"
 version = "0.0.1"
 dependencies = [
+ "base64 0.23.1",
  "bytes",
  "http-body-util",
  "hyper",
@@ -5807,6 +5808,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "silt-access",
  "silt-os",
  "silt-workspace",
  "tempfile",

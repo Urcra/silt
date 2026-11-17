@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!\", thread_id, run_hash, plugin, environment, change, created_ms, until_ms, revoked_ms, from_call\n               FROM plugin_grants WHERE thread_id = ? ORDER BY id DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "thread_id",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "run_hash",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "run_hash"
+          }
+        }
+      },
+      {
+        "name": "plugin",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "plugin"
+          }
+        }
+      },
+      {
+        "name": "environment",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "environment"
+          }
+        }
+      },
+      {
+        "name": "change",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "change"
+          }
+        }
+      },
+      {
+        "name": "created_ms",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "created_ms"
+          }
+        }
+      },
+      {
+        "name": "until_ms",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "until_ms"
+          }
+        }
+      },
+      {
+        "name": "revoked_ms",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "revoked_ms"
+          }
+        }
+      },
+      {
+        "name": "from_call",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "from_call"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "6d1b420d21579944cfcde8855b070cc42f659574e2155e3f518f04648a2c090e"
+}

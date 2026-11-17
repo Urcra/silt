@@ -256,7 +256,7 @@ workspaces: Array<string>,
  */
 environments: { [key in string]: Environment }, };
 
-export type Kind = { "type": "graphql" } | { "type": "command", argv: Array<string>, };
+export type Kind = { "type": "graphql" } | { "type": "command", argv: Array<string>, } | { "type": "mcp", argv: Array<string>, };
 
 export type Rule = "allow" | "ask";
 
@@ -271,9 +271,25 @@ target: string, reads: Rule, changes: Rule,
  */
 data: Array<DataClass>, 
 /**
- * A credential of `silt credential` added to its requests.
+ * A credential of `silt credential` added to its requests, or for a
+ * command or MCP server, given to it in `variable`.
  */
-credential: string | null, };
+credential: string | null, 
+/**
+ * The variable a command or MCP server reads the credential's secret
+ * from, such as `FLEET_TOKEN`.
+ */
+variable: string | null, 
+/**
+ * Each change is approved on its own: no grant covers it.
+ */
+once: boolean, 
+/**
+ * A GraphQL environment its agents may also query straight through
+ * the gateway, which reads each request: reads go, changes only where
+ * `changes` allows them, and data rules hold both ways.
+ */
+direct: boolean, };
 
 export type Outcome = { "status": "done", output: string, } | { "status": "refused", why: string, } | { "status": "failed", error: string, } | { "status": "unknown", why: string, } | { "status": "pending", approval: number, };
 
@@ -287,7 +303,63 @@ shown: string,
 /**
  * The hash an answer must name, so it answers what was shown.
  */
-hash: string, created_ms: number, state: ApprovalState, outcome: Outcome | null, };
+hash: string, created_ms: number, state: ApprovalState, outcome: Outcome | null, 
+/**
+ * It may change something, rather than only read.
+ */
+change: boolean, 
+/**
+ * Its environment allows no grant: each is approved on its own.
+ */
+once: boolean, };
+
+export type GrantScope = { "for": "run" } | { "for": "thread", minutes: number, };
+
+export type CallView = { id: number, plugin: string, tool: string, environment: string, target: string, shown: string, change: boolean, 
+/**
+ * It waited for the person.
+ */
+asked: boolean, 
+/**
+ * It ran without asking under this grant.
+ */
+grant: number | null, 
+/**
+ * `pending`, `running`, `rejected`, `expired` or `ended`.
+ */
+state: string, outcome: Outcome | null, created_ms: number, answered_ms: number | null, };
+
+export type GrantView = { id: number, plugin: string, environment: string, change: boolean, 
+/**
+ * For the run that asked only, rather than the thread.
+ */
+run_only: boolean, created_ms: number, until_ms: number | null, revoked_ms: number | null, 
+/**
+ * In force now.
+ */
+active: boolean, };
+
+export type AccessView = { calls: Array<CallView>, grants: Array<GrantView>, 
+/**
+ * What the gateway refused, newest first.
+ */
+refused: Array<NetworkRefusal>, 
+/**
+ * The devices Silt holds for the thread's sandboxes.
+ */
+devices: Array<RelayView>, };
+
+export type NetworkRefusal = { time_ms: number, host: string, port: number, why: string, };
+
+export type RelayView = { 
+/**
+ * `/dev/ttyUSB0`, or `adb:SERIAL`.
+ */
+device: string, 
+/**
+ * `serial` or `adb`.
+ */
+kind: string, since_ms: number, };
 
 export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<string>, };
 
@@ -1432,19 +1504,24 @@ no_nested?: boolean, };
 
 export type Network = "none" | "gateway" | "full" | "host";
 
-export type Backend = "bubblewrap";
+export type Backend = "bubblewrap" | "seatbelt";
 
-export type Devices = "none" | "named" | "all_usb";
+export type Devices = "none" | "relayed" | "named" | "all_usb";
 
 export type Extra = "ranges" | "ports" | "paths" | "gpu" | "docker" | "ssh_agent";
 
-export type Reach = { network: Network, 
+export type Reach = { 
+/**
+ * What makes the sandbox.
+ */
+backend: Backend, network: Network, 
 /**
  * The hosts "through Silt only" reaches; any public host when empty.
  */
 hosts: Array<string>, devices: Devices, 
 /**
- * Device nodes, for [`Devices::Named`].
+ * The devices, for [`Devices::Relayed`] and [`Devices::Named`]: device
+ * nodes, and for a relay `adb:SERIAL` too.
  */
 device_nodes: Array<string>, 
 /**

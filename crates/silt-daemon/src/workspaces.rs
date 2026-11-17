@@ -652,6 +652,14 @@ async fn mint_run_token(
     Ok(token)
 }
 
+/// [`Request::BindRunToken`](crate::protocol::Request) without a daemon.
+pub async fn bind_run_token(data_dir: &Path, token: &str, thread: &str) -> Result<(), CoreError> {
+    let thread: silt_types::ThreadId = thread.parse().map_err(|_| CoreError::Invalid(format!("{thread} isn't a thread id")))?;
+    let store = silt_store::Store::open(data_dir).await?;
+    store.bind_run_token(blake3::hash(token.as_bytes()).as_bytes(), thread).await?;
+    Ok(())
+}
+
 /// The rules for running `agent` with `args` in `thread`, from the files
 /// and the store, so a terminal's agent is checked whether a daemon runs or
 /// not (ADR 0018). A refusal says which rule and whose.

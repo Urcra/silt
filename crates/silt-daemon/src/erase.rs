@@ -206,6 +206,16 @@ impl Core {
         self.drop_threads(&here).await?;
         for thread in &erasure.threads {
             self.store.remove_run_tokens(*thread).await?;
+            // What its sandboxes asked of plugins, and reached, goes too.
+            self.store.remove_plugin_calls(*thread).await?;
+            let log = crate::sandbox::access_log(&self.data_dir, &thread.to_string());
+            if let Err(error) = std::fs::remove_file(&log)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(error.into());
+            }
+            #[cfg(unix)]
+            self.release_devices(*thread);
         }
         for family in families {
             if !self.threads.values().any(|record| record.family == family) {

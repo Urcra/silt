@@ -369,6 +369,21 @@ struct Run<'a> {
     held: &'a silt_daemon::workspaces::RunRules,
 }
 
+/// Binds the run's token to its thread, which may be new since the token
+/// was made, so what the run asks of plugins is kept with the thread.
+fn bind_run_token(token: &str, thread: &str) -> Result<(), Exn<CliError>> {
+    if !daemonless_capture() && is_running() {
+        return call::<String>(&Request::BindRunToken { token: token.to_owned(), thread: thread.to_owned() }).map(drop);
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .or_raise(|| CliError("cannot start the async runtime".into()))?;
+    runtime
+        .block_on(silt_daemon::workspaces::bind_run_token(&paths::data_dir(), token, thread))
+        .map_err(|error| fail(error.to_string()))
+}
+
 impl Run<'_> {
     /// Runs the agent with Silt's MCP server, hooks, and the repository's
     /// rules and skills it doesn't read by itself.
@@ -379,6 +394,13 @@ impl Run<'_> {
         recording: &mut Recording,
     ) -> Result<std::process::ExitStatus, Exn<CliError>> {
         let held = self.held;
+        // Only a run whose workspace has plugins calls them, which are kept
+        // with its thread.
+        let plugins = silt_daemon::plugins::load(&paths::data_dir());
+        let any_on = plugins.iter().any(|plugin| plugin.workspaces.iter().any(|on| on == held.workspace.id.as_str()));
+        if !held.token.is_empty() && any_on {
+            bind_run_token(&held.token, self.thread)?;
+        }
         let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
         let scratch = paths::data_dir().join("runs").join(format!("{}-{}", short(self.thread), std::process::id()));
         fs::create_dir_all(&scratch).or_raise(|| CliError("cannot create a directory for the run".into()))?;
@@ -428,8 +450,16 @@ impl Run<'_> {
                     )
                     .filter(|(key, _)| !(held.locks.no_bypass && key == "COPILOT_ALLOW_ALL"))
                     .collect();
+                // The daemon holds the devices, so their sessions outlive this run.
+                let relayed: Vec<silt_daemon::sandbox::Relayed> = if reach.devices == silt_workspace::Devices::Relayed {
+                    ensure_daemon()?;
+                    call(&Request::RelayDevices { thread: self.thread.to_owned(), devices: reach.device_nodes.clone() })?
+                } else {
+                    Vec::new()
+                };
                 let mut sandboxed = silt_daemon::sandbox::prepare(&silt_daemon::sandbox::Run {
                     data_dir: &paths::data_dir(),
+                    thread: self.thread,
                     agent: Some(self.agent),
                     checkout: self.checkout,
                     workspace: held.workspace.id.as_str(),
@@ -437,6 +467,7 @@ impl Run<'_> {
                     reach,
                     token: &held.token,
                     read_only: silt_daemon::sandbox::program_paths(&launch.program, &env),
+                    relayed,
                     env,
                 })
                 .map_err(|error| fail(format!("cannot prepare the sandbox: {error}")))?;

@@ -5,6 +5,7 @@
 //! out. The credential never enters the sandbox.
 
 mod ca;
+mod graphql;
 mod rules;
 
 use std::convert::Infallible;
@@ -23,6 +24,7 @@ use tokio::io::AsyncWriteExt as _;
 use tokio::net::TcpStream;
 
 pub use ca::Ca;
+pub use graphql::GraphqlRule;
 pub use rules::{Credential, Rules, matches};
 
 type Body = BoxBody<Bytes, hyper::Error>;
@@ -63,6 +65,17 @@ impl Gateway {
     }
 
     async fn route(self: Arc<Self>, request: Request<Incoming>) -> Response<Body> {
+        if let Some(token) = &self.rules.proxy_token {
+            let given = request.headers().get(hyper::header::PROXY_AUTHORIZATION).and_then(|value| value.to_str().ok());
+            if given != Some(proxy_authorization(token).as_str()) {
+                let mut response =
+                    refuse(StatusCode::PROXY_AUTHENTICATION_REQUIRED, "Silt's gateway answers its own sandboxes only");
+                response
+                    .headers_mut()
+                    .insert(hyper::header::PROXY_AUTHENTICATE, HeaderValue::from_static("Basic realm=\"silt\""));
+                return response;
+            }
+        }
         let Some(authority) = request.uri().authority().cloned() else {
             return refuse(StatusCode::BAD_REQUEST, "the gateway only takes requests for a host, as a proxy does");
         };
@@ -172,16 +185,42 @@ impl Gateway {
         {
             *request.uri_mut() = uri;
         }
+        let rule = self.rules.graphql_for(host, &path).cloned();
+        let request = match &rule {
+            Some(rule) => match read_graphql(request, rule).await {
+                Ok(request) => request,
+                Err(why) => {
+                    self.note(host, port, Some(&why), false);
+                    return refuse_graphql(&why);
+                }
+            },
+            None => request.map(|body| body.boxed()),
+        };
         self.note(host, port, None, added);
-        match self.send(request, host, addresses, tls).await {
-            Ok(response) => response.map(|body| body.boxed()),
-            Err(error) => refuse(StatusCode::BAD_GATEWAY, &format!("Silt's gateway couldn't reach {host}: {error}")),
+        let response = match self.send(request, host, addresses, tls).await {
+            Ok(response) => response,
+            Err(error) => return refuse(StatusCode::BAD_GATEWAY, &format!("Silt's gateway couldn't reach {host}: {error}")),
+        };
+        let Some(rule) = rule.filter(|rule| !rule.data.is_empty()) else {
+            return response.map(|body| body.boxed());
+        };
+        // What a data rule keeps from agents is checked before any of it
+        // reaches the sandbox.
+        let (parts, body) = response.into_parts();
+        let Ok(collected) = http_body_util::Limited::new(body, ANSWER_LIMIT).collect().await else {
+            return refuse_graphql("its answer was too large, or broke off, to check");
+        };
+        let bytes = collected.to_bytes();
+        if let Err(why) = rule.answer(&bytes) {
+            self.note(host, port, Some(&why), false);
+            return refuse_graphql(&why);
         }
+        Response::from_parts(parts, Full::new(bytes).map_err(|never| match never {}).boxed())
     }
 
     async fn send(
         &self,
-        request: Request<Incoming>,
+        request: Request<Body>,
         host: &str,
         addresses: &[SocketAddr],
         tls: bool,
@@ -221,7 +260,7 @@ where
     }
 }
 
-async fn send_on<T>(io: TokioIo<T>, request: Request<Incoming>) -> Result<Response<Incoming>, String>
+async fn send_on<T>(io: TokioIo<T>, request: Request<Body>) -> Result<Response<Incoming>, String>
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
@@ -267,6 +306,43 @@ fn upstream_config(root: Option<rustls::pki_types::CertificateDer<'static>>) -> 
     let mut config = builder.with_root_certificates(roots).with_no_client_auth();
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
     config
+}
+
+/// The `Proxy-Authorization` a request carries with `token` as its proxy
+/// URL's password, `http://silt:TOKEN@127.0.0.1:PORT`.
+pub fn proxy_authorization(token: &str) -> String {
+    use base64::Engine as _;
+    format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("silt:{token}")))
+}
+
+/// The most of a GraphQL request, and of its answer, the gateway reads.
+const REQUEST_LIMIT: usize = 1 << 20;
+const ANSWER_LIMIT: usize = 16 << 20;
+
+/// `request` read whole and checked against `rule`, ready to send on.
+async fn read_graphql(request: Request<Incoming>, rule: &GraphqlRule) -> Result<Request<Body>, String> {
+    if request.headers().contains_key(hyper::header::UPGRADE) {
+        return Err("a subscription's socket can't be read, so isn't let through".into());
+    }
+    let (parts, body) = request.into_parts();
+    let bytes = http_body_util::Limited::new(body, REQUEST_LIMIT)
+        .collect()
+        .await
+        .map_err(|_| "the request was too large, or broke off, to check".to_owned())?
+        .to_bytes();
+    let content_type = parts.headers.get(hyper::header::CONTENT_TYPE).and_then(|value| value.to_str().ok());
+    rule.request(parts.method.as_str(), parts.uri.query(), content_type, &bytes)?;
+    Ok(Request::from_parts(parts, Full::new(bytes).map_err(|never| match never {}).boxed()))
+}
+
+/// A refusal a GraphQL client shows as an error.
+fn refuse_graphql(why: &str) -> Response<Body> {
+    let said = serde_json::json!({"errors": [{"message": format!("Silt's gateway refused it: {why}")}]}).to_string();
+    let mut response = Response::new(Full::new(Bytes::from(said)).map_err(|never| match never {}).boxed());
+    *response.status_mut() = StatusCode::FORBIDDEN;
+    response.headers_mut().insert(hyper::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    response.headers_mut().insert("x-silt-gateway", HeaderValue::from_static("refused"));
+    response
 }
 
 fn empty() -> Body {

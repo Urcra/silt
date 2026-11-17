@@ -17,6 +17,8 @@ pub mod credentials;
 mod design;
 mod design_pages;
 mod design_sync;
+#[cfg(unix)]
+pub mod devices;
 mod disk;
 mod edited;
 mod erase;

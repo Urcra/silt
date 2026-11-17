@@ -21,10 +21,10 @@ tokio = { version = "1.54.0", features = ["process", "net"] }
 which = "8.0.6"
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.5", features = ["fs", "process"] }
+rustix = { version = "1.1.5", features = ["fs", "process", "pty", "termios"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-rustix = { version = "1.1.5", features = ["fs", "process", "net"] }
+rustix = { version = "1.1.5", features = ["fs", "process", "net", "pty", "termios"] }
 seccompiler = "0.5.0"
 
 [target.'cfg(windows)'.dependencies]

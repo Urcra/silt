@@ -476,6 +476,12 @@ pub fn session_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<S
 pub struct Gemini;
 
 impl Agent for Gemini {
+    fn model_apis(&self) -> &'static [crate::ModelApi] {
+        &crate::GEMINI_APIS
+    }
+    fn model_hosts(&self) -> &'static [&'static str] {
+        &["generativelanguage.googleapis.com", "cloudcode-pa.googleapis.com", "oauth2.googleapis.com", "accounts.google.com"]
+    }
     fn homes(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         let own = crate::home_from(home, env, "GEMINI_CLI_HOME", "").join(".gemini");
         let mut homes = vec![home.join(".gemini")];

@@ -757,18 +757,48 @@ pub enum Request {
     PluginRemove {
         name: String,
     },
-    /// Plugin calls waiting for the person or answered, a thread's alone
-    /// when one is named.
+    /// Plugin calls waiting for the person, a thread's alone when one is
+    /// named; with `all`, those answered too.
     Approvals {
         #[serde(default)]
         thread: Option<String>,
+        #[serde(default)]
+        all: bool,
     },
     /// The person's answer to an approval, naming the hash of the request
-    /// they were shown.
+    /// they were shown, and what else it allows from then on.
     ApprovalAnswer {
         id: u64,
         approve: bool,
         hash: String,
+        #[serde(default)]
+        grant: Option<crate::plugins::GrantScope>,
+    },
+    /// Binds a terminal run's token, made before its new thread was, to the
+    /// thread (ADR 0093).
+    BindRunToken {
+        token: String,
+        thread: String,
+    },
+    /// Holds `devices` for the thread's sandboxes, or hands back those it
+    /// holds already (ADR 0093).
+    RelayDevices {
+        thread: String,
+        devices: Vec<String>,
+    },
+    /// Lets go of a device relayed to the thread, ending its session.
+    ReleaseDevice {
+        thread: String,
+        device: String,
+    },
+    /// Ends a grant: calls it covered ask again.
+    GrantRevoke {
+        id: u64,
+    },
+    /// What reached a thread's sandboxes through Silt: plugin calls,
+    /// grants, and what the gateway refused (ADR 0093).
+    Access {
+        thread: String,
     },
     /// A request of an agent's history tools, answered only for the
     /// workspace its run's token was made for (ADR 0065).
@@ -2380,6 +2410,12 @@ mod tests {
             crate::plugins::Outcome::decl(&config),
             crate::plugins::ApprovalState::decl(&config),
             crate::plugins::ApprovalView::decl(&config),
+            crate::plugins::GrantScope::decl(&config),
+            crate::plugins::CallView::decl(&config),
+            crate::plugins::GrantView::decl(&config),
+            crate::plugins::AccessView::decl(&config),
+            crate::plugins::NetworkRefusal::decl(&config),
+            crate::plugins::RelayView::decl(&config),
             BusSubscription::decl(&config),
             CloneInfo::decl(&config),
             CloudLaunch::decl(&config),

@@ -194,6 +194,9 @@ pub struct Core {
     pub(crate) next_token: u64,
     /// Plugin calls waiting for, or answered by, the person (ADR 0093).
     pub(crate) approvals: crate::plugins::Approvals,
+    /// Devices held for threads' sandboxes (ADR 0093).
+    #[cfg(unix)]
+    pub(crate) relays: crate::devices::Relays,
     /// When the watcher noticed the changes being taken in, for crediting
     /// them to the tool that was running then.
     pub(crate) change_noticed: Option<Instant>,
@@ -414,6 +417,7 @@ impl Core {
         core.load_sessions().await?;
         core.load_agent_runs().await?;
         core.load_thread_states().await?;
+        core.recover_plugin_calls().await?;
         // Queued rather than done here, so the socket is already taking
         // requests while they run; they still come before any request.
         for checkout in core.checkouts.values() {
@@ -542,6 +546,8 @@ impl Core {
             index_transcripts: silt_agents::Transcripts::default(),
             next_token: 0,
             approvals: crate::plugins::Approvals::default(),
+            #[cfg(unix)]
+            relays: crate::devices::Relays::default(),
             change_noticed: None,
             deciding: None,
             marks_awaited: HashMap::new(),
@@ -752,7 +758,7 @@ impl Core {
             }
             match *asking {
                 Request::PluginTools => {
-                    let _ = reply.send(to_response(self.plugin_tools(&token).await));
+                    self.plugin_tools(&token, reply).await;
                     return;
                 }
                 Request::PluginCall { tool, input } => {
@@ -796,10 +802,44 @@ impl Core {
             Request::Plugins => Response::ok(crate::plugins::load(&self.data_dir)),
             Request::PluginPut { plugin } => to_response(crate::plugins::put(&self.data_dir, *plugin).map(|()| "saved")),
             Request::PluginRemove { name } => to_response(crate::plugins::remove(&self.data_dir, &name).map(|()| "removed")),
-            Request::Approvals { thread } => Response::ok(self.approvals_view(thread.as_deref())),
-            Request::ApprovalAnswer { id, approve, hash } => {
-                to_response(self.approval_answer(id, approve, &hash).map(|()| if approve { "approved" } else { "rejected" }))
+            Request::Approvals { thread, all } => to_response(self.approvals_view(thread.as_deref(), all).await),
+            Request::ApprovalAnswer { id, approve, hash, grant } => to_response(
+                self.approval_answer(id, approve, &hash, grant).await.map(|()| if approve { "approved" } else { "rejected" }),
+            ),
+            Request::BindRunToken { token, thread } => {
+                let bound = match self.find_thread(&thread) {
+                    Ok(thread) => {
+                        self.store.bind_run_token(blake3::hash(token.as_bytes()).as_bytes(), thread).await.map_err(Into::into)
+                    }
+                    Err(error) => Err(error),
+                };
+                to_response(bound.map(|()| "bound"))
             }
+            Request::RelayDevices { thread, devices } => {
+                #[cfg(unix)]
+                let relayed = match self.find_thread(&thread) {
+                    Ok(thread) => self.relay_devices(thread, &devices).await,
+                    Err(error) => Err(error),
+                };
+                #[cfg(not(unix))]
+                let relayed: Result<Vec<crate::sandbox::Relayed>, CoreError> = {
+                    let _ = (thread, devices);
+                    Err(CoreError::Invalid("Silt relays devices on Linux and macOS".into()))
+                };
+                to_response(relayed)
+            }
+            Request::ReleaseDevice { thread, device } => {
+                #[cfg(unix)]
+                let released = self.find_thread(&thread).and_then(|thread| self.release_device(thread, &device));
+                #[cfg(not(unix))]
+                let released: Result<(), CoreError> = {
+                    let _ = (thread, device);
+                    Err(CoreError::Invalid("Silt relays devices on Linux and macOS".into()))
+                };
+                to_response(released.map(|()| "released"))
+            }
+            Request::GrantRevoke { id } => to_response(self.grant_revoke(id).await.map(|()| "revoked")),
+            Request::Access { thread } => to_response(self.access_view(&thread).await),
             Request::PutArtifact { .. } => Response::error("only an agent's run shows the person something, with its token"),
             Request::ArtifactGuide { .. } => Response::error("only an agent's run asks for its artifact guide, with its token"),
             Request::DesignSystems { clone } => Response::ok(self.design_systems(clone.as_deref())),

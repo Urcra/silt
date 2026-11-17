@@ -105,6 +105,14 @@ pub struct SandboxPlan {
     /// Ports inside passed to sockets outside.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relays: Vec<Relay>,
+    /// Sockets outside the sandbox it connects to, such as the run's
+    /// channel: what macOS's sandbox must name to allow.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sockets: Vec<PathBuf>,
+    /// The gateway's port on this machine's loopback, where the sandbox has
+    /// no network of its own to relay it into, as on macOS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_port: Option<u16>,
 }
 
 /// The system's own folders, read-only.
@@ -239,7 +247,8 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
         add(MountKind::ReadOnly, protected);
     }
     match reach.devices {
-        Devices::None => {}
+        // Silt opens them and mounts what it relays them through.
+        Devices::None | Devices::Relayed => {}
         Devices::Named => {
             for node in &reach.device_nodes {
                 add(MountKind::Device, node.into());
@@ -277,6 +286,8 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
         nested: reach.nested,
         cwd: paths.checkout.clone(),
         relays: Vec::new(),
+        sockets: paths.run_socket.iter().cloned().collect(),
+        gateway_port: None,
     }
 }
 

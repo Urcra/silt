@@ -457,6 +457,12 @@ pub fn rollout_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<S
 pub struct Codex;
 
 impl Agent for Codex {
+    fn model_apis(&self) -> &'static [crate::ModelApi] {
+        &crate::CODEX_APIS
+    }
+    fn model_hosts(&self) -> &'static [&'static str] {
+        &["api.openai.com", "auth.openai.com", "chatgpt.com"]
+    }
     fn homes(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         vec![crate::home_from(home, env, "CODEX_HOME", ".codex")]
     }
