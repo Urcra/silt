@@ -1,4 +1,4 @@
-//! Erasing a Local only thread (ADR 0072): the thread and its forks, what
+//! Erasing a Local only thread (ADR 0092): the thread and its forks, what
 //! the store holds of them, their blobs no other thread needs, their managed
 //! checkouts, and the agents' own copies of their sessions. A marker written
 //! first lists what's to go, so an erasure a crash stopped is finished at the

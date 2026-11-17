@@ -105,7 +105,7 @@ pub struct Policy {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub home_locked: bool,
     /// Nothing Silt holds of its threads leaves this machine, and only
-    /// local models answer (ADR 0072): no server, `local`, and Claude Code
+    /// local models answer (ADR 0092): no server, `local`, and Claude Code
     /// on a local model only.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub local_only: bool,

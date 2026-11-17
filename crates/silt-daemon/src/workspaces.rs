@@ -612,7 +612,7 @@ pub(crate) fn can_sandbox(support: silt_agents::SandboxSupport, policy: &Policy)
 }
 
 /// What an agent's history tools may read (ADR 0065): its workspace, and
-/// in a Local only one its own project only (ADR 0072).
+/// in a Local only one its own project only (ADR 0092).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Scope {
     pub(crate) workspace: WorkspaceId,
@@ -634,7 +634,7 @@ pub struct RunRules {
     /// For its history tools, which read its workspace only.
     pub token: String,
     /// The arguments to run it with, when they differ from those given: a
-    /// local model's flag goes in its environment instead (ADR 0072).
+    /// local model's flag goes in its environment instead (ADR 0092).
     #[serde(default)]
     pub args: Option<Vec<String>>,
 }

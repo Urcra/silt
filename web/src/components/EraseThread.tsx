@@ -7,7 +7,7 @@ import { workspaceOf } from '../rules'
 import { hosted } from '../served'
 import { Button, toast } from '../ui'
 
-/** Erasing a Local only thread and its forks from this machine for good, once what goes is shown (ADR 0072). */
+/** Erasing a Local only thread and its forks from this machine for good, once what goes is shown (ADR 0092). */
 export function EraseThread({ thread, summary, onDone }: { thread: string; summary: ThreadSummary | undefined; onDone: () => void }) {
   const queries = useQueryClient()
   const navigate = useNavigate()

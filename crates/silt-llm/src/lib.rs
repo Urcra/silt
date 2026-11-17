@@ -1,4 +1,4 @@
-//! Local models (ADR 0072): finding them on Hugging Face, whether one fits
+//! Local models (ADR 0092): finding them on Hugging Face, whether one fits
 //! this machine, fetching them on consent, fetching llama.cpp, which model
 //! `llama-server` should hold, and running it.
 

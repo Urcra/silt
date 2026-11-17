@@ -1,5 +1,5 @@
 #!/bin/sh
-# Probes this machine for local models (ADR 0072) and writes a Markdown
+# Probes this machine for local models (ADR 0092) and writes a Markdown
 # report to paste back: the GPU and its memory, which llama.cpp builds run,
 # how fast a model is, whether tools work on both APIs, and Claude Code on it.
 #   scripts/local-model-probe.sh [model.gguf]

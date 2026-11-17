@@ -48,7 +48,7 @@ pub enum Request {
     CloneOf {
         thread: String,
     },
-    /// Erases a Local only thread and its forks for good (ADR 0072); without
+    /// Erases a Local only thread and its forks for good (ADR 0092); without
     /// `confirm`, says what would go.
     ThreadErase {
         thread: String,
@@ -56,7 +56,7 @@ pub enum Request {
         confirm: bool,
     },
     /// The local models here, the catalog's others, and what this machine
-    /// can run (ADR 0072).
+    /// can run (ADR 0092).
     Models,
     /// Starts downloading a model, one at a time: a catalog name,
     /// `owner/repo:file.gguf` on Hugging Face, or the absolute path of a GGUF
@@ -935,7 +935,7 @@ pub struct ImportCandidate {
     pub started_ms: Option<i64>,
 }
 
-/// The local models on this machine and what it can run (ADR 0072).
+/// The local models on this machine and what it can run (ADR 0092).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct LocalModels {

@@ -96,7 +96,7 @@ function Found({ found, busy, onPull }: { found: FoundModel; busy: boolean; onPu
   )
 }
 
-/** The models this machine runs itself, and finding others on Hugging Face (ADR 0072). */
+/** The models this machine runs itself, and finding others on Hugging Face (ADR 0092). */
 export function LocalModelsSettings() {
   const queries = useQueryClient()
   const view = useQuery({

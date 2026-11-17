@@ -1059,7 +1059,7 @@ isolated?: boolean,
 home_locked?: boolean, 
 /**
  * Nothing Silt holds of its threads leaves this machine, and only
- * local models answer (ADR 0072): no server, `local`, and Claude Code
+ * local models answer (ADR 0092): no server, `local`, and Claude Code
  * on a local model only.
  */
 local_only?: boolean, 

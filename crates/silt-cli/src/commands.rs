@@ -431,7 +431,7 @@ fn workspace_rules(
     agent: &'static dyn Agent,
     args: &[String],
 ) -> Result<silt_daemon::workspaces::RunRules, Exn<CliError>> {
-    // A local model runs through the daemon's gateway (ADR 0072).
+    // A local model runs through the daemon's gateway (ADR 0092).
     if silt_workspace::agent_key(agent.id()).as_str() == "claude"
         && silt_llm::local_model_in_args(args).is_some()
         && !daemonless_capture()
@@ -970,7 +970,7 @@ pub fn thread_change(request: Request) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-/// Says what erasing `thread` removes, and with `yes` erases it (ADR 0072).
+/// Says what erasing `thread` removes, and with `yes` erases it (ADR 0092).
 pub fn thread_erase(thread: String, yes: bool) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let said: String = call(&Request::ThreadErase { thread: thread.clone(), confirm: yes })?;

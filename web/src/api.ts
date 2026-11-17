@@ -150,7 +150,7 @@ export function dictationSocket(): WebSocket {
 export const api = {
   voiceStatus: () => request<VoiceStatus>('GET', '/api/voice'),
   voiceModel: () => request<VoiceStatus>('POST', '/api/voice/model'),
-  /** The local models here, and the llama-server that runs them (ADR 0072); a daemon's only. */
+  /** The local models here, and the llama-server that runs them (ADR 0092); a daemon's only. */
   models: () => request<LocalModels>('GET', '/api/models'),
   /** Starts a download: `owner/repo:file.gguf`, or a GGUF file's path. Answers with the model's name. */
   pullModel: (source: string) => request<string>('POST', '/api/models/pull', { source }),
@@ -161,7 +161,7 @@ export const api = {
   modelFiles: (repo: string) => request<ModelFiles>('GET', `/api/models/files?repo=${encodeURIComponent(repo)}`),
   /** Starts downloading llama.cpp's latest build for this machine. */
   pullRuntime: () => request<string>('POST', '/api/models/runtime'),
-  /** Erases a Local only thread and its forks (ADR 0072); unconfirmed, says what would go. */
+  /** Erases a Local only thread and its forks (ADR 0092); unconfirmed, says what would go. */
   eraseThread: (id: string, confirm: boolean) => request<string>('POST', `${thread(id)}/erase`, { confirm }),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   /** An artifact's content, by the blob a version of it names (ADR 0068). */

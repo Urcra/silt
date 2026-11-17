@@ -1,4 +1,4 @@
-//! Which model `llama-server` holds and which requests wait (ADR 0072): one
+//! Which model `llama-server` holds and which requests wait (ADR 0092): one
 //! model at a time, a swap only once the loaded one's requests are done,
 //! and a stop once it has been idle a while. The caller does the loading,
 //! unloading and forwarding each step asks for.
