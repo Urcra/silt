@@ -11,25 +11,85 @@ use silt_workspace::{PathDir, Reach, RunPaths};
 
 use crate::CoreError;
 
-/// Variables never passed into a sandbox: what they hold or point to signs
-/// in as the person somewhere.
-const CREDENTIAL_VARIABLES: [&str; 12] = [
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE",
-    "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE",
-    "KUBECONFIG",
-    "DOCKER_HOST",
-    "DOCKER_CONFIG",
-    "VAULT_TOKEN",
-    "NPM_TOKEN",
-    "SSH_AUTH_SOCK",
-    "GPG_AGENT_INFO",
-    "DBUS_SESSION_BUS_ADDRESS",
-    "XDG_RUNTIME_DIR",
+/// The only variables from the launching environment a sandbox gets: locale,
+/// terminal, and the roots of the language toolchains it builds with. An
+/// allowlist, not a denylist, because an unknown variable (`GH_TOKEN`,
+/// `DATABASE_URL`, a company's own) is far likelier to carry a secret than to
+/// be needed, and a denylist can't know every name. A model key or a
+/// workspace's credential comes back as a placeholder the gateway fills, added
+/// separately, so dropping it here is right. `PATH`, `HOME` and the agent's own
+/// home pointers are passed so its tools and sessions are found.
+const ENV_ALLOW: [&str; 44] = [
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "PWD",
+    "OLDPWD",
+    "TERM",
+    "COLORTERM",
+    "TERMINFO",
+    "TZ",
+    "LANG",
+    "LANGUAGE",
+    "TMPDIR",
+    "EDITOR",
+    "VISUAL",
+    "PAGER",
+    "LESS",
+    "HOSTNAME",
+    "CI",
+    "COLUMNS",
+    "LINES",
+    "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "CODEX_HOME",
+    "GEMINI_CLI_HOME",
+    "COPILOT_HOME",
+    "QUDIKS_HOME",
+    "JAVA_HOME",
+    "GOPATH",
+    "GOROOT",
+    "GOMODCACHE",
+    "GOCACHE",
+    "GOFLAGS",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "PKG_CONFIG_PATH",
+    "CC",
+    "CXX",
+    "MAKEFLAGS",
 ];
 
-/// Prefixes of variables never passed into a sandbox.
-const CREDENTIAL_PREFIXES: [&str; 2] = ["AWS_", "AZURE_"];
+/// Prefixes of variables a sandbox also gets: Silt's own, locale categories,
+/// and the per-toolchain settings builds read. None of these name a prefix a
+/// credential hides under (`AWS_`, `GITHUB_`); those fall through the
+/// allowlist. `npm_config_` is lower-case, so `NPM_TOKEN` is not caught by it.
+const ENV_ALLOW_PREFIXES: [&str; 18] = [
+    "SILT_",
+    "LC_",
+    "CARGO_",
+    "RUSTUP_",
+    "RUST_",
+    "RUSTC_",
+    "NODE_",
+    "npm_config_",
+    "PNPM_",
+    "COREPACK_",
+    "YARN_",
+    "PYENV_",
+    "CONDA_",
+    "DENO_",
+    "BUN_",
+    "GRADLE_",
+    "MAVEN_",
+    "CMAKE_",
+];
 
 /// The port the gateway answers on inside a sandbox.
 pub const GATEWAY_PORT: u16 = 3128;
@@ -151,7 +211,7 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     let lookup = |name: &str| run.env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone());
     let home = silt_os::home_dir();
     let (git_dir, git_shared) = git_paths(run.checkout);
-    let paths = RunPaths {
+    let mut paths = RunPaths {
         home: home.clone(),
         real_home: home.as_deref().and_then(real_if_linked),
         checkout: run.checkout.to_owned(),
@@ -161,6 +221,15 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
             (Some(agent), Some(home)) => agent.homes(home, &lookup),
             _ => Vec::new(),
         },
+        hide: match (run.agent, &home) {
+            (Some(agent), Some(home)) => agent.sign_in(home, &lookup),
+            _ => Vec::new(),
+        },
+        pin_config: match (run.agent, &home) {
+            (Some(agent), Some(home)) => agent.read_only_home(home, &lookup),
+            _ => Vec::new(),
+        },
+        git_protect: Vec::new(),
         path_dirs: lookup("PATH").map(|path| std::env::split_paths(&path).map(path_dir).collect()).unwrap_or_default(),
         silt: std::env::current_exe()?,
         read_only: run.read_only.clone(),
@@ -181,9 +250,22 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
             std::fs::create_dir_all(home)?;
         }
     }
+    // A config file that doesn't exist yet would otherwise be the agent's to
+    // create in its writable home and have run on the host later; create an
+    // empty one so pinning it read-only closes that (ADR 0093).
+    for config in &paths.pin_config {
+        if !config.exists() {
+            if let Some(parent) = config.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let empty = if config.extension().is_some_and(|ext| ext == "json") { "{}" } else { "" };
+            std::fs::write(config, empty)?;
+        }
+    }
     let git_dir = paths.git_dir.clone().unwrap_or_else(|| run.checkout.join(".git"));
     if git_dir.is_dir() {
         std::fs::create_dir_all(git_dir.join("hooks"))?;
+        paths.git_protect = git_protect(&git_dir)?;
     }
     std::fs::create_dir_all(run.checkout.join(".silt"))?;
     let mut plan = silt_workspace::plan(&paths, run.reach);
@@ -467,7 +549,7 @@ fn keeps(name: &str, reach: &Reach) -> bool {
     if name == "SSH_AUTH_SOCK" {
         return reach.ssh_agent;
     }
-    !CREDENTIAL_VARIABLES.contains(&name) && !CREDENTIAL_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+    ENV_ALLOW.contains(&name) || ENV_ALLOW_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
 }
 
 /// A checkout's own git dir when it's elsewhere, as a managed checkout's
@@ -490,6 +572,63 @@ fn git_paths(checkout: &Path) -> (Option<PathBuf>, Vec<PathBuf>) {
         })
         .collect();
     (git_dir, shared)
+}
+
+/// The paths under a git dir that decide what git runs, to keep read-only in
+/// the sandbox (B2.3, CVE-2026-25725): `config`, `hooks` and `commondir`, for
+/// the repo and for each submodule and linked worktree. The git dir itself is
+/// writable (objects, refs, the index), so without this an agent could rewrite
+/// a hook, or point `commondir` at a directory it controls to have git read
+/// its `config` and `hooks` from there when the person next runs git outside
+/// the sandbox. A missing `commondir` is created pointing at the dir itself, so
+/// it can't later be made to point elsewhere.
+fn git_protect(git_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    pin_gitdir(git_dir, &mut out)?;
+    for subtree in [git_dir.join("modules"), git_dir.join("worktrees")] {
+        protect_subtree(&subtree, &mut out)?;
+    }
+    Ok(out)
+}
+
+/// Pins one git dir's `commondir`, `config`, `config.worktree` and `hooks`.
+/// An absent `commondir` is written as `.` (the common dir is the git dir
+/// itself, git's own default), so pinning it read-only closes the redirect.
+fn pin_gitdir(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    let commondir = dir.join("commondir");
+    if !commondir.exists() {
+        std::fs::write(&commondir, ".")?;
+    }
+    out.push(commondir);
+    for name in ["config", "config.worktree", "hooks"] {
+        let path = dir.join(name);
+        if path.exists() {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Pins every git dir nested under a `modules` or `worktrees` tree, without
+/// walking into the objects, refs, logs or hooks that make those trees large.
+fn protect_subtree(root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    if !root.is_dir() {
+        return Ok(());
+    }
+    let mut stack = vec![root.to_owned()];
+    while let Some(dir) = stack.pop() {
+        if dir.join("HEAD").exists() {
+            pin_gitdir(&dir, out)?;
+        }
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            let name = path.file_name().and_then(|name| name.to_str());
+            if path.is_dir() && !matches!(name, Some("objects" | "refs" | "logs" | "hooks")) {
+                stack.push(path);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `program` as it runs, and what it links to, for the sandbox to show: a
@@ -571,16 +710,21 @@ mod tests {
             relayed: Vec::new(),
             env: vec![
                 ("PATH".into(), "/usr/bin:/bin".into()),
+                ("LANG".into(), "en_US.UTF-8".into()),
+                ("CARGO_HOME".into(), "/home/a/.cargo".into()),
                 ("ANTHROPIC_API_KEY".into(), "sk".into()),
                 ("AWS_SECRET_ACCESS_KEY".into(), "s".into()),
                 ("GOOGLE_APPLICATION_CREDENTIALS".into(), "/k.json".into()),
+                ("GH_TOKEN".into(), "ghp_secret".into()),
+                ("DATABASE_URL".into(), "postgres://u:p@prod/db".into()),
+                ("MY_COMPANY_SECRET".into(), "s3cr3t".into()),
                 ("SSH_AUTH_SOCK".into(), "/run/agent".into()),
             ],
             read_only: Vec::new(),
         };
         let sandboxed = prepare(&run).unwrap();
         let names: Vec<&str> = sandboxed.env.iter().map(|(name, _)| name.as_str()).collect();
-        assert!(names.contains(&"PATH"), "{names:?}");
+        assert!(names.contains(&"PATH") && names.contains(&"LANG") && names.contains(&"CARGO_HOME"), "{names:?}");
         #[cfg(unix)]
         {
             // The agent's key goes on at the gateway: the sandbox holds a placeholder.
@@ -588,6 +732,11 @@ mod tests {
             assert!(sandboxed.outside.iter().any(|outside| matches!(outside, Outside::Gateway { .. })));
         }
         assert!(!names.contains(&"AWS_SECRET_ACCESS_KEY") && !names.contains(&"GOOGLE_APPLICATION_CREDENTIALS"));
+        // The allowlist drops a token or URL from the launching shell, named or
+        // not, rather than trusting a denylist to know every secret's name.
+        for dropped in ["GH_TOKEN", "DATABASE_URL", "MY_COMPANY_SECRET"] {
+            assert!(!names.contains(&dropped), "{dropped} leaked into the sandbox: {names:?}");
+        }
         assert!(!names.contains(&"SSH_AUTH_SOCK"), "only when the rules hand ssh-agent over");
         assert!(sandboxed.env.contains(&("SILT_RUN_TOKEN".into(), "t0k".into())));
         assert_eq!(sandboxed.launcher[1], "sandbox-run");
@@ -597,6 +746,38 @@ mod tests {
         assert_eq!(plan.sees(&socket), Some(true));
         assert_eq!(plan.sees(&crate::paths::socket_path_in(data.path())), None, "never the person's socket");
         assert_eq!(plan.sees(&data.path().join("silt.sqlite")), None);
+        if let Some(home) = silt_os::home_dir() {
+            assert_eq!(plan.sees(&home.join(".claude/.credentials.json")), None, "the agent's sign-in is hidden");
+            assert_eq!(plan.sees(&home.join(".claude/settings.json")), Some(false), "the agent's hooks config is read-only");
+        }
+    }
+
+    #[test]
+    fn git_protect_pins_config_hooks_and_commondir() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = dir.path().join(".git");
+        std::fs::create_dir_all(git.join("hooks")).unwrap();
+        std::fs::write(git.join("config"), "[core]\n").unwrap();
+        // A submodule's own git dir, with its own config and hooks.
+        let sub = git.join("modules/libs/a");
+        std::fs::create_dir_all(sub.join("hooks")).unwrap();
+        std::fs::write(sub.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(sub.join("config"), "[core]\n").unwrap();
+
+        let protect = git_protect(&git).unwrap();
+
+        // An absent commondir is created pointing at the git dir itself, and
+        // pinned, so it can't later be made to redirect config and hooks.
+        assert_eq!(std::fs::read_to_string(git.join("commondir")).unwrap(), ".");
+        for pinned in [git.join("commondir"), git.join("config"), git.join("hooks")] {
+            assert!(protect.contains(&pinned), "{pinned:?} not pinned: {protect:?}");
+        }
+        // The submodule gets the same treatment, so its config and hooks can't
+        // be rewritten to run on the host either.
+        assert_eq!(std::fs::read_to_string(sub.join("commondir")).unwrap(), ".");
+        for pinned in [sub.join("commondir"), sub.join("config"), sub.join("hooks")] {
+            assert!(protect.contains(&pinned), "{pinned:?} not pinned: {protect:?}");
+        }
     }
 
     #[cfg(unix)]

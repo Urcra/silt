@@ -147,12 +147,55 @@ pub fn bwrap_args(plan: &SandboxPlan, ids: Ids, seccomp: &File, resolv: Option<&
         }
     }
     if let Some(resolv) = resolv {
-        push(&["--ro-bind".as_ref(), resolv.as_os_str(), "/etc/resolv.conf".as_ref()]);
+        // `/etc/resolv.conf` is often a symlink (to `/run/...` on systemd, to
+        // `/mnt/wsl/...` on WSL). The host's `/etc` is bound read-only, so the
+        // symlink comes in as-is; binding onto it makes bwrap follow it and
+        // fail when the target isn't in the sandbox. Bind at the resolved
+        // target instead, after making its parent, so the symlink leads to the
+        // resolver either way.
+        let (dir, dest) = resolv_destination();
+        if let Some(dir) = &dir {
+            push(&["--dir".as_ref(), dir.as_os_str()]);
+        }
+        push(&["--ro-bind".as_ref(), resolv.as_os_str(), dest.as_os_str()]);
     }
     let fd = seccomp.as_fd().as_raw_fd().to_string();
     push(&["--seccomp".as_ref(), fd.as_ref(), "--chdir".as_ref(), plan.cwd.as_os_str(), "--".as_ref()]);
     args.extend(command.iter().cloned());
     args
+}
+
+/// Where the sandbox's resolver goes, and the directory to make for it first.
+/// When `/etc/resolv.conf` is a symlink, that's the symlink's resolved target
+/// (and its parent, unless the parent is somewhere the sandbox already has);
+/// otherwise it's `/etc/resolv.conf` itself, which exists in the bound `/etc`.
+fn resolv_destination() -> (Option<PathBuf>, PathBuf) {
+    let etc = PathBuf::from("/etc/resolv.conf");
+    let Ok(target) = std::fs::read_link(&etc) else {
+        return (None, etc);
+    };
+    let dest = if target.is_absolute() { target } else { PathBuf::from("/etc").join(target) };
+    let dest = normalize(&dest);
+    // `/run` is a fresh tmpfs the bind makes its parents under; anything else
+    // (such as WSL's `/mnt/wsl`) needs the directory made first.
+    let dir = dest.parent().filter(|parent| !parent.starts_with("/run")).map(Path::to_owned);
+    (dir, dest)
+}
+
+/// `path` with `.` and `..` folded out, without touching the disk, so a
+/// relative resolver symlink resolves the same inside the sandbox.
+fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// The user and group a sandbox runs as.
@@ -390,6 +433,55 @@ mod tests {
         let said = String::from_utf8_lossy(&output.stdout);
         assert!(!said.contains("SEEN") && said.contains("WROTE") && said.contains("LOCKED"), "{said}");
         assert!(checkout.join("made").exists());
+    }
+
+    #[test]
+    fn a_relative_resolver_symlink_folds_to_an_absolute_target() {
+        assert_eq!(normalize(Path::new("/etc/../run/systemd/resolve/stub-resolv.conf")), Path::new("/run/systemd/resolve/stub-resolv.conf"));
+        assert_eq!(normalize(Path::new("/mnt/wsl/resolv.conf")), Path::new("/mnt/wsl/resolv.conf"));
+    }
+
+    #[test]
+    fn a_pinned_commondir_holds_and_a_sign_in_is_hidden() {
+        let Some(tools) = tools(Network::None).ok().filter(|tools| check(tools).is_ok()) else {
+            eprintln!("skipped: bubblewrap can't make a sandbox here");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = dir.path().join("app");
+        std::fs::create_dir_all(checkout.join(".git/hooks")).unwrap();
+        std::fs::write(checkout.join(".git/config"), "[core]\n").unwrap();
+        // Pinned to the git dir itself, as the daemon writes it before a run.
+        std::fs::write(checkout.join(".git/commondir"), ".").unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::write(home.join(".claude/.credentials.json"), "SECRET-OAUTH-TOKEN").unwrap();
+        let paths = RunPaths {
+            home: Some(home.clone()),
+            checkout: checkout.clone(),
+            silt: "/bin/sh".into(),
+            scratch: dir.path().join("run"),
+            agent_homes: vec![home.join(".claude")],
+            hide: vec![home.join(".claude/.credentials.json")],
+            git_protect: vec![checkout.join(".git/commondir"), checkout.join(".git/config")],
+            ..RunPaths::default()
+        };
+        let plan = plan(&paths, &Reach::of(&Policy { network: Some(Network::None), ..Policy::default() }));
+        let program = seccomp_program().unwrap();
+        std::fs::write(dir.path().join("seccomp.bpf"), program).unwrap();
+        let seccomp = File::open(dir.path().join("seccomp.bpf")).unwrap();
+        inherit(&seccomp).unwrap();
+        let script = format!(
+            "echo evil > .git/commondir 2>/dev/null && echo WROTE-COMMONDIR; printf 'TOKEN=['; cat {}/.claude/.credentials.json 2>/dev/null; printf ']\\n'",
+            home.display()
+        );
+        let args = bwrap_args(&plan, Ids::here(), &seccomp, None, &["/bin/sh".into(), "-c".into(), script.into()]);
+        let output = std::process::Command::new(&tools.bwrap).args(&args).output().unwrap();
+        let said = String::from_utf8_lossy(&output.stdout);
+        assert!(!said.contains("WROTE-COMMONDIR"), "commondir must stay read-only: {said}");
+        assert!(!said.contains("SECRET-OAUTH-TOKEN"), "the sign-in must be hidden: {said}");
+        assert!(said.contains("TOKEN=[]"), "the sign-in file reads empty: {said}");
+        assert_eq!(std::fs::read_to_string(checkout.join(".git/commondir")).unwrap(), ".", "the real file is unchanged");
     }
 
     #[test]

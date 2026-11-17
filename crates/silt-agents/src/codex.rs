@@ -472,6 +472,14 @@ impl Agent for Codex {
         vec![crate::home_from(home, env, "CODEX_HOME", ".codex")]
     }
 
+    fn sign_in(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        vec![crate::home_from(home, env, "CODEX_HOME", ".codex").join("auth.json")]
+    }
+
+    fn read_only_home(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        vec![crate::home_from(home, env, "CODEX_HOME", ".codex").join("config.toml")]
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }

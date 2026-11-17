@@ -100,6 +100,18 @@ pub struct RunPaths {
     pub git_shared: Vec<PathBuf>,
     /// Where the agent keeps its sessions and settings.
     pub agent_homes: Vec<PathBuf>,
+    /// Files inside the agent's homes that hold its sign-in, hidden after the
+    /// homes are mounted so the agent's own credential never enters (ADR 0093).
+    pub hide: Vec<PathBuf>,
+    /// Files inside the agent's homes that configure what it runs (hooks, MCP
+    /// commands), kept read-only after the homes are mounted so an agent can't
+    /// plant one that runs on the host on a later unsandboxed start (ADR 0093).
+    pub pin_config: Vec<PathBuf>,
+    /// Paths under the git dir that configure what git runs — `config`,
+    /// `hooks`, `commondir` and the same for submodules and worktrees — kept
+    /// read-only so an agent can't make git run its code on the host later
+    /// (B2.3, CVE-2026-25725). Worked out with I/O before the plan.
+    pub git_protect: Vec<PathBuf>,
     /// Each folder of the run's `PATH`.
     pub path_dirs: Vec<PathDir>,
     /// The `silt` its hooks and MCP server run.
@@ -272,6 +284,15 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
     for dir in &paths.agent_homes {
         mounts.at(MountKind::ReadWrite, dir.clone());
     }
+    // After the homes are writable, so the sign-in a home holds is hidden
+    // rather than handed over, and its hooks and other run-defining config
+    // can't be rewritten to run on the host later (ADR 0093).
+    for file in &paths.hide {
+        mounts.at(MountKind::Hide, file.clone());
+    }
+    for file in &paths.pin_config {
+        mounts.at(MountKind::ReadOnly, file.clone());
+    }
     mounts.at(MountKind::ReadWrite, paths.scratch.clone());
     for (path, writable) in &reach.paths {
         mounts.at(if *writable { MountKind::ReadWrite } else { MountKind::ReadOnly }, PathBuf::from(path));
@@ -281,6 +302,13 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
     let git_dir = paths.git_dir.clone().unwrap_or_else(|| paths.checkout.join(".git"));
     for protected in [git_dir.join("config"), git_dir.join("hooks"), paths.checkout.join(".silt")] {
         mounts.at(MountKind::ReadOnly, protected);
+    }
+    // The git dir is writable for objects, refs and the index, so the paths
+    // that tell git what to run are pinned read-only on top: `config`, `hooks`
+    // and `commondir` can't be rewritten, and `commondir` can't be made to
+    // point git's config and hooks lookup at a directory the agent controls.
+    for protected in &paths.git_protect {
+        mounts.at(MountKind::ReadOnly, protected.clone());
     }
     match reach.devices {
         // Silt opens them and mounts what it relays them through.
@@ -383,6 +411,12 @@ mod tests {
             git_dir: Some("/home/ana/work/api/.git/silt/clones/t1".into()),
             git_shared: vec!["/home/ana/work/api/.git/objects".into()],
             agent_homes: vec!["/home/ana/.claude".into(), "/home/ana/.claude.json".into()],
+            hide: vec!["/home/ana/.claude/.credentials.json".into()],
+            pin_config: vec!["/home/ana/.claude/settings.json".into()],
+            git_protect: vec![
+                "/home/ana/work/api/.git/silt/clones/t1/commondir".into(),
+                "/home/ana/work/api/.git/silt/clones/t1/config".into(),
+            ],
             path_dirs: vec!["/home/ana/.local/bin".into(), "/home/ana".into(), "/home".into(), "/usr/bin".into()],
             silt: "/home/ana/.cargo/bin/silt".into(),
             read_only: Vec::new(),

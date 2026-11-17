@@ -312,6 +312,10 @@ impl Agent for OpenCode {
         [".local/share/opencode", ".config/opencode", ".local/state/opencode"].iter().map(|dir| home.join(dir)).collect()
     }
 
+    fn sign_in(&self, home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        vec![home.join(".local/share/opencode/auth.json")]
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }

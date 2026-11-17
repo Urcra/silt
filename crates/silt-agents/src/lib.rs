@@ -366,6 +366,22 @@ pub trait Agent: Send + Sync {
     fn homes(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         Vec::new()
     }
+    /// The files in its homes that hold its stored sign-in, hidden in Silt's
+    /// sandbox so the agent's own credential never enters it (ADR 0093): the
+    /// gateway adds what it needs to reach its model instead. `env` reads the
+    /// run's variables.
+    fn sign_in(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        Vec::new()
+    }
+    /// The files in its homes that configure what it runs — hooks, MCP server
+    /// commands, and the like — kept read-only in Silt's sandbox so an agent
+    /// can't plant one that runs on the host the next time it starts outside a
+    /// sandbox (ADR 0093, CVE-2026-25725). The daemon creates an absent one
+    /// first, so pinning it closes the gap either way. Its sessions and other
+    /// state stay writable. `env` reads the run's variables.
+    fn read_only_home(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        Vec::new()
+    }
     /// The model APIs it calls with a key from a variable, which Silt's
     /// gateway adds instead, so its sandbox never holds the key (ADR 0093).
     fn model_apis(&self) -> &'static [ModelApi] {

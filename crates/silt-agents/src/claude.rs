@@ -183,6 +183,15 @@ impl Agent for ClaudeCode {
         }
     }
 
+    fn sign_in(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        self.homes(home, env).first().map(|dir| dir.join(".credentials.json")).into_iter().collect()
+    }
+
+    fn read_only_home(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        let Some(dir) = self.homes(home, env).into_iter().find(|dir| dir.extension().is_none()) else { return Vec::new() };
+        vec![dir.join("settings.json"), dir.join("settings.local.json")]
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }
