@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use silt_workspace::{Mount, MountKind, Network};
-use silt_workspace::{Reach, RunPaths};
+use silt_workspace::{PathDir, Reach, RunPaths};
 
 use crate::CoreError;
 
@@ -153,6 +153,7 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     let (git_dir, git_shared) = git_paths(run.checkout);
     let paths = RunPaths {
         home: home.clone(),
+        real_home: home.as_deref().and_then(real_if_linked),
         checkout: run.checkout.to_owned(),
         git_dir,
         git_shared,
@@ -160,10 +161,11 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
             (Some(agent), Some(home)) => agent.homes(home, &lookup),
             _ => Vec::new(),
         },
-        path_dirs: lookup("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default(),
+        path_dirs: lookup("PATH").map(|path| std::env::split_paths(&path).map(path_dir).collect()).unwrap_or_default(),
         silt: std::env::current_exe()?,
         read_only: run.read_only.clone(),
         data_dir: Some(run.data_dir.to_owned()),
+        real_data_dir: real_if_linked(run.data_dir),
         scratch: run.scratch.to_owned(),
         #[cfg(unix)]
         run_socket: Some(crate::paths::agents_socket_in(run.data_dir)),
@@ -246,6 +248,22 @@ fn devices(run: &Run<'_>, plan: &mut silt_workspace::SandboxPlan) -> Vec<(String
         env.push(("SILT_SERIAL_PORTS".to_owned(), serials.join(";")));
     }
     env
+}
+
+/// A `PATH` folder with the links on the way to it resolved, for the plan.
+fn path_dir(path: PathBuf) -> PathDir {
+    let plain = path.is_absolute()
+        && path.components().all(|part| matches!(part, std::path::Component::RootDir | std::path::Component::Normal(_)));
+    let link = plain
+        .then(|| path.ancestors().find(|dir| dir.symlink_metadata().is_ok_and(|meta| meta.file_type().is_symlink())))
+        .flatten()
+        .and_then(|link| Some((link.to_owned(), std::fs::canonicalize(link).ok()?)));
+    PathDir { real: std::fs::canonicalize(&path).ok(), link, path }
+}
+
+/// Where `path` really is, if a link makes that differ.
+fn real_if_linked(path: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(path).ok().filter(|real| real != path)
 }
 
 /// What a run's relays out of the sandbox add to it.
@@ -687,6 +705,25 @@ mod tests {
         assert_eq!(env("ANDROID_SERIAL").as_deref(), Some("R58M"));
         assert!(!std::fs::read_to_string(scratch.join("sandbox.json")).unwrap().contains("s3cret"));
         assert_eq!(plan.sees(&data.path().join("gateway/ca-key.pem")), None, "the authority's key stays out");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_folder_names_the_deepest_link_on_its_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let node = root.join("fnm/node-versions/v22/installation");
+        std::fs::create_dir_all(node.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("fnm/aliases")).unwrap();
+        std::os::unix::fs::symlink("../node-versions/v22/installation", root.join("fnm/aliases/default")).unwrap();
+        std::fs::create_dir_all(root.join("multishells")).unwrap();
+        let shell = root.join("multishells/42_1");
+        std::os::unix::fs::symlink(root.join("fnm/aliases/default"), &shell).unwrap();
+        let resolved = path_dir(shell.join("bin"));
+        assert_eq!(resolved.real.as_deref(), Some(node.join("bin").as_path()));
+        assert_eq!(resolved.link, Some((shell, node.clone())));
+        assert_eq!(path_dir(node.join("bin")).link, None);
+        assert_eq!(path_dir(root.join("multishells/../fnm")).link, None, "only plain paths");
     }
 
     #[test]
