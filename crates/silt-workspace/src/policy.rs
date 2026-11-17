@@ -4,7 +4,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::Preset;
-use crate::reach::{Devices, Extra, Network, both, lower};
+use crate::reach::{Backend, Devices, Extra, Network, both, lower};
 
 /// An agent as rules name it: the same for its CLI and its ACP adapter
 /// (`claude`, `codex`, `copilot`, …).
@@ -94,9 +94,17 @@ pub struct Policy {
     /// The most an agent may do without asking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_preset: Option<Preset>,
-    /// The agent runs only with its own sandbox on.
+    /// The agent runs only with its own sandbox on, which Silt's sandbox
+    /// also answers.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sandbox: bool,
+    /// Agents run in Silt's own sandbox, and don't start where it can't be
+    /// made (ADR 0093). The reach rules below apply only with it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub silt_sandbox: bool,
+    /// What makes Silt's sandbox; bubblewrap when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<Backend>,
     /// "Hide other workspaces' files": the sandbox also keeps the agent out
     /// of Silt's data and other workspaces' folders; implies `sandbox`.
     /// History tools are scoped to their workspace without it.
@@ -204,6 +212,9 @@ impl Policy {
                 (one, other) => one.or(other),
             },
             sandbox: self.sandbox || other.sandbox,
+            silt_sandbox: self.silt_sandbox || other.silt_sandbox,
+            // An org's choice holds on its members' machines.
+            backend: other.backend.or(self.backend),
             isolated: self.isolated || other.isolated,
             home_locked: self.home_locked || other.home_locked,
             local_only: self.local_only || other.local_only,
@@ -332,6 +343,10 @@ pub enum Broken {
         agent: String,
         hides_others: bool,
     },
+    /// Silt's sandbox is required and this machine can't make one.
+    SiltSandbox {
+        why: String,
+    },
     Home,
     /// An agent that doesn't run on a local model, in a Local only workspace.
     NotLocal {
@@ -391,6 +406,9 @@ impl Refusal {
             ),
             Broken::Sandbox { agent, hides_others: false } => {
                 format!("{workspace} needs the agent's own sandbox, which Silt can't turn on for {agent} ({source})")
+            }
+            Broken::SiltSandbox { why } => {
+                format!("{workspace} runs its agents in Silt's sandbox, which this machine can't make ({source}): {why}")
             }
             Broken::Home => format!("{workspace}'s projects sync with its server only ({source})"),
             Broken::NotLocal { agent } => {
@@ -490,6 +508,15 @@ impl Rules<'_> {
         self.check(|policy| {
             (!policy.sandboxes(support))
                 .then(|| Broken::Sandbox { agent: agent.name().to_owned(), hides_others: policy.isolated })
+        })
+    }
+
+    /// Whether an agent may start here when this machine can make Silt's
+    /// sandbox or, with `unavailable`, says why it can't.
+    pub fn check_silt_sandbox(&self, unavailable: Option<&str>) -> Result<(), Refusal> {
+        self.check(|policy| {
+            let why = unavailable.filter(|_| policy.silt_sandbox)?;
+            Some(Broken::SiltSandbox { why: why.to_owned() })
         })
     }
 
@@ -692,6 +719,24 @@ mod tests {
         let rules = Rules { workspace: "Work", local: &local, org: Some(Ok(&org)) };
         let refusal = rules.check_agent(&known("codex", "Codex"), SandboxSupport::Sandbox).unwrap_err();
         assert!(matches!(refusal.origin, Source::Org { .. }));
+    }
+
+    #[test]
+    fn silt_s_sandbox_is_its_own_rule_and_nothing_starts_where_it_cant_be_made() {
+        let why = "no bubblewrap";
+        let agents_own = Policy { sandbox: true, isolated: true, ..Policy::default() };
+        let rules = Rules { workspace: "Work", local: &agents_own, org: None };
+        assert_eq!(rules.check_silt_sandbox(Some(why)), Ok(()), "the agent's own sandbox doesn't ask for Silt's");
+
+        let org = acme(Policy { silt_sandbox: true, ..Policy::default() });
+        let rules = Rules { workspace: "Work", local: &agents_own, org: Some(Ok(&org)) };
+        assert_eq!(rules.check_silt_sandbox(None), Ok(()));
+        let refusal = rules.check_silt_sandbox(Some(why)).unwrap_err();
+        assert_eq!(
+            refusal.to_string(),
+            "Work runs its agents in Silt's sandbox, which this machine can't make (acme's policy on silt.acme.dev): no bubblewrap"
+        );
+        assert!(rules.effective().silt_sandbox);
     }
 
     #[test]

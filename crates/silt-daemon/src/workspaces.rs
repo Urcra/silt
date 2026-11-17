@@ -12,7 +12,7 @@ use silt_workspace::{
 
 use crate::core::{Core, CoreError};
 use crate::homes::Home;
-use crate::protocol::{Preset, WorkspaceProject, WorkspaceView, WorkspacesView};
+use crate::protocol::{BackendView, Preset, WorkspaceProject, WorkspaceView, WorkspacesView};
 
 const FILE: &str = "workspaces.json";
 
@@ -196,6 +196,10 @@ impl Core {
                             .collect(),
                     }
                 })
+                .collect(),
+            backends: silt_workspace::Backend::ALL
+                .into_iter()
+                .map(|backend| BackendView { backend, unavailable: crate::sandbox::unavailable(backend).map(str::to_owned) })
                 .collect(),
         }
     }
@@ -526,8 +530,9 @@ impl Core {
     ) -> Result<(Option<Preset>, Option<silt_workspace::Reach>), CoreError> {
         let rules = self.rules(workspace);
         let policy = rules.effective();
-        let ours = policy.sandbox_required() && crate::sandbox::supported();
         let refused = |refusal: silt_workspace::Refusal| CoreError::Invalid(refusal.to_string());
+        rules.check_silt_sandbox(crate::sandbox::unavailable(policy.backend.unwrap_or_default())).map_err(refused)?;
+        let ours = policy.silt_sandbox;
         let custom = silt_acp::registry::custom(&self.data_dir).iter().any(|own| own.id == agent.id);
         let choice = if custom {
             silt_workspace::AgentChoice::Custom { name: agent.name.clone() }
@@ -741,7 +746,8 @@ fn check_run(
     let policy = rules.effective();
     let choice =
         silt_workspace::AgentChoice::Known { key: silt_workspace::agent_key(agent.id()), name: agent.display_name().to_owned() };
-    let ours = policy.sandbox_required() && crate::sandbox::supported();
+    rules.check_silt_sandbox(crate::sandbox::unavailable(policy.backend.unwrap_or_default())).map_err(refused)?;
+    let ours = policy.silt_sandbox;
     // Silt's own sandbox holds the agent to every sandbox rule.
     let support = if ours { silt_agents::SandboxSupport::Isolate } else { agent.sandbox_support() };
     rules.check_agent(&choice, support).map_err(refused)?;

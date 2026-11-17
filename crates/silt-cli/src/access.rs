@@ -61,7 +61,9 @@ fn doctor() {
 
 #[cfg(not(target_os = "linux"))]
 fn doctor() {
-    println!("Silt's own sandbox runs on Linux for now; here, a workspace that requires one uses the agent's own sandbox.");
+    println!(
+        "Silt's own sandbox runs on Linux for now; here, agents don't start in a workspace that runs them in it, and the agent's own sandbox is what a workspace can require."
+    );
     credentials();
 }
 

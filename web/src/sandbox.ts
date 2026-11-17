@@ -1,6 +1,16 @@
-import type { Devices, Extra, Network, Policy, Reach } from './api'
+import type { Backend, Devices, Extra, Network, Policy, Reach } from './api'
 
 /** Silt's sandbox in the web UI (ADR 0093): its options as Settings shows them, and what a policy gives a run. */
+
+export const BACKENDS: { value: Backend; label: string; detail: string }[] = [
+  { value: 'bubblewrap', label: 'bubblewrap', detail: "A process sandbox on Linux: starts at once, and shares this machine's kernel." },
+]
+
+/** The backends ADR 0093 plans, listed so the choice reads as one before they can be picked. */
+export const PLANNED_BACKENDS: { label: string; detail: string }[] = [
+  { label: 'Container (OCI)', detail: 'crun or youki, for a toolchain of its own that every machine gets alike.' },
+  { label: 'Virtual machine', detail: 'libkrun or gVisor, a kernel of its own, for untrusted content.' },
+]
 
 export const NETWORKS: { value: Network; label: string; detail: string }[] = [
   { value: 'none', label: 'No network', detail: 'Nothing leaves the sandbox. For work on untrusted content.' },

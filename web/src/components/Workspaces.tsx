@@ -280,6 +280,7 @@ export function WorkspacesSettings() {
         workspace={workspace.name}
         policy={workspace.policy}
         org={org ? { name: org.org, policy: org.policy } : null}
+        backends={view.data.backends}
         onChange={changePolicy}
       />
       {view.data.saved && <WorkspacePlugins workspace={workspace.id} name={workspace.name} />}
@@ -329,7 +330,7 @@ export function WorkspacesSettings() {
                   )
                 }
                 theirs={org?.policy.sandbox ? 'Required' : '—'}
-                effect={effective.sandbox || effective.isolated ? 'Required' : 'Not required'}
+                effect={effective.sandbox || effective.isolated ? (effective.silt_sandbox ? "Required; Silt's sandbox answers it" : 'Required') : 'Not required'}
               />
               <Rule
                 name="Hide other workspaces' files"

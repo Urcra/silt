@@ -337,20 +337,28 @@ pub fn program_paths(program: &std::ffi::OsStr, env: &[(String, String)]) -> Vec
     paths
 }
 
-/// Whether Silt's sandbox can run agents on this machine: on Linux, with
-/// bubblewrap able to make one. Elsewhere, or without it, a workspace that
-/// requires a sandbox gets the agent's own, as before (ADR 0065).
-pub fn supported() -> bool {
+/// Why `backend` can't make Silt's sandbox on this machine, if it can't.
+pub fn unavailable(backend: silt_workspace::Backend) -> Option<&'static str> {
+    match backend {
+        silt_workspace::Backend::Bubblewrap => bubblewrap_unavailable(),
+    }
+}
+
+fn bubblewrap_unavailable() -> Option<&'static str> {
     #[cfg(target_os = "linux")]
     {
-        static WORKS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *WORKS.get_or_init(|| {
-            silt_os::sandbox::tools(silt_workspace::Network::None).is_ok_and(|tools| silt_os::sandbox::check(&tools).is_ok())
+        static WHY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        WHY.get_or_init(|| {
+            silt_os::sandbox::tools(silt_workspace::Network::None)
+                .and_then(|tools| silt_os::sandbox::check(&tools))
+                .err()
+                .map(|error| error.to_string())
         })
+        .as_deref()
     }
     #[cfg(not(target_os = "linux"))]
     {
-        false
+        Some("bubblewrap runs on Linux only")
     }
 }
 

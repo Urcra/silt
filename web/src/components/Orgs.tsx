@@ -129,6 +129,7 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
         />
         {(
           [
+            ['silt_sandbox', "Silt's sandbox", 'Agents run in it, and don’t start on a machine that can’t make one'],
             ['sandbox', "Agent's own sandbox", 'Agents that can’t sandbox are refused'],
             ['isolated', "Hide other workspaces' files", "The sandbox also keeps agents out of Silt's data and other workspaces' folders"],
             ['home_locked', 'Where threads sync', `Only to this server; never this machine only, never another`],
