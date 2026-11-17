@@ -10,12 +10,15 @@ use serde::{Deserialize, Serialize};
 use silt_design::{Builtin, SystemName};
 
 use crate::core::CoreError;
-use crate::protocol::{ArtifactSettings, DesignSource, DesignSystemView};
+use crate::protocol::{ArtifactSettings, DesignComponentView, DesignSource, DesignSystemView};
 
 /// A repository's systems, under its checkout.
 pub(crate) const PROJECT_DIR: &str = ".silt/design-systems";
 /// The person's own, under the data dir.
 pub(crate) const PERSONAL_DIR: &str = "design-systems";
+/// A system's components' CSS and their examples, in its folder (ADR 0086).
+pub(crate) const COMPONENTS_CSS: &str = "components.css";
+pub(crate) const COMPONENTS_DIR: &str = "components";
 /// What `design_system` takes to style nothing.
 pub(crate) const NONE: &str = "none";
 /// The system the person picked for each project on this machine.
@@ -86,11 +89,34 @@ impl System {
         out
     }
 
-    /// The CSS its tokens compile to, for a frame.
+    /// Its `components.css`, empty when it has none (ADR 0086).
+    fn components_css(&self) -> String {
+        match &self.place {
+            Place::Builtin(builtin) => builtin.components_css.to_owned(),
+            Place::Folder(dir) => {
+                read_capped(&dir.join(COMPONENTS_CSS), silt_design::COMPONENTS_CSS_BYTES as u64).unwrap_or_default()
+            }
+        }
+    }
+
+    /// Its components' examples, and what was left out of them.
+    pub(crate) fn components(&self) -> (Vec<silt_design::Component>, Vec<String>) {
+        match &self.place {
+            Place::Builtin(builtin) => silt_design::components(builtin.components.iter().copied()),
+            Place::Folder(dir) => {
+                let files = component_files(&dir.join(COMPONENTS_DIR));
+                silt_design::components(files.iter().map(|(name, html)| (name.as_str(), html.as_str())))
+            }
+        }
+    }
+
+    /// The CSS its tokens and components compile to, for a frame.
     pub(crate) fn compiled(&self) -> Result<silt_design::Compiled, CoreError> {
         let tokens = self.tokens()?;
         let fonts = self.fonts(&tokens);
-        Ok(silt_design::compile(&tokens, &fonts))
+        let mut compiled = silt_design::compile(&tokens, &fonts);
+        compiled.add_components(&self.components_css());
+        Ok(compiled)
     }
 
     pub(crate) fn view(&self, with_readme: bool) -> DesignSystemView {
@@ -101,8 +127,39 @@ impl System {
             source: self.source,
             readme: with_readme.then(|| self.readme()),
             tokens: if with_readme { tokens.as_ref().map(silt_design::token_names).unwrap_or_default() } else { BTreeMap::new() },
+            components: if with_readme {
+                self.components()
+                    .0
+                    .into_iter()
+                    .map(|component| DesignComponentView { name: component.name, about: component.about, html: component.html })
+                    .collect()
+            } else {
+                Vec::new()
+            },
         }
     }
+}
+
+/// The `.html` files directly in a system's `components/`, by stem: the
+/// first that a system may hold, each read only when it's small enough to
+/// be kept.
+pub(crate) fn component_files(dir: &Path) -> BTreeMap<String, String> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return BTreeMap::new();
+    };
+    let names: std::collections::BTreeSet<String> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.strip_suffix(".html").map(str::to_owned))
+        .filter(|name| silt_design::valid_component_name(name))
+        .collect();
+    names
+        .into_iter()
+        .take(silt_design::MAX_COMPONENTS)
+        .filter_map(|name| {
+            let html = read_capped(&dir.join(format!("{name}.html")), silt_design::COMPONENT_BYTES as u64)?;
+            Some((name, html))
+        })
+        .collect()
 }
 
 pub(crate) fn read_capped(path: &Path, limit: u64) -> Option<String> {
@@ -401,6 +458,38 @@ mod tests {
         assert!(find(&all, "acme").is_err());
         assert_eq!(project_default(checkout.path()).as_deref(), Some("nous"));
         assert!(find(&all, "plain").expect("plain").compiled().expect("css").css.contains("--chart-1:"));
+    }
+
+    #[test]
+    fn a_folders_components_reach_its_frame_and_its_view() {
+        let checkout = tempfile::tempdir().expect("temp dir");
+        let dir = checkout.path().join(PROJECT_DIR).join("acme");
+        fs::create_dir_all(dir.join(COMPONENTS_DIR).join("nested.html")).expect("dir");
+        fs::write(dir.join("tokens.json"), r#"{"name":"Acme"}"#).expect("tokens");
+        fs::write(dir.join(COMPONENTS_CSS), ".a-button { padding: 4px; }").expect("css");
+        fs::write(dir.join(COMPONENTS_DIR).join("button.html"), "<!-- The button. -->\n<button class=\"a-button\">Go</button>")
+            .expect("button");
+        fs::write(dir.join(COMPONENTS_DIR).join("notes.txt"), "not a component").expect("notes");
+        fs::write(dir.join(COMPONENTS_DIR).join("Big Name.html"), "<b></b>").expect("bad name");
+
+        let all = systems(Some(checkout.path()), checkout.path());
+        let acme = find(&all, "acme").expect("acme");
+        let css = acme.compiled().expect("css").css;
+        assert!(css.ends_with("/* components */\n.a-button { padding: 4px; }\n"), "{css}");
+        let view = acme.view(true);
+        assert_eq!(
+            view.components,
+            [DesignComponentView {
+                name: "button".into(),
+                about: "The button.".into(),
+                html: "<!-- The button. -->\n<button class=\"a-button\">Go</button>".into(),
+            }]
+        );
+        assert!(acme.view(false).components.is_empty(), "a listing leaves them out");
+
+        let nous = find(&all, "nous").expect("nous");
+        assert!(nous.compiled().expect("css").css.contains(".n-button"));
+        assert!(nous.view(true).components.iter().any(|component| component.name == "row"));
     }
 
     #[test]

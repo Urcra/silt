@@ -1,0 +1,248 @@
+/* Silt's own components, as web/src/ui draws them. Every size here is the product's. */
+
+.n-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--fg-1);
+  font: 500 12px/1.45 var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--duration-micro) var(--ease), color var(--duration-micro) var(--ease);
+}
+.n-button:hover { background: var(--surface-2); }
+.n-button:disabled { background: var(--surface-1); color: var(--fg-2); cursor: not-allowed; }
+.n-button svg { width: 16px; height: 16px; flex-shrink: 0; }
+.n-button.n-primary { border-color: transparent; background: var(--accent); color: var(--fg-on-accent); }
+.n-button.n-primary:hover { background: var(--accent-hover); }
+.n-button.n-primary:disabled { background: var(--surface-2); color: var(--fg-2); }
+.n-button.n-ghost { border-color: transparent; background: transparent; color: var(--fg-2); }
+.n-button.n-ghost:hover { background: var(--surface-2); color: var(--fg-1); }
+.n-button.n-danger { color: var(--danger); }
+.n-button.n-danger:hover { background: var(--danger-tint); }
+.n-button.n-sm { padding: 2px 6px; }
+.n-button.n-lg { padding: 10px 16px; font-size: 13px; }
+
+.n-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.n-icon-button:hover { background: var(--surface-2); color: var(--fg-1); }
+.n-icon-button svg { width: 16px; height: 16px; }
+
+.n-field {
+  box-sizing: border-box;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--fg-1);
+  font: 400 13px/1.45 var(--font-sans);
+}
+.n-field::placeholder { color: var(--fg-3); }
+textarea.n-field { display: block; width: 100%; }
+
+.n-select { position: relative; display: inline-flex; min-width: 0; vertical-align: middle; font-size: 13px; }
+.n-select select {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 28px 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--fg-1);
+  font: inherit;
+  appearance: none;
+  cursor: pointer;
+}
+.n-select select:hover { border-color: var(--border-strong); }
+.n-select svg {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  width: 12px;
+  height: 12px;
+  transform: translateY(-50%);
+  color: var(--fg-2);
+  pointer-events: none;
+}
+
+.n-field:focus-visible,
+.n-select select:focus-visible,
+.n-button:focus-visible,
+.n-icon-button:focus-visible,
+.n-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.n-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font: 400 11px/1.35 var(--font-mono);
+}
+.n-tag.n-accent { background: var(--accent-tint); color: var(--accent-fg); }
+.n-tag.n-ok { background: var(--ok-tint); color: var(--ok); }
+.n-tag.n-warn { background: var(--warn-tint); color: var(--fg-1); }
+.n-tag.n-danger { background: var(--danger-tint); color: var(--danger); }
+.n-tag.n-info { background: var(--info-tint); color: var(--info); }
+
+.n-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-2);
+  font: 400 12px/1.45 var(--font-sans);
+  cursor: pointer;
+}
+.n-chip:hover { background: var(--surface-2); }
+.n-chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-tint); color: var(--accent-fg); }
+
+.n-kbd {
+  display: inline-flex;
+  min-width: 18px;
+  justify-content: center;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--fg-2);
+  font: 400 11px/1.35 var(--font-mono);
+}
+
+.n-dot { display: inline-block; flex-shrink: 0; width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--fg-3); }
+.n-dot.n-ok { background: var(--ok); }
+.n-dot.n-warn { background: var(--warn); }
+.n-dot.n-danger { background: var(--danger); }
+.n-dot.n-info { background: var(--info); }
+.n-dot.n-accent { background: var(--accent); }
+
+.n-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--fg-2);
+  font: 400 11px/1.35 var(--font-mono);
+}
+
+.n-section-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 4px;
+  color: var(--fg-2);
+  font: 400 11px/1.35 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.n-card { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-elevated); }
+.n-card-body { padding: var(--space-3); }
+.n-card-title { margin: 0; color: var(--fg-1); font: 500 15px/1.35 var(--font-sans); }
+.n-card-meta { margin: 2px 0 0; color: var(--fg-3); font: 400 11px/1.35 var(--font-mono); }
+
+.n-row {
+  display: flex;
+  min-width: 0;
+  height: 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  color: var(--fg-1);
+  font: 400 13px/1.45 var(--font-sans);
+  text-decoration: none;
+}
+.n-row:hover { background: var(--surface-2); }
+.n-row[aria-current] { background: var(--accent-tint); color: var(--accent-fg); box-shadow: inset 2px 0 0 var(--accent); }
+.n-row svg { width: 14px; height: 14px; flex-shrink: 0; }
+.n-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.n-row-meta { flex-shrink: 0; color: var(--fg-3); font: 400 11px/1.35 var(--font-mono); white-space: nowrap; }
+
+.n-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--info-tint);
+  color: var(--info);
+  font: 400 13px/1.45 var(--font-sans);
+}
+.n-banner svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 2px; }
+.n-banner.n-ok { background: var(--ok-tint); color: var(--ok); }
+.n-banner.n-warn { background: var(--warn-tint); color: var(--fg-1); }
+.n-banner.n-danger { background: var(--danger-tint); color: var(--danger); }
+
+.n-empty {
+  padding: 32px 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  text-align: center;
+  font: 400 13px/1.45 var(--font-sans);
+}
+.n-empty-title { margin: 0; color: var(--fg-1); font-weight: 500; }
+.n-empty-body { margin: 4px 0 0; color: var(--fg-2); }
+
+.n-diff { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-elevated); }
+.n-diff-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--fg-2);
+  font: 400 11px/1.35 var(--font-mono);
+}
+.n-diff-path { min-width: 0; overflow: hidden; color: var(--fg-1); text-overflow: ellipsis; white-space: nowrap; }
+.n-diff-counts { margin-left: auto; white-space: nowrap; }
+.n-diff-counts .n-added { color: var(--ok); }
+.n-diff-counts .n-removed { color: var(--danger); }
+.n-diff-lines { margin: 0; overflow-x: auto; color: var(--fg-1); font: 400 12px/1.6 var(--font-mono); }
+.n-diff-line { display: grid; grid-template-columns: 40px 1fr; white-space: pre; }
+.n-diff-line > span:first-child { padding-right: 8px; color: var(--fg-3); text-align: right; user-select: none; }
+.n-diff-line.n-added { background: var(--ok-tint); }
+.n-diff-line.n-removed { background: var(--danger-tint); }
+
+.n-status-bar {
+  display: flex;
+  height: 24px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-2);
+  font: 400 11px/1.35 var(--font-mono);
+}
+
+@media (pointer: coarse), (max-width: 767px) {
+  .n-button, .n-field, .n-select select, .n-chip, .n-row { min-height: 44px; }
+  .n-icon-button { min-width: 44px; min-height: 44px; }
+  .n-field, .n-select { font-size: 14px; }
+  .n-kbd { display: none; }
+}

@@ -17,12 +17,42 @@ pub const BUILTIN: [Builtin; 2] = [
         name: "nous",
         readme: include_str!("../systems/nous/README.md"),
         tokens: include_str!("../systems/nous/tokens.json"),
+        components_css: include_str!("../systems/nous/components.css"),
+        components: NOUS_COMPONENTS,
     },
     Builtin {
         name: "plain",
         readme: include_str!("../systems/plain/README.md"),
         tokens: include_str!("../systems/plain/tokens.json"),
+        components_css: "",
+        components: &[],
     },
+];
+
+macro_rules! nous_components {
+    ($($name:literal),* $(,)?) => {
+        &[$(($name, include_str!(concat!("../systems/nous/components/", $name, ".html")))),*]
+    };
+}
+
+const NOUS_COMPONENTS: &[(&str, &str)] = nous_components![
+    "button",
+    "icon-button",
+    "field",
+    "select",
+    "tag",
+    "chip",
+    "kbd",
+    "dot",
+    "pill",
+    "section-label",
+    "card",
+    "row",
+    "banner",
+    "empty-state",
+    "diff",
+    "status-bar",
+    "icons",
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -30,6 +60,9 @@ pub struct Builtin {
     pub name: &'static str,
     pub readme: &'static str,
     pub tokens: &'static str,
+    pub components_css: &'static str,
+    /// Each component's example, by name.
+    pub components: &'static [(&'static str, &'static str)],
 }
 
 pub fn builtin(name: &str) -> Option<Builtin> {
@@ -200,6 +233,101 @@ pub fn parse(json: &str) -> Result<Tokens, InvalidTokens> {
 pub struct Compiled {
     pub css: String,
     pub dropped: Vec<String>,
+}
+
+/// `components.css` may be at most this large (ADR 0086).
+pub const COMPONENTS_CSS_BYTES: usize = 128 << 10;
+/// One component's example may be at most this large.
+pub const COMPONENT_BYTES: usize = 16 << 10;
+/// A system holds at most this many components...
+pub const MAX_COMPONENTS: usize = 48;
+/// ...and their examples at most this much together.
+pub const COMPONENTS_BYTES: usize = 128 << 10;
+
+impl Compiled {
+    /// Adds a system's `components.css` after its tokens. It's unlayered,
+    /// so a library's layered reset (Tailwind's preflight) doesn't undo it,
+    /// and it comes before the page, whose own rules win at equal
+    /// specificity. A file that could load anything or close the frame's
+    /// `<style>` is left out whole.
+    pub fn add_components(&mut self, css: &str) {
+        if css.trim().is_empty() {
+            return;
+        }
+        match components_css_problem(css) {
+            Some(why) => self.dropped.push(format!("components.css {why}")),
+            None => {
+                let _ = writeln!(self.css, "/* components */\n{}", css.trim_end());
+            }
+        }
+    }
+}
+
+fn components_css_problem(css: &str) -> Option<&'static str> {
+    if css.len() > COMPONENTS_CSS_BYTES {
+        return Some("is larger than 128 KiB");
+    }
+    let lower = css.to_ascii_lowercase();
+    if lower.contains("@import") {
+        Some("holds an @import")
+    } else if lower.contains("</") {
+        Some("holds `</`")
+    } else if lower
+        .match_indices("url(")
+        .any(|(at, _)| !lower[at + 4..].trim_start().trim_start_matches(['"', '\'']).starts_with("data:"))
+    {
+        Some("loads a url() that isn't a data: URI")
+    } else {
+        None
+    }
+}
+
+/// One of a system's components: its example markup and the note that
+/// heads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Component {
+    pub name: String,
+    pub about: String,
+    pub html: String,
+}
+
+/// Whether `name` can name a component: what names a system.
+pub fn valid_component_name(name: &str) -> bool {
+    name.parse::<SystemName>().is_ok()
+}
+
+/// A system's components from their files, by name, in name order, within
+/// the limits, and what was left out and why.
+pub fn components<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> (Vec<Component>, Vec<String>) {
+    let mut files: Vec<(&str, &str)> = files.into_iter().collect();
+    files.sort_by_key(|(name, _)| *name);
+    let mut out = Vec::new();
+    let mut dropped = Vec::new();
+    let mut total = 0;
+    for (name, html) in files {
+        if !valid_component_name(name) {
+            dropped.push(format!("{name:?} isn't a component's name"));
+        } else if html.len() > COMPONENT_BYTES {
+            dropped.push(format!("the component {name} is larger than 16 KiB"));
+        } else if out.len() == MAX_COMPONENTS {
+            dropped.push(format!("the component {name} is past the {MAX_COMPONENTS} a system may hold"));
+        } else if total + html.len() > COMPONENTS_BYTES {
+            dropped.push(format!("the component {name} is past the 128 KiB a system's components may hold together"));
+        } else {
+            total += html.len();
+            out.push(Component { name: name.to_owned(), about: component_note(html), html: html.trim().to_owned() });
+        }
+    }
+    (out, dropped)
+}
+
+/// The `<!-- … -->` comment an example opens with, on one line.
+fn component_note(html: &str) -> String {
+    html.trim_start()
+        .strip_prefix("<!--")
+        .and_then(|rest| rest.split_once("-->"))
+        .map(|(note, _)| note.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default()
 }
 
 /// Compiles `tokens` into custom properties: the first theme's on `:root`,
@@ -676,6 +804,84 @@ mod tests {
         );
         assert!(out.css.contains(".ds-body { font-family: var(--font-sans); font-size: 14px; line-height: 1.6; font-weight: 400; letter-spacing: -0.01em; }"), "{}", out.css);
         assert_eq!(out.dropped, ["the font file fonts/gone.woff2 isn't in the system"]);
+    }
+
+    #[test]
+    fn components_css_comes_after_the_tokens_unless_it_reaches_out() {
+        let mut out = compiled(r##"{"name":"A","color":{"themes":[{"id":"light"}],"tokens":[{"name":"bg","value":"#fff"}]}}"##);
+        out.add_components(".a-button { background: var(--bg); mask: url( 'data:image/svg+xml,x'); }");
+        assert!(
+            out.css.ends_with("/* components */\n.a-button { background: var(--bg); mask: url( 'data:image/svg+xml,x'); }\n"),
+            "{}",
+            out.css
+        );
+        assert!(out.dropped.is_empty(), "{:?}", out.dropped);
+        for (css, why) in [
+            ("@IMPORT 'x.css';", "@import"),
+            ("a::after { content: '</style>'; }", "`</`"),
+            ("a { background: URL(https://example.com/x.png) }", "data: URI"),
+            (&"a{}".repeat(COMPONENTS_CSS_BYTES), "128 KiB"),
+        ] {
+            let before = out.css.clone();
+            out.add_components(css);
+            assert_eq!(out.css, before, "{css:.40} left out whole");
+            assert!(out.dropped.last().is_some_and(|dropped| dropped.contains(why)), "{:?}", out.dropped);
+        }
+    }
+
+    #[test]
+    fn components_are_named_noted_and_kept_within_their_limits() {
+        let big = "x".repeat(COMPONENT_BYTES + 1);
+        let (kept, dropped) = components([
+            ("row", "  <!-- A list row:\n   28px tall. -->\n<a class=\"r\">x</a>\n"),
+            ("Bad name", "<b>x</b>"),
+            ("huge", big.as_str()),
+            ("button", "<button>x</button>"),
+        ]);
+        let names: Vec<&str> = kept.iter().map(|component| component.name.as_str()).collect();
+        assert_eq!(names, ["button", "row"]);
+        assert_eq!(kept[1].about, "A list row: 28px tall.");
+        assert_eq!(kept[1].html, "<!-- A list row:\n   28px tall. -->\n<a class=\"r\">x</a>");
+        assert_eq!(kept[0].about, "");
+        assert_eq!(dropped.len(), 2, "{dropped:?}");
+
+        let names: Vec<String> = (0..=MAX_COMPONENTS).map(|n| format!("c{n:02}")).collect();
+        let (kept, dropped) = components(names.iter().map(|name| (name.as_str(), "<i></i>")));
+        assert_eq!((kept.len(), dropped.len()), (MAX_COMPONENTS, 1));
+        let half = "x".repeat(COMPONENT_BYTES);
+        let (kept, dropped) = components((0..9).map(|n| (["a", "b", "c", "d", "e", "f", "g", "h", "i"][n], half.as_str())));
+        assert_eq!((kept.len(), dropped.len()), (8, 1), "{dropped:?}");
+    }
+
+    #[test]
+    fn nous_components_read_only_its_tokens_and_use_only_classes_it_defines() {
+        let nous = builtin("nous").expect("nous");
+        let tokens = parse(nous.tokens).expect("tokens");
+        let known: BTreeSet<String> = token_names(&tokens).into_values().flatten().collect();
+        let css = nous.components_css;
+        for (at, _) in css.match_indices("var(--") {
+            let name: String = css[at + 4..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+            assert!(known.contains(&name), "components.css reads {name}, which Nous doesn't define");
+        }
+        let mut out = compile(&tokens, &BTreeMap::new());
+        out.add_components(css);
+        assert!(out.dropped.is_empty(), "{:?}", out.dropped);
+
+        let (kept, dropped) = components(nous.components.iter().copied());
+        assert!(dropped.is_empty(), "{dropped:?}");
+        assert_eq!(kept.len(), nous.components.len());
+        for component in &kept {
+            assert!(!component.about.is_empty(), "{} has a note", component.name);
+            for class in component.html.split("class=\"").skip(1).filter_map(|rest| rest.split('"').next()) {
+                for class in class.split_whitespace().filter(|class| class.starts_with("n-")) {
+                    assert!(
+                        css.contains(&format!(".{class}")),
+                        "{} uses .{class}, which components.css doesn't define",
+                        component.name
+                    );
+                }
+            }
+        }
     }
 
     #[test]

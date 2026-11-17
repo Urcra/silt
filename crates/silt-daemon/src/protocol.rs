@@ -1116,6 +1116,18 @@ pub struct DesignSystemView {
     /// Its custom properties and type classes, by family.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub tokens: std::collections::BTreeMap<String, Vec<String>>,
+    /// Its components, given with its README (ADR 0086).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<DesignComponentView>,
+}
+
+/// One of a design system's components: its example and the note it opens with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignComponentView {
+    pub name: String,
+    pub about: String,
+    pub html: String,
 }
 
 /// What [`Request::ArtifactGuide`] answers.
@@ -1907,6 +1919,7 @@ mod tests {
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
             DesignSystemView::decl(&config),
+            DesignComponentView::decl(&config),
             silt_proto::view::ArtifactContent::decl(&config),
             silt_proto::view::LinkedArtifact::decl(&config),
             UsageView::decl(&config),
