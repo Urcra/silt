@@ -15,12 +15,12 @@ default:
 # Build the CLI and the desktop app
 build: build-cli build-desktop
 
-# Install the CLI, the desktop app and the speech helper
-install: install-cli install-desktop install-voice
+# Install the CLI, the desktop app and, where it builds, the speech helper
+install: install-cli install-desktop try-install-voice
 
 # Build the web UI, which the CLI embeds
-build-web:
-    pnpm -C web install
+build-web: check-pnpm
+    pnpm -C web install --frozen-lockfile
     pnpm -C web build
 
 # Build target/release/silt
@@ -64,8 +64,14 @@ install-desktop: check-webkit
 install-voice:
     cargo install --locked --path crates/silt-voice
 
+# Dictation is optional, and its build downloads the speech engine, which
+# fails offline and on platforms it has no build for.
+[private]
+try-install-voice:
+    @{{just_executable()}} install-voice || echo "Skipped the speech helper, so the web UI has no dictation. \`just install-voice\` tries again." >&2
+
 # From WSL: install the CLI and the speech helper here, and those and the desktop app on Windows
-install-wsl: install-cli install-voice install-windows
+install-wsl: install-cli try-install-voice install-windows
 
 # From WSL: build with Windows' cargo and install the CLI, the desktop app and the speech helper into %LOCALAPPDATA%\Silt
 install-windows: build-web
@@ -78,6 +84,11 @@ uninstall:
     -cargo uninstall silt-voice
     rm -f "{{data_dir}}/applications/silt-desktop.desktop" "{{data_dir}}/applications/silt.desktop"
     for size in 32x32 128x128 256x256 512x512; do rm -f "{{data_dir}}/icons/hicolor/$size/apps/silt.png"; done
+
+[private]
+check-pnpm:
+    @command -v node > /dev/null || { echo "Building the web UI needs Node.js (see docs/contributing.md)" >&2; exit 1; }
+    @command -v pnpm > /dev/null || { echo "Building the web UI needs pnpm: \`corepack enable pnpm\`, or \`npm install -g pnpm\` (see docs/contributing.md)" >&2; exit 1; }
 
 [private]
 check-webkit:
