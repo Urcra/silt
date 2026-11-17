@@ -627,6 +627,12 @@ enum OrgCommand {
         /// Agents run only with their own sandbox on
         #[arg(long)]
         sandbox: bool,
+        /// Agents run in Silt's own sandbox, and don't start on a machine that can't make one
+        #[arg(long)]
+        silt_sandbox: bool,
+        /// What makes Silt's sandbox on members' machines: bubblewrap (the only one so far)
+        #[arg(long, value_parser = workspace::parse_backend)]
+        backend: Option<silt_workspace::Backend>,
         /// The sandbox also keeps agents out of Silt's data and other workspaces' folders
         #[arg(long = "hide-other-workspaces", alias = "isolated")]
         isolated: bool,
@@ -951,6 +957,8 @@ fn run() -> Result<(), Exn<CliError>> {
                 no_custom_agents,
                 max_preset,
                 sandbox,
+                silt_sandbox,
+                backend,
                 isolated,
                 home_locked,
                 connectors,
@@ -972,6 +980,8 @@ fn run() -> Result<(), Exn<CliError>> {
                     custom_agents: no_custom_agents.then_some(false),
                     max_preset,
                     sandbox,
+                    silt_sandbox,
+                    backend,
                     isolated,
                     home_locked,
                     connectors: connectors

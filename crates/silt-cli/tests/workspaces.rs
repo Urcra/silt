@@ -107,18 +107,27 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     let settings = fs::read_to_string(laptop.agents.join("logs/claude-settings")).expect("Claude got settings");
     let settings: serde_json::Value = serde_json::from_str(&settings).expect("json");
     assert_eq!(settings["permissions"]["disableBypassPermissionsMode"], "disable", "{settings}");
-    if said.contains("sandboxed: ") {
+    assert!(!said.contains("sandboxed: "), "hiding other workspaces asks only for the agent's own sandbox: {said}");
+    assert_eq!(settings["sandbox"]["enabled"], true, "{settings}");
+    assert_eq!(settings["sandbox"]["failIfUnavailable"], true, "{settings}");
+    let denied = settings["sandbox"]["filesystem"]["denyRead"].to_string();
+    let silt_home = laptop.silt_home.to_string_lossy().replace('\\', "/");
+    assert!(denied.contains(&silt_home), "Silt's data is out of the sandbox's reach: {denied}");
+    assert!(settings["hooks"]["Stop"].is_array(), "the hooks are still there: {settings}");
+
+    laptop.silt(&["workspace", "policy", "Work", "--silt-sandbox", "on"]);
+    let ran = in_work(&["claude"]);
+    let said = String::from_utf8_lossy(&ran.stderr).into_owned();
+    if ran.status.success() {
         // Silt's own sandbox is the wall (ADR 0093); the agent's own isn't forced on inside it.
         assert!(said.contains("sandboxed: no network"), "{said}");
+        let settings = fs::read_to_string(laptop.agents.join("logs/claude-settings")).expect("Claude got settings");
+        let settings: serde_json::Value = serde_json::from_str(&settings).expect("json");
         assert!(settings["sandbox"].is_null(), "{settings}");
     } else {
-        assert_eq!(settings["sandbox"]["enabled"], true, "{settings}");
-        assert_eq!(settings["sandbox"]["failIfUnavailable"], true, "{settings}");
-        let denied = settings["sandbox"]["filesystem"]["denyRead"].to_string();
-        let silt_home = laptop.silt_home.to_string_lossy().replace('\\', "/");
-        assert!(denied.contains(&silt_home), "Silt's data is out of the sandbox's reach: {denied}");
+        assert!(said.contains("Work runs its agents in Silt's sandbox, which this machine can't make (your rules): "), "{said}");
     }
-    assert!(settings["hooks"]["Stop"].is_array(), "the hooks are still there: {settings}");
+    laptop.silt(&["workspace", "policy", "Work", "--silt-sandbox", "off"]);
 
     let work_thread = thread_in(&laptop, "work");
     let personal = thread_in(&laptop, "default");

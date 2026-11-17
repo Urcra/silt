@@ -79,6 +79,12 @@ pub enum WorkspaceCommand {
         /// Agents run only with their own sandbox on: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
         sandbox: Option<bool>,
+        /// Agents run in Silt's own sandbox, and don't start on a machine that can't make one: on or off
+        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        silt_sandbox: Option<bool>,
+        /// What makes Silt's sandbox once it's on: bubblewrap, the only one so far
+        #[arg(long, value_parser = parse_backend)]
+        backend: Option<silt_workspace::Backend>,
         /// The sandbox also keeps agents out of Silt's data and other workspaces' folders: on or off
         #[arg(long = "hide-other-workspaces", alias = "isolated", value_parser = crate::admin::parse_on_off)]
         isolated: Option<bool>,
@@ -258,6 +264,8 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
             custom_agents,
             max_preset,
             sandbox,
+            silt_sandbox,
+            backend,
             isolated,
             home_locked,
             connectors,
@@ -346,6 +354,12 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
             if let Some(sandbox) = sandbox {
                 policy.sandbox = sandbox;
             }
+            if let Some(silt_sandbox) = silt_sandbox {
+                policy.silt_sandbox = silt_sandbox;
+            }
+            if backend.is_some() {
+                policy.backend = backend;
+            }
             if let Some(isolated) = isolated {
                 policy.isolated = isolated;
             }
@@ -425,6 +439,10 @@ fn expand_home(path: &str) -> String {
     }
 }
 
+pub(crate) fn parse_backend(name: &str) -> Result<silt_workspace::Backend, String> {
+    silt_workspace::Backend::parse(name).ok_or_else(|| format!("no backend {name:?}: bubblewrap is the only one so far"))
+}
+
 /// The reach rules a command names: the network, the devices, and what may
 /// never be handed over.
 pub(crate) struct ParsedReach {
@@ -493,7 +511,7 @@ fn policy_text(policy: &silt_workspace::Policy) -> String {
     if policy.isolated {
         parts.push("other workspaces' files hidden".into());
     } else if policy.sandbox {
-        parts.push("sandboxed".into());
+        parts.push("agent's sandbox required".into());
     }
     if policy.home_locked {
         parts.push("home locked".into());
@@ -501,10 +519,12 @@ fn policy_text(policy: &silt_workspace::Policy) -> String {
     if policy.local_only {
         parts.push(if policy.wide_history { "local only, history across it" } else { "local only, history by project" }.into());
     }
-    if policy.sandbox || policy.isolated {
-        parts.push(silt_workspace::Reach::of(policy).summary());
-    } else if let Some(network) = policy.network {
-        parts.push(format!("sandboxes: {}", network.label().to_lowercase()));
+    if policy.silt_sandbox {
+        parts.push(format!(
+            "in Silt's sandbox ({}): {}",
+            policy.backend.unwrap_or_default().label(),
+            silt_workspace::Reach::of(policy).summary()
+        ));
     }
     if !policy.refuse.is_empty() {
         let refused: Vec<&str> = policy.refuse.iter().map(|extra| extra.label()).collect();
@@ -598,14 +618,17 @@ fn which(view: &WorkspacesView) -> Result<(), Exn<CliError>> {
         "  permissions  {}",
         policy.max_preset.map_or("any, up to Full access".to_owned(), |cap| format!("at most {}", cap.label()))
     );
+    let backend = policy.backend.unwrap_or_default().label();
     println!(
         "  sandbox      {}",
-        if policy.isolated {
-            "required, hiding other workspaces' files"
-        } else if policy.sandbox {
-            "required"
-        } else {
-            "not required"
+        match (policy.silt_sandbox, policy.isolated, policy.sandbox) {
+            (true, true, _) => {
+                format!("Silt's ({backend}), hiding other workspaces' files: {}", silt_workspace::Reach::of(policy).summary())
+            }
+            (true, false, _) => format!("Silt's ({backend}): {}", silt_workspace::Reach::of(policy).summary()),
+            (false, true, _) => "the agent's own, hiding other workspaces' files".to_owned(),
+            (false, false, true) => "the agent's own".to_owned(),
+            (false, false, false) => "not required".to_owned(),
         }
     );
     if let Some(org) = &shown.org_policy {

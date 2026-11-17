@@ -56,6 +56,36 @@ impl fmt::Display for Network {
     }
 }
 
+/// What makes Silt's sandbox. OCI containers and VMs follow (ADR 0093).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum Backend {
+    /// A process sandbox, on Linux.
+    #[default]
+    Bubblewrap,
+}
+
+impl Backend {
+    pub const ALL: [Self; 1] = [Self::Bubblewrap];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bubblewrap => "bubblewrap",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|backend| backend.as_str() == name)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bubblewrap => "bubblewrap",
+        }
+    }
+}
+
 /// Which devices the sandbox gets, from least to most.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

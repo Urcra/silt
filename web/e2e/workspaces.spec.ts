@@ -209,6 +209,15 @@ test("a workspace's sandbox reach and its plugins are set in its settings, and a
   await expect(plugins.getByLabel('fleet-api in Work')).not.toBeChecked()
 
   const reach = settings.getByRole('region', { name: 'What its agents can reach' })
+  const sandbox = reach.getByLabel("Run its agents in Silt's sandbox")
+  // Hiding other workspaces' files asks only for the agent's own sandbox, so what Silt's reaches waits for it.
+  await expect(sandbox).not.toBeChecked()
+  await expect(reach.getByRole('radio', { name: /No network/ })).toBeDisabled()
+  await expect(reach.getByLabel('The GPU')).toBeDisabled()
+  await sandbox.check()
+  const isolation = reach.getByRole('radiogroup', { name: 'Isolation' })
+  await expect(isolation.getByRole('radio', { name: /bubblewrap/ })).toBeChecked()
+  await expect(isolation.getByRole('radio', { name: /Virtual machine/ })).toBeDisabled()
   await expect(reach.getByRole('radio', { name: /Full internet/ })).toBeChecked()
   await reach.getByRole('radio', { name: /No network/ }).check()
   await reach.getByLabel('The GPU').check()
@@ -216,6 +225,7 @@ test("a workspace's sandbox reach and its plugins are set in its settings, and a
   await expect(page.getByText('Workspaces saved')).toBeVisible()
   await page.reload()
   await settings.getByRole('tab', { name: /Work/ }).click()
+  await expect(sandbox).toBeChecked()
   await expect(reach.getByRole('radio', { name: /No network/ })).toBeChecked()
   await expect(reach.getByLabel('The GPU')).toBeChecked()
   await reach.scrollIntoViewIfNeeded()

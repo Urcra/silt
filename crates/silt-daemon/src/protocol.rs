@@ -1993,6 +1993,16 @@ pub struct WorkspacesView {
     /// syncing with the default server.
     pub saved: bool,
     pub workspaces: Vec<WorkspaceView>,
+    /// What can make Silt's sandbox, and whether it can on this machine.
+    pub backends: Vec<BackendView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct BackendView {
+    pub backend: silt_workspace::Backend,
+    /// Why it can't make one here, if it can't.
+    pub unavailable: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2459,6 +2469,7 @@ mod tests {
             ChatSettings::decl(&config),
             WorkspacesView::decl(&config),
             WorkspaceView::decl(&config),
+            BackendView::decl(&config),
             WorkspaceProject::decl(&config),
             silt_workspace::Workspace::decl(&config),
             silt_workspace::Workspaces::decl(&config),
@@ -2468,6 +2479,7 @@ mod tests {
             silt_workspace::AgentDefaults::decl(&config),
             silt_workspace::Policy::decl(&config),
             silt_workspace::Network::decl(&config),
+            silt_workspace::Backend::decl(&config),
             silt_workspace::Devices::decl(&config),
             silt_workspace::Extra::decl(&config),
             silt_workspace::Reach::decl(&config),

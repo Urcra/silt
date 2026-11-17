@@ -1285,7 +1285,11 @@ export type WorkspacesView = { default: WorkspaceId,
  * Whether the person made any; until then there's the one Default,
  * syncing with the default server.
  */
-saved: boolean, workspaces: Array<WorkspaceView>, };
+saved: boolean, workspaces: Array<WorkspaceView>, 
+/**
+ * What can make Silt's sandbox, and whether it can on this machine.
+ */
+backends: Array<BackendView>, };
 
 export type WorkspaceView = { workspace: Workspace, 
 /**
@@ -1301,6 +1305,12 @@ waiting_for_policy: boolean,
  * Its own rules and its org's, together.
  */
 effective: Policy, projects: Array<WorkspaceProject>, };
+
+export type BackendView = { backend: Backend, 
+/**
+ * Why it can't make one here, if it can't.
+ */
+unavailable: string | null, };
 
 export type WorkspaceProject = { repo: string, why: Why, };
 
@@ -1352,9 +1362,19 @@ custom_agents?: boolean | null,
  */
 max_preset?: Preset | null, 
 /**
- * The agent runs only with its own sandbox on.
+ * The agent runs only with its own sandbox on, which Silt's sandbox
+ * also answers.
  */
 sandbox?: boolean, 
+/**
+ * Agents run in Silt's own sandbox, and don't start where it can't be
+ * made (ADR 0093). The reach rules below apply only with it.
+ */
+silt_sandbox?: boolean, 
+/**
+ * What makes Silt's sandbox; bubblewrap when unset.
+ */
+backend?: Backend | null, 
 /**
  * "Hide other workspaces' files": the sandbox also keeps the agent out
  * of Silt's data and other workspaces' folders; implies `sandbox`.
@@ -1422,6 +1442,8 @@ refuse?: Array<Extra>,
 no_nested?: boolean, };
 
 export type Network = "none" | "gateway" | "full" | "host";
+
+export type Backend = "bubblewrap";
 
 export type Devices = "none" | "named" | "all_usb";
 

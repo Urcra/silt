@@ -508,7 +508,7 @@ fn workspace_rules(
         if let Some(reach) = &reach {
             held.push(reach.as_str());
         } else if rules.locks.sandbox {
-            held.push("sandboxed");
+            held.push("in its own sandbox");
         }
         if !rules.locks.deny.is_empty() {
             held.push("history: this workspace only");
