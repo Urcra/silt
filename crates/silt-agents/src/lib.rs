@@ -369,7 +369,7 @@ pub trait Agent: Send + Sync {
         SandboxSupport::None
     }
     /// Where it keeps its sessions and settings, which Silt's sandbox keeps
-    /// writable (ADR 0086). `env` reads the run's variables.
+    /// writable (ADR 0093). `env` reads the run's variables.
     fn homes(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         Vec::new()
     }

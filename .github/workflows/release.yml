@@ -97,7 +97,7 @@ jobs:
           strip "$bin"
           file "$bin" | grep -Eq 'static-pie linked|statically linked'
           "$bin" --version
-          # Silt's sandbox needs bubblewrap and pasta, shipped beside it (ADR 0086).
+          # Silt's sandbox needs bubblewrap and pasta, shipped beside it (ADR 0093).
           mkdir dist package
           cp "$bin" package/silt
           scripts/build-sandbox-tools.sh package

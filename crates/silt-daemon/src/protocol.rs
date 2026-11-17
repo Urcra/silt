@@ -643,7 +643,7 @@ pub enum Request {
         #[serde(default)]
         version: Option<u32>,
     },
-    /// The tools of the plugins on in the run's workspace (ADR 0086); only
+    /// The tools of the plugins on in the run's workspace (ADR 0093); only
     /// inside [`Request::Scoped`].
     PluginTools,
     /// Calls a plugin's tool for the run; only inside [`Request::Scoped`].
@@ -1480,7 +1480,7 @@ pub struct AgentStatus {
     /// ends.
     #[serde(default)]
     pub stoppable: Vec<String>,
-    /// What Silt's sandbox lets it reach, when it runs in one (ADR 0086).
+    /// What Silt's sandbox lets it reach, when it runs in one (ADR 0093).
     #[serde(default)]
     pub sandbox: Option<silt_workspace::Reach>,
 }

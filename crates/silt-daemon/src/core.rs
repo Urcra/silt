@@ -190,7 +190,7 @@ pub struct Core {
     /// Readers for indexing what other machines record.
     pub(crate) index_transcripts: silt_agents::Transcripts,
     pub(crate) next_token: u64,
-    /// Plugin calls waiting for, or answered by, the person (ADR 0086).
+    /// Plugin calls waiting for, or answered by, the person (ADR 0093).
     pub(crate) approvals: crate::plugins::Approvals,
     /// When the watcher noticed the changes being taken in, for crediting
     /// them to the tool that was running then.
@@ -588,7 +588,7 @@ impl Core {
         }
         if let Request::Scoped { token, asking } = request {
             // A sandboxed run's hooks capture as anyone's do, once its token
-            // shows it's a run Silt started (ADR 0086).
+            // shows it's a run Silt started (ADR 0093).
             if let Request::Hook { event, input } = *asking {
                 let answer = match self.run_thread(&token).await {
                     Ok(_) => self.hook(&event, input).await,

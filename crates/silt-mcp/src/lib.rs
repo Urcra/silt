@@ -39,7 +39,7 @@ pub trait Backend {
     }
 
     /// Tools offered beside Silt's, such as the plugins' of the run's
-    /// workspace (ADR 0086).
+    /// workspace (ADR 0093).
     fn extra(&mut self) -> Vec<Value> {
         Vec::new()
     }

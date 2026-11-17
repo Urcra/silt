@@ -67,7 +67,7 @@ mkdir -p "$dir"
 cp "$work/silt" "$dir/.silt.new"
 chmod 755 "$dir/.silt.new"
 mv "$dir/.silt.new" "$dir/silt"
-# The sandbox's bubblewrap and pasta, which `silt` finds beside it (ADR 0086).
+# The sandbox's bubblewrap and pasta, which `silt` finds beside it (ADR 0093).
 for tool in silt-bwrap silt-pasta silt-pasta.avx2; do
     [ -f "$work/$tool" ] || continue
     cp "$work/$tool" "$dir/.$tool.new"

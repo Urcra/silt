@@ -1,5 +1,5 @@
 //! `silt access doctor`: whether Silt's sandbox and its gateway work on this
-//! machine, and how to fix what doesn't (ADR 0086).
+//! machine, and how to fix what doesn't (ADR 0093).
 
 use clap::Subcommand;
 use exn::Exn;

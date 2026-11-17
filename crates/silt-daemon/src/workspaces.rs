@@ -581,7 +581,7 @@ pub struct RunRules {
     pub env: Vec<(String, String)>,
     /// For its history tools, which read its workspace only.
     pub token: String,
-    /// What Silt's sandbox lets it reach, when it runs in one (ADR 0086).
+    /// What Silt's sandbox lets it reach, when it runs in one (ADR 0093).
     #[serde(default)]
     pub reach: Option<silt_workspace::Reach>,
 }

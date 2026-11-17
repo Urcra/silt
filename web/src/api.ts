@@ -387,7 +387,7 @@ export const api = {
   /** Puts a project in a workspace, or with none back under the match rules. */
   assignProject: (repo: string, workspace: string | null) =>
     request<string>('POST', '/api/workspaces/assign', { repo, workspace }),
-  // Plugin calls waiting for the person, and this machine's plugins (ADR 0086).
+  // Plugin calls waiting for the person, and this machine's plugins (ADR 0093).
   approvals: (thread?: string) => request<ApprovalView[]>('GET', thread ? `/api/approvals?thread=${encodeURIComponent(thread)}` : '/api/approvals'),
   /** Answers an approval, naming the hash of the request shown, so it answers only that. */
   answerApproval: (id: number, approve: boolean, hash: string) => request<string>('POST', `/api/approvals/${id}`, { approve, hash }),

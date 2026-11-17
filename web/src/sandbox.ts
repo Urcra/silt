@@ -1,6 +1,6 @@
 import type { Devices, Extra, Network, Policy, Reach } from './api'
 
-/** Silt's sandbox in the web UI (ADR 0086): its options as Settings shows them, and what a policy gives a run. */
+/** Silt's sandbox in the web UI (ADR 0093): its options as Settings shows them, and what a policy gives a run. */
 
 export const NETWORKS: { value: Network; label: string; detail: string }[] = [
   { value: 'none', label: 'No network', detail: 'Nothing leaves the sandbox. For work on untrusted content.' },

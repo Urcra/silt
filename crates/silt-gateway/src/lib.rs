@@ -1,4 +1,4 @@
-//! The gateway a sandboxed agent's traffic leaves through (ADR 0086). It
+//! The gateway a sandboxed agent's traffic leaves through (ADR 0093). It
 //! answers as an HTTP proxy on a socket the sandbox reaches: it refuses what
 //! the run's rules don't allow, passes the rest through unread, and reads
 //! only requests to hosts it holds a credential for, to add it on the way

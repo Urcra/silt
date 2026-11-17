@@ -1,5 +1,5 @@
 //! `silt credential`: credentials Silt's gateway adds on the way out for a
-//! workspace's sandboxed agents (ADR 0086). The agents never see them.
+//! workspace's sandboxed agents (ADR 0093). The agents never see them.
 
 use std::io::Read as _;
 

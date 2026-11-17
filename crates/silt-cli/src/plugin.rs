@@ -1,6 +1,6 @@
 //! `silt plugin` and `silt approvals`: what a workspace's sandboxed agents
 //! reach production through, and the person's answers to the calls that
-//! wait for them (ADR 0086).
+//! wait for them (ADR 0093).
 
 use std::io::{BufRead as _, IsTerminal as _, Write as _};
 use std::path::PathBuf;

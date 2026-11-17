@@ -293,7 +293,7 @@ fn run_agent_in(name: &str, cwd: PathBuf, isolated: bool, args: &[String]) -> Re
     let held = workspace_rules(None, Some(&cwd), agent, args)?;
     if held.reach.is_some() {
         // A sandboxed agent's hooks reach the daemon only through its run's
-        // channel, so the daemon must be there (ADR 0086).
+        // channel, so the daemon must be there (ADR 0093).
         ensure_daemon()?;
     }
     let session_id = (agent.session_ids() == SessionIds::Chosen).then(|| uuid::Uuid::new_v4().to_string());
@@ -839,7 +839,7 @@ fn hook_input(agent: Option<&str>, event: &str, mut input: serde_json::Value) {
 /// didn't answer in time, or capture in process was asked for.
 fn forwarded(event: &str, input: &serde_json::Value) -> Option<HookReply> {
     // In Silt's sandbox there's no store to capture into: only the run's
-    // channel to the daemon (ADR 0086).
+    // channel to the daemon (ADR 0093).
     if let Some((socket, token)) = paths::run_channel() {
         let request =
             Request::Scoped { token, asking: Box::new(Request::Hook { event: event.to_owned(), input: input.clone() }) };

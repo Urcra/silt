@@ -194,7 +194,7 @@ test("a workspace's defaults pick the agent's model, and the project picker move
   await expect(form.getByLabel('model')).toHaveValue('smart')
 })
 
-test("a workspace's sandbox reach and its plugins are set in its settings, and a plugin is on only where turned on (ADR 0086)", async ({ page }) => {
+test("a workspace's sandbox reach and its plugins are set in its settings, and a plugin is on only where turned on (ADR 0093)", async ({ page }) => {
   const file = join(fixture.dir, 'fleet-api.json')
   const environment = { target: 'https://api.fleet.example/graphql', reads: 'allow', changes: 'ask', data: ['location'] }
   writeFileSync(file, JSON.stringify({ name: 'fleet-api', kind: { type: 'graphql' }, environments: { production: environment } }))

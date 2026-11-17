@@ -163,7 +163,7 @@ commands: Array<AgentCommand>,
  */
 stoppable: Array<string>, 
 /**
- * What Silt's sandbox lets it reach, when it runs in one (ADR 0086).
+ * What Silt's sandbox lets it reach, when it runs in one (ADR 0093).
  */
 sandbox: Reach | null, };
 
@@ -1211,12 +1211,12 @@ home_locked?: boolean,
 connectors?: Array<string> | null, 
 /**
  * The hosts a sandbox reaches "through Silt only"; any public host
- * when unset (ADR 0086).
+ * when unset (ADR 0093).
  */
 hosts?: Array<string> | null, 
 /**
  * What the sandbox can connect to: the person's choice, or an org's
- * most; full internet when unset (ADR 0086).
+ * most; full internet when unset (ADR 0093).
  */
 network?: Network | null, 
 /**

@@ -32,7 +32,7 @@ pub(crate) struct AcpRun {
     run: u64,
     info: AgentInfo,
     /// What its sandbox reaches and the run's token, when it runs in Silt's
-    /// sandbox, for starting it again the same way (ADR 0086).
+    /// sandbox, for starting it again the same way (ADR 0093).
     sandbox: Option<(silt_workspace::Reach, String, String)>,
     checkout_id: CheckoutId,
     checkout: PathBuf,
@@ -2265,7 +2265,7 @@ fn run_scratch(data_dir: &Path, thread: ThreadId, run: u64) -> PathBuf {
     data_dir.join("runs").join(format!("acp-{}-{run}", thread.short()))
 }
 
-/// Silt's sandbox for an ACP agent's run (ADR 0086).
+/// Silt's sandbox for an ACP agent's run (ADR 0093).
 pub(crate) struct AcpSandbox {
     reach: silt_workspace::Reach,
     token: String,

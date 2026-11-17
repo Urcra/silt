@@ -1,4 +1,4 @@
-//! Starting an agent in Silt's sandbox (ADR 0086), the same for the
+//! Starting an agent in Silt's sandbox (ADR 0093), the same for the
 //! terminal's agents and the web UI's: the run's paths, the variables it
 //! gets, and the plan `silt sandbox-run` reads.
 

@@ -215,7 +215,7 @@ fn listen(socket: &Path, events: mpsc::UnboundedSender<Event>, answered: mpsc::U
     Ok(())
 }
 
-/// Takes connections from sandboxed agents' runs (ADR 0086). Whatever
+/// Takes connections from sandboxed agents' runs (ADR 0093). Whatever
 /// reaches it may ask only what a run's token allows, so the person's
 /// authority never enters a sandbox.
 #[cfg(unix)]

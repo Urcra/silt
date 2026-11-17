@@ -49,7 +49,7 @@ function Fact({ name, children }: { name: string; children: ReactNode }) {
 }
 
 /**
- * The header's shield (ADR 0086): what the thread's agent reaches, to read rather than change mid-run. A run Silt
+ * The header's shield (ADR 0093): what the thread's agent reaches, to read rather than change mid-run. A run Silt
  * sandboxed says what it was given; otherwise it says what the workspace's rules give the next one.
  */
 export function SandboxShield({ thread, summary, agent }: { thread: string; summary: ThreadSummary | undefined; agent: AgentStatus | null | undefined }) {
@@ -114,7 +114,7 @@ function remaining(createdMs: number, now: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
-/** A plugin's call waiting for the person (ADR 0086), drawn from Silt's own copy of the request, never the agent's account of it. */
+/** A plugin's call waiting for the person (ADR 0093), drawn from Silt's own copy of the request, never the agent's account of it. */
 export function ApprovalCard({ approval, first }: { approval: ApprovalView; first: boolean }) {
   const queries = useQueryClient()
   const [error, setError] = useState<string>()
@@ -235,7 +235,7 @@ function ListInput({ label, value, placeholder, onChange }: { label: string; val
   )
 }
 
-/** Settings › Workspaces' "What its agents can reach" (ADR 0086): the sandbox's network, devices and what of the machine it's handed. */
+/** Settings › Workspaces' "What its agents can reach" (ADR 0093): the sandbox's network, devices and what of the machine it's handed. */
 export function ReachSettings({
   workspace,
   policy,
@@ -361,7 +361,7 @@ export function ReachSettings({
   )
 }
 
-/** Settings › Workspaces' plugins (ADR 0086): which of this machine's plugins the workspace's agents get. Saved at once. */
+/** Settings › Workspaces' plugins (ADR 0093): which of this machine's plugins the workspace's agents get. Saved at once. */
 export function WorkspacePlugins({ workspace, name }: { workspace: string; name: string }) {
   const queries = useQueryClient()
   const plugins = useQuery({ queryKey: keys.plugins, queryFn: api.plugins })

@@ -110,11 +110,11 @@ pub struct Policy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connectors: Option<BTreeSet<String>>,
     /// The hosts a sandbox reaches "through Silt only"; any public host
-    /// when unset (ADR 0086).
+    /// when unset (ADR 0093).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hosts: Option<BTreeSet<String>>,
     /// What the sandbox can connect to: the person's choice, or an org's
-    /// most; full internet when unset (ADR 0086).
+    /// most; full internet when unset (ADR 0093).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<Network>,
     /// Which devices the sandbox gets: the person's choice, or an org's most.

@@ -108,7 +108,7 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     let settings: serde_json::Value = serde_json::from_str(&settings).expect("json");
     assert_eq!(settings["permissions"]["disableBypassPermissionsMode"], "disable", "{settings}");
     if said.contains("sandboxed: ") {
-        // Silt's own sandbox is the wall (ADR 0086); the agent's own isn't forced on inside it.
+        // Silt's own sandbox is the wall (ADR 0093); the agent's own isn't forced on inside it.
         assert!(said.contains("sandboxed: no network"), "{said}");
         assert!(settings["sandbox"].is_null(), "{settings}");
     } else {

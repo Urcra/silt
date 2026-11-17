@@ -1,4 +1,4 @@
-//! What a sandboxed run sees of the machine (ADR 0086), worked out from the
+//! What a sandboxed run sees of the machine (ADR 0093), worked out from the
 //! run's paths and its reach. Its root starts empty, so this lists what goes
 //! in: a credential store nobody named stays out.
 

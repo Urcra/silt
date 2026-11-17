@@ -1,4 +1,4 @@
-//! What an agent's sandbox may reach beyond its own files (ADR 0086): its
+//! What an agent's sandbox may reach beyond its own files (ADR 0093): its
 //! network, devices, and what of the machine the person hands it.
 
 use std::collections::{BTreeMap, BTreeSet};
