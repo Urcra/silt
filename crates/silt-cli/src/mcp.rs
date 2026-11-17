@@ -20,6 +20,7 @@ use crate::render::short;
 
 const DEFAULT_LIMIT: usize = 40;
 const PLUGIN_WAIT: &str = "silt_plugin_wait";
+const DESIGN_SYSTEM_SKILL: &str = "design-system";
 /// Longest text of one history entry an agent reads.
 const ENTRY_CHARS: usize = 4000;
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -139,6 +140,32 @@ impl DaemonTools {
         conventions::discover_skills_with(&self.checkout, home.as_deref(), builtin.as_deref())
     }
 
+    /// Tells Silt the thread is making or changing a design system, so the
+    /// web UI shows it beside the conversation. Loading the skill doesn't
+    /// depend on it.
+    fn note_design_skill(&self) {
+        let noted = self.peers(
+            || Request::DesignSkillUsed { thread: self.thread.clone() },
+            |data_dir| silt_daemon::note_design_skill(data_dir, &self.thread).map(|()| String::new()),
+        );
+        if let Err(error) = noted {
+            tracing::debug!(%error, "could not note the design-system skill");
+        }
+    }
+
+    /// Where this machine keeps the person's systems, which the skill can
+    /// only name by variable, and where a chat's agent puts one.
+    fn design_system_folders(&self) -> String {
+        let personal = paths::data_dir().join("design-systems");
+        let mut out = format!("\n\nOn this machine, the person's own design systems are in `{}`.", personal.display());
+        if silt_git::Repo::discover(&self.checkout).is_ok_and(|repo| repo.is_chat()) {
+            out.push_str(
+                " This run is a chat, with no project: keep the system there, as theirs, unless they ask for it in this chat's folder.",
+            );
+        }
+        out
+    }
+
     fn skill(&self, name: &str) -> Result<Skill, String> {
         self.skills()
             .into_iter()
@@ -213,6 +240,10 @@ impl silt_mcp::Backend for DaemonTools {
                     let _ = write!(out, " Its other files: {}.", files.join(", "));
                 }
                 let _ = write!(out, "\n\n{body}");
+                if skill.name == DESIGN_SYSTEM_SKILL {
+                    self.note_design_skill();
+                    out.push_str(&self.design_system_folders());
+                }
                 return Ok(out);
             }
             "silt_show" => {

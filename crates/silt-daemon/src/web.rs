@@ -209,6 +209,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/design-systems/system", get(design_system))
         .route("/api/design-systems/asset", get(design_asset))
         .route("/api/design-systems/start", post(design_start))
+        .route("/api/design-systems/keep", post(keep_design_system))
         .route("/api/threads/{id}/design-system", get(thread_design))
         .route("/api/artifact-settings", get(artifact_settings).put(set_artifact_settings))
         .route("/api/projects/design-systems", get(project_design_systems).put(set_project_design_system))
@@ -1481,6 +1482,16 @@ async fn design_start(State(web): State<Web>, Json(start): Json<crate::protocol:
 
 async fn thread_design(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
     ask(&web, Request::ThreadDesignSystem { thread }).await
+}
+
+#[derive(Deserialize)]
+struct KeepDesignSystem {
+    thread: String,
+    name: String,
+}
+
+async fn keep_design_system(State(web): State<Web>, Json(body): Json<KeepDesignSystem>) -> HttpResponse {
+    ask(&web, Request::KeepDesignSystem { thread: body.thread, name: body.name }).await
 }
 
 async fn project_design_systems(State(web): State<Web>) -> HttpResponse {

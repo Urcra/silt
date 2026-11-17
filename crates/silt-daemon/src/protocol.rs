@@ -705,9 +705,21 @@ pub enum Request {
     /// Starts a thread whose agent makes a design system, or changes one;
     /// answers the thread.
     DesignStart(DesignStart),
-    /// The design system a thread was started to make or change, if any.
+    /// The design system a thread was started to make or change, or wrote
+    /// since it loaded the design-system skill, if any.
     ThreadDesignSystem {
         thread: String,
+    },
+    /// A thread loaded the design-system skill; a run's own thread when
+    /// inside [`Request::Scoped`].
+    DesignSkillUsed {
+        thread: String,
+    },
+    /// Copies a system a thread's folder holds, a chat's, to the person's
+    /// own; answers the copy's row.
+    KeepDesignSystem {
+        thread: String,
+        name: String,
     },
     /// Picks a project's design system on this machine, or drops the pick.
     SetProjectDesignSystem {
@@ -1310,16 +1322,28 @@ pub struct DesignComponentView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct DesignCatalog {
-    /// Each project's own, then the person's.
+    /// Each project's own, each chat's, then the person's.
     pub groups: Vec<DesignGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct DesignGroup {
-    /// The project whose repository keeps them; none for the person's own.
+    /// The project whose repository keeps them; none for a chat's or the
+    /// person's own.
     pub project: Option<DesignProject>,
+    /// The chat whose folder keeps them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<DesignChat>,
     pub systems: Vec<DesignSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignChat {
+    pub thread: String,
+    pub title: String,
+    pub folder: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1353,6 +1377,9 @@ pub struct DesignSummary {
     /// It's only in that thread's folder so far.
     #[serde(default)]
     pub unmerged: bool,
+    /// It's in that thread's folder, a chat's, which nothing merges.
+    #[serde(default)]
+    pub chat: bool,
 }
 
 /// One design system's page.
@@ -2464,6 +2491,7 @@ mod tests {
             DesignCatalog::decl(&config),
             DesignGroup::decl(&config),
             DesignProject::decl(&config),
+            DesignChat::decl(&config),
             DesignSummary::decl(&config),
             DesignDetail::decl(&config),
             DesignTheme::decl(&config),

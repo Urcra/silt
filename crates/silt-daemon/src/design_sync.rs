@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use silt_proto::DesignSystemCopy;
 use tracing::warn;
 
+use crate::core::CoreError;
 use crate::design::{
     ASSETS_DIR, COMPONENTS_CSS, COMPONENTS_DIR, COVER, PERSONAL_DIR, asset_files, component_files, component_guides,
 };
@@ -202,6 +203,21 @@ fn changes(data_dir: &Path, index: &mut Index, now: i64) -> Vec<DesignSystemCopy
             },
         })
         .collect()
+}
+
+/// Copies the system in `from` to the person's own as `name`, holding what
+/// a synced one holds, unless they have one by that name already.
+pub(crate) fn keep_as_personal(data_dir: &Path, name: &str, from: &Path) -> Result<(), CoreError> {
+    let root = data_dir.join(PERSONAL_DIR);
+    let dir = root.join(name);
+    if dir.exists() {
+        return Err(CoreError::Invalid(format!("you have a design system {name} already")));
+    }
+    let copy = read_folder(name, from)
+        .ok_or_else(|| CoreError::Invalid(format!("{name} has no readable tokens, or holds more than a design system may")))?;
+    fs::create_dir_all(&root)?;
+    write_folder(&root, &dir, &copy)?;
+    Ok(())
 }
 
 /// Takes a copy from a server if it changed later than what's here,

@@ -2315,6 +2315,67 @@ fn design_systems_are_listed_shown_and_made_by_an_agent() {
     assert!(!known, "an unknown thread is refused");
 }
 
+#[test]
+fn a_design_system_made_in_a_chat_shows_beside_it_and_can_be_kept() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let prompt = "Do you know how to make a design system?";
+    let started = api.ok("POST", "/api/agents/start", Some(serde_json::json!({"agent": "v1", "chat": true, "prompt": prompt})));
+    let thread = started.as_str().expect("the thread").to_owned();
+    settled_history(&api, &thread, &format!("Done: {prompt}"));
+    let chats: Vec<PathBuf> =
+        fs::read_dir(env.silt_home.join("chats")).expect("chats").flatten().map(|entry| entry.path()).collect();
+    let [folder] = chats.as_slice() else { panic!("one chat folder: {chats:?}") };
+    let tokens = |name: &str| {
+        format!(r##"{{"name":"{name}","color":{{"themes":[{{"id":"light"}}],"tokens":[{{"name":"bg","value":"#fff"}}]}}}}"##)
+    };
+    let own = folder.join(".silt/design-systems");
+    fs::create_dir_all(own.join("playback")).expect("mkdir");
+    fs::write(own.join("playback/tokens.json"), tokens("Playback")).expect("tokens");
+    fs::write(own.join("default"), "playback\n").expect("default");
+
+    let made = api.ok("GET", &format!("/api/threads/{thread}/design-system"), None);
+    assert_eq!((made["name"].as_str(), made["keep"].as_str()), (Some("playback"), Some("repo")), "the chat's own: {made}");
+    assert_eq!(made["detail"]["summary"]["chat"], true, "{made}");
+
+    let catalog = api.ok("GET", "/api/design-systems/catalog", None);
+    let groups = catalog["groups"].as_array().expect("groups");
+    let chat = groups
+        .iter()
+        .find(|group| group["chat"]["thread"] == thread.as_str())
+        .unwrap_or_else(|| panic!("the chat's group: {catalog}"));
+    assert_eq!(chat["systems"][0]["name"], "playback");
+    assert_eq!(chat["systems"][0]["uses"][0], "the chat's default");
+    let page = api.ok("GET", &format!("/api/design-systems/system?source=project&name=playback&thread={thread}"), None);
+    assert_eq!((page["summary"]["chat"].as_bool(), page["summary"]["unmerged"].as_bool()), (Some(true), Some(false)), "{page}");
+
+    let kept = api.ok("POST", "/api/design-systems/keep", Some(serde_json::json!({"thread": thread, "name": "playback"})));
+    assert_eq!(kept["source"], "personal", "{kept}");
+    assert!(env.silt_home.join("design-systems/playback/tokens.json").is_file(), "kept as the person's own");
+    let (again, said) =
+        api.call("POST", "/api/design-systems/keep", Some(serde_json::json!({"thread": thread, "name": "playback"})));
+    assert!(!again && said.to_string().contains("already"), "{said}");
+
+    std::thread::sleep(Duration::from_millis(20));
+    let mut mcp =
+        McpClient::spawn(&env, &["mcp", "--thread", &thread, "--checkout", &folder.display().to_string(), "--ui"], folder);
+    let skill = mcp.tool("silt_use_skill", serde_json::json!({"name": "design-system"}));
+    let personal = env.silt_home.join("design-systems");
+    assert!(skill.contains(&format!("`{}`", personal.display())) && skill.contains("This run is a chat"), "{skill}");
+    std::thread::sleep(Duration::from_millis(20));
+    fs::create_dir_all(personal.join("harbor")).expect("mkdir");
+    fs::write(personal.join("harbor/tokens.json"), tokens("Harbor")).expect("tokens");
+    let made = api.ok("GET", &format!("/api/threads/{thread}/design-system"), None);
+    assert_eq!(
+        (made["name"].as_str(), made["keep"].as_str(), made["changing"].as_bool()),
+        (Some("harbor"), Some("personal"), Some(false)),
+        "what it wrote since loading the skill: {made}"
+    );
+}
+
 fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
     fs::create_dir_all(to).expect("mkdir");
     for entry in fs::read_dir(from).expect("read dir").flatten() {
@@ -2343,9 +2404,19 @@ impl McpClient {
         let server = &config["mcpServers"]["silt"];
         let args: Vec<String> =
             server["args"].as_array().expect("args").iter().map(|arg| arg.as_str().expect("string").to_owned()).collect();
-        let mut child = Command::new(server["command"].as_str().expect("command"))
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        Self::spawn_with(server["command"].as_str().expect("command"), env, &args, &env.repo)
+    }
+
+    /// `silt` with `args`, as an agent the web UI runs would start it.
+    fn spawn(env: &Env, args: &[&str], cwd: &Path) -> Self {
+        Self::spawn_with(env!("CARGO_BIN_EXE_silt"), env, args, cwd)
+    }
+
+    fn spawn_with(command: &str, env: &Env, args: &[&str], cwd: &Path) -> Self {
+        let mut child = Command::new(command)
             .args(args)
-            .current_dir(&env.repo)
+            .current_dir(cwd)
             .env("SILT_HOME", &env.silt_home)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
