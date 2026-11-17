@@ -648,6 +648,14 @@ impl Core {
                 let _ = reply.send(to_response(self.artifact_guide(&token, design_system).await));
                 return;
             }
+            if let Request::DesignSkillUsed { .. } = *asking {
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => crate::design::note_design_skill(&self.data_dir, &thread).map(|()| "noted"),
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
             if let Request::ArtifactRead { id, version } = *asking {
                 let _ = reply.send(to_response(self.artifact_read(&token, &id, version).await));
                 return;
@@ -809,6 +817,10 @@ impl Core {
                 to_response(self.design_asset(source, &name, clone.as_deref(), thread.as_deref(), &path))
             }
             Request::ThreadDesignSystem { thread } => to_response(self.thread_design(&thread)),
+            Request::DesignSkillUsed { thread } => {
+                to_response(crate::design::note_design_skill(&self.data_dir, &thread).map(|()| "noted"))
+            }
+            Request::KeepDesignSystem { thread, name } => to_response(self.keep_design_system(&thread, &name)),
             Request::ArtifactSettings => Response::ok(crate::design::artifact_settings(&self.data_dir)),
             Request::SetArtifactSettings { settings } => {
                 to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))

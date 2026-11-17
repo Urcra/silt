@@ -807,17 +807,24 @@ guide?: string | null, };
 
 export type DesignCatalog = { 
 /**
- * Each project's own, then the person's.
+ * Each project's own, each chat's, then the person's.
  */
 groups: Array<DesignGroup>, };
 
 export type DesignGroup = { 
 /**
- * The project whose repository keeps them; none for the person's own.
+ * The project whose repository keeps them; none for a chat's or the
+ * person's own.
  */
-project: DesignProject | null, systems: Array<DesignSummary>, };
+project: DesignProject | null, 
+/**
+ * The chat whose folder keeps them.
+ */
+chat?: DesignChat | null, systems: Array<DesignSummary>, };
 
 export type DesignProject = { repo: string, name: string, clone: string, };
+
+export type DesignChat = { thread: string, title: string, folder: string, };
 
 export type DesignSummary = { name: string, title: string, source: DesignSource, 
 /**
@@ -840,7 +847,11 @@ thread?: string | null,
 /**
  * It's only in that thread's folder so far.
  */
-unmerged: boolean, };
+unmerged: boolean, 
+/**
+ * It's in that thread's folder, a chat's, which nothing merges.
+ */
+chat: boolean, };
 
 export type DesignDetail = { summary: DesignSummary, readme: string, 
 /**

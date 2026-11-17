@@ -68,6 +68,7 @@ pub mod workspaces;
 pub use blame::blame_from_notes;
 pub use capture::{Captured, capture_here};
 pub use core::CoreError;
+pub use design::note_design_skill;
 pub use recorder::{NewRun, Recorder};
 pub use server::{RunError, holds_lock, run};
 pub use sync_once::{Synced, sync_once};
