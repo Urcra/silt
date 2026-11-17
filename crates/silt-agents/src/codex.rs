@@ -37,7 +37,7 @@ fn rollouts(home: &Path) -> Vec<PathBuf> {
 
 /// The rollouts of days from `since_ms` on. Days are named in local time,
 /// so the day before counts too.
-fn rollouts_since(home: &Path, since_ms: i64) -> Vec<PathBuf> {
+pub(crate) fn rollouts_since(home: &Path, since_ms: i64) -> Vec<PathBuf> {
     let stamp = crate::time::file_stamp(since_ms.saturating_sub(24 * 60 * 60 * 1000));
     rollouts_from(home, &[&stamp[..4], &stamp[5..7], &stamp[8..10]])
 }

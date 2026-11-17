@@ -1614,6 +1614,38 @@ pull: ModelPull | null,
  */
 failed: ModelFailure | null, };
 
+export type AgentUsage = { 
+/**
+ * The agent's name, such as Claude Code.
+ */
+agent: string, 
+/**
+ * Its plan's name, such as Max, where the agent says.
+ */
+plan: string | null, limits: Array<UsageLimit>, 
+/**
+ * Where the person sees all of it.
+ */
+page: string, 
+/**
+ * Why there are no limits to show, such as an API key or no sign-in.
+ */
+unavailable: string | null, 
+/**
+ * Read from what the agent last recorded, as asking failed.
+ */
+recorded: boolean, read_ms: number, };
+
+export type UsageLimit = { 
+/**
+ * Such as 5-hour limit or Premium requests.
+ */
+name: string, 
+/**
+ * 0 to 100.
+ */
+used_percent: number, resets_at_ms: number | null, };
+
 export type ModelDevice = { name: string, description: string, total: number, free: number, };
 
 export type LocalModel = { id: string, name: string, 

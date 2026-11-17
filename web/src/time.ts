@@ -13,3 +13,12 @@ export function ago(ms: number, now: number): string {
   if (since < 30 * DAY) return `${Math.floor(since / (7 * DAY))}w`
   return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
+
+/** When a plan's limit resets, as Claude Code's usage says it: `Resets at 2:00 PM` today, `Resets Tue 7:00 AM` within the week, else `Resets Dec 1`. */
+export function resetsAt(ms: number, now: number): string {
+  const at = new Date(ms)
+  const time = at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (at.toDateString() === new Date(now).toDateString()) return `Resets at ${time}`
+  if (ms - now < 6 * DAY) return `Resets ${at.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
+  return `Resets ${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+}

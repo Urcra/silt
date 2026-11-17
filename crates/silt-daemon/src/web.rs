@@ -175,6 +175,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
         .route("/api/agents/start", post(agent_start))
+        .route("/api/agents/{agent}/usage", get(agent_usage))
         .route("/api/clones/branches", get(branches))
         .route("/api/cloud", get(cloud_launches).post(cloud_start))
         .route("/api/threads/{id}/cloud/send", post(cloud_send))
@@ -1350,6 +1351,16 @@ async fn live(State(web): State<Web>, Path(thread): Path<String>) -> HttpRespons
 
 async fn agents(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::AcpAgents).await
+}
+
+#[derive(Deserialize)]
+struct UsageQuery {
+    #[serde(default)]
+    thread: Option<String>,
+}
+
+async fn agent_usage(State(web): State<Web>, Path(agent): Path<String>, Query(query): Query<UsageQuery>) -> HttpResponse {
+    ask(&web, Request::AgentUsage { agent, thread: query.thread }).await
 }
 
 #[derive(Deserialize)]

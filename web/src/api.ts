@@ -7,6 +7,7 @@ import { apiUrl } from './served'
 import { askedServer } from './workspace'
 import type {
   AgentChoices,
+  AgentUsage,
   ArtifactContent,
   ArtifactListed,
   ConnectorTool,
@@ -389,6 +390,9 @@ export const api = {
     request<PresenceReply>('POST', `${thread(id)}/presence`, state),
   live: (id: string) => request<LiveState>('GET', `${thread(id)}/live`),
   agents: () => request<AgentChoices>('GET', '/api/agents'),
+  /** How much of its plan `agent` has used, with the sign-in it runs with in `thread` (ADR 0095); a daemon's only. */
+  usage: (agent: string, thread?: string) =>
+    request<AgentUsage>('GET', `/api/agents/${encodeURIComponent(agent)}/usage${thread ? `?thread=${encodeURIComponent(thread)}` : ''}`),
   /** Starts `agent` in a thread, a clone, or with neither a new chat (`options.chat`, ADR 0059). */
   startAgent: (agent: string, where: { thread: string } | { clone: string } | Record<string, never>, options: Partial<StartOptions> = {}) =>
     request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),

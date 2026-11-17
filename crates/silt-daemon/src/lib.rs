@@ -59,6 +59,7 @@ mod sync;
 mod sync_once;
 mod thumbnails;
 mod transcripts;
+mod usage;
 mod views;
 mod voice;
 mod watch;

@@ -24,6 +24,7 @@ pub mod sign_in;
 mod tail;
 pub mod time;
 pub mod tool;
+pub mod usage;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
