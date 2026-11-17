@@ -20,6 +20,14 @@ use crate::attribution;
 use crate::core::{CanonicalCwd, Core, CoreError, Event, now_ms, to_response};
 use crate::protocol::{Response, SessionStarted};
 
+/// When a transcript was last written, which its marks read now were
+/// written by: a busy machine reads them well after.
+fn written_by(metadata: &fs::Metadata) -> Instant {
+    let now = Instant::now();
+    let ago = metadata.modified().ok().and_then(|modified| SystemTime::now().duration_since(modified).ok());
+    ago.and_then(|ago| now.checked_sub(ago)).unwrap_or(now)
+}
+
 /// How long edits wait for the transcript of an agent without Silt's
 /// hooks: agents flush their transcripts late, and some only write a tool
 /// call once it finished.
@@ -797,8 +805,14 @@ impl Core {
             self.tail_session(id).await?;
         }
         for checkout in checkouts {
-            if self.checkouts.contains_key(&checkout) {
+            let Some(held) = self.checkouts.get(&checkout) else {
+                continue;
+            };
+            if !self.awaits_tool_marks(checkout, Instant::now()) {
                 self.rescan(checkout).await?;
+            } else if self.resident {
+                let path = held.record.path.clone();
+                self.settle_changes(checkout, vec![path], Instant::now());
             }
         }
         Ok(())
@@ -821,11 +835,23 @@ impl Core {
             checkouts.extend(self.session(id).map(|session| session.record.checkout_id));
         }
         for checkout in checkouts {
-            if self.checkouts.contains_key(&checkout) {
+            if self.checkouts.contains_key(&checkout) && !self.holds_for_marks(checkout) {
                 self.rescan(checkout).await?;
             }
         }
         Ok(())
+    }
+
+    /// Whether a step, which has no watcher to say when files changed,
+    /// holds the checkout's changes back for its agent's tool marks: for
+    /// the settling window from the first step that held them.
+    fn holds_for_marks(&mut self, checkout: CheckoutId) -> bool {
+        let since = *self.marks_awaited.entry(checkout).or_insert_with(Instant::now);
+        let held = self.awaits_tool_marks(checkout, since);
+        if !held {
+            self.marks_awaited.remove(&checkout);
+        }
+        held
     }
 
     /// Whether the thread's agent needs `record_step`: its session is still
@@ -976,7 +1002,9 @@ impl Core {
         let Ok(mut file) = fs::File::open(path) else {
             return Ok(false);
         };
-        let length = file.metadata()?.len();
+        let metadata = file.metadata()?;
+        let length = metadata.len();
+        let written = written_by(&metadata);
         if length < offset {
             // The agent rewound its transcript; what it dropped stays recorded.
             offset = length;
@@ -1009,7 +1037,7 @@ impl Core {
             batch.push(staged.family, staged.delta, staged.rows, end);
             if !staged.marks.is_empty() {
                 self.store_batch(session_id, key, &mut batch, read_to(end)).await?;
-                self.apply_marks(session_id, staged.marks).await?;
+                self.apply_marks(session_id, staged.marks, written).await?;
             }
         }
         // Lines that recorded nothing still count as read.
@@ -1039,7 +1067,7 @@ impl Core {
     ) -> Result<(), CoreError> {
         let staged = self.stage_line(session_id, key, line)?;
         self.store_lines(session_id, key, staged.family, &[staged.delta], &staged.rows, read).await?;
-        self.apply_marks(session_id, staged.marks).await
+        self.apply_marks(session_id, staged.marks, Instant::now()).await
     }
 
     /// Applies a transcript record to its family in memory, with what it
@@ -1101,14 +1129,16 @@ impl Core {
         Ok(())
     }
 
-    async fn apply_marks(&mut self, session_id: &str, marks: Vec<Mark>) -> Result<(), CoreError> {
+    async fn apply_marks(&mut self, session_id: &str, marks: Vec<Mark>, written: Instant) -> Result<(), CoreError> {
         for mark in marks {
-            self.apply_mark(session_id, mark).await?;
+            self.apply_mark(session_id, mark, written).await?;
         }
         Ok(())
     }
 
-    pub(crate) async fn apply_mark(&mut self, session_id: &str, mark: Mark) -> Result<(), CoreError> {
+    /// Applies a mark written by `written`: when a tool or turn closed, as
+    /// edits are credited by how close they came to it.
+    pub(crate) async fn apply_mark(&mut self, session_id: &str, mark: Mark, written: Instant) -> Result<(), CoreError> {
         let open = self.open_tool(session_id).map(str::to_owned);
         let session = self.session_mut(session_id).expect("caller checked");
         let mark = match mark {
@@ -1124,15 +1154,15 @@ impl Core {
                 TurnMark::ToolStarted { tool_use_id, tool }
             }
             Mark::ToolFinished { tool_use_id } => {
-                session.closed_tool = Some((tool_use_id.clone(), Instant::now()));
+                session.closed_tool = Some((tool_use_id.clone(), written));
                 TurnMark::ToolFinished { tool_use_id }
             }
             Mark::Stopped => {
                 session.in_turn = false;
                 if let Some(tool) = open {
-                    session.closed_tool = Some((tool, Instant::now()));
+                    session.closed_tool = Some((tool, written));
                 }
-                session.turn_closed = Some(Instant::now());
+                session.turn_closed = Some(written);
                 TurnMark::Stopped
             }
         };
@@ -1244,6 +1274,25 @@ impl Core {
     }
 
     pub(crate) fn author_for(&self, checkout: CheckoutId) -> Author {
+        self.author_noticed(checkout, self.change_noticed.unwrap_or_else(Instant::now))
+    }
+
+    /// Whether edits noticed at `noticed` should wait for the transcripts
+    /// again: an agent that marks its turns and tools only there runs on
+    /// the checkout, and so far no tool of its is known to have made them.
+    /// Its prompt and tool marks may still be on the way, and a busy
+    /// machine writes and reads them late, so they get the whole settling
+    /// window.
+    pub(crate) fn awaits_tool_marks(&self, checkout: CheckoutId, noticed: Instant) -> bool {
+        let transcript_agent = self.sessions.iter().any(|session| {
+            session.record.checkout_id == checkout && session.live && session.agent.capture() == Capture::Transcript
+        });
+        transcript_agent
+            && noticed.elapsed() < attribution::MARK_SETTLE
+            && matches!(self.author_noticed(checkout, noticed), Author::User | Author::Agent { tool_use_id: None, .. })
+    }
+
+    fn author_noticed(&self, checkout: CheckoutId, noticed: Instant) -> Author {
         let sessions: Vec<attribution::SessionState<'_>> = self
             .sessions
             .iter()
@@ -1261,7 +1310,6 @@ impl Core {
             .collect();
         // An agent that hasn't written its session yet, but is running.
         let pending = self.pending.iter().find(|pending| pending.checkout_id == checkout).map(|pending| pending.agent.id());
-        let noticed = self.change_noticed.unwrap_or_else(Instant::now);
         attribution::author(self.importing, &sessions, pending, noticed)
     }
 

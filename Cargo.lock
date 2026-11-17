@@ -5446,6 +5446,7 @@ dependencies = [
  "silt-os",
  "silt-proto",
  "silt-types",
+ "silt-workspace",
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
