@@ -724,9 +724,135 @@ tokens?: { [key in string]: Array<string> },
 /**
  * Its components, given with its README (ADR 0086).
  */
-components?: Array<DesignComponentView>, };
+components?: Array<DesignComponentView>, 
+/**
+ * Its folder and its assets' paths under `assets/`, given with its
+ * README (ADR 0088).
+ */
+dir?: string | null, assets?: Array<string>, };
 
-export type DesignComponentView = { name: string, about: string, html: string, };
+export type DesignComponentView = { name: string, about: string, html: string, 
+/**
+ * Its guidelines, `components/<name>.md` (ADR 0088).
+ */
+guide?: string | null, };
+
+export type DesignCatalog = { 
+/**
+ * Each project's own, then the person's.
+ */
+groups: Array<DesignGroup>, };
+
+export type DesignGroup = { 
+/**
+ * The project whose repository keeps them; none for the person's own.
+ */
+project: DesignProject | null, systems: Array<DesignSummary>, };
+
+export type DesignProject = { repo: string, name: string, clone: string, };
+
+export type DesignSummary = { name: string, title: string, source: DesignSource, 
+/**
+ * Its folder.
+ */
+dir: string, 
+/**
+ * A few of its colours, in its first theme.
+ */
+swatches: Array<string>, colors: number, type_styles: number, components: number, 
+/**
+ * What picks it as a default: "repo's default", "picked for web on
+ * this machine", "default for Work".
+ */
+uses: Array<string>, 
+/**
+ * The thread still making or changing it, when one is.
+ */
+thread?: string | null, 
+/**
+ * It's only in that thread's folder so far.
+ */
+unmerged: boolean, };
+
+export type DesignDetail = { summary: DesignSummary, readme: string, 
+/**
+ * Where it was made from, as its tokens' `meta.source` says.
+ */
+made_from?: string | null, themes: Array<DesignTheme>, 
+/**
+ * Its tokens with their values per theme, colours first.
+ */
+tokens: Array<DesignToken>, type_styles: Array<DesignTypeStyle>, 
+/**
+ * The CSS its tokens and components compile to, as a frame gets it.
+ */
+css: string, components: Array<DesignComponentView>, cover?: string | null, assets: Array<DesignAssetView>, 
+/**
+ * Every file in its folder, by path.
+ */
+files: Array<string>, 
+/**
+ * What its files hold that Silt left out, and why.
+ */
+dropped: Array<string>, };
+
+export type DesignTheme = { id: string, name: string, };
+
+export type DesignToken = { family: string, name: string, 
+/**
+ * Its value by theme id; one value holds in every theme under `*`.
+ */
+values: { [key in string]: string }, usage: string, };
+
+export type DesignTypeStyle = { name: string, group: string, 
+/**
+ * Its font stack, from its family.
+ */
+family: string, font_size: string, line_height: string | null, font_weight: string | null, letter_spacing: string | null, usage: string, };
+
+export type DesignAssetView = { path: string, media_type: string, size: number, };
+
+export type DesignAssetData = { media_type: string, data: string, };
+
+export type DesignFrom = "code" | "website" | "description";
+
+export type DesignKeep = "repo" | "personal";
+
+export type DesignStart = { 
+/**
+ * The system's name as people read it, such as "Harbor"; its folder's
+ * name comes from it.
+ */
+title: string, agent: string, keep: DesignKeep, 
+/**
+ * The project: the one built from, the one whose repository keeps it,
+ * or both.
+ */
+clone: string | null, from: DesignFrom | null, 
+/**
+ * The website's address, for one made from a website.
+ */
+link: string | null, 
+/**
+ * What to make it from, for one made from a description, or anything
+ * else the person adds.
+ */
+notes: string | null, 
+/**
+ * A brand guide, screenshots or anything else sent with the prompt.
+ */
+attachments: Array<PromptAttachment>, 
+/**
+ * What to change in the system `name`, which exists; a new one when
+ * unset.
+ */
+change: string | null, name: string | null, };
+
+export type ThreadDesign = { name: string, title: string, keep: DesignKeep, changing: boolean, 
+/**
+ * What's written so far; none until the folder has its tokens.
+ */
+detail: DesignDetail | null, };
 
 export type ArtifactContent = { media_type: string, 
 /**

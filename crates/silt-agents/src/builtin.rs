@@ -40,7 +40,16 @@ pub const BUILTIN_SKILLS: &[BuiltinSkill] = &[
         name: "artifact-diagramming",
         files: &[("SKILL.md", include_str!("../skills/artifact-diagramming/SKILL.md"))],
     },
-    BuiltinSkill { name: "design-system", files: &[("SKILL.md", include_str!("../skills/design-system/SKILL.md"))] },
+    BuiltinSkill {
+        name: "design-system",
+        files: &[
+            ("SKILL.md", include_str!("../skills/design-system/SKILL.md")),
+            ("references/from-code.md", include_str!("../skills/design-system/references/from-code.md")),
+            ("references/from-website.md", include_str!("../skills/design-system/references/from-website.md")),
+            ("references/from-design-tool.md", include_str!("../skills/design-system/references/from-design-tool.md")),
+            ("references/cover.md", include_str!("../skills/design-system/references/cover.md")),
+        ],
+    },
     BuiltinSkill {
         name: "artifact-slides",
         files: &[

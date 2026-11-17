@@ -3,6 +3,7 @@ import { Layout } from './components/Layout'
 import * as routes from './components/Routes'
 import { basePath, hosted } from './served'
 import { phone } from './shell'
+import { designSearch } from './designSearch'
 
 const root = createRootRoute({ component: Layout })
 
@@ -63,6 +64,16 @@ export const router = createRouter({
       },
     }),
     createRoute({ getParentRoute: () => root, path: '/settings/$section', component: lazyRouteComponent(() => import('./components/Settings'), 'Settings') }),
+    // One design system's page (ADR 0088); the hosted app shows none yet.
+    createRoute({
+      getParentRoute: () => root,
+      path: '/settings/design-systems/system',
+      component: lazyRouteComponent(() => import('./components/DesignSystems'), 'DesignSystemPage'),
+      validateSearch: designSearch,
+      beforeLoad: () => {
+        if (hosted()) throw redirect({ to: '/settings/$section', params: { section: 'projects' }, replace: true })
+      },
+    }),
     moved('/projects', 'projects'),
     moved('/projects/add', 'add'),
     moved('/orgs', 'orgs'),
