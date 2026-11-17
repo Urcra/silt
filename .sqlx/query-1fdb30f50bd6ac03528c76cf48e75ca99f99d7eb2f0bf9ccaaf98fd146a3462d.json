@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM thread_seen_marks WHERE thread_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "1fdb30f50bd6ac03528c76cf48e75ca99f99d7eb2f0bf9ccaaf98fd146a3462d"
+}

@@ -93,7 +93,7 @@ impl Core {
         }
         channel.reporting = true;
         let events = self.events.clone();
-        let startable = silt_acp::registry::installed_here(&self.data_dir)
+        let startable = crate::acp::agents_here(&self.data_dir)
             .into_iter()
             .map(|agent| Startable { id: agent.id, name: agent.name })
             .collect();

@@ -48,6 +48,37 @@ pub enum Request {
     CloneOf {
         thread: String,
     },
+    /// Erases a Local only thread and its forks for good (ADR 0092); without
+    /// `confirm`, says what would go.
+    ThreadErase {
+        thread: String,
+        #[serde(default)]
+        confirm: bool,
+    },
+    /// The local models here, the catalog's others, and what this machine
+    /// can run (ADR 0092).
+    Models,
+    /// Starts downloading a model, one at a time: a catalog name,
+    /// `owner/repo:file.gguf` on Hugging Face, or the absolute path of a GGUF
+    /// file, which is used where it is. Answers with the model's name.
+    ModelPull {
+        source: String,
+    },
+    ModelRemove {
+        model: String,
+    },
+    /// GGUF models on Hugging Face matching `query`, the most downloaded
+    /// first; with an empty query, the most downloaded of all.
+    ModelSearch {
+        query: String,
+    },
+    /// A Hugging Face repository's quantizations, as this machine would run
+    /// each.
+    ModelFiles {
+        repo: String,
+    },
+    /// Starts downloading llama.cpp's latest build for this machine.
+    RuntimePull,
     /// This machine's settings for chats (ADR 0059).
     ChatSettings,
     SetChatSettings {
@@ -1442,6 +1473,119 @@ pub struct ImportCandidate {
     pub started_ms: Option<i64>,
 }
 
+/// The local models on this machine and what it can run (ADR 0092).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct LocalModels {
+    /// The `llama-server` models run with, if one was found.
+    pub server: Option<String>,
+    pub devices: Vec<ModelDevice>,
+    /// Bytes a model may use here: the devices', else the machine's memory.
+    pub room: u64,
+    pub models: Vec<LocalModel>,
+    /// A model's download, or llama.cpp's (`llama.cpp`), while it runs.
+    pub pull: Option<ModelPull>,
+    /// Why the last download failed.
+    pub failed: Option<ModelFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ModelDevice {
+    pub name: String,
+    pub description: String,
+    pub total: u64,
+    pub free: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct LocalModel {
+    pub id: String,
+    pub name: String,
+    /// Where it came from: `owner/repo:file` or a file here.
+    pub source: String,
+    pub size: u64,
+    pub context: u32,
+    pub fit: ModelFit,
+    /// The file `llama-server` loads.
+    pub path: PathBuf,
+}
+
+/// A model repository a search on Hugging Face found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct FoundModel {
+    /// `owner/name`.
+    pub repo: String,
+    /// Downloads in the last month.
+    pub downloads: u64,
+    pub updated: Option<String>,
+}
+
+/// A repository's quantizations, as this machine would run each.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ModelFiles {
+    pub repo: String,
+    pub architecture: Option<String>,
+    /// The most context the model was trained for.
+    pub context_length: Option<u64>,
+    /// Smallest first.
+    pub quantizations: Vec<ModelQuantization>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ModelQuantization {
+    /// What a pull takes: `owner/repo:file.gguf`.
+    pub source: String,
+    /// Its kind, such as `Q4_K_M`.
+    pub label: String,
+    pub size: u64,
+    /// Files it's split across.
+    pub parts: u32,
+    pub fit: ModelFit,
+    /// The context it would start with here.
+    pub context: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum ModelFit {
+    Fits,
+    /// It may load, with less context or nothing else running.
+    Tight,
+    TooBig,
+}
+
+impl From<silt_llm::Fit> for ModelFit {
+    fn from(fit: silt_llm::Fit) -> Self {
+        match fit {
+            silt_llm::Fit::Fits => Self::Fits,
+            silt_llm::Fit::Tight => Self::Tight,
+            silt_llm::Fit::TooBig => Self::TooBig,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ModelPull {
+    pub id: String,
+    pub done: u64,
+    /// Zero until the files' sizes are known.
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ModelFailure {
+    pub id: String,
+    pub reason: String,
+}
+
 /// What the web UI's voice button can do on this machine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -2260,6 +2404,15 @@ mod tests {
             VoiceDownload::decl(&config),
             VoiceEvent::decl(&config),
             VoiceStatus::decl(&config),
+            LocalModels::decl(&config),
+            ModelDevice::decl(&config),
+            LocalModel::decl(&config),
+            FoundModel::decl(&config),
+            ModelFiles::decl(&config),
+            ModelQuantization::decl(&config),
+            ModelFit::decl(&config),
+            ModelPull::decl(&config),
+            ModelFailure::decl(&config),
         ];
         let generated = format!(
             "// The daemon's API types, written by `UPDATE_API_TYPES=1 cargo test -p silt-daemon api_types`\n// from crates/silt-daemon/src/protocol.rs. Don't edit by hand.\n\n{}\n",

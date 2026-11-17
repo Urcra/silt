@@ -36,10 +36,13 @@ import type {
   HistoryPage,
   InboxEntry,
   InboxRead,
+  FoundModel,
   KindSetting,
   LiveState,
+  LocalModels,
   MarkSeen,
   Mine,
+  ModelFiles,
   MrDetails,
   MrSummary,
   NewLink,
@@ -218,6 +221,19 @@ export function dictationSocket(): WebSocket {
 export const api = {
   voiceStatus: () => request<VoiceStatus>('GET', '/api/voice'),
   voiceModel: () => request<VoiceStatus>('POST', '/api/voice/model'),
+  /** The local models here, and the llama-server that runs them (ADR 0092); a daemon's only. */
+  models: () => request<LocalModels>('GET', '/api/models'),
+  /** Starts a download: `owner/repo:file.gguf`, or a GGUF file's path. Answers with the model's name. */
+  pullModel: (source: string) => request<string>('POST', '/api/models/pull', { source }),
+  removeModel: (id: string) => request<string>('DELETE', `/api/models/${encodeURIComponent(id)}`),
+  /** GGUF models on Hugging Face, the most downloaded first; with no words, the most downloaded of all. */
+  searchModels: (words: string) => request<FoundModel[]>('GET', `/api/models/search?q=${encodeURIComponent(words)}`),
+  /** A Hugging Face repository's quantizations, as this machine would run each. */
+  modelFiles: (repo: string) => request<ModelFiles>('GET', `/api/models/files?repo=${encodeURIComponent(repo)}`),
+  /** Starts downloading llama.cpp's latest build for this machine. */
+  pullRuntime: () => request<string>('POST', '/api/models/runtime'),
+  /** Erases a Local only thread and its forks (ADR 0092); unconfirmed, says what would go. */
+  eraseThread: (id: string, confirm: boolean) => request<string>('POST', `${thread(id)}/erase`, { confirm }),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   /** An artifact's content, by the blob a version of it names (ADR 0068). */
   artifact: (id: string, blob: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${blob}`),

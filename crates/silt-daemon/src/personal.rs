@@ -50,6 +50,14 @@ impl Personal {
         self.thread_seen.get(&(thread, path.to_owned()))
     }
 
+    /// Drops what this person kept of a thread that's gone from here.
+    pub(crate) fn forget(&mut self, thread: ThreadId) {
+        self.states.remove(&thread);
+        self.pending.remove(&thread);
+        self.thread_seen.retain(|key, _| key.0 != thread);
+        self.thread_seen_pending.retain(|key| key.0 != thread);
+    }
+
     fn take_thread_mark(&mut self, thread: ThreadId, mark: SeenMark) -> bool {
         let key = (thread, mark.path.clone());
         let newer = self.thread_seen.get(&key).is_none_or(|known| mark.newer_than(known));

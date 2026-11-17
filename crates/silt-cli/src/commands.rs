@@ -321,7 +321,7 @@ fn run_agent_in(name: &str, cwd: PathBuf, isolated: bool, args: &[String]) -> Re
         mount_checkout(mount, &started.checkout, &started.thread);
     }
     let run = Run { agent, thread: &started.thread, checkout: &started.checkout, cwd: &started.agent_cwd, held: &held };
-    let status = run.launch(Start::New { id: session_id }, args, &mut recording)?;
+    let status = run.launch(Start::New { id: session_id }, held.args.as_deref().unwrap_or(args), &mut recording)?;
     recording.end()?;
     eprintln!("silt: thread {} recorded; see `silt show {}`", short(&started.thread), short(&started.thread));
     exit_like(status)
@@ -432,6 +432,13 @@ fn workspace_rules(
     agent: &'static dyn Agent,
     args: &[String],
 ) -> Result<silt_daemon::workspaces::RunRules, Exn<CliError>> {
+    // A local model runs through the daemon's gateway (ADR 0092).
+    if silt_workspace::agent_key(agent.id()).as_str() == "claude"
+        && silt_llm::local_model_in_args(args).is_some()
+        && !daemonless_capture()
+    {
+        ensure_daemon()?;
+    }
     // A daemon running holds the store; opening it beside one slows its capture.
     let rules = if !daemonless_capture() && is_running() {
         call::<silt_daemon::workspaces::RunRules>(&Request::RunRules {
@@ -612,7 +619,7 @@ fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliErro
     let held = workspace_rules(Some(&resumed.thread), None, agent, args)?;
     let run = Run { agent, thread: &resumed.thread, checkout: &resumed.checkout, cwd: &resumed.agent_cwd, held: &held };
     let mut recording = Recording::by_daemon(&resumed.thread)?;
-    let status = run.launch(start, args, &mut recording)?;
+    let status = run.launch(start, held.args.as_deref().unwrap_or(args), &mut recording)?;
     recording.end()?;
     exit_like(status)
 }
@@ -961,6 +968,17 @@ pub fn thread_change(request: Request) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let message: String = call(&request)?;
     println!("{message}");
+    Ok(())
+}
+
+/// Says what erasing `thread` removes, and with `yes` erases it (ADR 0092).
+pub fn thread_erase(thread: String, yes: bool) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let said: String = call(&Request::ThreadErase { thread: thread.clone(), confirm: yes })?;
+    println!("{said}");
+    if !yes {
+        println!("Run `silt thread erase {thread} --yes` to erase it.");
+    }
     Ok(())
 }
 

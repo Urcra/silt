@@ -1303,6 +1303,17 @@ isolated?: boolean,
  */
 home_locked?: boolean, 
 /**
+ * Nothing Silt holds of its threads leaves this machine, and only
+ * local models answer (ADR 0092): no server, `local`, and Claude Code
+ * on a local model only.
+ */
+local_only?: boolean, 
+/**
+ * In a Local only workspace, agents' history tools read the whole
+ * workspace rather than their own project.
+ */
+wide_history?: boolean, 
+/**
  * The page connectors its artifacts' pages may call, by name; any
  * when unset (ADR 0080).
  */
@@ -1439,3 +1450,81 @@ model: boolean, download: VoiceDownload | null,
  * Why the last download failed.
  */
 failed: string | null, };
+
+export type LocalModels = { 
+/**
+ * The `llama-server` models run with, if one was found.
+ */
+server: string | null, devices: Array<ModelDevice>, 
+/**
+ * Bytes a model may use here: the devices', else the machine's memory.
+ */
+room: number, models: Array<LocalModel>, 
+/**
+ * A model's download, or llama.cpp's (`llama.cpp`), while it runs.
+ */
+pull: ModelPull | null, 
+/**
+ * Why the last download failed.
+ */
+failed: ModelFailure | null, };
+
+export type ModelDevice = { name: string, description: string, total: number, free: number, };
+
+export type LocalModel = { id: string, name: string, 
+/**
+ * Where it came from: `owner/repo:file` or a file here.
+ */
+source: string, size: number, context: number, fit: ModelFit, 
+/**
+ * The file `llama-server` loads.
+ */
+path: string, };
+
+export type FoundModel = { 
+/**
+ * `owner/name`.
+ */
+repo: string, 
+/**
+ * Downloads in the last month.
+ */
+downloads: number, updated: string | null, };
+
+export type ModelFiles = { repo: string, architecture: string | null, 
+/**
+ * The most context the model was trained for.
+ */
+context_length: number | null, 
+/**
+ * Smallest first.
+ */
+quantizations: Array<ModelQuantization>, };
+
+export type ModelQuantization = { 
+/**
+ * What a pull takes: `owner/repo:file.gguf`.
+ */
+source: string, 
+/**
+ * Its kind, such as `Q4_K_M`.
+ */
+label: string, size: number, 
+/**
+ * Files it's split across.
+ */
+parts: number, fit: ModelFit, 
+/**
+ * The context it would start with here.
+ */
+context: number, };
+
+export type ModelFit = "fits" | "tight" | "too_big";
+
+export type ModelPull = { id: string, done: number, 
+/**
+ * Zero until the files' sizes are known.
+ */
+total: number, };
+
+export type ModelFailure = { id: string, reason: string, };

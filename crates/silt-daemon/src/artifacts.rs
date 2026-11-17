@@ -135,7 +135,7 @@ impl Core {
     /// and only while the daemon runs that thread's agent for the web UI.
     pub(crate) async fn put_artifact(&mut self, token: &str, new: NewArtifact) -> Result<ArtifactPut, CoreError> {
         let hash = blake3::hash(token.as_bytes());
-        let (thread, workspace) = self
+        let silt_store::RunToken { thread, workspace, .. } = self
             .store
             .run_token(hash.as_bytes())
             .await?
@@ -727,7 +727,7 @@ impl Core {
     /// named, else its project's default, else its workspace's (ADR 0071).
     pub(crate) async fn artifact_guide(&self, token: &str, asked: Option<String>) -> Result<ArtifactGuide, CoreError> {
         let hash = blake3::hash(token.as_bytes());
-        let (thread, workspace) = self
+        let silt_store::RunToken { thread, workspace, .. } = self
             .store
             .run_token(hash.as_bytes())
             .await?
@@ -773,7 +773,7 @@ impl Core {
             return Err(CoreError::Invalid(format!("{id} isn't an artifact id")));
         }
         let hash = blake3::hash(token.as_bytes());
-        let (thread, _) = self
+        let silt_store::RunToken { thread, .. } = self
             .store
             .run_token(hash.as_bytes())
             .await?

@@ -141,6 +141,7 @@ impl Core {
         for thread in threads {
             self.deleted.remove(thread);
             self.threads.remove(thread);
+            self.personal.forget(*thread);
             self.store.remove_thread(*thread).await?;
         }
         for family in families {

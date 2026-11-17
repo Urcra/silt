@@ -11,7 +11,11 @@ export const KNOWN_AGENTS: { key: string; ids: string[]; name: string }[] = [
   { key: 'gemini', ids: ['gemini-cli', 'gemini'], name: 'Gemini CLI' },
   { key: 'agy', ids: ['antigravity-cli', 'antigravity-acp'], name: 'Antigravity' },
   { key: 'opencode', ids: ['opencode', 'opencode-v2'], name: 'OpenCode' },
+  { key: 'local', ids: ['local'], name: 'Silt on a local model' },
 ]
+
+/** The agents that run on local models, as `silt_workspace::LOCAL_AGENTS` lists them. */
+export const LOCAL_AGENTS = ['local', 'claude']
 
 export function agentKey(id: string): string {
   return KNOWN_AGENTS.find((agent) => agent.ids.includes(id))?.key ?? id.toLowerCase()
@@ -38,6 +42,8 @@ function whose(view: WorkspaceView, rule: (policy: Policy) => boolean): string {
 
 /** Why `agent` can't start in the workspace, or nothing when it can. */
 export function agentRefused(view: WorkspaceView | undefined, agent: string): string | undefined {
+  // A Local only workspace runs Silt's own agent, and Claude Code on a local model (ADR 0092).
+  if (view?.effective.local_only && !LOCAL_AGENTS.includes(agentKey(agent))) return `Local only · ${view.workspace.name} runs local models only`
   const allowed = view?.effective.agents
   if (!view || !allowed || allowed.includes(agentKey(agent))) return undefined
   return `Not allowed in ${view.workspace.name} · ${whose(view, (policy) => Boolean(policy.agents && !policy.agents.includes(agentKey(agent))))}`
@@ -70,6 +76,7 @@ export function rulesLine(policy: Policy): string {
   if (policy.isolated) parts.push("other workspaces' files hidden")
   else if (policy.sandbox) parts.push("agent's sandbox required")
   if (policy.home_locked) parts.push('home locked')
+  if (policy.local_only) parts.push(policy.wide_history ? 'local only, history across it' : 'local only, history by project')
   return parts.join(' · ')
 }
 

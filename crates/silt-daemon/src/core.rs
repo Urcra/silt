@@ -147,6 +147,8 @@ pub enum CoreError {
     },
     #[error("{0}")]
     Invalid(String),
+    #[error(transparent)]
+    Llm(#[from] silt_llm::LlmError),
 }
 
 /// A working directory with its symlinks resolved, as checkout paths are
@@ -250,7 +252,7 @@ pub struct Core {
     pub(crate) asked_server: Option<String>,
     /// The workspace the request being handled may read, for an agent's
     /// history tools (ADR 0065).
-    pub(crate) scope: Option<silt_workspace::WorkspaceId>,
+    pub(crate) scope: Option<crate::workspaces::Scope>,
     pub(crate) syncs: HashMap<FamilyId, ClientSync>,
     /// Bumped when a family's sync state is replaced, so answers to requests
     /// made before aren't taken as answers to new ones.
@@ -262,6 +264,8 @@ pub struct Core {
     /// When each server's listing was last asked for, by URL.
     pub(crate) last_listings: HashMap<String, Instant>,
     pub(crate) notes_settings: crate::notes::NotesSettings,
+    /// The local models here and their downloads (ADR 0092).
+    pub(crate) models: std::sync::Arc<crate::models::LocalModelsHere>,
     /// Each server's last sync error, by URL.
     pub(crate) sync_errors: HashMap<String, String>,
     /// The HEAD commit each checkout was last seen at.
@@ -521,6 +525,7 @@ impl Core {
         events: mpsc::UnboundedSender<Event>,
         resident: bool,
     ) -> Result<Self, CoreError> {
+        let models = std::sync::Arc::new(crate::models::LocalModelsHere::new(data_dir, store.clone()));
         let mut core = Self {
             store,
             actor,
@@ -563,6 +568,7 @@ impl Core {
             known_secrets: HashSet::new(),
             last_listings: HashMap::new(),
             notes_settings: crate::notes::NotesSettings::default(),
+            models,
             sync_errors: HashMap::new(),
             heads: HashMap::new(),
             head_stamps: HashMap::new(),
@@ -962,6 +968,25 @@ impl Core {
                 Err(error) => Response::error(error),
             },
             Request::CloneOf { thread } => to_response(self.find_thread(&thread).and_then(|thread| self.clone_of(thread))),
+            Request::Models => {
+                let models = self.models.clone();
+                return answer_later(reply, Ok(async move { Ok::<_, CoreError>(models.view().await) }));
+            }
+            Request::ModelPull { source } => to_response(self.models.start_pull(&source)),
+            Request::RuntimePull => to_response(self.models.start_runtime_pull()),
+            Request::ModelSearch { query } => {
+                let models = self.models.clone();
+                return answer_later(reply, Ok(async move { models.search(&query).await }));
+            }
+            Request::ModelFiles { repo } => {
+                let models = self.models.clone();
+                return answer_later(reply, Ok(async move { models.files(&repo).await }));
+            }
+            Request::ThreadErase { thread, confirm } => to_response(self.erase(&thread, confirm).await),
+            Request::ModelRemove { model } => {
+                let models = self.models.clone();
+                return answer_later(reply, Ok(async move { models.remove(&model).await }));
+            }
             Request::ChatSettings => to_response(Ok::<_, CoreError>(crate::chats::settings(&self.data_dir))),
             Request::SetChatSettings { settings } => {
                 to_response(crate::chats::save_settings(&self.data_dir, &settings).map(|()| "chat settings saved"))

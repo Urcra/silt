@@ -368,6 +368,15 @@ impl StoredDeltas {
     }
 }
 
+/// What a run's token was made for (ADR 0065).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunToken {
+    pub thread: ThreadId,
+    pub workspace: String,
+    /// The project it runs in, where it was known.
+    pub project: Option<String>,
+}
+
 /// The local database and blob store.
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -889,13 +898,21 @@ impl Store {
 
     /// Remembers a run's token by its hash, for what its history tools may
     /// read.
-    pub async fn add_run_token(&self, hash: &[u8], thread: ThreadId, workspace: &str, now_ms: i64) -> Result<(), StoreError> {
+    pub async fn add_run_token(
+        &self,
+        hash: &[u8],
+        thread: ThreadId,
+        workspace: &str,
+        project: Option<&str>,
+        now_ms: i64,
+    ) -> Result<(), StoreError> {
         let thread = id_bytes(thread.0);
         sqlx::query!(
-            "INSERT OR REPLACE INTO run_tokens (hash, thread_id, workspace, created_ms) VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO run_tokens (hash, thread_id, workspace, project, created_ms) VALUES (?, ?, ?, ?, ?)",
             hash,
             thread,
             workspace,
+            project,
             now_ms
         )
         .execute(&self.pool)
@@ -904,11 +921,41 @@ impl Store {
     }
 
     /// The thread and workspace a run token was made for.
-    pub async fn run_token(&self, hash: &[u8]) -> Result<Option<(ThreadId, String)>, StoreError> {
-        sqlx::query!("SELECT thread_id, workspace FROM run_tokens WHERE hash = ?", hash)
+    /// Forgets the tokens of a thread's runs.
+    pub async fn remove_run_tokens(&self, thread: ThreadId) -> Result<(), StoreError> {
+        let thread = id_bytes(thread.0);
+        sqlx::query!("DELETE FROM run_tokens WHERE thread_id = ?", thread).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Forgets where a family syncs and which workspace it's in, once it
+    /// has no thread left.
+    pub async fn forget_family(&self, family: FamilyId) -> Result<(), StoreError> {
+        let family = id_bytes(family.0);
+        let mut tx = self.write_transaction().await?;
+        sqlx::query!("DELETE FROM family_homes WHERE family_id = ?", family).execute(&mut *tx).await?;
+        sqlx::query!("DELETE FROM family_workspaces WHERE family_id = ?", family).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// After an erasure: the search index merged, so it keeps no trace of
+    /// deleted rows, then the file rebuilt from what's left and the WAL
+    /// emptied, so deleted pages don't stay in either (ADR 0092).
+    pub async fn compact_erased(&self) -> Result<(), StoreError> {
+        // Statements sqlx's macros can't describe.
+        sqlx::query("INSERT INTO search(search) VALUES('optimize')").execute(&self.pool).await?;
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+        self.checkpoint().await
+    }
+
+    pub async fn run_token(&self, hash: &[u8]) -> Result<Option<RunToken>, StoreError> {
+        sqlx::query!("SELECT thread_id, workspace, project FROM run_tokens WHERE hash = ?", hash)
             .fetch_optional(&self.pool)
             .await?
-            .map(|row| Ok((ThreadId(id_from(&row.thread_id)?), row.workspace)))
+            .map(|row| {
+                Ok(RunToken { thread: ThreadId(id_from(&row.thread_id)?), workspace: row.workspace, project: row.project })
+            })
             .transpose()
     }
 
@@ -944,8 +991,8 @@ impl Store {
             .collect()
     }
 
-    /// Forgets a thread here: its sessions, checkouts and search entries.
-    /// Files on disk stay.
+    /// Forgets a thread here: its sessions, checkouts, search entries and
+    /// seen marks. Files on disk stay.
     pub async fn remove_thread(&self, thread: ThreadId) -> Result<(), StoreError> {
         let id = id_bytes(thread.0);
         let mut tx = self.write_transaction().await?;
@@ -967,7 +1014,9 @@ impl Store {
         sqlx::query!("DELETE FROM disk_files WHERE checkout_id IN (SELECT id FROM checkouts WHERE thread_id = ?1)", id)
             .execute(&mut *tx)
             .await?;
+        sqlx::query!("DELETE FROM checkout_git_states WHERE thread_id = ?1", id).execute(&mut *tx).await?;
         sqlx::query!("DELETE FROM checkouts WHERE thread_id = ?1", id).execute(&mut *tx).await?;
+        sqlx::query!("DELETE FROM thread_seen_marks WHERE thread_id = ?1", id).execute(&mut *tx).await?;
         sqlx::query!("DELETE FROM search WHERE rowid IN (SELECT row_id FROM search_threads WHERE thread_id = ?1)", id)
             .execute(&mut *tx)
             .await?;

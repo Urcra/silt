@@ -367,6 +367,25 @@ impl Custom {
     }
 }
 
+/// Silt's own agent's id (ADR 0092).
+pub const LOCAL_AGENT: &str = "local";
+
+/// Silt's own agent on a local model, run as `silt agent local` by the
+/// `silt` program at `silt`.
+pub fn local_agent(silt: &Path) -> AgentInfo {
+    AgentInfo {
+        id: LOCAL_AGENT.to_owned(),
+        name: "Silt (local model)".to_owned(),
+        description: "Silt's own agent, on a model this machine runs: what you send it stays here".to_owned(),
+        distribution: Distribution::Command {
+            program: silt.to_string_lossy().into_owned(),
+            args: vec!["agent".to_owned(), "local".to_owned()],
+            env: Vec::new(),
+        },
+        clis: Vec::new(),
+    }
+}
+
 /// Every agent to offer: custom ones first, then the registry's.
 pub fn all(data_dir: &Path) -> Vec<AgentInfo> {
     let mut agents = custom(data_dir);

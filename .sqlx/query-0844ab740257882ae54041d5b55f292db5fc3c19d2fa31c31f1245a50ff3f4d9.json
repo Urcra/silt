@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT thread_id, workspace FROM run_tokens WHERE hash = ?",
+  "query": "SELECT thread_id, workspace, project FROM run_tokens WHERE hash = ?",
   "describe": {
     "columns": [
       {
@@ -24,6 +24,17 @@
             "name": "workspace"
           }
         }
+      },
+      {
+        "name": "project",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "run_tokens",
+            "name": "project"
+          }
+        }
       }
     ],
     "parameters": {
@@ -31,8 +42,9 @@
     },
     "nullable": [
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "73b6a65b231aa08ce80e8370703969892d83ff9d9dfb590c37abb2f17521f379"
+  "hash": "0844ab740257882ae54041d5b55f292db5fc3c19d2fa31c31f1245a50ff3f4d9"
 }

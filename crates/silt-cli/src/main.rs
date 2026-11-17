@@ -4,6 +4,7 @@ mod commands;
 mod design;
 mod desktop;
 mod mcp;
+mod model;
 mod recording;
 mod reference;
 mod render;
@@ -175,6 +176,12 @@ enum Command {
         #[command(subcommand)]
         command: ProjectCommand,
     },
+    /// Local models this machine runs with llama.cpp, for Silt's own agent
+    /// and for Claude Code
+    Model {
+        #[command(subcommand)]
+        command: model::ModelCommand,
+    },
     /// Workspaces: which projects belong together, the server their threads
     /// sync with, and the rules for agents started in them
     Workspace {
@@ -331,6 +338,12 @@ enum Command {
         #[command(subcommand)]
         command: DaemonCommand,
     },
+    /// Silt's own agent, which the daemon runs over ACP
+    #[command(hide = true)]
+    Agent {
+        #[command(subcommand)]
+        agent: AgentCommand,
+    },
     /// Called by agent hooks; reads the hook input on stdin
     #[command(hide = true)]
     Hook {
@@ -456,6 +469,25 @@ enum AuthCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum AgentCommand {
+    /// Silt's own agent, on a model this machine runs through the daemon's gateway
+    Local,
+}
+
+/// Serves `silt agent local` on stdin and stdout; its sessions go to
+/// `SILT_LOCAL_HOME`, which the daemon sets, else the data dir's `local/`.
+fn local_agent() -> Result<(), Exn<CliError>> {
+    let home = std::env::var_os("SILT_LOCAL_HOME")
+        .filter(|home| !home.is_empty())
+        .map_or_else(|| silt_daemon::paths::data_dir().join("local"), PathBuf::from);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| commands::fail(format!("could not start a runtime: {error}")))?;
+    runtime.block_on(silt_local::serve(home)).map_err(|error| commands::fail(format!("the local agent stopped: {error}")))
+}
+
+#[derive(Debug, Subcommand)]
 enum ThreadCommand {
     /// Move a thread of yours to the trash, on every device
     Delete { thread: String },
@@ -464,6 +496,13 @@ enum ThreadCommand {
     /// Remove a thread in the trash for good, keeping only what forks of it
     /// build on
     Purge { thread: String },
+    /// Erase a Local only thread and its forks from this machine for good, with what agents kept of them
+    Erase {
+        thread: String,
+        /// Erase it; without this, says what would go
+        #[arg(long)]
+        yes: bool,
+    },
     /// List the threads in the trash
     Trash,
     /// Let someone edit a thread of yours with you, or stop it with --remove
@@ -769,6 +808,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Chat { agent, about, workspace, args } => commands::chat(&agent, about.as_deref(), workspace.as_deref(), &args),
         Command::Workspace { command } => workspace::run(command),
         Command::Design { command } => design::run(command),
+        Command::Model { command } => model::run(command),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
         Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),
         Command::Gemini(run) => commands::run_agent("gemini", run.isolated, &run.args),
@@ -817,6 +857,7 @@ fn run() -> Result<(), Exn<CliError>> {
             ThreadCommand::Delete { thread } => commands::thread_change(Request::ThreadDelete { thread }),
             ThreadCommand::Restore { thread } => commands::thread_change(Request::ThreadRestore { thread }),
             ThreadCommand::Purge { thread } => commands::thread_change(Request::ThreadPurge { thread }),
+            ThreadCommand::Erase { thread, yes } => commands::thread_erase(thread, yes),
             ThreadCommand::Trash => commands::trash(),
             ThreadCommand::Share { thread, user, remove } => {
                 commands::thread_change(Request::ThreadShare { thread, user, remove })
@@ -850,6 +891,9 @@ fn run() -> Result<(), Exn<CliError>> {
                     home_locked,
                     connectors: connectors
                         .map(|list| list.split(',').map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned).collect()),
+                    // A Local only workspace has no server, so no org's policy reaches it.
+                    local_only: false,
+                    wide_history: false,
                 };
                 admin::org_change(OrgChange::Policy { org, policy })
             }
@@ -946,6 +990,7 @@ fn run() -> Result<(), Exn<CliError>> {
             print!("{}", reference::markdown(&<Cli as clap::CommandFactory>::command()));
             Ok(())
         }
+        Command::Agent { agent: AgentCommand::Local } => local_agent(),
         Command::Hook { agent, event } => {
             commands::hook(agent.as_deref(), &event);
             Ok(())

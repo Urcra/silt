@@ -59,6 +59,14 @@ fn run() -> Step {
     let mut args = env::args().skip(1);
     let (mut session, mut resume, mut settings) = (String::new(), false, None);
     let log_dir = env::var_os("FAKE_LOG_DIR").map(PathBuf::from);
+    if let Some(logs) = &log_dir {
+        let model_env: serde_json::Map<String, serde_json::Value> = env::vars()
+            .filter(|(name, _)| name.starts_with("ANTHROPIC_") || name.starts_with("CLAUDE_CODE_"))
+            .map(|(name, value)| (name, value.into()))
+            .collect();
+        let said = serde_json::json!({"args": env::args().skip(1).collect::<Vec<_>>(), "env": model_env});
+        write(&logs.join("claude-run"), said.to_string().as_bytes())?;
+    }
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--session-id" => session = args.next().unwrap_or_default(),

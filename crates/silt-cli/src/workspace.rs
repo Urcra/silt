@@ -28,6 +28,9 @@ pub enum WorkspaceCommand {
         /// Keep its threads on this machine
         #[arg(long)]
         local: bool,
+        /// Keep its threads on this machine, with only local models answering
+        #[arg(long, conflicts_with = "server")]
+        local_only: bool,
         /// Put projects whose remote matches in it, such as `github.com/acme/*`; repeatable
         #[arg(long = "remote")]
         remotes: Vec<String>,
@@ -82,6 +85,12 @@ pub enum WorkspaceCommand {
         /// Projects keep the workspace's server: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
         home_locked: Option<bool>,
+        /// Nothing Silt holds of its threads leaves this machine, and only local models answer: on or off
+        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        local_only: Option<bool>,
+        /// In a Local only workspace, agents' history tools read every project in it, not only their own: on or off
+        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        wide_history: Option<bool>,
         /// The page connectors its pages may call, comma-separated, or `any`
         #[arg(long)]
         connectors: Option<String>,
@@ -162,13 +171,14 @@ fn folder(text: &str) -> Result<MatchRule, Exn<CliError>> {
 
 fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<CliError>> {
     match change {
-        WorkspaceCommand::New { name, server, org, local, remotes, folders, default } => {
+        WorkspaceCommand::New { name, server, org, local, local_only, remotes, folders, default } => {
             let id = WorkspaceId::from_name(&name).map_err(|error| fail(error.to_string()))?;
             if all.get(&id).is_some() {
                 return Err(fail(format!("there's a workspace {id} already")));
             }
             let mut workspace = Workspace::new(id.clone(), name.trim());
-            workspace.server = match (server, local) {
+            workspace.policy.local_only = local_only;
+            workspace.server = match (server, local || local_only) {
                 (Some(url), _) => Some(ServerBinding { url: url.trim_end_matches('/').to_owned(), org }),
                 (None, true) => None,
                 // Like the default workspace, unless told to stay here.
@@ -206,7 +216,18 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
                 Ok(format!("{} takes {}", workspace.name, rule_text(&rule)))
             }
         }
-        WorkspaceCommand::Policy { workspace, agents, custom_agents, max_preset, sandbox, isolated, home_locked, connectors } => {
+        WorkspaceCommand::Policy {
+            workspace,
+            agents,
+            custom_agents,
+            max_preset,
+            sandbox,
+            isolated,
+            home_locked,
+            connectors,
+            local_only,
+            wide_history,
+        } => {
             let workspace = find_mut(all, &workspace)?;
             let policy = &mut workspace.policy;
             if let Some(agents) = agents {
@@ -231,6 +252,19 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
             }
             if let Some(isolated) = isolated {
                 policy.isolated = isolated;
+            }
+            if let Some(local_only) = local_only {
+                if local_only && workspace.server.is_some() {
+                    return Err(fail(format!(
+                        "{} syncs with a server; a Local only workspace has none: make one with `silt workspace new <name> --local-only`",
+                        workspace.name
+                    )));
+                }
+                workspace.policy.local_only = local_only;
+            }
+            let policy = &mut workspace.policy;
+            if let Some(wide) = wide_history {
+                policy.wide_history = wide;
             }
             if let Some(locked) = home_locked {
                 policy.home_locked = locked;
@@ -319,6 +353,9 @@ fn policy_text(policy: &silt_workspace::Policy) -> String {
     }
     if policy.home_locked {
         parts.push("home locked".into());
+    }
+    if policy.local_only {
+        parts.push(if policy.wide_history { "local only, history across it" } else { "local only, history by project" }.into());
     }
     if let Some(connectors) = &policy.connectors {
         parts.push(if connectors.is_empty() {
