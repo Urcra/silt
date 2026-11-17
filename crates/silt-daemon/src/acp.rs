@@ -576,10 +576,6 @@ impl Core {
             options.preset = allowed;
         }
         let attachments = decode(std::mem::take(&mut options.attachments))?;
-        let seen_accepts = read_seen(&self.data_dir).remove(&info.id).and_then(|seen| seen.takes).map(Accepts::from);
-        if let Some(refused) = seen_accepts.and_then(|accepts| attachments.iter().find(|attachment| !accepts.takes(attachment))) {
-            return Err(CoreError::Invalid(format!("{} doesn't take files like {}", info.name, refused.name)));
-        }
         let continues = options.continues.as_deref().map(|selector| self.find_thread(selector)).transpose()?;
         if continues.is_some_and(|chat| !self.is_chat(chat)) {
             return Err(CoreError::Invalid("only a chat continues in a project".into()));
@@ -864,9 +860,6 @@ impl Core {
             return Ok("queued");
         }
         let run = self.acp.get_mut(&thread).expect("checked above");
-        if let Some(refused) = attachments.iter().find(|attachment| !run.accepts.takes(attachment)) {
-            return Err(CoreError::Invalid(format!("{} doesn't take files like {}", run.info.name, refused.name)));
-        }
         if plan {
             plan_first(run);
         } else if let Some(mode) = run.back_to.take() {
@@ -877,17 +870,9 @@ impl Core {
         Ok("sent")
     }
 
-    /// Sends the prompt the agent was started with. Files it turned out not
-    /// to take are left out and named, rather than losing the prompt.
+    /// Sends the prompt the agent was started with.
     async fn send_first(&mut self, thread: ThreadId, first: First) -> Result<(), CoreError> {
-        let accepts = self.running(thread)?.accepts;
-        let (taken, refused): (Vec<_>, Vec<_>) = first.attachments.into_iter().partition(|attachment| accepts.takes(attachment));
-        self.acp_prompt_with(&thread.to_string(), &first.prompt, first.plan, taken).await?;
-        if !refused.is_empty() {
-            let run = self.acp.get_mut(&thread).expect("checked above");
-            let names: Vec<&str> = refused.iter().map(|attachment| attachment.name.as_str()).collect();
-            run.error = Some(format!("{} doesn't take files like {}; sent without them", run.info.name, names.join(", ")));
-        }
+        self.acp_prompt_with(&thread.to_string(), &first.prompt, first.plan, first.attachments).await?;
         Ok(())
     }
 
@@ -980,6 +965,16 @@ impl Core {
             .map(|attachment| (attachment.mime.clone(), BASE64.encode(&attachment.data)))
             .collect();
         self.record_acp(thread, &acp::prompt(&said, &authors.join(", "), &attached, &images)).await?;
+        let accepts = self.running(thread)?.accepts;
+        let (attachments, as_files): (Vec<_>, Vec<_>) =
+            attachments.into_iter().partition(|attachment| accepts.inline(attachment));
+        let mut saved = Vec::new();
+        for attachment in &as_files {
+            saved.push((attachment, save_attachment(&self.data_dir, thread, attachment).await?));
+        }
+        if !saved.is_empty() {
+            prompt = format!("{prompt}\n\n{}", saved_note(&saved));
+        }
         let run = self.acp.get_mut(&thread).expect("caller checked");
         run.state = AgentState::Working;
         run.error = None;
@@ -2000,14 +1995,18 @@ impl Drop for Aborting {
 fn sandboxed(
     start: &mut Start,
     info: &AgentInfo,
+    thread: ThreadId,
     data_dir: &Path,
     sandbox: &AcpSandbox,
 ) -> Result<Vec<tokio::task::JoinHandle<()>>, CoreError> {
     let key = silt_workspace::agent_key(&info.id);
     let agent = silt_agents::AGENTS.iter().copied().find(|agent| silt_workspace::agent_key(agent.id()) == key);
     let mut read_only = crate::sandbox::program_paths(std::ffi::OsStr::new(&start.program), &start.env);
-    // Agents Silt downloaded, and its built-in skills, live in its data.
-    read_only.extend([data_dir.join("agents"), data_dir.join("skills")]);
+    // Agents Silt downloaded, its built-in skills, and the thread's attached
+    // files live in its data. The last is made now, as a mount needs it there.
+    let attachments = attachments_dir(data_dir, thread);
+    std::fs::create_dir_all(&attachments)?;
+    read_only.extend([data_dir.join("agents"), data_dir.join("skills"), attachments]);
     let prepared = crate::sandbox::prepare(&crate::sandbox::Run {
         data_dir,
         thread: &sandbox.thread,
@@ -2074,6 +2073,33 @@ pub(crate) fn decode(attachments: Vec<PromptAttachment>) -> Result<Vec<Attachmen
             Ok(Attachment { name: attachment.name, mime: attachment.mime, data })
         })
         .collect()
+}
+
+/// Where the files of a thread's prompts that the agent reads from disk are
+/// kept: apart from other threads', so a sandbox shows its agent only its own.
+pub(crate) fn attachments_dir(data_dir: &Path, thread: ThreadId) -> PathBuf {
+    data_dir.join("attachments").join(thread.to_string())
+}
+
+/// Writes a file the agent can't take in the prompt itself where it can
+/// read it, and answers with its path.
+async fn save_attachment(data_dir: &Path, thread: ThreadId, attachment: &Attachment) -> Result<PathBuf, CoreError> {
+    let hash = blake3::hash(&attachment.data).to_hex();
+    let path = attachments_dir(data_dir, thread).join(attachment_name(&hash, &attachment.name));
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await?;
+    }
+    tokio::fs::write(&path, &attachment.data).await?;
+    Ok(path)
+}
+
+/// What the prompt says of the files given as files.
+fn saved_note(saved: &[(&Attachment, PathBuf)]) -> String {
+    let mut note = String::from("Files attached to this prompt, saved where you can read them:");
+    for (attachment, path) in saved {
+        note.push_str(&format!("\n- {} ({}): {}", attachment.name, attachment.mime, path.display()));
+    }
+    note
 }
 
 /// Where a prompt's file is kept beside its session: under its content's
@@ -2443,7 +2469,7 @@ pub(crate) fn spawn_agent(
         // long as the agent runs.
         let mut outside = Vec::new();
         if let Some(sandbox) = sandbox {
-            match sandboxed(&mut start, &info, &data_dir, &sandbox) {
+            match sandboxed(&mut start, &info, thread, &data_dir, &sandbox) {
                 Ok(started) => outside = started,
                 Err(error) => {
                     let message = format!("couldn't start {} in Silt's sandbox: {error}", info.name);
@@ -2689,7 +2715,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn files_for_the_first_prompt_are_refused_before_the_agent_starts() {
+    async fn files_go_only_with_a_first_prompt() {
         let data = tempfile::tempdir().expect("temp dir");
         std::fs::write(data.path().join("agents.json"), r#"[{"id": "plain", "name": "Plain agent", "command": "plain-agent"}]"#)
             .expect("writes");
@@ -2706,11 +2732,20 @@ mod tests {
 
         let alone = refused(core.acp_start(None, Some(data.path()), "plain", start(None)).await);
         assert!(alone.contains("attached files go with the first prompt"), "{alone}");
-
-        let takes_no_images = Seen { takes: Some(Takes { images: false, files: false }), ..Seen::default() };
-        core.keep_seen("plain".into(), takes_no_images);
-        let image = refused(core.acp_start(None, Some(data.path()), "plain", start(Some("look"))).await);
-        assert!(image.contains("Plain agent doesn't take files like shot.png"), "{image}");
         assert!(core.acp.is_empty(), "nothing was started");
+    }
+
+    #[tokio::test]
+    async fn a_file_the_agent_reads_from_disk_is_kept_with_its_thread() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let thread = ThreadId(7);
+        let sheet =
+            Attachment { name: "../book.xls".into(), mime: "application/vnd.ms-excel".into(), data: vec![0xd0, 0xcf, 0x11] };
+        let path = save_attachment(data.path(), thread, &sheet).await.expect("saves");
+        assert!(path.starts_with(attachments_dir(data.path(), thread)), "{}", path.display());
+        assert_eq!(path.file_name().and_then(|name| name.to_str()), Some("book.xls"));
+        assert_eq!(std::fs::read(&path).expect("reads"), sheet.data);
+        let note = saved_note(&[(&sheet, path.clone())]);
+        assert!(note.ends_with(&format!("- ../book.xls (application/vnd.ms-excel): {}", path.display())), "{note}");
     }
 }

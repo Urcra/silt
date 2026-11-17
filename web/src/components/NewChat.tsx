@@ -5,7 +5,7 @@ import { PRESETS, modeForPreset, permissionModes, startSettings, startingValue }
 import { type AgentSetting, api, type Preset } from '../api'
 import { agentRefused, presetRefused, within } from '../rules'
 import { useWorkspace } from '../workspace'
-import { type Takes, attachChoice, useAttachments } from '../attachments'
+import { ATTACH, useAttachments } from '../attachments'
 import { NEW_CHAT_DRAFT, useDraft } from '../drafts'
 import { useHeldSend } from '../heldSend'
 import { useMedia } from '../media'
@@ -59,8 +59,7 @@ export function NewChat() {
   const settings = startSettings(seen?.settings ?? [], modes)
   const settingValue = (setting: AgentSetting) =>
     startingValue(setting, chosenSettings[setting.id], workspace?.workspace.defaults.agents?.[agent]?.settings?.[setting.id])
-  const takes: Takes = { agent: agentName || 'the agent', images: seen?.takes_images ?? null, files: seen?.takes_files ?? null }
-  const { attached, add, remove, clear } = useAttachments(takes)
+  const { attached, add, remove, clear } = useAttachments()
   const attach = (files: File[], pasted = false) => {
     setError(undefined)
     add(files, pasted).catch((failure: unknown) => setError(message(failure)))
@@ -176,7 +175,7 @@ export function NewChat() {
               </>
             }
             voice={!hosted()}
-            attach={attachChoice(takes)}
+            attach={ATTACH}
             enter="start"
             send={{ label: 'Start', title: 'Start and open it', disabled: !ready, busy: starting, submit: true }}
             menu={[{ label: 'Start in the background', icon: 'clock' as const, onSelect: () => start(true), disabled: !ready }]}

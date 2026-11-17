@@ -174,7 +174,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
-        .route("/api/agents/start", post(agent_start))
+        .route("/api/agents/start", post(agent_start).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/agents/{agent}/usage", get(agent_usage))
         .route("/api/clones/branches", get(branches))
         .route("/api/cloud", get(cloud_launches).post(cloud_start))
