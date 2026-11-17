@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use silt_proto::DesignSystemCopy;
 use tracing::warn;
 
-use crate::design::{COMPONENTS_CSS, COMPONENTS_DIR, PERSONAL_DIR, component_files};
+use crate::design::{
+    ASSETS_DIR, COMPONENTS_CSS, COMPONENTS_DIR, COVER, PERSONAL_DIR, asset_files, component_files, component_guides,
+};
 use crate::remote::Remote;
 
 /// What each system held when last synced, here.
@@ -75,8 +77,31 @@ fn read_folder(name: &str, dir: &Path) -> Option<DesignSystemCopy> {
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .unwrap_or_default();
     let components = component_files(&dir.join(COMPONENTS_DIR));
-    let copy =
-        DesignSystemCopy { name: name.to_owned(), at_ms: 0, deleted: false, readme, tokens, fonts, components_css, components };
+    let component_guides = component_guides(&dir.join(COMPONENTS_DIR), components.keys());
+    let cover = read_capped(&dir.join(COVER), silt_proto::DESIGN_COVER_BYTES as u64)
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .unwrap_or_default();
+    let (kept, _) = silt_design::assets(asset_files(&dir.join(ASSETS_DIR)));
+    let assets = kept
+        .into_iter()
+        .filter_map(|(path, _, _)| {
+            let bytes = read_capped(&dir.join(ASSETS_DIR).join(&path), silt_proto::DESIGN_ASSET_BYTES as u64)?;
+            Some((path, BASE64.encode(bytes)))
+        })
+        .collect();
+    let copy = DesignSystemCopy {
+        name: name.to_owned(),
+        at_ms: 0,
+        deleted: false,
+        readme,
+        tokens,
+        fonts,
+        components_css,
+        components,
+        component_guides,
+        cover,
+        assets,
+    };
     copy.valid().then_some(copy)
 }
 
@@ -104,6 +129,23 @@ fn hash(copy: &DesignSystemCopy) -> String {
             digest.update(html.as_bytes());
             digest.update(&[0]);
         }
+    }
+    // The same for what ADR 0088 added: a system without them keeps its hash.
+    for (part, entries) in [("guides", &copy.component_guides), ("assets", &copy.assets)] {
+        if !entries.is_empty() {
+            digest.update(part.as_bytes());
+            digest.update(&[0]);
+            for (name, text) in entries {
+                digest.update(name.as_bytes());
+                digest.update(&[0]);
+                digest.update(text.as_bytes());
+                digest.update(&[0]);
+            }
+        }
+    }
+    if !copy.cover.is_empty() {
+        digest.update(b"cover\0");
+        digest.update(copy.cover.as_bytes());
     }
     digest.finalize().to_hex()[..32].to_owned()
 }
@@ -154,6 +196,9 @@ fn changes(data_dir: &Path, index: &mut Index, now: i64) -> Vec<DesignSystemCopy
                 fonts: BTreeMap::new(),
                 components_css: String::new(),
                 components: BTreeMap::new(),
+                component_guides: BTreeMap::new(),
+                cover: String::new(),
+                assets: BTreeMap::new(),
             },
         })
         .collect()
@@ -202,6 +247,20 @@ fn write_folder(root: &Path, dir: &Path, copy: &DesignSystemCopy) -> std::io::Re
         for (name, html) in &copy.components {
             fs::write(staging.join(COMPONENTS_DIR).join(format!("{name}.html")), html)?;
         }
+        for (name, guide) in &copy.component_guides {
+            fs::write(staging.join(COMPONENTS_DIR).join(format!("{name}.md")), guide)?;
+        }
+    }
+    if !copy.cover.is_empty() {
+        fs::write(staging.join(COVER), &copy.cover)?;
+    }
+    for (path, data) in &copy.assets {
+        let bytes = BASE64.decode(data).map_err(std::io::Error::other)?;
+        let file = staging.join(ASSETS_DIR).join(path);
+        if let Some(group) = file.parent() {
+            fs::create_dir_all(group)?;
+        }
+        fs::write(file, bytes)?;
     }
     remove(dir)?;
     fs::rename(&staging, dir)
@@ -339,9 +398,40 @@ mod tests {
         let mut hostile = DesignSystemCopy { at_ms: 300, ..with.clone() };
         hostile.components.insert("../../escape".into(), "<b></b>".into());
         assert!(!take(there.path(), &mut theirs, &hostile));
-        let mut huge = DesignSystemCopy { at_ms: 300, ..with };
+        let mut huge = DesignSystemCopy { at_ms: 300, ..with.clone() };
         huge.components.insert("big".into(), "x".repeat(silt_proto::DESIGN_COMPONENT_BYTES + 1));
         assert!(!take(there.path(), &mut theirs, &huge));
+        let mut escaping = DesignSystemCopy { at_ms: 300, ..with };
+        escaping.assets.insert("../../../escape.svg".into(), "PHN2Zy8+".into());
+        assert!(!take(there.path(), &mut theirs, &escaping), "an asset's path stays under assets/");
+    }
+
+    #[test]
+    fn guidelines_a_cover_and_assets_travel_too() {
+        let here = tempfile::tempdir().expect("temp dir");
+        system(here.path(), "acme", r#"{"name":"Acme"}"#);
+        let mut index = Index::new();
+        let without = changes(here.path(), &mut index, 100).remove(0);
+        let dir = here.path().join(PERSONAL_DIR).join("acme");
+        fs::create_dir_all(dir.join(COMPONENTS_DIR)).expect("dir");
+        fs::write(dir.join(COMPONENTS_DIR).join("row.html"), "<a>x</a>").expect("row");
+        fs::write(dir.join(COMPONENTS_DIR).join("row.md"), "A list row.").expect("guide");
+        fs::write(dir.join(COVER), "<svg></svg>").expect("cover");
+        fs::create_dir_all(dir.join(ASSETS_DIR).join("Logos")).expect("assets");
+        fs::write(dir.join(ASSETS_DIR).join("Logos/mark.svg"), "<svg/>").expect("mark");
+        fs::write(dir.join(ASSETS_DIR).join("Logos/notes.txt"), "not kept").expect("notes");
+        let with = changes(here.path(), &mut index, 200).remove(0);
+        assert_ne!(hash(&without), hash(&with));
+        assert_eq!(with.component_guides.get("row").map(String::as_str), Some("A list row."));
+        assert_eq!(with.cover, "<svg></svg>");
+        assert_eq!(with.assets.keys().collect::<Vec<_>>(), ["Logos/mark.svg"]);
+
+        let there = tempfile::tempdir().expect("temp dir");
+        assert!(take(there.path(), &mut Index::new(), &with));
+        let taken = there.path().join(PERSONAL_DIR).join("acme");
+        assert_eq!(fs::read_to_string(taken.join(COMPONENTS_DIR).join("row.md")).expect("guide"), "A list row.");
+        assert_eq!(fs::read_to_string(taken.join(COVER)).expect("cover"), "<svg></svg>");
+        assert_eq!(fs::read(taken.join(ASSETS_DIR).join("Logos/mark.svg")).expect("mark"), b"<svg/>");
     }
 
     #[test]
@@ -349,5 +439,8 @@ mod tests {
         assert_eq!(silt_proto::DESIGN_COMPONENTS, silt_design::MAX_COMPONENTS);
         assert_eq!(silt_proto::DESIGN_COMPONENT_BYTES, silt_design::COMPONENT_BYTES);
         assert_eq!(silt_proto::DESIGN_COMPONENTS_CSS_BYTES, silt_design::COMPONENTS_CSS_BYTES);
+        assert_eq!(silt_proto::DESIGN_COVER_BYTES, silt_design::COVER_BYTES);
+        assert_eq!(silt_proto::DESIGN_ASSETS, silt_design::MAX_ASSETS);
+        assert_eq!(silt_proto::DESIGN_ASSET_BYTES, silt_design::ASSET_BYTES);
     }
 }

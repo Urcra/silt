@@ -240,7 +240,7 @@ textarea.n-field { display: block; width: 100%; }
   font: 400 11px/1.35 var(--font-mono);
 }
 
-@media (pointer: coarse), (max-width: 767px) {
+@media (pointer: coarse) {
   .n-button, .n-field, .n-select select, .n-chip, .n-row { min-height: 44px; }
   .n-icon-button { min-width: 44px; min-height: 44px; }
   .n-field, .n-select { font-size: 14px; }

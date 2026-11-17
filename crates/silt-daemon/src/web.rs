@@ -197,6 +197,11 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/chats/settings", get(chat_settings).put(set_chat_settings))
         .route("/api/workspaces", get(workspaces).put(set_workspaces))
         .route("/api/design-systems", get(design_systems))
+        .route("/api/design-systems/catalog", get(design_catalog))
+        .route("/api/design-systems/system", get(design_system))
+        .route("/api/design-systems/asset", get(design_asset))
+        .route("/api/design-systems/start", post(design_start))
+        .route("/api/threads/{id}/design-system", get(thread_design))
         .route("/api/artifact-settings", get(artifact_settings).put(set_artifact_settings))
         .route("/api/projects/design-systems", get(project_design_systems).put(set_project_design_system))
         .route("/api/workspaces/assign", post(assign_project))
@@ -1359,6 +1364,40 @@ struct DesignSystemsQuery {
 
 async fn design_systems(State(web): State<Web>, Query(query): Query<DesignSystemsQuery>) -> HttpResponse {
     ask(&web, Request::DesignSystems { clone: query.clone }).await
+}
+
+async fn design_catalog(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::DesignCatalog).await
+}
+
+#[derive(Deserialize)]
+struct DesignSystemQuery {
+    source: crate::protocol::DesignSource,
+    name: String,
+    #[serde(default)]
+    clone: Option<PathBuf>,
+    #[serde(default)]
+    thread: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+async fn design_system(State(web): State<Web>, Query(query): Query<DesignSystemQuery>) -> HttpResponse {
+    ask(&web, Request::DesignSystem { source: query.source, name: query.name, clone: query.clone, thread: query.thread }).await
+}
+
+async fn design_asset(State(web): State<Web>, Query(query): Query<DesignSystemQuery>) -> HttpResponse {
+    let path = query.path.unwrap_or_default();
+    ask(&web, Request::DesignAsset { source: query.source, name: query.name, clone: query.clone, thread: query.thread, path })
+        .await
+}
+
+async fn design_start(State(web): State<Web>, Json(start): Json<crate::protocol::DesignStart>) -> HttpResponse {
+    ask(&web, Request::DesignStart(start)).await
+}
+
+async fn thread_design(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::ThreadDesignSystem { thread }).await
 }
 
 async fn project_design_systems(State(web): State<Web>) -> HttpResponse {

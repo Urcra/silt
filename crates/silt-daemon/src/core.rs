@@ -712,6 +712,14 @@ impl Core {
             Request::ArtifactGuide { .. } => Response::error("only an agent's run asks for its artifact guide, with its token"),
             Request::DesignSystems { clone } => Response::ok(self.design_systems(clone.as_deref())),
             Request::ProjectDesignSystems => Response::ok(self.project_design_systems()),
+            Request::DesignCatalog => Response::ok(self.design_catalog()),
+            Request::DesignSystem { source, name, clone, thread } => {
+                to_response(self.design_system(source, &name, clone.as_deref(), thread.as_deref()))
+            }
+            Request::DesignAsset { source, name, clone, thread, path } => {
+                to_response(self.design_asset(source, &name, clone.as_deref(), thread.as_deref(), &path))
+            }
+            Request::ThreadDesignSystem { thread } => to_response(self.thread_design(&thread)),
             Request::ArtifactSettings => Response::ok(crate::design::artifact_settings(&self.data_dir)),
             Request::SetArtifactSettings { settings } => {
                 to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))
@@ -1074,6 +1082,7 @@ impl Core {
             Request::AcpStart { thread, clone, agent, options } => {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent, options).await)
             }
+            Request::DesignStart(start) => to_response(self.design_start(start).await),
             Request::Branches { clone } => to_response(self.branches(&clone)),
             Request::CloudStart { clone, task } => return answer_later(reply, self.cloud_start(&clone, &task)),
             Request::CloudLaunched { launch } => {
