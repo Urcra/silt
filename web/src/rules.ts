@@ -67,7 +67,7 @@ export function rulesLine(policy: Policy): string {
   }
   if (policy.max_preset && policy.max_preset !== 'full_access') parts.push(`at most ${PRESET_LABELS[policy.max_preset]}`)
   if (policy.custom_agents === false) parts.push('no custom agents')
-  if (policy.isolated) parts.push('isolated history')
+  if (policy.isolated) parts.push("other workspaces' files hidden")
   else if (policy.sandbox) parts.push("agent's sandbox required")
   if (policy.home_locked) parts.push('home locked')
   return parts.join(' · ')

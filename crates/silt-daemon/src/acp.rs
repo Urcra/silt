@@ -2219,7 +2219,7 @@ fn spawn_agent(
         let workspace_env = std::mem::take(&mut start.env);
         start.env = registry::agent_environment(&info.id, &data_dir).into_iter().chain(env).chain(workspace_env).collect();
         let (sender, mut receiver) = mpsc::unbounded_channel();
-        let handle = silt_acp::start(start, sender);
+        let handle = silt_acp::start(start.for_agent(&info.id), sender);
         let _ = events.send(Event::Acp { thread, run, event: AcpEvent::Started(Ok(handle)) });
         while let Some(event) = receiver.recv().await {
             let exited = matches!(event, silt_acp::Event::Exited);

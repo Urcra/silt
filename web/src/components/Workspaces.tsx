@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { type ReactNode, useState } from 'react'
 import { PRESETS, permissionModes, startSettings } from '../agentState'
+import { missingSystem } from '../artifacts'
 import { type AgentChoice, type AgentDefaults, api, type MatchRule, type Policy, type Preset, type Workspace, type WorkspaceView, type Workspaces as WorkspacesFile } from '../api'
 import { keys, message } from '../query'
 import { KNOWN_AGENTS, PRESET_LABELS, rulesLine, serverLine } from '../rules'
@@ -236,9 +237,11 @@ export function WorkspacesSettings() {
             {(designSystems.data ?? []).map((system) => (
               <option key={system.name} value={system.name}>
                 {system.title}
-                {system.source === 'builtin' ? ' (built in)' : ''}
               </option>
             ))}
+            {missingSystem(workspace.defaults.design_system, designSystems.data) && (
+              <option value={workspace.defaults.design_system ?? ''}>{workspace.defaults.design_system} (not on this machine)</option>
+            )}
           </Select>
         </div>
         <AgentDefaultsRows
@@ -308,13 +311,19 @@ export function WorkspacesSettings() {
               />
               <Rule
                 name="Agent's own sandbox"
-                mine={<Toggle label="require the agent's sandbox" on={Boolean(workspace.policy.sandbox)} onChange={(sandbox) => changePolicy({ sandbox })} />}
+                mine={
+                  workspace.policy.isolated ? (
+                    <span className="text-xs text-fg-2">on, to hide other workspaces' files</span>
+                  ) : (
+                    <Toggle label="require the agent's sandbox" on={Boolean(workspace.policy.sandbox)} onChange={(sandbox) => changePolicy({ sandbox })} />
+                  )
+                }
                 theirs={org?.policy.sandbox ? 'Required' : '—'}
                 effect={effective.sandbox || effective.isolated ? 'Required' : 'Not required'}
               />
               <Rule
-                name="Isolated history"
-                mine={<Toggle label="isolated history" on={Boolean(workspace.policy.isolated)} onChange={(isolated) => changePolicy({ isolated })} />}
+                name="Hide other workspaces' files"
+                mine={<Toggle label="hide other workspaces' files" on={Boolean(workspace.policy.isolated)} onChange={(isolated) => changePolicy({ isolated })} />}
                 theirs={org?.policy.isolated ? 'On' : '—'}
                 effect={effective.isolated ? 'On' : 'Off'}
               />
@@ -328,8 +337,8 @@ export function WorkspacesSettings() {
           </table>
         </div>
         <p className={SUB}>
-          <strong>Isolated</strong>: Silt's history tools answer only with {workspace.name}'s threads, and the agent's sandbox can't read Silt's data or other
-          workspaces' folders. Without the sandbox, an agent could still read files directly.
+          Silt's history tools always answer an agent only with its own workspace's threads. <strong>Hide other workspaces' files</strong> also keeps the
+          agent's sandbox from reading Silt's data and other workspaces' folders directly, so it needs an agent Silt can sandbox that way.
         </p>
         {rulesLine(effective) && <p className="text-xs">In effect: {rulesLine(effective)}</p>}
       </section>

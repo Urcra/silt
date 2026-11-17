@@ -534,8 +534,8 @@ enum OrgCommand {
         /// Agents run only with their own sandbox on
         #[arg(long)]
         sandbox: bool,
-        /// The sandbox also hides Silt's data and other workspaces
-        #[arg(long)]
+        /// The sandbox also keeps agents out of Silt's data and other workspaces' folders
+        #[arg(long = "hide-other-workspaces", alias = "isolated")]
         isolated: bool,
         /// Projects keep this server: no other, and not one machine only
         #[arg(long)]

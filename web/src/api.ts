@@ -15,6 +15,11 @@ import type {
   ChatSettings,
   CloudLaunch,
   DesignSystemView,
+  DesignCatalog,
+  DesignDetail,
+  DesignAssetData,
+  DesignStart,
+  ThreadDesign,
   CommentLocation,
   CommentOn,
   CommentView,
@@ -155,6 +160,22 @@ export interface SearchForm {
 }
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
+
+/** Where a design system is: a project's clone, the person's own, or the folder of the thread making it. */
+export interface DesignWhere {
+  source: 'project' | 'personal'
+  name: string
+  clone?: string
+  thread?: string
+}
+
+function designQuery(where: DesignWhere): string {
+  const query = new URLSearchParams({ source: where.source, name: where.name })
+  if (where.clone) query.set('clone', where.clone)
+  if (where.thread) query.set('thread', where.thread)
+  return query.toString()
+}
+
 /** What a diff leaves out: with `hideGit`, what git itself rewrote (ADR 0069); with `hideOthers`, the edits of other
  * agents working in the same clone (ADR 0089). */
 export interface Hidden {
@@ -389,6 +410,13 @@ export const api = {
   workspaces: () => request<WorkspacesView>('GET', '/api/workspaces'),
   // The person's design systems and Silt's own, for a workspace's default (ADR 0071).
   designSystems: (clone?: string) => request<DesignSystemView[]>('GET', clone ? `/api/design-systems?clone=${encodeURIComponent(clone)}` : '/api/design-systems'),
+  // Settings › Design systems: every system, one system's page, its assets, and the threads that make one (ADR 0088).
+  designCatalog: () => request<DesignCatalog>('GET', '/api/design-systems/catalog'),
+  designSystem: (where: DesignWhere) => request<DesignDetail>('GET', `/api/design-systems/system?${designQuery(where)}`),
+  designAsset: (where: DesignWhere, path: string) =>
+    request<DesignAssetData>('GET', `/api/design-systems/asset?${designQuery(where)}&path=${encodeURIComponent(path)}`),
+  designStart: (start: DesignStart) => request<string>('POST', '/api/design-systems/start', start),
+  threadDesign: (id: string) => request<ThreadDesign | null>('GET', `${thread(id)}/design-system`),
   artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),
   setArtifactSettings: (settings: ArtifactSettings) => request<string>('PUT', '/api/artifact-settings', settings),
   projectDesignSystems: () => request<Record<string, string>>('GET', '/api/projects/design-systems'),

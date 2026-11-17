@@ -18,6 +18,7 @@ import {
   withFilesInlined,
   artifactPath,
   listingMatches,
+  missingSystem,
 } from './artifacts'
 import { FRAME_FIXTURES, OFFLINE_STUB } from './frame.generated'
 
@@ -220,5 +221,16 @@ describe('the Artifacts page', () => {
   it('links to an artifact, at a version when not the latest', () => {
     expect(artifactPath('t1', '0123456789ab')).toBe('/t/t1/artifacts/0123456789ab')
     expect(artifactPath('t1', '0123456789ab', 3)).toBe('/t/t1/artifacts/0123456789ab/v/3')
+  })
+})
+
+describe('a picked design system', () => {
+  const systems = [{ name: 'nous', title: 'Nous', source: 'project' as const }]
+  it('is missing only when picked, not none, and not among those here', () => {
+    expect(missingSystem('plain', systems)).toBe(true)
+    expect(missingSystem('nous', systems)).toBe(false)
+    expect(missingSystem('none', systems)).toBe(false)
+    expect(missingSystem(null, systems)).toBe(false)
+    expect(missingSystem('plain', undefined)).toBe(false)
   })
 })

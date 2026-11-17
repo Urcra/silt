@@ -76,8 +76,8 @@ pub enum WorkspaceCommand {
         /// Agents run only with their own sandbox on: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
         sandbox: Option<bool>,
-        /// The sandbox also hides Silt's data and other workspaces: on or off
-        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        /// The sandbox also keeps agents out of Silt's data and other workspaces' folders: on or off
+        #[arg(long = "hide-other-workspaces", alias = "isolated", value_parser = crate::admin::parse_on_off)]
         isolated: Option<bool>,
         /// Projects keep the workspace's server: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
@@ -313,7 +313,7 @@ fn policy_text(policy: &silt_workspace::Policy) -> String {
         parts.push("no custom agents".into());
     }
     if policy.isolated {
-        parts.push("isolated".into());
+        parts.push("other workspaces' files hidden".into());
     } else if policy.sandbox {
         parts.push("sandboxed".into());
     }
@@ -411,7 +411,7 @@ fn which(view: &WorkspacesView) -> Result<(), Exn<CliError>> {
     println!(
         "  sandbox      {}",
         if policy.isolated {
-            "required, isolated"
+            "required, hiding other workspaces' files"
         } else if policy.sandbox {
             "required"
         } else {

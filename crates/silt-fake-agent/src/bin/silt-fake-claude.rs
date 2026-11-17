@@ -37,7 +37,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use silt_fake_agent::{Failed, Step, append, exit, expect_words, io, records, write};
+use silt_fake_agent::{Failed, Step, append, exit, expect_words, feed_hook, io, records, write};
 
 struct Run {
     session: String,
@@ -243,7 +243,7 @@ impl Run {
             command.stdout(fs::File::create(output).map_err(io)?);
         }
         let mut child = command.stdin(Stdio::piped()).spawn().map_err(|error| Failed(1, format!("{program}: {error}")))?;
-        child.stdin.take().expect("piped").write_all(input.to_string().as_bytes()).map_err(io)?;
+        feed_hook(&mut child, input.to_string().as_bytes())?;
         let status = child.wait().map_err(io)?;
         match status.code() {
             Some(0) => Ok(()),
