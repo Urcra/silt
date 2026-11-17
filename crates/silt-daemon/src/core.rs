@@ -268,6 +268,8 @@ pub struct Core {
     pub(crate) notes_settings: crate::notes::NotesSettings,
     /// The local models here and their downloads (ADR 0092).
     pub(crate) models: std::sync::Arc<crate::models::LocalModelsHere>,
+    /// What each agent's plan has used (ADR 0095).
+    pub(crate) usage: std::sync::Arc<crate::usage::Usage>,
     /// Each server's last sync error, by URL.
     pub(crate) sync_errors: HashMap<String, String>,
     /// The HEAD commit each checkout was last seen at.
@@ -572,6 +574,7 @@ impl Core {
             last_listings: HashMap::new(),
             notes_settings: crate::notes::NotesSettings::default(),
             models,
+            usage: std::sync::Arc::new(crate::usage::Usage::new()),
             sync_errors: HashMap::new(),
             heads: HashMap::new(),
             head_stamps: HashMap::new(),
@@ -1202,6 +1205,12 @@ impl Core {
                 return answer_later(reply, self.presence(&thread, file, line, draft, leaving));
             }
             Request::AcpAgents => Response::ok(self.acp_agents()),
+            Request::AgentUsage { agent, thread } => {
+                // A thread's folder may be in a workspace whose agents sign in apart; a thread not here asks as this machine.
+                let cwd = thread.and_then(|thread| self.find_thread(&thread).and_then(|thread| self.clone_of(thread)).ok());
+                let usage = self.usage.clone();
+                return answer_later(reply, Ok(async move { usage.of(&agent, cwd.as_deref()).await }));
+            }
             Request::AcpStart { thread, clone, agent, options } => {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent, options).await)
             }

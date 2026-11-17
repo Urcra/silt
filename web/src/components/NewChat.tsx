@@ -16,6 +16,7 @@ import { Skeleton, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
 import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
+import { UsageRing } from './UsageRing'
 import { ComposerBox } from './Composer'
 import { WorkspaceLine } from './NewThread'
 import { Page } from './Page'
@@ -171,6 +172,7 @@ export function NewChat() {
                     options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says, refused: presetRefused(workspace, choice.id) }))}
                   />
                 )}
+                {agent && <UsageRing agent={agent} />}
               </>
             }
             voice={!hosted()}

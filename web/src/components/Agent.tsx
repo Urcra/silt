@@ -6,6 +6,7 @@ import { useNow } from '../now'
 import { tokens } from '../transcript'
 import { keys, message } from '../query'
 import { hosted } from '../served'
+import { UsageRing } from './UsageRing'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
 import { Button, Dot, Icon, Input, Kbd, Spinner, buttonClass, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
@@ -709,6 +710,7 @@ export function AgentDock({
           options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says, refused: presetRefused(workspace, choice.id) }))}
         />
       )}
+      {(live ? status.agent_id : startable && agent) && <UsageRing agent={live ? status.agent_id : agent} thread={thread} />}
     </>
   )
 

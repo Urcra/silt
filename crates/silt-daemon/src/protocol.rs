@@ -839,6 +839,13 @@ pub enum Request {
     /// The agents the web UI can start, and the clones to start new threads
     /// in.
     AcpAgents,
+    /// How much of its plan `agent` has used, with the sign-in it would run
+    /// with in `thread`'s folder, else this machine's (ADR 0095).
+    AgentUsage {
+        agent: String,
+        #[serde(default)]
+        thread: Option<String>,
+    },
     /// Starts an ACP agent in `thread`, or in a new thread of `clone`
     /// (ADR 0014). Answers with the thread.
     AcpStart {
@@ -1506,6 +1513,34 @@ pub struct ImportCandidate {
     pub transcript: PathBuf,
     pub cwd: Option<PathBuf>,
     pub started_ms: Option<i64>,
+}
+
+/// How much of its plan an agent has used (ADR 0095).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct AgentUsage {
+    /// The agent's name, such as Claude Code.
+    pub agent: String,
+    /// Its plan's name, such as Max, where the agent says.
+    pub plan: Option<String>,
+    pub limits: Vec<UsageLimit>,
+    /// Where the person sees all of it.
+    pub page: String,
+    /// Why there are no limits to show, such as an API key or no sign-in.
+    pub unavailable: Option<String>,
+    /// Read from what the agent last recorded, as asking failed.
+    pub recorded: bool,
+    pub read_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct UsageLimit {
+    /// Such as 5-hour limit or Premium requests.
+    pub name: String,
+    /// 0 to 100.
+    pub used_percent: f64,
+    pub resets_at_ms: Option<i64>,
 }
 
 /// The local models on this machine and what it can run (ADR 0092).
@@ -2469,6 +2504,8 @@ mod tests {
             VoiceEvent::decl(&config),
             VoiceStatus::decl(&config),
             LocalModels::decl(&config),
+            AgentUsage::decl(&config),
+            UsageLimit::decl(&config),
             ModelDevice::decl(&config),
             LocalModel::decl(&config),
             FoundModel::decl(&config),

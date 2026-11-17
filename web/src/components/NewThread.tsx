@@ -21,6 +21,7 @@ import { NEW_THREAD_DRAFT, useDraft } from '../drafts'
 import { useHeldSend } from '../heldSend'
 import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
+import { UsageRing } from './UsageRing'
 import { CloudLaunches } from './Cloud'
 import { ImportOffer } from './ImportOffer'
 import { hosted } from '../served'
@@ -715,6 +716,7 @@ export function NewThread() {
                       options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says, refused: presetRefused(workspace, choice.id) }))}
                     />
                   )}
+                  {agent && <UsageRing agent={agent} />}
                 </>
               )
             }
