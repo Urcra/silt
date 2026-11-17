@@ -34,7 +34,7 @@ import {
   layout,
   partDocument,
   shown,
-  slideFromHash, drawnSeries, onPage, pagesOf, deckDocument } from "../typed";
+  slideFromHash, drawnSeries, onPage, pagesOf, deckDocument, NOTE_WIDTH } from "../typed";
 import { Button, Icon, IconButton, cx } from "../ui";
 import { Markdown } from "./Markdown";
 
@@ -682,9 +682,6 @@ export function CanvasView({
     </div>
   );
 }
-
-/** A canvas note's width where it gives none. */
-const NOTE_WIDTH = 240;
 
 /** Two boards side by side at one scale, each whole, to tell them apart. */
 function BoardsCompared({

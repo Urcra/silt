@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canvasOf, chartColors, chartTable, pointer, runs, stepsOf, toolValue, withLive, xPositions, yDomain, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice, drawnSeries, deckOffline, pagesOf, onPage } from './typed'
+import { canvasOf, chartColors, chartTable, pointer, runs, stepsOf, toolValue, withLive, xPositions, yDomain, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice, drawnSeries, deckOffline, canvasOffline, pagesOf, onPage } from './typed'
 
 describe('the artifact types', () => {
   it('opens a deck at the slide a link names, within the deck', () => {
@@ -89,6 +89,39 @@ describe("a deck's offline copy", () => {
     const file = deckOffline(deck, 'Review', null, { 'images/chart.png': { media_type: 'image/png', data: 'iVBORw0KGgo=' } })
     expect(file).toContain('data:image/png;base64,iVBORw0KGgo=')
     expect(file).not.toContain('src=&quot;images/chart.png')
+    expect(file).toContain('img-src data: blob:')
+  })
+})
+
+describe("a canvas's offline copy", () => {
+  it('draws each board in a sealed frame where the viewer puts it, with its caption and the notes', () => {
+    const canvas = {
+      style: '.ground{color:red}',
+      boards: [
+        { id: 'a', name: 'Phone "small"', caption: 'closed', width: 390, height: 844, html: '<div class="ground">A & B</div>' },
+        { id: 'b', name: '</script>', width: 1280, height: 800, grow: true, html: '<p>wide</p>' },
+      ],
+      notes: [{ text: 'Why <this>', x: 0, y: 900 }],
+    }
+    const file = canvasOffline(canvas, 'Rings <v3>', null)
+    expect(file.match(/<iframe /g)).toHaveLength(2)
+    expect(file).toContain('left:470px;top:0px;width:1280px')
+    expect(file).toContain('&lt;div class=&quot;ground&quot;&gt;A &amp; B&lt;/div&gt;')
+    expect(file).toContain('.ground{color:red}')
+    expect(file).toContain('<b>Phone &quot;small&quot;</b> <span>390×844 · closed</span>')
+    expect(file).toContain('<b>&lt;/script&gt;</b>')
+    expect(file).toContain('data-least="800"')
+    expect(file).toContain('>Why &lt;this&gt;</p>')
+    expect(file).toContain('<title>Rings &lt;v3&gt;</title>')
+    expect(file).not.toContain('<img')
+  })
+  it('heads each page when there are several, and carries the files boards name', () => {
+    const board = (id: string, page: string) => ({ id, name: id, width: 10, height: 10, html: '<img src="a.png">', page })
+    const file = canvasOffline({ boards: [board('a', 'Before'), board('b', 'After')] }, 'Pages', null, { 'a.png': { media_type: 'image/png', data: 'iVBORw0KGgo=' } })
+    expect(file).toContain('<h2>Before</h2>')
+    expect(file).toContain('<h2>After</h2>')
+    expect(file.match(/class="plane"/g)).toHaveLength(2)
+    expect(file).toContain('data:image/png;base64,iVBORw0KGgo=')
   })
 })
 
