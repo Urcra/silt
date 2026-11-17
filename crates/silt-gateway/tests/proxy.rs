@@ -7,13 +7,13 @@ use bytes::Bytes;
 use http_body_util::{BodyExt as _, Full};
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
-use silt_gateway::{Ca, Credential, Gateway, Rules};
+use silt_gateway::{Ca, Credential, Gateway, GraphqlRule, Rules};
 use silt_workspace::Network;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, UnixListener, UnixStream};
 
 /// A TLS server for `localhost` that answers each request with the
-/// `authorization` header it got.
+/// `authorization` header it got, or at `/graphql` with its body.
 async fn echo_server() -> (u16, rustls::pki_types::CertificateDer<'static>) {
     let key = rcgen::KeyPair::generate().unwrap();
     let certificate = rcgen::CertificateParams::new(vec!["localhost".to_owned()]).unwrap().self_signed(&key).unwrap();
@@ -34,6 +34,10 @@ async fn echo_server() -> (u16, rustls::pki_types::CertificateDer<'static>) {
             tokio::spawn(async move {
                 let Ok(tls) = acceptor.accept(tcp).await else { return };
                 let service = service_fn(|request: hyper::Request<hyper::body::Incoming>| async move {
+                    if request.uri().path() == "/graphql" {
+                        let body = request.into_body().collect().await.map(|body| body.to_bytes()).unwrap_or_default();
+                        return Ok::<_, std::convert::Infallible>(hyper::Response::new(Full::new(body)));
+                    }
                     let said = request
                         .headers()
                         .get("authorization")
@@ -66,6 +70,16 @@ async fn ask(stream: &mut UnixStream, head: &str) -> String {
 
 /// A request through a CONNECT tunnel, trusting the gateway's authority.
 async fn through_tunnel(dir: &std::path::Path, ca: &Ca, port: u16, path: &str) -> String {
+    let request = hyper::Request::get(path)
+        .header("host", format!("localhost:{port}"))
+        .header("authorization", "Bearer silt-placeholder")
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    sent(dir, ca, port, request).await.1
+}
+
+/// `request` through a CONNECT tunnel: the answer's status and body.
+async fn sent(dir: &std::path::Path, ca: &Ca, port: u16, request: hyper::Request<Full<Bytes>>) -> (u16, String) {
     let mut stream = UnixStream::connect(dir.join("gateway.sock")).await.unwrap();
     let said = ask(&mut stream, &format!("CONNECT localhost:{port} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n")).await;
     assert!(said.starts_with("HTTP/1.1 200"), "{said}");
@@ -83,13 +97,9 @@ async fn through_tunnel(dir: &std::path::Path, ca: &Ca, port: u16, path: &str) -
         .expect("the gateway's certificate is trusted");
     let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(tls)).await.unwrap();
     tokio::spawn(connection);
-    let request = hyper::Request::get(path)
-        .header("host", format!("localhost:{port}"))
-        .header("authorization", "Bearer silt-placeholder")
-        .body(Full::new(Bytes::new()))
-        .unwrap();
     let response = sender.send_request(request).await.unwrap();
-    String::from_utf8_lossy(&response.into_body().collect().await.unwrap().to_bytes()).into_owned()
+    let status = response.status().as_u16();
+    (status, String::from_utf8_lossy(&response.into_body().collect().await.unwrap().to_bytes()).into_owned())
 }
 
 #[tokio::test]
@@ -105,6 +115,7 @@ async fn a_credential_is_added_on_the_way_out_and_only_where_it_belongs() {
             header: "authorization".into(),
             value: "Bearer s3cret".into(),
         }],
+        graphql: Vec::new(),
     };
     let (dir, ca) = gateway(rules, root).await;
     assert_eq!(through_tunnel(dir.path(), &ca, port, "/repos/acme/api").await, "Bearer s3cret");
@@ -119,6 +130,7 @@ async fn what_sandboxes_never_reach_is_refused_with_the_reason() {
         hosts: vec!["*.github.com".into()],
         blocked: silt_workspace::subtract(&silt_workspace::ALWAYS_BLOCKED.map(str::to_owned), &[]),
         credentials: Vec::new(),
+        graphql: Vec::new(),
     };
     let (dir, _ca) = gateway(rules, root).await;
     let mut stream = UnixStream::connect(dir.path().join("gateway.sock")).await.unwrap();
@@ -127,4 +139,41 @@ async fn what_sandboxes_never_reach_is_refused_with_the_reason() {
     let mut stream = UnixStream::connect(dir.path().join("gateway.sock")).await.unwrap();
     let said = ask(&mut stream, "GET http://169.254.169.254/latest/meta-data HTTP/1.1\r\nHost: 169.254.169.254\r\n\r\n").await;
     assert!(said.starts_with("HTTP/1.1 403"), "{said}");
+}
+
+#[tokio::test]
+async fn graphql_straight_to_an_api_reads_but_changes_and_location_are_refused() {
+    let (port, root) = echo_server().await;
+    let rules = Rules {
+        network: Network::Full,
+        hosts: Vec::new(),
+        blocked: Vec::new(),
+        credentials: Vec::new(),
+        graphql: vec![GraphqlRule {
+            host: "localhost".into(),
+            path: "/graphql".into(),
+            changes: false,
+            data: vec![silt_access::DataClass::Location],
+            schema: None,
+            plugin: "fleet-api".into(),
+        }],
+    };
+    let (dir, ca) = gateway(rules, root).await;
+    let post = |body: &str| {
+        hyper::Request::post("/graphql")
+            .header("host", format!("localhost:{port}"))
+            .header("content-type", "application/json")
+            .body(Full::new(Bytes::from(body.to_owned())))
+            .unwrap()
+    };
+    let (status, said) = sent(dir.path(), &ca, port, post(r#"{"query": "{ vehicle { id } }"}"#)).await;
+    assert_eq!(status, 200, "{said}");
+    assert!(said.contains("vehicle"), "the API got it whole: {said}");
+    let (status, said) = sent(dir.path(), &ca, port, post(r#"{"query": "mutation { setOta { id } }"}"#)).await;
+    assert_eq!(status, 403);
+    assert!(said.contains("fleet-api plugin's mutate tool"), "{said}");
+    let leaking = r#"{"query": "{ vehicle { id } }", "variables": {"spot": {"latitude": 59.3293, "longitude": 18.0686}}}"#;
+    let (status, said) = sent(dir.path(), &ca, port, post(leaking)).await;
+    assert_eq!(status, 403, "an answer carrying location is kept: {said}");
+    assert!(said.contains("the answer was kept"), "{said}");
 }

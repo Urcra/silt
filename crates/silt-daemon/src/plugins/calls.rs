@@ -5,7 +5,7 @@
 //! of call run without asking, for the run or the thread, until a time.
 //! A call the daemon stopped in the middle of reads as outcome unknown.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ use silt_store::{GrantRecord, PluginCallRecord, Store};
 use silt_types::ThreadId;
 use tokio::sync::{broadcast, oneshot, watch};
 
-use super::{Outcome, PluginTool, exec_of, execute, load, prepare, shown_input, tools};
+use super::{Outcome, exec_of, execute, load, prepare, shown_input, tools};
 use crate::CoreError;
 use crate::core::{Core, now_ms, to_response};
 use crate::protocol::{BusEvent, Response};
@@ -130,10 +130,12 @@ pub struct NetworkRefusal {
     pub why: String,
 }
 
-/// Who waits on each call still open: its outcome, once there is one.
+/// Who waits on each call still open, and the tools each MCP plugin's
+/// server offers, as it last listed them.
 #[derive(Default)]
 pub struct Approvals {
     waiting: HashMap<i64, Arc<watch::Sender<Option<Outcome>>>>,
+    listed: Arc<std::sync::Mutex<BTreeMap<String, Vec<Value>>>>,
 }
 
 impl Approvals {
@@ -203,9 +205,27 @@ impl Core {
         Ok((thread, workspace, hash))
     }
 
-    pub(crate) async fn plugin_tools(&self, token: &str) -> Result<Vec<PluginTool>, CoreError> {
-        let (_, workspace, _) = self.run_of(token).await?;
-        Ok(tools(&load(&self.data_dir), &workspace))
+    /// The tools of the plugins on in the run's workspace, an MCP plugin's
+    /// as its server lists them now, which it does outside the core.
+    pub(crate) async fn plugin_tools(&self, token: &str, reply: oneshot::Sender<Response>) {
+        let workspace = match self.run_of(token).await {
+            Ok((_, workspace, _)) => workspace,
+            Err(error) => {
+                let _ = reply.send(to_response::<()>(Err(error)));
+                return;
+            }
+        };
+        let (data_dir, listed) = (self.data_dir.clone(), self.approvals.listed.clone());
+        tokio::spawn(async move {
+            let plugins = load(&data_dir);
+            for plugin in plugins.iter().filter(|plugin| plugin.workspaces.contains(&workspace)) {
+                if let Some(offered) = super::list_mcp(&data_dir, plugin, &workspace).await {
+                    listed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(plugin.name.clone(), offered);
+                }
+            }
+            let known = listed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+            let _ = reply.send(Response::ok(tools(&plugins, &workspace, &known)));
+        });
     }
 
     /// Calls in the daemon's hands when it stopped can't be followed: they
@@ -254,7 +274,10 @@ impl Core {
             created_ms: now,
             answered_ms: None,
         };
-        let prepared = match prepare(&plugins, &workspace, tool, &input) {
+        let data_dir = self.data_dir.clone();
+        let schemas = move |plugin: &str, environment: &str| super::schema_of(&data_dir, plugin, environment);
+        let listed = self.approvals.listed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let prepared = match prepare(&plugins, &schemas, &listed, &workspace, tool, &input) {
             Ok(prepared) => prepared,
             Err(why) => {
                 // Kept too, so the person sees what was refused.
@@ -588,6 +611,8 @@ mod tests {
                     data: Vec::new(),
                     credential: None,
                     once,
+                    direct: false,
+                    variable: None,
                 },
             )]),
         }

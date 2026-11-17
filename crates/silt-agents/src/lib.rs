@@ -373,7 +373,50 @@ pub trait Agent: Send + Sync {
     fn homes(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         Vec::new()
     }
+    /// The model APIs it calls with a key from a variable, which Silt's
+    /// gateway adds instead, so its sandbox never holds the key (ADR 0086).
+    fn model_apis(&self) -> &'static [ModelApi] {
+        &[]
+    }
+    /// The hosts it needs to work at all, sign-ins included, which a
+    /// sandbox that reaches only listed hosts reaches too.
+    fn model_hosts(&self) -> &'static [&'static str] {
+        &[]
+    }
 }
+
+/// A model API an agent calls with a key it reads from `variable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelApi {
+    pub variable: &'static str,
+    pub host: &'static str,
+    /// The header the key goes in, lower-case.
+    pub header: &'static str,
+    /// What goes before the key in it, such as `Bearer`; empty for none.
+    pub scheme: &'static str,
+}
+
+const ANTHROPIC: [ModelApi; 3] = [
+    ModelApi { variable: "ANTHROPIC_API_KEY", host: "api.anthropic.com", header: "x-api-key", scheme: "" },
+    ModelApi { variable: "ANTHROPIC_AUTH_TOKEN", host: "api.anthropic.com", header: "authorization", scheme: "Bearer" },
+    ModelApi { variable: "CLAUDE_CODE_OAUTH_TOKEN", host: "api.anthropic.com", header: "authorization", scheme: "Bearer" },
+];
+const OPENAI: [ModelApi; 2] = [
+    ModelApi { variable: "OPENAI_API_KEY", host: "api.openai.com", header: "authorization", scheme: "Bearer" },
+    ModelApi { variable: "CODEX_API_KEY", host: "api.openai.com", header: "authorization", scheme: "Bearer" },
+];
+const GEMINI: [ModelApi; 2] = [
+    ModelApi { variable: "GEMINI_API_KEY", host: "generativelanguage.googleapis.com", header: "x-goog-api-key", scheme: "" },
+    ModelApi { variable: "GOOGLE_API_KEY", host: "generativelanguage.googleapis.com", header: "x-goog-api-key", scheme: "" },
+];
+const OPENROUTER: ModelApi =
+    ModelApi { variable: "OPENROUTER_API_KEY", host: "openrouter.ai", header: "authorization", scheme: "Bearer" };
+
+pub(crate) const CLAUDE_APIS: [ModelApi; 3] = ANTHROPIC;
+pub(crate) const CODEX_APIS: [ModelApi; 2] = OPENAI;
+pub(crate) const GEMINI_APIS: [ModelApi; 2] = GEMINI;
+pub(crate) const OPENCODE_APIS: [ModelApi; 8] =
+    [ANTHROPIC[0], ANTHROPIC[1], ANTHROPIC[2], OPENAI[0], OPENAI[1], GEMINI[0], GEMINI[1], OPENROUTER];
 
 /// `$variable` when the run sets it, else `dir` in the home folder.
 pub(crate) fn home_from(home: &Path, env: &dyn Fn(&str) -> Option<String>, variable: &str, dir: &str) -> PathBuf {

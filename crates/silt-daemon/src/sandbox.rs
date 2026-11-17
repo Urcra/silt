@@ -150,18 +150,36 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     let mut missing = Vec::new();
     #[cfg(unix)]
     {
-        let (credentials, placeholders, unresolved) = crate::credentials::resolve(run.data_dir, run.workspace);
+        let (mut credentials, mut placeholders, unresolved) = crate::credentials::resolve(run.data_dir, run.workspace);
         missing.extend(unresolved);
-        let gateway = run.reach.network == Network::Gateway || (run.reach.network == Network::Full && !credentials.is_empty());
+        // The agent's own model key goes on at the gateway too, so the
+        // sandbox holds a placeholder rather than the key.
+        let (model_credentials, model_placeholders) = model_keys(run.agent, &lookup);
+        let through_gateway = matches!(run.reach.network, Network::Gateway | Network::Full);
+        if through_gateway {
+            credentials.extend(model_credentials);
+            placeholders.extend(model_placeholders);
+        }
+        let graphql = crate::plugins::direct_graphql(run.data_dir, run.workspace);
+        let gateway = run.reach.network == Network::Gateway
+            || (run.reach.network == Network::Full && (!credentials.is_empty() || !graphql.is_empty()));
         if gateway {
             let socket = short_socket(run.scratch, "gateway.sock")?;
             let ca = std::sync::Arc::new(silt_gateway::Ca::load_or_create(&run.data_dir.join("gateway"))?);
             trust(&mut plan, &mut extra_env, run.scratch, ca.pem())?;
+            let mut hosts = run.reach.hosts.clone();
+            // A list of hosts still lets the agent reach its own model.
+            if !hosts.is_empty()
+                && let Some(agent) = run.agent
+            {
+                hosts.extend(agent.model_hosts().iter().map(|host| (*host).to_owned()));
+            }
             let rules = silt_gateway::Rules {
                 network: run.reach.network,
-                hosts: run.reach.hosts.clone(),
+                hosts,
                 blocked: silt_workspace::subtract(&plan.blocked, &plan.allowed),
                 credentials,
+                graphql,
             };
             let log = Some(access_log(run.data_dir, run.thread));
             if let Some(dir) = log.as_deref().and_then(Path::parent) {
@@ -202,6 +220,31 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     env.extend(extra_env);
     Ok(Sandboxed { launcher, env, outside, missing })
 }
+
+/// The gateway's credentials for the model keys `agent` reads that the run
+/// has, and the placeholders the sandbox gets in their place.
+fn model_keys(
+    agent: Option<&dyn silt_agents::Agent>,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> (Vec<silt_gateway::Credential>, Vec<(String, String)>) {
+    let mut credentials = Vec::new();
+    let mut placeholders = Vec::new();
+    for api in agent.map(|agent| agent.model_apis()).unwrap_or_default() {
+        let Some(key) = lookup(api.variable).filter(|key| !key.is_empty() && key != PLACEHOLDER) else { continue };
+        let value = if api.scheme.is_empty() { key } else { format!("{} {key}", api.scheme) };
+        credentials.push(silt_gateway::Credential {
+            host: api.host.to_owned(),
+            path: "/".to_owned(),
+            header: api.header.to_owned(),
+            value,
+        });
+        placeholders.push((api.variable.to_owned(), PLACEHOLDER.to_owned()));
+    }
+    (credentials, placeholders)
+}
+
+/// What a sandbox holds in place of a key the gateway adds.
+const PLACEHOLDER: &str = "silt-placeholder";
 
 /// Where the gateway notes what a thread's sandboxes reached and what it
 /// refused: outside every run's own folder, so it outlives the run.
@@ -359,7 +402,13 @@ mod tests {
         };
         let sandboxed = prepare(&run).unwrap();
         let names: Vec<&str> = sandboxed.env.iter().map(|(name, _)| name.as_str()).collect();
-        assert!(names.contains(&"PATH") && names.contains(&"ANTHROPIC_API_KEY"), "{names:?}");
+        assert!(names.contains(&"PATH"), "{names:?}");
+        #[cfg(unix)]
+        {
+            // The agent's key goes on at the gateway: the sandbox holds a placeholder.
+            assert!(sandboxed.env.contains(&("ANTHROPIC_API_KEY".into(), PLACEHOLDER.into())), "{:?}", sandboxed.env);
+            assert!(sandboxed.outside.iter().any(|outside| matches!(outside, Outside::Gateway { .. })));
+        }
         assert!(!names.contains(&"AWS_SECRET_ACCESS_KEY") && !names.contains(&"GOOGLE_APPLICATION_CREDENTIALS"));
         assert!(!names.contains(&"SSH_AUTH_SOCK"), "only when the rules hand ssh-agent over");
         assert!(sandboxed.env.contains(&("SILT_RUN_TOKEN".into(), "t0k".into())));

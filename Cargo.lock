@@ -5795,6 +5795,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "silt-access",
  "silt-os",
  "silt-workspace",
  "tempfile",

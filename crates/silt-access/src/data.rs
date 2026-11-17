@@ -79,6 +79,13 @@ fn names_location(name: &str) -> bool {
     words(name).iter().any(|word| LOCATION_WORDS.contains(&word.as_str()) || word.starts_with("geo"))
 }
 
+/// Whether a field's, key's or type's `name` says it holds `class`.
+pub(crate) fn names_class(class: DataClass, name: &str) -> bool {
+    match class {
+        DataClass::Location => names_location(name),
+    }
+}
+
 /// Fields a GraphQL request selects that a rule refuses before it's sent.
 pub fn graphql_fields<'a>(class: DataClass, fields: impl IntoIterator<Item = &'a String>) -> Option<Finding> {
     match class {

@@ -34,6 +34,15 @@ pub enum PluginCommand {
         #[arg(long)]
         workspace: String,
     },
+    /// Fetch a GraphQL environment's schema by introspection, for data rules that see past field names
+    Schema {
+        name: String,
+        #[arg(long)]
+        environment: String,
+        /// The workspace whose credential it's fetched with; the first it's on in by default
+        #[arg(long)]
+        workspace: Option<String>,
+    },
 }
 
 fn core_error(error: silt_daemon::CoreError) -> Exn<CliError> {
@@ -60,6 +69,7 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
                 let kind = match &plugin.kind {
                     Kind::Graphql => "GraphQL".to_owned(),
                     Kind::Command { argv } => format!("runs {}", argv.join(" ")),
+                    Kind::Mcp { argv } => format!("MCP server {}", argv.join(" ")),
                 };
                 let on = if plugin.workspaces.is_empty() {
                     "on in no workspace".to_owned()
@@ -80,6 +90,19 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
         PluginCommand::Remove { name } => {
             plugins::remove(&data, &name).map_err(core_error)?;
             println!("removed {name}");
+        }
+        PluginCommand::Schema { name, environment, workspace } => {
+            let plugin = plugins::load(&data)
+                .into_iter()
+                .find(|plugin| plugin.name == name)
+                .ok_or_else(|| fail(format!("no plugin {name}")))?;
+            let workspace = workspace.or_else(|| plugin.workspaces.first().cloned()).unwrap_or_else(|| "default".to_owned());
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .or_raise(|| CliError("cannot start the async runtime".into()))?;
+            runtime.block_on(plugins::fetch_schema(&data, &plugin, &environment, &workspace)).map_err(fail)?;
+            println!("kept {name}'s {environment} schema; its data rules now walk it");
         }
         PluginCommand::Enable { name, workspace } => turn(&data, &name, &workspace, true)?,
         PluginCommand::Disable { name, workspace } => turn(&data, &name, &workspace, false)?,

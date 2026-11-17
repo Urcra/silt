@@ -396,7 +396,8 @@ impl Run<'_> {
         // Only a run whose workspace has plugins calls them, which are kept
         // with its thread.
         let plugins = silt_daemon::plugins::load(&paths::data_dir());
-        if !held.token.is_empty() && !silt_daemon::plugins::tools(&plugins, held.workspace.id.as_str()).is_empty() {
+        let any_on = plugins.iter().any(|plugin| plugin.workspaces.iter().any(|on| on == held.workspace.id.as_str()));
+        if !held.token.is_empty() && any_on {
             bind_run_token(&held.token, self.thread)?;
         }
         let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;

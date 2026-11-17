@@ -37,6 +37,8 @@ pub struct Rules {
     /// Ranges never reached, whatever a name resolves to.
     pub blocked: Vec<Cidr>,
     pub credentials: Vec<Credential>,
+    /// GraphQL endpoints whose requests it reads.
+    pub graphql: Vec<crate::GraphqlRule>,
 }
 
 impl Rules {
@@ -66,6 +68,12 @@ impl Rules {
     /// passes everything else through unread.
     pub fn terminates(&self, host: &str) -> bool {
         self.credentials.iter().any(|credential| matches(&credential.host, host))
+            || self.graphql.iter().any(|rule| rule.host.eq_ignore_ascii_case(host))
+    }
+
+    /// The GraphQL rule for a request to `host` at `path`.
+    pub fn graphql_for(&self, host: &str, path: &str) -> Option<&crate::GraphqlRule> {
+        self.graphql.iter().find(|rule| rule.covers(host, path))
     }
 }
 
@@ -93,6 +101,7 @@ mod tests {
                 header: "authorization".into(),
                 value: "Bearer s3cret".into(),
             }],
+            graphql: Vec::new(),
         }
     }
 

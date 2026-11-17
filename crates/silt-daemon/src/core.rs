@@ -695,7 +695,7 @@ impl Core {
             }
             match *asking {
                 Request::PluginTools => {
-                    let _ = reply.send(to_response(self.plugin_tools(&token).await));
+                    self.plugin_tools(&token, reply).await;
                     return;
                 }
                 Request::PluginCall { tool, input } => {

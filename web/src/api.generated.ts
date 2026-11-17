@@ -256,7 +256,7 @@ workspaces: Array<string>,
  */
 environments: { [key in string]: Environment }, };
 
-export type Kind = { "type": "graphql" } | { "type": "command", argv: Array<string>, };
+export type Kind = { "type": "graphql" } | { "type": "command", argv: Array<string>, } | { "type": "mcp", argv: Array<string>, };
 
 export type Rule = "allow" | "ask";
 
@@ -271,13 +271,25 @@ target: string, reads: Rule, changes: Rule,
  */
 data: Array<DataClass>, 
 /**
- * A credential of `silt credential` added to its requests.
+ * A credential of `silt credential` added to its requests, or for a
+ * command or MCP server, given to it in `variable`.
  */
 credential: string | null, 
 /**
+ * The variable a command or MCP server reads the credential's secret
+ * from, such as `FLEET_TOKEN`.
+ */
+variable: string | null, 
+/**
  * Each change is approved on its own: no grant covers it.
  */
-once: boolean, };
+once: boolean, 
+/**
+ * A GraphQL environment its agents may also query straight through
+ * the gateway, which reads each request: reads go, changes only where
+ * `changes` allows them, and data rules hold both ways.
+ */
+direct: boolean, };
 
 export type Outcome = { "status": "done", output: string, } | { "status": "refused", why: string, } | { "status": "failed", error: string, } | { "status": "unknown", why: string, } | { "status": "pending", approval: number, };
 

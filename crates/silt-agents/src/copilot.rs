@@ -308,6 +308,9 @@ pub fn event_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<Str
 pub struct Copilot;
 
 impl Agent for Copilot {
+    fn model_hosts(&self) -> &'static [&'static str] {
+        &["api.githubcopilot.com", "api.individual.githubcopilot.com", "api.github.com", "github.com"]
+    }
     fn homes(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         vec![crate::home_from(home, env, "COPILOT_HOME", ".copilot")]
     }

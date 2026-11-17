@@ -419,7 +419,7 @@ export function WorkspacePlugins({ workspace, name }: { workspace: string; name:
             <label key={plugin.name} className="flex cursor-pointer items-center gap-2.5 border-b border-line-subtle px-4 py-2.5 text-sm last:border-b-0">
               <input type="checkbox" aria-label={`${plugin.name} in ${name}`} className="accent-[var(--accent)]" checked={on} onChange={(event) => turn(plugin, event.target.checked)} />
               <span className="font-medium">{plugin.name}</span>
-              <Tag>{plugin.kind.type === 'graphql' ? 'GraphQL' : (plugin.kind.argv[0] ?? 'command')}</Tag>
+              <Tag>{plugin.kind.type === 'graphql' ? 'GraphQL' : plugin.kind.type === 'mcp' ? 'MCP' : (plugin.kind.argv[0] ?? 'command')}</Tag>
               {Object.entries(plugin.environments).map(([environment, rules]) => (
                 <Tag key={environment} tone={rules.changes === 'ask' ? 'warn' : 'neutral'}>
                   {environment}
