@@ -85,6 +85,39 @@ pub enum WorkspaceCommand {
         /// The page connectors its pages may call, comma-separated, or `any`
         #[arg(long)]
         connectors: Option<String>,
+        /// What its sandboxes connect to: none, gateway, full (the default) or host
+        #[arg(long)]
+        network: Option<String>,
+        /// Which devices its sandboxes get: none, named or all_usb
+        #[arg(long)]
+        devices: Option<String>,
+        /// The device nodes `--devices named` gives, comma-separated, or `none`
+        #[arg(long)]
+        device_nodes: Option<String>,
+        /// Address ranges its sandboxes reach past those always blocked, such as a VPN's, comma-separated, or `none`
+        #[arg(long)]
+        ranges: Option<String>,
+        /// Ports on this machine its sandboxes reach, comma-separated, or `none`
+        #[arg(long)]
+        ports: Option<String>,
+        /// More folders for its sandboxes, comma-separated, each read-only or with `:rw` writable, or `none`
+        #[arg(long)]
+        paths: Option<String>,
+        /// Its sandboxes get the GPU: on or off
+        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        gpu: Option<bool>,
+        /// Its sandboxes get the Docker socket, which is root on this machine: on or off
+        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        docker: Option<bool>,
+        /// Its sandboxes get your SSH agent, which signs as you anywhere: on or off
+        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        ssh_agent: Option<bool>,
+        /// What may never be handed its sandboxes, comma-separated: ranges, ports, paths, gpu, docker, ssh_agent; or `none`
+        #[arg(long)]
+        refuse: Option<String>,
+        /// Agents' own sandboxes may run inside Silt's: on or off
+        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        nested: Option<bool>,
     },
     /// Set or unset a variable given to every agent started in a workspace, such as its own CLAUDE_CONFIG_DIR
     Env {
@@ -206,9 +239,71 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
                 Ok(format!("{} takes {}", workspace.name, rule_text(&rule)))
             }
         }
-        WorkspaceCommand::Policy { workspace, agents, custom_agents, max_preset, sandbox, isolated, home_locked, connectors } => {
+        WorkspaceCommand::Policy {
+            workspace,
+            agents,
+            custom_agents,
+            max_preset,
+            sandbox,
+            isolated,
+            home_locked,
+            connectors,
+            network,
+            devices,
+            device_nodes,
+            ranges,
+            ports,
+            paths,
+            gpu,
+            docker,
+            ssh_agent,
+            refuse,
+            nested,
+        } => {
             let workspace = find_mut(all, &workspace)?;
             let policy = &mut workspace.policy;
+            let reach = parse_reach(network.as_deref(), devices.as_deref(), refuse.as_deref())?;
+            if network.is_some() {
+                policy.network = reach.network;
+            }
+            if devices.is_some() {
+                policy.devices = reach.devices;
+            }
+            if refuse.is_some() {
+                policy.refuse = reach.refuse;
+            }
+            if let Some(nodes) = device_nodes {
+                policy.device_nodes = entries(&nodes).collect();
+            }
+            if let Some(ranges) = ranges {
+                policy.ranges = entries(&ranges)
+                    .map(|range| match silt_workspace::Cidr::parse(&range) {
+                        Some(cidr) => Ok(cidr.to_string()),
+                        None => Err(fail(format!("{range} isn't an address range, such as 10.20.0.0/16"))),
+                    })
+                    .collect::<Result<_, _>>()?;
+            }
+            if let Some(ports) = ports {
+                policy.ports = entries(&ports)
+                    .map(|port| port.parse::<u16>().map_err(|_| fail(format!("{port} isn't a port"))))
+                    .collect::<Result<_, _>>()?;
+            }
+            if let Some(paths) = paths {
+                policy.paths = entries(&paths)
+                    .map(|path| match path.strip_suffix(":rw") {
+                        Some(path) => (expand_home(path), true),
+                        None => (expand_home(path.strip_suffix(":ro").unwrap_or(&path)), false),
+                    })
+                    .collect();
+            }
+            for (setting, value) in [(&mut policy.gpu, gpu), (&mut policy.docker, docker), (&mut policy.ssh_agent, ssh_agent)] {
+                if let Some(value) = value {
+                    *setting = value;
+                }
+            }
+            if let Some(nested) = nested {
+                policy.no_nested = !nested;
+            }
             if let Some(agents) = agents {
                 policy.agents = match agents.trim() {
                     "any" | "" => None,
@@ -282,6 +377,54 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
     }
 }
 
+/// A comma-separated list's entries; `none` or nothing is an empty one.
+fn entries(text: &str) -> impl Iterator<Item = String> + '_ {
+    let text = if text.trim() == "none" { "" } else { text };
+    text.split(',').map(str::trim).filter(|entry| !entry.is_empty()).map(str::to_owned)
+}
+
+fn expand_home(path: &str) -> String {
+    match (path.strip_prefix("~/"), silt_os::home_dir()) {
+        (Some(rest), Some(home)) => home.join(rest).to_string_lossy().into_owned(),
+        _ => path.to_owned(),
+    }
+}
+
+/// The reach rules a command names: the network, the devices, and what may
+/// never be handed over.
+pub(crate) struct ParsedReach {
+    pub network: Option<silt_workspace::Network>,
+    pub devices: Option<silt_workspace::Devices>,
+    pub refuse: BTreeSet<silt_workspace::Extra>,
+}
+
+pub(crate) fn parse_reach(
+    network: Option<&str>,
+    devices: Option<&str>,
+    refuse: Option<&str>,
+) -> Result<ParsedReach, Exn<CliError>> {
+    let network = match network {
+        None | Some("any") => None,
+        Some(name) => Some(
+            silt_workspace::Network::parse(name)
+                .ok_or_else(|| fail(format!("no network {name}: none, gateway, full or host")))?,
+        ),
+    };
+    let devices = match devices {
+        None | Some("any") => None,
+        Some(name) => {
+            Some(silt_workspace::Devices::parse(name).ok_or_else(|| fail(format!("no devices {name}: none, named or all_usb")))?)
+        }
+    };
+    let refuse = entries(refuse.unwrap_or_default())
+        .map(|name| {
+            silt_workspace::Extra::parse(&name)
+                .ok_or_else(|| fail(format!("nothing called {name} to refuse: ranges, ports, paths, gpu, docker or ssh_agent")))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(ParsedReach { network, devices, refuse })
+}
+
 fn server_text(workspace: &Workspace) -> String {
     match &workspace.server {
         Some(ServerBinding { url, org: Some(org) }) => format!("syncs with {url}, org {org}"),
@@ -319,6 +462,15 @@ fn policy_text(policy: &silt_workspace::Policy) -> String {
     }
     if policy.home_locked {
         parts.push("home locked".into());
+    }
+    if policy.sandbox || policy.isolated {
+        parts.push(silt_workspace::Reach::of(policy).summary());
+    } else if let Some(network) = policy.network {
+        parts.push(format!("sandboxes: {}", network.label().to_lowercase()));
+    }
+    if !policy.refuse.is_empty() {
+        let refused: Vec<&str> = policy.refuse.iter().map(|extra| extra.label()).collect();
+        parts.push(format!("never: {}", refused.join(", ")));
     }
     if let Some(connectors) = &policy.connectors {
         parts.push(if connectors.is_empty() {

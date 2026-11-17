@@ -169,6 +169,14 @@ pub fn transcript_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Ve
 pub struct ClaudeCode;
 
 impl Agent for ClaudeCode {
+    fn homes(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        // Without its own folder, Claude Code keeps its settings in the home folder too.
+        match env("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
+            Some(dir) => vec![PathBuf::from(dir)],
+            None => vec![home.join(".claude"), home.join(".claude.json")],
+        }
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }

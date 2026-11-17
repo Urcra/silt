@@ -1155,7 +1155,46 @@ home_locked?: boolean,
  * The page connectors its artifacts' pages may call, by name; any
  * when unset (ADR 0080).
  */
-connectors?: Array<string> | null, };
+connectors?: Array<string> | null, 
+/**
+ * What the sandbox can connect to: the person's choice, or an org's
+ * most; full internet when unset (ADR 0086).
+ */
+network?: Network | null, 
+/**
+ * Which devices the sandbox gets: the person's choice, or an org's most.
+ */
+devices?: Devices | null, 
+/**
+ * The device nodes [`Devices::Named`] gives.
+ */
+device_nodes?: Array<string>, 
+/**
+ * Address ranges allowed past those always blocked, such as a VPN's.
+ */
+ranges?: Array<string>, 
+/**
+ * Ports on this machine the sandbox reaches as its own `localhost`.
+ */
+ports?: Array<number>, 
+/**
+ * Extra folders for the sandbox, each writable or not.
+ */
+paths?: { [key in string]: boolean }, gpu?: boolean, docker?: boolean, ssh_agent?: boolean, 
+/**
+ * What of the machine may never be handed to the sandbox.
+ */
+refuse?: Array<Extra>, 
+/**
+ * The agent's own sandbox may not run inside Silt's.
+ */
+no_nested?: boolean, };
+
+export type Network = "none" | "gateway" | "full" | "host";
+
+export type Devices = "none" | "named" | "all_usb";
+
+export type Extra = "ranges" | "ports" | "paths" | "gpu" | "docker" | "ssh_agent";
 
 export type OrgPolicy = { org: string, server: string, policy: Policy, };
 

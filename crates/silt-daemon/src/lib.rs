@@ -44,6 +44,7 @@ mod review;
 mod room_mux;
 mod rooms;
 mod sample;
+pub mod sandbox;
 mod server;
 mod sessions;
 mod spool;

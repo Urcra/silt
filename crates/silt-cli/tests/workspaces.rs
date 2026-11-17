@@ -69,6 +69,12 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
         "ask_before_commands",
         "--hide-other-workspaces",
         "on",
+        // Where the stand-in agent keeps its logs, which Silt's sandbox would otherwise hide;
+        // and no network, which it doesn't need and some test machines can't give a sandbox.
+        "--network",
+        "none",
+        "--paths",
+        &format!("{}:rw", laptop.agents.to_string_lossy()),
     ]);
     let listed = String::from_utf8_lossy(&laptop.silt(&["workspace", "list"]).stdout).into_owned();
     assert!(
@@ -96,15 +102,22 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     );
 
     let ran = in_work(&["claude"]);
-    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    let said = String::from_utf8_lossy(&ran.stderr).into_owned();
+    assert!(ran.status.success(), "{said}");
     let settings = fs::read_to_string(laptop.agents.join("logs/claude-settings")).expect("Claude got settings");
     let settings: serde_json::Value = serde_json::from_str(&settings).expect("json");
     assert_eq!(settings["permissions"]["disableBypassPermissionsMode"], "disable", "{settings}");
-    assert_eq!(settings["sandbox"]["enabled"], true, "{settings}");
-    assert_eq!(settings["sandbox"]["failIfUnavailable"], true, "{settings}");
-    let denied = settings["sandbox"]["filesystem"]["denyRead"].to_string();
-    let silt_home = laptop.silt_home.to_string_lossy().replace('\\', "/");
-    assert!(denied.contains(&silt_home), "Silt's data is out of the sandbox's reach: {denied}");
+    if said.contains("sandboxed: ") {
+        // Silt's own sandbox is the wall (ADR 0086); the agent's own isn't forced on inside it.
+        assert!(said.contains("sandboxed: no network"), "{said}");
+        assert!(settings["sandbox"].is_null(), "{settings}");
+    } else {
+        assert_eq!(settings["sandbox"]["enabled"], true, "{settings}");
+        assert_eq!(settings["sandbox"]["failIfUnavailable"], true, "{settings}");
+        let denied = settings["sandbox"]["filesystem"]["denyRead"].to_string();
+        let silt_home = laptop.silt_home.to_string_lossy().replace('\\', "/");
+        assert!(denied.contains(&silt_home), "Silt's data is out of the sandbox's reach: {denied}");
+    }
     assert!(settings["hooks"]["Stop"].is_array(), "the hooks are still there: {settings}");
 
     let work_thread = thread_in(&laptop, "work");

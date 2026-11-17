@@ -302,6 +302,10 @@ fn record_ids(lines: &[String]) -> Vec<String> {
 pub struct OpenCode;
 
 impl Agent for OpenCode {
+    fn homes(&self, home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        [".local/share/opencode", ".config/opencode", ".local/state/opencode"].iter().map(|dir| home.join(dir)).collect()
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }

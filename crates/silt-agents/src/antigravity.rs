@@ -457,6 +457,10 @@ fn link_all_but(from: &Path, into: &Path, except: &[&str]) -> io::Result<()> {
 pub struct Antigravity;
 
 impl Agent for Antigravity {
+    fn homes(&self, home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        vec![home.join(".gemini"), home.join(".antigravity")]
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }

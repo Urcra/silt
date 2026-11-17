@@ -584,6 +584,16 @@ impl Core {
             return;
         }
         if let Request::Scoped { token, asking } = request {
+            // A sandboxed run's hooks capture as anyone's do, once its token
+            // shows it's a run Silt started (ADR 0086).
+            if let Request::Hook { event, input } = *asking {
+                let answer = match self.run_thread(&token).await {
+                    Ok(_) => self.hook(&event, input).await,
+                    Err(error) => to_response::<()>(Err(error)),
+                };
+                let _ = reply.send(answer);
+                return;
+            }
             if let Request::PutArtifact { artifact } = *asking {
                 let _ = reply.send(to_response(self.put_artifact(&token, *artifact).await));
                 return;

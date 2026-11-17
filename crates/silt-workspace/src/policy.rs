@@ -1,9 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::Preset;
+use crate::reach::{Devices, Extra, Network, both, lower};
 
 /// An agent as rules name it: the same for its CLI and its ACP adapter
 /// (`claude`, `codex`, `copilot`, …).
@@ -108,6 +109,37 @@ pub struct Policy {
     /// when unset (ADR 0080).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connectors: Option<BTreeSet<String>>,
+    /// What the sandbox can connect to: the person's choice, or an org's
+    /// most; full internet when unset (ADR 0086).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<Network>,
+    /// Which devices the sandbox gets: the person's choice, or an org's most.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devices: Option<Devices>,
+    /// The device nodes [`Devices::Named`] gives.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub device_nodes: BTreeSet<String>,
+    /// Address ranges allowed past those always blocked, such as a VPN's.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub ranges: BTreeSet<String>,
+    /// Ports on this machine the sandbox reaches as its own `localhost`.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub ports: BTreeSet<u16>,
+    /// Extra folders for the sandbox, each writable or not.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub paths: BTreeMap<String, bool>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gpu: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub docker: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ssh_agent: bool,
+    /// What of the machine may never be handed to the sandbox.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub refuse: BTreeSet<Extra>,
+    /// The agent's own sandbox may not run inside Silt's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_nested: bool,
 }
 
 impl Policy {
@@ -141,6 +173,19 @@ impl Policy {
                 (Some(mine), Some(theirs)) => Some(mine.intersection(theirs).cloned().collect()),
                 (one, other) => one.clone().or_else(|| other.clone()),
             },
+            network: lower(self.network, other.network),
+            devices: lower(self.devices, other.devices),
+            // What the person hands over is theirs to list; a rule can only
+            // refuse it, through `refuse` and the caps above.
+            device_nodes: both(&self.device_nodes, &other.device_nodes),
+            ranges: both(&self.ranges, &other.ranges),
+            ports: both(&self.ports, &other.ports),
+            paths: other.paths.iter().chain(&self.paths).map(|(path, writable)| (path.clone(), *writable)).collect(),
+            gpu: self.gpu || other.gpu,
+            docker: self.docker || other.docker,
+            ssh_agent: self.ssh_agent || other.ssh_agent,
+            refuse: both(&self.refuse, &other.refuse),
+            no_nested: self.no_nested || other.no_nested,
         }
     }
 }

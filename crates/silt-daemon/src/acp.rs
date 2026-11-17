@@ -31,6 +31,9 @@ mod sign_in;
 pub(crate) struct AcpRun {
     run: u64,
     info: AgentInfo,
+    /// What its sandbox reaches and the run's token, when it runs in Silt's
+    /// sandbox, for starting it again the same way (ADR 0086).
+    sandbox: Option<(silt_workspace::Reach, String)>,
     checkout_id: CheckoutId,
     checkout: PathBuf,
     handle: Option<AgentHandle>,
@@ -477,7 +480,7 @@ impl Core {
             (None, true) => Some(crate::chats::settings(&self.data_dir).preset),
             (None, false) => Some(Preset::default()),
         });
-        let allowed = self.check_acp_start(&workspace, &info, asked, chosen, options.mode.as_deref())?;
+        let (allowed, reach) = self.check_acp_start(&workspace, &info, asked, chosen, options.mode.as_deref())?;
         if allowed != asked {
             options.preset = allowed;
         }
@@ -567,17 +570,20 @@ impl Core {
         let token = self.mint_run_token(thread, &workspace.id).await?;
         let mut start = self.agent_start(thread, &checkout, load.as_ref().map(|(_, native)| native.clone()));
         if let Some(mcp) = &mut start.mcp {
-            mcp.args.extend(["--token".to_owned(), token]);
+            mcp.args.extend(["--token".to_owned(), token.clone()]);
         }
         start.env.extend(workspace.env.iter().map(|(name, value)| (name.clone(), value.clone())));
         let presents_plans =
             silt_acp::presents_plans(&info.id) || read_seen(&self.data_dir).get(&info.id).is_some_and(|seen| seen.presents_plans);
-        spawn_agent(self.events.clone(), thread, run, info.clone(), self.data_dir.clone(), start);
+        let kept = reach.clone().map(|reach| (reach, token.clone()));
+        let sandbox = reach.map(|reach| AcpSandbox { reach, token, scratch: run_scratch(&self.data_dir, thread, run) });
+        spawn_agent(self.events.clone(), thread, run, info.clone(), self.data_dir.clone(), start, sandbox);
         self.acp.insert(
             thread,
             AcpRun {
                 run,
                 info,
+                sandbox: kept,
                 checkout_id,
                 checkout,
                 handle: None,
@@ -1854,6 +1860,35 @@ impl Core {
 
 /// What `silt mcp` needs to find this daemon, which an agent's filtered
 /// environment leaves out.
+/// `start` rewritten to run in Silt's sandbox: through `silt sandbox-run`,
+/// with the sandbox's variables, and Silt's MCP server reaching the daemon
+/// through the run's channel.
+fn sandboxed(start: &mut Start, info: &AgentInfo, data_dir: &Path, sandbox: &AcpSandbox) -> Result<(), CoreError> {
+    let key = silt_workspace::agent_key(&info.id);
+    let agent = silt_agents::AGENTS.iter().copied().find(|agent| silt_workspace::agent_key(agent.id()) == key);
+    let mut read_only = crate::sandbox::program_paths(std::ffi::OsStr::new(&start.program), &start.env);
+    // Agents Silt downloaded, and its built-in skills, live in its data.
+    read_only.extend([data_dir.join("agents"), data_dir.join("skills")]);
+    let prepared = crate::sandbox::prepare(&crate::sandbox::Run {
+        data_dir,
+        agent,
+        checkout: &start.cwd,
+        scratch: &sandbox.scratch,
+        reach: &sandbox.reach,
+        token: &sandbox.token,
+        env: std::mem::take(&mut start.env),
+        read_only,
+    })?;
+    let all = prepared.command(&start.program, &start.args);
+    start.program = all[0].to_string_lossy().into_owned();
+    start.args = all[1..].iter().map(|arg| arg.to_string_lossy().into_owned()).collect();
+    if let Some(mcp) = &mut start.mcp {
+        mcp.env.extend(prepared.env.iter().filter(|(name, _)| name.starts_with("SILT_RUN_")).cloned());
+    }
+    start.env = prepared.env;
+    Ok(())
+}
+
 fn mcp_env(data_dir: &Path) -> Vec<(String, String)> {
     let mut env = vec![("SILT_HOME".to_owned(), data_dir.to_string_lossy().into_owned())];
     // Where the daemon's headless browser is, for `silt_artifact_check`,
@@ -2194,13 +2229,26 @@ fn send(run: &mut AcpRun, command: Command) {
 
 /// Finds the agent's command, downloading it if needed, then runs it and
 /// forwards what it does to the daemon's event loop.
-fn spawn_agent(
+/// Where an ACP run's sandbox keeps its plan and files.
+fn run_scratch(data_dir: &Path, thread: ThreadId, run: u64) -> PathBuf {
+    data_dir.join("runs").join(format!("acp-{}-{run}", thread.short()))
+}
+
+/// Silt's sandbox for an ACP agent's run (ADR 0086).
+pub(crate) struct AcpSandbox {
+    reach: silt_workspace::Reach,
+    token: String,
+    scratch: PathBuf,
+}
+
+pub(crate) fn spawn_agent(
     events: mpsc::UnboundedSender<Event>,
     thread: ThreadId,
     run: u64,
     info: AgentInfo,
     data_dir: PathBuf,
     mut start: Start,
+    sandbox: Option<AcpSandbox>,
 ) {
     tokio::spawn(async move {
         let registry::AgentCommand { program, args, env } = match registry::command(&info, &data_dir).await {
@@ -2214,6 +2262,13 @@ fn spawn_agent(
         start.args = args;
         let workspace_env = std::mem::take(&mut start.env);
         start.env = registry::agent_environment(&info.id, &data_dir).into_iter().chain(env).chain(workspace_env).collect();
+        if let Some(sandbox) = sandbox
+            && let Err(error) = sandboxed(&mut start, &info, &data_dir, &sandbox)
+        {
+            let message = format!("couldn't start {} in Silt's sandbox: {error}", info.name);
+            let _ = events.send(Event::Acp { thread, run, event: AcpEvent::Started(Err(message)) });
+            return;
+        }
         let (sender, mut receiver) = mpsc::unbounded_channel();
         let handle = silt_acp::start(start.for_agent(&info.id), sender);
         let _ = events.send(Event::Acp { thread, run, event: AcpEvent::Started(Ok(handle)) });

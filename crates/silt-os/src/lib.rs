@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 mod secrets;
 mod wsl;
 
+#[cfg(target_os = "linux")]
+pub mod sandbox;
+
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]

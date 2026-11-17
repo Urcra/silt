@@ -7,6 +7,7 @@ mod mcp;
 mod recording;
 mod reference;
 mod render;
+mod sandbox;
 mod workspace;
 
 use std::path::PathBuf;
@@ -351,6 +352,17 @@ enum Command {
     /// Serve the tools a page gave its question to the agent answering it
     #[command(hide = true)]
     SampleTools { file: PathBuf },
+    /// Run a program in Silt's sandbox, as the plan Silt wrote says
+    #[command(hide = true)]
+    SandboxRun {
+        #[arg(long)]
+        plan: PathBuf,
+        /// Already in the sandbox's own network namespace
+        #[arg(long)]
+        in_network: bool,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<std::ffi::OsString>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -530,6 +542,18 @@ enum OrgCommand {
         /// The page connectors its projects' pages may call, comma-separated
         #[arg(long)]
         connectors: Option<String>,
+        /// The most network its sandboxes get: none, gateway, full or host
+        #[arg(long)]
+        network: Option<String>,
+        /// The most devices its sandboxes get: none, named or all_usb
+        #[arg(long)]
+        devices: Option<String>,
+        /// What members may never hand a sandbox, comma-separated: ranges, ports, paths, gpu, docker, ssh_agent
+        #[arg(long)]
+        refuse: Option<String>,
+        /// Agents' own sandboxes may not run inside Silt's
+        #[arg(long)]
+        no_nested: bool,
     },
 }
 
@@ -820,7 +844,21 @@ fn run() -> Result<(), Exn<CliError>> {
             OrgCommand::Add { org, user, owner } => admin::org_change(OrgChange::AddMember { org, user, owner }),
             OrgCommand::Remove { org, user } => admin::org_change(OrgChange::RemoveMember { org, user }),
             OrgCommand::Default { org, visibility } => admin::org_change(OrgChange::DefaultVisibility { org, visibility }),
-            OrgCommand::Policy { org, agents, no_custom_agents, max_preset, sandbox, isolated, home_locked, connectors } => {
+            OrgCommand::Policy {
+                org,
+                agents,
+                no_custom_agents,
+                max_preset,
+                sandbox,
+                isolated,
+                home_locked,
+                connectors,
+                network,
+                devices,
+                refuse,
+                no_nested,
+            } => {
+                let reach = workspace::parse_reach(network.as_deref(), devices.as_deref(), refuse.as_deref())?;
                 let max_preset = match max_preset.as_deref().map(|name| silt_workspace::Preset::parse(name).ok_or(name)) {
                     Some(Err(name)) => return Err(commands::fail(format!("no preset {name}"))),
                     Some(Ok(preset)) => Some(preset),
@@ -837,6 +875,11 @@ fn run() -> Result<(), Exn<CliError>> {
                     home_locked,
                     connectors: connectors
                         .map(|list| list.split(',').map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned).collect()),
+                    network: reach.network,
+                    devices: reach.devices,
+                    refuse: reach.refuse,
+                    no_nested,
+                    ..silt_workspace::Policy::default()
                 };
                 admin::org_change(OrgChange::Policy { org, policy })
             }
@@ -924,6 +967,7 @@ fn run() -> Result<(), Exn<CliError>> {
         },
         Command::Mcp { thread, checkout, token, ui } => mcp::serve(&thread, checkout, token, ui),
         Command::SampleTools { file } => mcp::serve_page_tools(&file),
+        Command::SandboxRun { plan, in_network, command } => sandbox::run(&plan, in_network, &command),
         Command::Reference => {
             print!("{}", reference::markdown(&<Cli as clap::CommandFactory>::command()));
             Ok(())

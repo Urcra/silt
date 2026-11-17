@@ -457,6 +457,10 @@ pub fn rollout_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<S
 pub struct Codex;
 
 impl Agent for Codex {
+    fn homes(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        vec![crate::home_from(home, env, "CODEX_HOME", ".codex")]
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }

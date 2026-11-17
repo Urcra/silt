@@ -42,7 +42,8 @@ pub fn serve(thread: &str, checkout: Option<PathBuf>, token: Option<String>, sho
 }
 
 fn ask_daemon<T: DeserializeOwned>(request: &Request) -> Result<T, String> {
-    match client::send(&paths::socket_path(), request, Some(REQUEST_TIMEOUT)) {
+    let socket = paths::run_channel().map_or_else(paths::socket_path, |(socket, _)| socket);
+    match client::send(&socket, request, Some(REQUEST_TIMEOUT)) {
         Ok(Response::Ok { data }) => serde_json::from_value(data).map_err(|error| error.to_string()),
         Ok(Response::Error { message }) => Err(message),
         Err(error) => Err(format!("the Silt daemon is not answering: {error}")),

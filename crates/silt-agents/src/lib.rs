@@ -368,6 +368,16 @@ pub trait Agent: Send + Sync {
     fn sandbox_support(&self) -> SandboxSupport {
         SandboxSupport::None
     }
+    /// Where it keeps its sessions and settings, which Silt's sandbox keeps
+    /// writable (ADR 0086). `env` reads the run's variables.
+    fn homes(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        Vec::new()
+    }
+}
+
+/// `$variable` when the run sets it, else `dir` in the home folder.
+pub(crate) fn home_from(home: &Path, env: &dyn Fn(&str) -> Option<String>, variable: &str, dir: &str) -> PathBuf {
+    env(variable).filter(|value| !value.is_empty()).map_or_else(|| home.join(dir), PathBuf::from)
 }
 
 /// The environment variables that say where agents keep their sessions.

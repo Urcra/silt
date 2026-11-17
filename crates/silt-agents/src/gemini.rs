@@ -476,6 +476,15 @@ pub fn session_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<S
 pub struct Gemini;
 
 impl Agent for Gemini {
+    fn homes(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        let own = crate::home_from(home, env, "GEMINI_CLI_HOME", "").join(".gemini");
+        let mut homes = vec![home.join(".gemini")];
+        if !homes.contains(&own) {
+            homes.push(own);
+        }
+        homes
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }
