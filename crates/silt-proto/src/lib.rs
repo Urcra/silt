@@ -27,8 +27,10 @@ pub mod view;
 /// rooms that span machines through `/v1/rooms` (ADR 0081). 15: a room's
 /// presence sent as it changes, and comments on a sheet's cells. 16: a
 /// design system's components (ADR 0086). 17: its components' guidelines,
-/// cover and assets (ADR 0088).
-pub const PROTOCOL: u32 = 17;
+/// cover and assets (ADR 0088). 18: edits by another agent in the same
+/// clone, or by one of several (`Author::Others`, `Author::Agents`,
+/// ADR 0089).
+pub const PROTOCOL: u32 = 18;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -1368,6 +1370,9 @@ pub enum RemoteCommand {
         /// Leave out what git itself rewrote (ADR 0069).
         #[serde(default)]
         hide_git: bool,
+        /// Leave out other agents' edits (ADR 0089).
+        #[serde(default)]
+        hide_others: bool,
     },
     /// Marks one of a merge request's files seen, or not, as it is now.
     MrSeen {

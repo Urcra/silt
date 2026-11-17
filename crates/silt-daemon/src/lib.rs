@@ -30,6 +30,7 @@ mod load;
 mod notes;
 mod page;
 pub mod paths;
+pub mod peers;
 mod personal;
 mod presets;
 mod projects;

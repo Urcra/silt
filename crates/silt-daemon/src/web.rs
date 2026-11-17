@@ -664,32 +664,35 @@ struct DiffQuery {
     /// `hide` leaves out what git itself rewrote (ADR 0069).
     #[serde(default)]
     git: Option<String>,
+    /// `hide` leaves out other agents' edits (ADR 0089).
+    #[serde(default)]
+    others: Option<String>,
 }
 
 impl DiffQuery {
-    fn hide_git(&self) -> bool {
-        silt_proto::view::GitQuery { git: self.git.clone() }.hide_git()
+    fn hide(&self) -> silt_log::Hide {
+        silt_proto::view::GitQuery { git: self.git.clone(), others: self.others.clone() }.hide()
     }
 }
 
 async fn diff(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
     let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let base = query.base.filter(|base| !base.is_empty());
     let path = query.path.filter(|path| !path.is_empty());
-    ask(&web, Request::Diff { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git }).await
+    ask(&web, Request::Diff { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git, hide_others }).await
 }
 
 async fn diff_stats(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let base = query.base.filter(|base| !base.is_empty());
-    ask(&web, Request::DiffStats { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git }).await
+    ask(&web, Request::DiffStats { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git, hide_others }).await
 }
 
 async fn thread_seen(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let base = query.base.filter(|base| !base.is_empty());
-    ask(&web, Request::ThreadSeen { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git }).await
+    ask(&web, Request::ThreadSeen { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git, hide_others }).await
 }
 
 async fn mark_thread_seen(
@@ -702,10 +705,11 @@ async fn mark_thread_seen(
 
 async fn diff_turns(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
     let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let base = query.base.filter(|base| !base.is_empty());
     let path = query.path.filter(|path| !path.is_empty());
-    ask(&web, Request::DiffTurns { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git }).await
+    ask(&web, Request::DiffTurns { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git, hide_others })
+        .await
 }
 
 /// The web UI has no clone of its own; comments that need one say so.
@@ -719,12 +723,16 @@ struct CommentsQuery {
     /// `hide` places them as a diff without git's rewrites shows the lines.
     #[serde(default)]
     git: Option<String>,
+    /// `hide`, and without other agents' edits.
+    #[serde(default)]
+    others: Option<String>,
 }
 
 async fn comments(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<CommentsQuery>) -> HttpResponse {
-    let hide_git = silt_proto::view::GitQuery { git: query.git }.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } =
+        silt_proto::view::GitQuery { git: query.git, others: query.others }.hide();
     let base = query.base.filter(|base| !base.is_empty());
-    ask(&web, Request::Comments { thread, base, hide_git, cwd: no_clone() }).await
+    ask(&web, Request::Comments { thread, base, hide_git, hide_others, cwd: no_clone() }).await
 }
 
 #[derive(Deserialize)]
@@ -1781,7 +1789,8 @@ async fn merge_request(
     Path(mr): Path<String>,
     Query(query): Query<silt_proto::view::GitQuery>,
 ) -> HttpResponse {
-    ask(&web, Request::MrShow { mr, hide_git: query.hide_git() }).await
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
+    ask(&web, Request::MrShow { mr, hide_git, hide_others }).await
 }
 
 async fn approve(State(web): State<Web>, Path(mr): Path<String>) -> HttpResponse {
@@ -1939,7 +1948,8 @@ async fn file_at(
 
 /// Other threads of the thread's repository that changed the path.
 async fn in_flight(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<PathQuery>) -> HttpResponse {
-    ask_in_clone(&web, &thread, |cwd| Request::InFlight { cwd, path: query.path }).await
+    let caller = Some(thread.clone());
+    ask_in_clone(&web, &thread, |cwd| Request::InFlight { cwd, path: query.path, thread: caller }).await
 }
 
 #[derive(Deserialize)]

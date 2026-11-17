@@ -683,6 +683,12 @@ pub struct HookInput {
     /// For `SessionStart`: `startup`, `resume`, `clear` or `compact`.
     #[serde(default)]
     pub source: Option<String>,
+    /// For `UserPromptSubmit`: what the person asked.
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// For `SessionEnd`: why, such as `clear`, `logout` or `prompt_input_exit`.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// `settings` with the workspace's locks in Claude Code's own keys, which
@@ -713,7 +719,7 @@ pub fn locked_settings(settings: &str, locks: &crate::Locks) -> String {
 }
 
 /// Hook events Silt listens to.
-pub const HOOK_EVENTS: [&str; 5] = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionStart"];
+pub const HOOK_EVENTS: [&str; 6] = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionStart", "SessionEnd"];
 
 /// Settings JSON for `claude --settings` that runs `command <event>` for each
 /// hook event Silt needs, with the hook input on stdin. With `program`, the
@@ -911,6 +917,17 @@ mod tests {
         let hook = exec.pointer("/hooks/Stop/0/hooks/0").expect("a Stop hook");
         assert_eq!(hook["command"], json!(r"C:\Program Files\Silt\silt.exe"));
         assert_eq!(hook["args"], json!(["hook", "Stop"]), "no shell reads the path");
+        assert_eq!(
+            settings.pointer("/hooks/SessionEnd/0/hooks/0/command"),
+            Some(&json!("silt hook SessionEnd")),
+            "Silt hears when the agent goes (ADR 0090)"
+        );
+        let ending: HookInput =
+            serde_json::from_str(r#"{"session_id":"s","hook_event_name":"SessionEnd","reason":"clear"}"#).expect("parses");
+        assert_eq!(ending.reason.as_deref(), Some("clear"));
+        let prompt: HookInput =
+            serde_json::from_str(r#"{"session_id":"s","hook_event_name":"UserPromptSubmit","prompt":"fix it"}"#).expect("parses");
+        assert_eq!(prompt.prompt.as_deref(), Some("fix it"));
     }
 
     #[test]

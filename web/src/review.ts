@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import type { CommentLocation, CommentView } from './api'
+import type { CommentLocation, CommentView, Hidden } from './api'
 import type { DiffFile } from './diffParse'
 import { store, stored } from './stored'
 
@@ -43,6 +43,8 @@ export interface Draft {
   anchor?: string
   /** Numbered as the diff showed them with git's rewrites left out (ADR 0069). */
   hideGit?: boolean
+  /** And with other agents' edits left out (ADR 0089). */
+  hideOthers?: boolean
 }
 
 export interface Review {
@@ -70,9 +72,10 @@ export function useReview(thread: string) {
   return {
     review,
     /** Adds a draft, and says its id. */
-    add: (at: Lines, text: string, quote: string[], base?: string, hideGit?: boolean): string => {
+    add: (at: Lines, text: string, quote: string[], base?: string, { hideGit, hideOthers }: Hidden = {}): string => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      update((before) => ({ ...before, drafts: [...before.drafts, { id, at, text, quote, base, ...(hideGit ? { hideGit } : {}) }] }))
+      const hidden = { ...(hideGit ? { hideGit } : {}), ...(hideOthers ? { hideOthers } : {}) }
+      update((before) => ({ ...before, drafts: [...before.drafts, { id, at, text, quote, base, ...hidden }] }))
       return id
     },
     setAnchor: (id: string, anchor: string) =>

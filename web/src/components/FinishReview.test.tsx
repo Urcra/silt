@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { Review, ReviewState } from '../review'
 import { FinishReview } from './FinishReview'
@@ -49,4 +49,22 @@ test('with nothing pending, the review can still be marked reviewed through a tu
   expect(screen.getByRole('radio', { name: 'Mark reviewed through turn 3' })).toBeChecked()
   expect(screen.queryByRole('radio', { name: 'Request changes' })).toBeNull()
   expect(screen.getByRole('button', { name: 'Mark reviewed' })).toBeInTheDocument()
+})
+
+test("a draft made without other agents' changes is commented on as numbered there", async () => {
+  const sent: unknown[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.endsWith('/comments')) sent.push(JSON.parse(String(init?.body)))
+      return new Response(JSON.stringify({ id: 'c1' }))
+    }),
+  )
+  const draft = { id: '1', at: { path: 'src/a.rs', start: 2, end: 4 }, text: 'retry it', quote: ['+send(chunk);'], hideOthers: true }
+  render(<FinishReview {...props} review={reviewOf({ note: '', drafts: [draft] })} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Finish review' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Copy 1 comment' }))
+  await waitFor(() => expect(sent).toHaveLength(1))
+  expect(sent[0]).toMatchObject({ on: { on: 'lines', path: 'src/a.rs', start: 2, end: 4, hide_git: false, hide_others: true }, text: 'retry it' })
+  vi.unstubAllGlobals()
 })

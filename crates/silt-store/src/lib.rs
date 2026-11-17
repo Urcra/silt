@@ -105,7 +105,9 @@ pub struct Snapshot {
     pub data: Vec<u8>,
 }
 
-/// A checkout's row in this machine's store.
+/// A checkout's row in this machine's store: one thread's view of a
+/// directory. A clone several agents work in has a row for each of their
+/// threads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CheckoutId(pub i64);
 
@@ -141,6 +143,55 @@ pub struct SessionRecord {
     pub session_id: String,
     pub thread: ThreadId,
     pub checkout_id: CheckoutId,
+}
+
+/// A session as the agents in its project are told of it (ADR 0090): its
+/// thread, where it works, and what it last did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionActivity {
+    pub agent: String,
+    pub session_id: String,
+    pub thread: ThreadId,
+    pub repo: String,
+    pub repo_root: PathBuf,
+    pub checkout: PathBuf,
+    pub managed: bool,
+    pub created_ms: i64,
+    pub seen_ms: Option<i64>,
+    pub ended_ms: Option<i64>,
+    /// Its turn stopped, and it waits for its person.
+    pub idle: bool,
+    pub doing: Option<String>,
+}
+
+/// What one thread's agent has to tell another's (ADR 0090).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentMessageKind {
+    /// Something it sent with `silt_message`.
+    Message,
+    /// It started in the project.
+    Arrival,
+}
+
+impl AgentMessageKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Message => "message",
+            Self::Arrival => "arrival",
+        }
+    }
+
+    fn parse(kind: &str) -> Self {
+        if kind == "arrival" { Self::Arrival } else { Self::Message }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentMessage {
+    pub from: ThreadId,
+    pub kind: AgentMessageKind,
+    pub body: String,
+    pub created_ms: i64,
 }
 
 /// A session that ran before Silt recorded it, imported whole (ADR 0043).
@@ -1128,6 +1179,166 @@ impl Store {
         Ok(taken.into_iter().map(|notice| notice.message).collect())
     }
 
+    /// Records that the session's agent was heard from. An ended session
+    /// stays ended: only [`Self::session_revived`] brings it back.
+    pub async fn session_seen(&self, agent: &str, session: &str, now_ms: i64) -> Result<(), StoreError> {
+        sqlx::query!(
+            "UPDATE sessions SET seen_ms = ? WHERE agent = ? AND session_id = ? AND ended_ms IS NULL",
+            now_ms,
+            agent,
+            session
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The session's agent runs again, as when a session is resumed.
+    pub async fn session_revived(&self, agent: &str, session: &str, now_ms: i64) -> Result<(), StoreError> {
+        sqlx::query!(
+            "UPDATE sessions SET seen_ms = ?, ended_ms = NULL, idle = 0 WHERE agent = ? AND session_id = ?",
+            now_ms,
+            agent,
+            session
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn session_ended(&self, agent: &str, session: &str, now_ms: i64) -> Result<(), StoreError> {
+        sqlx::query!(
+            "UPDATE sessions SET ended_ms = ? WHERE agent = ? AND session_id = ? AND ended_ms IS NULL",
+            now_ms,
+            agent,
+            session
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Whether the session's turn stopped and it waits for its person.
+    pub async fn session_idle(&self, agent: &str, session: &str, idle: bool) -> Result<(), StoreError> {
+        sqlx::query!("UPDATE sessions SET idle = ? WHERE agent = ? AND session_id = ?", idle, agent, session)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// What the session was last asked to do.
+    pub async fn session_doing(&self, agent: &str, session: &str, doing: &str) -> Result<(), StoreError> {
+        sqlx::query!("UPDATE sessions SET doing = ? WHERE agent = ? AND session_id = ?", doing, agent, session)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn touch_file(&self, agent: &str, session: &str, path: &str, now_ms: i64) -> Result<(), StoreError> {
+        sqlx::query!(
+            "INSERT INTO session_touches (agent, session_id, path, touched_ms)
+             SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM sessions WHERE agent = ?1 AND session_id = ?2)
+             ON CONFLICT (agent, session_id, path) DO UPDATE SET touched_ms = excluded.touched_ms",
+            agent,
+            session,
+            path,
+            now_ms
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The files the session edited, last edited first, at most `limit`.
+    pub async fn recent_touches(&self, agent: &str, session: &str, limit: i64) -> Result<Vec<String>, StoreError> {
+        let rows = sqlx::query!(
+            "SELECT path FROM session_touches WHERE agent = ? AND session_id = ? ORDER BY touched_ms DESC, path LIMIT ?",
+            agent,
+            session,
+            limit
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|row| row.path).collect())
+    }
+
+    /// Every session here with its thread and checkout, but those of threads
+    /// in the trash, oldest first.
+    pub async fn session_activity(&self) -> Result<Vec<SessionActivity>, StoreError> {
+        let rows = sqlx::query!(
+            r#"SELECT s.agent, s.session_id, s.thread_id, t.repo, t.repo_root, c.path, c.managed AS "managed: bool",
+                      s.created_ms, s.seen_ms, s.ended_ms, s.idle AS "idle: bool", s.doing
+               FROM sessions s JOIN threads t ON t.id = s.thread_id JOIN checkouts c ON c.id = s.checkout_id
+               WHERE t.deleted_ms IS NULL ORDER BY s.created_ms"#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(SessionActivity {
+                    agent: row.agent,
+                    session_id: row.session_id,
+                    thread: ThreadId(id_from(&row.thread_id)?),
+                    repo: row.repo,
+                    repo_root: PathBuf::from(row.repo_root),
+                    checkout: PathBuf::from(row.path),
+                    managed: row.managed,
+                    created_ms: row.created_ms,
+                    seen_ms: row.seen_ms,
+                    ended_ms: row.ended_ms,
+                    idle: row.idle,
+                    doing: row.doing,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn add_agent_message(
+        &self,
+        to: ThreadId,
+        from: ThreadId,
+        kind: AgentMessageKind,
+        body: &str,
+        now_ms: i64,
+    ) -> Result<(), StoreError> {
+        let (to, from, kind) = (id_bytes(to.0), id_bytes(from.0), kind.as_str());
+        sqlx::query!(
+            "INSERT INTO agent_messages (to_thread, from_thread, kind, body, created_ms) VALUES (?, ?, ?, ?, ?)",
+            to,
+            from,
+            kind,
+            body,
+            now_ms
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// What waits for the agent of `thread` from other agents, oldest first,
+    /// taken so that only one hook hands it over.
+    pub async fn take_agent_messages(&self, thread: ThreadId) -> Result<Vec<AgentMessage>, StoreError> {
+        let thread = id_bytes(thread.0);
+        let mut taken = sqlx::query!(
+            r#"DELETE FROM agent_messages WHERE to_thread = ? RETURNING id AS "id!", from_thread, kind, body, created_ms"#,
+            thread
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        taken.sort_by_key(|row| row.id);
+        taken
+            .into_iter()
+            .map(|row| {
+                Ok(AgentMessage {
+                    from: ThreadId(id_from(&row.from_thread)?),
+                    kind: AgentMessageKind::parse(&row.kind),
+                    body: row.body,
+                    created_ms: row.created_ms,
+                })
+            })
+            .collect()
+    }
+
     pub async fn agent_runs(&self) -> Result<HashMap<ThreadId, AgentRunRecord>, StoreError> {
         let rows = sqlx::query!("SELECT thread_id, agent, state, error, preset, mode, updated_ms FROM agent_runs")
             .fetch_all(&self.pool)
@@ -1242,6 +1453,28 @@ impl Store {
         sqlx::query!("UPDATE sessions SET thread_id = ? WHERE checkout_id = ?", thread, checkout).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// The checkouts at `path`, one per thread working there, oldest first.
+    pub async fn checkouts_at(&self, path: &Path) -> Result<Vec<CheckoutRecord>, StoreError> {
+        let path_text = path_text(path);
+        let rows = sqlx::query!(
+            r#"SELECT id AS "id!", thread_id, actor, managed AS "managed: bool" FROM checkouts WHERE path = ? ORDER BY id"#,
+            path_text
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(CheckoutRecord {
+                    id: CheckoutId(row.id),
+                    thread: ThreadId(id_from(&row.thread_id)?),
+                    path: path.to_owned(),
+                    actor: ActorId(id_from(&row.actor)?),
+                    managed: row.managed,
+                })
+            })
+            .collect()
     }
 
     pub async fn checkouts(&self) -> Result<Vec<CheckoutRecord>, StoreError> {

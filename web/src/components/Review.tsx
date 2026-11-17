@@ -9,7 +9,7 @@ import { useTopic } from '../bus'
 import { useDetailChoice, useGroupingChoice } from '../detail'
 import type { DiffFile } from '../diffParse'
 import { type View, VIEWS, baseOf } from '../diffSpec'
-import { useHideGit } from '../hideGit'
+import { useHideGit, useHideOthers } from '../hideGit'
 import { keys, message } from '../query'
 import { type Lines, itemOf, useReview } from '../review'
 import { type At, defaultTurns, filtered, firstChange, linesNew, nextUnseen, pickTurns, seenOf, stepFile, stepHunk, turnsOfHunk } from '../reviewNav'
@@ -19,7 +19,7 @@ import { useActions } from '../shortcuts'
 import { useThreadDiff } from '../threadDiff'
 import { Button, Icon, Input, Select, Skeleton, Tabs, cx, toast } from '../ui'
 import { ChipSelect } from './ChipSelect'
-import { HideGitBox } from './DiffPanel'
+import { HiddenNote, HideGitBox, HideOthersBox } from './DiffPanel'
 import { type DiffLayout, DiffView } from './DiffView'
 import { FinishReview } from './FinishReview'
 import { OutdatedDrafts } from './OutdatedDrafts'
@@ -72,11 +72,13 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
   const reviewed = summary.mine.reviewed_turn
   // Until the person picks, a review starts after the turn they reviewed through.
   const picked = kept.chosen ? kept.turns : (kept.turns ?? defaultTurns(turns.data?.length ?? 0, reviewed))
-  // Against main the diff is git's own; elsewhere git's rewrites can be left out (ADR 0069).
+  // Against main the diff is git's own; elsewhere git's rewrites (ADR 0069) and other agents' edits (ADR 0089) can be
+  // left out.
   const againstMain = !picked && base === 'main'
   const [hideGitSetting, setHideGit] = useHideGit()
-  const hideGit = hideGitSetting && !againstMain
-  const spec: DiffSpec = picked ? { turn: picked[0], toTurn: picked[1], hideGit } : { base, hideGit }
+  const [hideOthersSetting, setHideOthers] = useHideOthers()
+  const hidden = { hideGit: hideGitSetting && !againstMain, hideOthers: hideOthersSetting && !againstMain && summary.shared }
+  const spec: DiffSpec = picked ? { turn: picked[0], toTurn: picked[1], ...hidden } : { base, ...hidden }
   const review = useReview(thread)
   const { agent: status } = useLive(thread)
   const agent = status?.agent
@@ -240,6 +242,7 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
             <ChipSelect label="compare" value={kept.view} onChange={(chosen) => change({ view: chosen as View })} options={VIEWS.map((choice) => ({ id: choice.id, name: choice.label }))} />
           )}
           <HideGitBox on={hideGitSetting} onChange={setHideGit} disabled={againstMain} />
+          {summary.shared && <HideOthersBox on={hideOthersSetting} onChange={setHideOthers} disabled={againstMain} />}
           <Tabs label="layout" tabs={LAYOUTS} value={kept.layout} onChange={(layout) => change({ layout })} />
           <FinishReview
             thread={thread}
@@ -304,11 +307,7 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
           <OutdatedDrafts drafts={outdated} review={review} />
           {error && <p className="text-sm text-danger">{message(error)}</p>}
           {(stats.isPending || (whole && diff.isPending)) && <Skeleton className="h-32" />}
-          {hideGit && (
-            <p role="note" className="text-xs text-fg-2">
-              Without what git rewrote, as a checkout, pull or stash does; what's on disk may differ.
-            </p>
-          )}
+          <HiddenNote hidden={spec} />
           {whole === false && <FilesByStats thread={thread} stats={filtered(stats.data ?? [], filter)} of={spec} commenting={commenting} />}
           {whole && files.length === 0 && !diff.isPending && <p className="text-sm text-fg-2">No changes.</p>}
           {whole && shown.length > 0 && (

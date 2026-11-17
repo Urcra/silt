@@ -52,6 +52,9 @@ impl NoteAuthor {
             Author::User => Some(Self::Person),
             Author::Agent { agent, .. } => Some(Self::Agent(word(agent))),
             Author::Import => None,
+            Author::Others { sessions } | Author::Agents { sessions } => {
+                sessions.first().map(|session| Self::Agent(word(&session.agent)))
+            }
         }
     }
 }

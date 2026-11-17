@@ -17,7 +17,7 @@ use silt_log::TurnMark;
 use silt_store::Store;
 
 use crate::capture_lock::{CaptureLock, Turn};
-use crate::core::{Ahead, Core, CoreError};
+use crate::core::{Ahead, Core, CoreError, now_ms};
 use crate::protocol::HookReply;
 
 /// How long a hook waits for its turn at writing before it gives up, so a
@@ -95,34 +95,93 @@ impl Core {
         let Some(session) = self.session(session_id) else {
             return Ok(HookReply::default());
         };
-        let (thread, checkout, hooked, cwd) = (
+        let (thread, checkout, hooked, cwd, agent) = (
             session.record.thread,
             session.record.checkout_id,
             session.agent.capture() == Capture::Hooks,
             session.agent_cwd.clone(),
+            session.record.agent.clone(),
         );
+        // Whether the agent is still around, as its peers are told (ADR 0090).
+        match event {
+            "SessionEnd" => {
+                // `/clear` starts the same agent over.
+                if input.reason.as_deref() != Some("clear") {
+                    self.store.session_ended(&agent, session_id, now_ms()).await?;
+                }
+                return Ok(HookReply::default());
+            }
+            "SessionStart" => self.store.session_revived(&agent, session_id, now_ms()).await?,
+            _ => self.store.session_seen(&agent, session_id, now_ms()).await?,
+        }
+        match event {
+            "UserPromptSubmit" => {
+                self.store.session_idle(&agent, session_id, false).await?;
+                if let Some(doing) = input.prompt.as_deref().and_then(crate::peers::doing_of) {
+                    self.store.session_doing(&agent, session_id, &doing).await?;
+                }
+            }
+            "Stop" => self.store.session_idle(&agent, session_id, true).await?,
+            _ => {}
+        }
+        let source = input.source.as_deref();
+        if event == "SessionStart" && hooked && matches!(source, Some("startup" | "resume" | "clear")) {
+            let greeting = self.greet(thread, source != Some("clear")).await?;
+            return Ok(HookReply { additional_context: greeting });
+        }
         // Agents without hooks mark their turns in their transcripts.
         let mark = hooked.then(|| mark_of(event, input)).flatten();
-        let compacted = event == "SessionStart" && input.source.as_deref() == Some("compact");
+        let compacted = event == "SessionStart" && source == Some("compact");
         if hooked && mark.is_none() && !compacted {
             return Ok(HookReply::default());
         }
         self.tail_session(session_id).await?;
         if compacted && hooked {
-            let context = format!("{} This session's thread is {thread}.", silt_mcp::INSTRUCTIONS);
+            let mut context = format!("{} This session's thread is {thread}.", silt_mcp::INSTRUCTIONS);
+            if let Some(peers) = self.greet(thread, false).await? {
+                context = format!("{context}\n\n{peers}");
+            }
             return Ok(HookReply { additional_context: Some(context) });
         }
         if let Some(mark) = mark {
             if self.checkouts.contains_key(&checkout) {
+                // Other agents working in the same clone take in the same
+                // edits, each into its own thread (ADR 0089).
+                let rows: Vec<_> = std::iter::once(checkout).chain(self.sharing(checkout)).collect();
                 match scan_for(event, input) {
                     Scan::Nothing => {}
-                    Scan::Paths(paths) => self.ingest_paths(checkout, absolute(&cwd, paths)).await?,
-                    Scan::Checkout => self.rescan(checkout).await?,
+                    Scan::Paths(paths) => {
+                        let paths = absolute(&cwd, paths);
+                        self.deciding = Some(session_id.to_owned());
+                        let ingested = async {
+                            for row in rows {
+                                self.ingest_paths(row, paths.clone()).await?;
+                            }
+                            Ok::<_, CoreError>(())
+                        }
+                        .await;
+                        self.deciding = None;
+                        ingested?;
+                    }
+                    Scan::Checkout => {
+                        for row in rows {
+                            self.rescan(row).await?;
+                        }
+                    }
                 }
             }
             self.record_turn(session_id, mark).await?;
         }
-        let additional_context = if event == "UserPromptSubmit" { self.prompt_context(thread).await } else { None };
+        // Other agents' messages reach a busy agent after its next tool call.
+        let additional_context = match event {
+            "UserPromptSubmit" => {
+                let parts: Vec<String> =
+                    [self.prompt_context(thread).await, self.take_messages(thread).await?].into_iter().flatten().collect();
+                (!parts.is_empty()).then(|| parts.join("\n\n"))
+            }
+            "PostToolUse" => self.take_messages(thread).await?,
+            _ => None,
+        };
         Ok(HookReply { additional_context })
     }
 }

@@ -89,6 +89,10 @@ pub enum Request {
         /// does (ADR 0069); not against a branch, which is git's already.
         #[serde(default)]
         hide_git: bool,
+        /// Leave out the edits of other agents working in the same clone
+        /// (ADR 0089).
+        #[serde(default)]
+        hide_others: bool,
     },
     /// [`Request::Diff`]'s files, each with its counts and size but not its
     /// lines.
@@ -101,6 +105,8 @@ pub enum Request {
         base: Option<String>,
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
     },
     /// For [`Request::Diff`]'s files the person marked seen, whether each is
     /// as they saw it, and the lines new since (ADR 0067).
@@ -114,6 +120,8 @@ pub enum Request {
         /// As [`Request::Diff`]'s.
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
     },
     /// Marks a file of the thread seen, or not, at a version the review read.
     MarkThreadSeen {
@@ -136,6 +144,8 @@ pub enum Request {
         /// As [`Request::Diff`]'s.
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
     },
     /// Searches the server when connected (with `filters`), else this
     /// machine's index.
@@ -229,6 +239,8 @@ pub enum Request {
         /// As [`Request::Diff`]'s.
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
     },
     MrApprove {
         mr: String,
@@ -313,6 +325,22 @@ pub enum Request {
     InFlight {
         cwd: PathBuf,
         path: String,
+        /// The asking agent's thread, left out; else the one checked out
+        /// at `cwd`, which in a clone several agents share may be another's.
+        #[serde(default)]
+        thread: Option<String>,
+    },
+    /// The other agents present in `thread`'s project, as its agent hears
+    /// of them (ADR 0090).
+    Agents {
+        thread: String,
+    },
+    /// A message from `from`'s agent to the agent of the thread `to` names,
+    /// handed to it after its next tool call or with its next prompt.
+    Message {
+        from: String,
+        to: String,
+        text: String,
     },
     /// Who wrote each line of `path`, as seen from `cwd` (ADR 0042).
     Blame {
@@ -336,6 +364,8 @@ pub enum Request {
         /// the lines (ADR 0069).
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
         cwd: PathBuf,
     },
     /// Anchors lines for a pending review comment, recording nothing
@@ -2143,6 +2173,7 @@ mod tests {
             NewLink::decl(&config),
             ThreadLink::decl(&config),
             FileEdit::decl(&config),
+            silt_proto::view::SharedEdits::decl(&config),
             FileTouch::decl(&config),
             HistoryEntry::decl(&config),
             ToolView::decl(&config),

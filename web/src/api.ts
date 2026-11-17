@@ -175,13 +175,28 @@ function designQuery(where: DesignWhere): string {
   if (where.thread) query.set('thread', where.thread)
   return query.toString()
 }
-/** Which of a thread's changes a diff shows: those of `turn`, or of turns `turn` to `toTurn`, else since `base`; with
- * `hideGit`, without what git itself rewrote (ADR 0069). */
-export interface DiffSpec {
+
+/** What a diff leaves out: with `hideGit`, what git itself rewrote (ADR 0069); with `hideOthers`, the edits of other
+ * agents working in the same clone (ADR 0089). */
+export interface Hidden {
+  hideGit?: boolean
+  hideOthers?: boolean
+}
+
+const hiddenParams = (params: URLSearchParams, hidden: Hidden) => {
+  if (hidden.hideGit) params.set('git', 'hide')
+  if (hidden.hideOthers) params.set('others', 'hide')
+  return params
+}
+
+/** The same, as a comment's or its anchors' lines say how they're numbered. */
+export const hiddenLines = (hidden: Hidden) => ({ hide_git: hidden.hideGit ?? false, hide_others: hidden.hideOthers ?? false })
+
+/** Which of a thread's changes a diff shows: those of `turn`, or of turns `turn` to `toTurn`, else since `base`. */
+export interface DiffSpec extends Hidden {
   turn?: number
   toTurn?: number
   base?: string
-  hideGit?: boolean
 }
 
 const diffParams = (options: DiffSpec) => {
@@ -189,8 +204,7 @@ const diffParams = (options: DiffSpec) => {
   if (options.turn !== undefined) params.set('turn', String(options.turn))
   if (options.toTurn !== undefined) params.set('to_turn', String(options.toTurn))
   if (options.base) params.set('base', options.base)
-  if (options.hideGit) params.set('git', 'hide')
-  return params
+  return hiddenParams(params, options)
 }
 /** Names which server to ask, on a machine signed in to several (ADR 0032). */
 const onServer = (server?: string | null) => (server ? `?server=${encodeURIComponent(server)}` : '')
@@ -325,11 +339,10 @@ export const api = {
   /** For the diff's files, the turns that last wrote their new lines. */
   diffTurns: (id: string, options: DiffSpec = {}) => request<FileTurns[]>('GET', `${thread(id)}/diff/turns?${diffParams(options)}`),
   /** With `base`, a diff base, code comments say where they are there too. */
-  comments: (id: string, base?: string, hideGit = false) => {
+  comments: (id: string, base?: string, hidden: Hidden = {}) => {
     const params = new URLSearchParams()
     if (base) params.set('base', base)
-    if (hideGit) params.set('git', 'hide')
-    const query = params.toString()
+    const query = hiddenParams(params, hidden).toString()
     return request<CommentView[]>('GET', `${thread(id)}/comments${query ? `?${query}` : ''}`)
   },
   commentsSent: (id: string, comments: string[]) => request<CommentView[]>('POST', `${thread(id)}/comments/sent`, { comments }),
@@ -458,8 +471,10 @@ export const api = {
   share: (id: string, user: string, remove: boolean) => request<string>('POST', `${thread(id)}/share`, { user, remove }),
   offerMergeRequest: (id: string, title: string) => request<MrSummary>('POST', `${thread(id)}/mrs`, { title }),
   mergeRequests: () => request<MrSummary[]>('GET', '/api/mrs'),
-  mergeRequest: (id: string, hideGit = false) =>
-    request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}${hideGit ? '?git=hide' : ''}`),
+  mergeRequest: (id: string, hidden: Hidden = {}) => {
+    const query = hiddenParams(new URLSearchParams(), hidden).toString()
+    return request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}${query ? `?${query}` : ''}`)
+  },
   approve: (id: string) => request<MrSummary>('POST', `/api/mrs/${encodeURIComponent(id)}/approve`),
   writeGuide: (id: string, text?: string) =>
     request<string>('POST', `/api/mrs/${encodeURIComponent(id)}/guide`, text === undefined ? {} : { text }),
