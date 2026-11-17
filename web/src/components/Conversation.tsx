@@ -7,12 +7,25 @@ function isWork(line: ShowLine): boolean {
   return line.line === 'tool_call' || line.line === 'edits' || (line.line === 'entry' && line.kind !== 'user' && line.kind !== 'assistant')
 }
 
+type Edits = Extract<ShowLine, { line: 'edits' }>
+
+/** Who made edits that weren't this thread's agent's alone, as `silt show` says it (ADR 0086). */
+function madeBy(shared: NonNullable<Edits['shared']>): string {
+  const agents = shared.agents.length > 0 ? ` (${shared.agents.join(', ')})` : ''
+  return `${shared.others ? 'by another agent' : 'by one of these agents'}${agents}`
+}
+
+const names = (lines: Edits[]) => [...new Set(lines.flatMap((line) => line.files.map((file) => file.path.split('/').pop())))].join(', ')
+
 function Work({ lines }: { lines: ShowLine[] }) {
   const tools = lines.filter((line) => line.line === 'tool_call')
-  const edited = lines.flatMap((line) => (line.line === 'edits' ? line.files : []))
+  const edits = lines.filter((line): line is Edits => line.line === 'edits')
+  const theirs = edits.filter((line) => line.shared?.others)
+  const edited = edits.filter((line) => !line.shared?.others)
   const summary = [
     tools.length > 0 ? `Ran ${tools.length} ${tools.length === 1 ? 'tool' : 'tools'}` : 'Tool output',
-    edited.length > 0 && `edited ${[...new Set(edited.map((file) => file.path.split('/').pop()))].join(', ')}`,
+    edited.length > 0 && `edited ${names(edited)}`,
+    theirs.length > 0 && `another agent edited ${names(theirs)}`,
   ]
     .filter(Boolean)
     .join(' · ')
@@ -31,6 +44,7 @@ function Work({ lines }: { lines: ShowLine[] }) {
             </p>
           ) : line.line === 'edits' ? (
             <p key={index} className="flex flex-wrap gap-x-3 font-mono">
+              {line.shared && <span className="font-sans text-fg-3">✎ {madeBy(line.shared)}</span>}
               {line.files.map((file) => (
                 <span key={file.path} className="inline-flex items-center gap-1.5">
                   {file.path} <Counts added={file.inserted} removed={file.deleted} />

@@ -5,7 +5,7 @@
 use std::str::FromStr;
 
 use silt_crdt::VersionVector;
-use silt_log::{Family, GitMade};
+use silt_log::{Family, Hidden, Hide};
 use silt_proto::SeenMark;
 use silt_proto::view::{FileSeen, FileTurns, LineSpan, MarkSeen, Seen, ThreadSeenView, TurnRun};
 use silt_types::{DeltaId, Frontier, ThreadId};
@@ -18,21 +18,21 @@ type Lines = [(String, Option<DeltaId>)];
 
 impl Core {
     /// For each file of the diff, the turns that last wrote its new lines;
-    /// with `hide_git`, numbered as the diff without git's rewrites shows
-    /// them (ADR 0069).
+    /// numbered as the diff without what `hide` leaves out shows them
+    /// (ADR 0069, ADR 0086).
     pub(crate) fn diff_turns(
         &self,
         thread: ThreadId,
         turns: TurnRange,
         base: Option<&str>,
         only: Only<'_>,
-        hide_git: bool,
+        hide: Hide,
     ) -> Result<Vec<FileTurns>, CoreError> {
-        let changes = self.diff_changes(thread, turns, base, only, hide_git)?;
+        let changes = self.diff_changes(thread, turns, base, only, hide)?;
         let (_, family) = self.diff_family(thread)?;
         let graph = family.graph();
         let range = diff_range(family, thread, turns, base)?;
-        let shown = Shown::new(family, range.to(), hide_git && range.is_versions());
+        let shown = Shown::new(family, range.to(), if range.is_versions() { hide } else { Hide::default() });
         let marks: Vec<VersionVector> = prompt_marks(family, thread).iter().map(|mark| graph.version_vector(mark)).collect();
         Ok(changes
             .iter()
@@ -50,8 +50,8 @@ impl Core {
 
 impl Core {
     /// For each file of the diff the person marked seen, whether it's still
-    /// as they saw it, and else which of its lines are new since; with
-    /// `hide_git`, numbered as the diff without git's rewrites shows them.
+    /// as they saw it, and else which of its lines are new since, numbered
+    /// as the diff without what `hide` leaves out shows them.
     /// Whether it's as they saw it reads the whole file either way, so the
     /// box doesn't take a tick away.
     pub(crate) fn thread_seen(
@@ -59,14 +59,14 @@ impl Core {
         thread: ThreadId,
         turns: TurnRange,
         base: Option<&str>,
-        hide_git: bool,
+        hide: Hide,
     ) -> Result<ThreadSeenView, CoreError> {
-        let changes = self.diff_changes(thread, turns, base, Only::default(), hide_git)?;
+        let changes = self.diff_changes(thread, turns, base, Only::default(), hide)?;
         let (_, family) = self.diff_family(thread)?;
         let graph = family.graph();
         let range = diff_range(family, thread, turns, base)?;
         let to = range.to().clone();
-        let shown = Shown::new(family, &to, hide_git && range.is_versions());
+        let shown = Shown::new(family, &to, if range.is_versions() { hide } else { Hide::default() });
         let files = changes
             .iter()
             .filter_map(|change| change.new_path.as_deref().or(change.old_path.as_deref()))
@@ -111,23 +111,23 @@ impl Core {
 }
 
 /// A file's lines as the diff shows them: at its new side's version, and
-/// without git's edits where it leaves them out.
+/// without what it leaves out.
 struct Shown<'a> {
     family: &'a Family,
     to: &'a VersionVector,
-    git_made: Option<GitMade>,
+    hidden: Option<Hidden>,
 }
 
 impl<'a> Shown<'a> {
-    fn new(family: &'a Family, to: &'a VersionVector, hide_git: bool) -> Self {
-        let git_made = hide_git.then(|| GitMade::of(family.log())).filter(|made| !made.is_empty());
-        Self { family, to, git_made }
+    fn new(family: &'a Family, to: &'a VersionVector, hide: Hide) -> Self {
+        let hidden = Hidden::of(family.log(), hide).filter(|hidden| !hidden.is_empty());
+        Self { family, to, hidden }
     }
 
     fn lines(&self, path: &str) -> Option<Vec<(String, Option<DeltaId>)>> {
-        match &self.git_made {
+        match &self.hidden {
             None => self.family.lines_at(path, self.to),
-            Some(made) => self.family.lines_where(path, |id| self.to.contains(id) && !made.contains(id)),
+            Some(hidden) => self.family.lines_where(path, |id| self.to.contains(id) && !hidden.contains(id)),
         }
     }
 }

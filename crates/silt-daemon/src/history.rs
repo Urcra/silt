@@ -531,7 +531,7 @@ fn file_touches(family: &Family, inode: InodeId, include: impl Fn(&Delta) -> boo
                 thread: delta.thread.to_string(),
                 prompt,
                 tool_use_id: tool,
-                by_agent: matches!(delta.author, Author::Agent { .. }),
+                by_agent: delta.author.is_agents(),
                 inserted,
                 deleted,
                 time_ms: delta.time_ms,

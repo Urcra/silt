@@ -358,6 +358,37 @@ async fn a_thread_goes_with_the_sessions_of_a_checkout_rebound_to_it() {
 }
 
 #[tokio::test]
+async fn a_clone_has_a_checkout_for_each_thread_working_there() {
+    let (_dir, store) = store_with_thread().await;
+    const OTHER: ThreadId = ThreadId(13);
+    store
+        .create_thread(&ThreadRecord {
+            id: OTHER,
+            family: FAMILY,
+            repo_root: PathBuf::from("/repo"),
+            repo: "github.com/u/repo".into(),
+            created_ms: 2,
+            owner: String::new(),
+        })
+        .await
+        .expect("thread");
+    let repo = PathBuf::from("/repo");
+    let first = store.add_checkout(THREAD, &repo, ActorId(5), false, 1).await.expect("checkout");
+    let second = store.add_checkout(OTHER, &repo, ActorId(6), false, 2).await.expect("a second thread's checkout");
+    store.add_checkout(OTHER, &PathBuf::from("/elsewhere"), ActorId(7), false, 3).await.expect("checkout");
+    assert!(store.add_checkout(OTHER, &repo, ActorId(8), false, 4).await.is_err(), "one per thread");
+    assert_eq!(store.checkouts_at(&repo).await.expect("checkouts"), [first.clone(), second.clone()]);
+
+    let session =
+        |id: &str, thread, checkout_id| SessionRecord { agent: "claude-code".into(), session_id: id.into(), thread, checkout_id };
+    store.add_session(&session("a", THREAD, first.id), 1).await.expect("session");
+    store.add_session(&session("b", OTHER, second.id), 1).await.expect("session");
+    store.remove_thread(OTHER).await.expect("removes");
+    assert_eq!(store.checkouts_at(&repo).await.expect("checkouts"), std::slice::from_ref(&first));
+    assert_eq!(store.sessions().await.expect("sessions"), [session("a", THREAD, first.id)]);
+}
+
+#[tokio::test]
 async fn full_text_search_finds_prefixes_and_ignores_query_syntax() {
     let (_dir, store) = store_with_thread().await;
     let delta = DeltaId::new(ActorId(1), Lamport(4));

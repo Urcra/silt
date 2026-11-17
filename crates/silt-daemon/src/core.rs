@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
 use silt_crdt::InodeId;
 use silt_git::{ListedFile, Repo};
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op, ThreadState, ThreadView};
+use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Hide, Op, ThreadState, ThreadView};
 use silt_proto::{Listing, Visibility};
 use silt_redact::Redactor;
 use silt_store::{CheckoutId, CheckoutRecord, SearchRow, SessionRead, SessionRecord, Store, ThreadRecord};
@@ -193,6 +193,9 @@ pub struct Core {
     /// When the watcher noticed the changes being taken in, for crediting
     /// them to the tool that was running then.
     pub(crate) change_noticed: Option<Instant>,
+    /// The session whose hook named the files being taken in, which made
+    /// those edits whoever else has a tool open (ADR 0086).
+    pub(crate) deciding: Option<String>,
     /// Set while a new thread takes in its clone's uncommitted changes,
     /// which are part of where it starts, not edits made in it.
     pub(crate) importing: bool,
@@ -459,15 +462,44 @@ impl Core {
         };
         let (loaded, entries) = tokio::join!(load::family_unread(&core.store, thread.family, repo.as_ref()), entries);
         core.take_loaded(thread.family, loaded?);
+        let mut sessions = vec![record];
         if let (Some(checkout), Some(entries)) = (checkout, entries?) {
-            let id = checkout.id;
+            let (id, path) = (checkout.id, checkout.path.clone());
             core.hold_checkout(checkout, entries)?;
             if let Some(Ok(Ok(check))) = filters.map(std::thread::JoinHandle::join) {
                 core.checkout(id)?.repo.knows_git_cli_filters(check);
             }
+            sessions.extend(core.hold_sharing(&path, id).await?);
         }
-        core.take_sessions(vec![record]).await?;
+        core.take_sessions(sessions).await?;
         Ok(core)
+    }
+
+    /// Holds the other checkouts at `path` whose threads' agents work there
+    /// too, with their families, and returns their sessions: an edit found
+    /// here is theirs to take in as well, and their open tools say who made
+    /// it (ADR 0086).
+    async fn hold_sharing(&mut self, path: &Path, own: CheckoutId) -> Result<Vec<SessionRecord>, CoreError> {
+        let mut held = Vec::new();
+        for record in self.store.checkouts_at(path).await? {
+            let Some(family) = self.threads.get(&record.thread).map(|thread| thread.family) else {
+                continue;
+            };
+            if record.id == own || !self.agent_at_work_anywhere(record.thread) {
+                continue;
+            }
+            if !self.families.contains_key(&family) {
+                let repo = Repo::discover(path).ok();
+                self.take_loaded(family, load::family_unread(&self.store, family, repo.as_ref()).await?);
+            }
+            let entries = stored_entries(&self.store, record.id).await?;
+            held.push(record.id);
+            self.hold_checkout(record, entries)?;
+        }
+        if held.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self.store.sessions().await?.into_iter().filter(|session| held.contains(&session.checkout_id)).collect())
     }
 
     /// A core for a process other than the daemon, holding no family yet.
@@ -498,6 +530,7 @@ impl Core {
             index_transcripts: silt_agents::Transcripts::default(),
             next_token: 0,
             change_noticed: None,
+            deciding: None,
             importing: false,
             recorded_at: None,
             index_queued: false,
@@ -916,31 +949,29 @@ impl Core {
             },
             Request::Threads => Response::ok(self.thread_summaries()),
             Request::Show { thread } => to_response(self.find_thread(&thread).map(|thread| self.show(thread))),
-            Request::Diff { thread, turn, to_turn, base, files, path, hide_git } => {
+            Request::Diff { thread, turn, to_turn, base, files, path, hide_git, hide_others } => {
+                let hide = Hide { git: hide_git, others: hide_others };
                 let only = Only { files, path: path.as_deref() };
                 let turns = TurnRange { turn, to_turn };
-                to_response(
-                    self.find_thread(&thread).and_then(|thread| self.diff(thread, turns, base.as_deref(), only, hide_git)),
-                )
+                to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turns, base.as_deref(), only, hide)))
             }
-            Request::DiffStats { thread, turn, to_turn, base, hide_git } => {
+            Request::DiffStats { thread, turn, to_turn, base, hide_git, hide_others } => {
+                let hide = Hide { git: hide_git, others: hide_others };
                 let turns = TurnRange { turn, to_turn };
-                to_response(
-                    self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turns, base.as_deref(), hide_git)),
-                )
+                to_response(self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turns, base.as_deref(), hide)))
             }
-            Request::ThreadSeen { thread, turn, to_turn, base, hide_git } => {
+            Request::ThreadSeen { thread, turn, to_turn, base, hide_git, hide_others } => {
+                let hide = Hide { git: hide_git, others: hide_others };
                 let turns = TurnRange { turn, to_turn };
-                to_response(
-                    self.find_thread(&thread).and_then(|thread| self.thread_seen(thread, turns, base.as_deref(), hide_git)),
-                )
+                to_response(self.find_thread(&thread).and_then(|thread| self.thread_seen(thread, turns, base.as_deref(), hide)))
             }
             Request::MarkThreadSeen { thread, mark } => to_response(self.mark_thread_seen(&thread, mark).await),
-            Request::DiffTurns { thread, turn, to_turn, base, files, path, hide_git } => {
+            Request::DiffTurns { thread, turn, to_turn, base, files, path, hide_git, hide_others } => {
+                let hide = Hide { git: hide_git, others: hide_others };
                 let only = Only { files, path: path.as_deref() };
                 let turns = TurnRange { turn, to_turn };
                 to_response(
-                    self.find_thread(&thread).and_then(|thread| self.diff_turns(thread, turns, base.as_deref(), only, hide_git)),
+                    self.find_thread(&thread).and_then(|thread| self.diff_turns(thread, turns, base.as_deref(), only, hide)),
                 )
             }
             Request::Search { query, limit, filters } => {
@@ -1000,7 +1031,9 @@ impl Core {
                 to_response(self.mr_create(thread.as_deref(), &cwd, title, summary).await)
             }
             Request::MrList { thread } => to_response(self.mr_list(thread.as_deref())),
-            Request::MrShow { mr, hide_git } => to_response(self.mr_show(&mr, hide_git)),
+            Request::MrShow { mr, hide_git, hide_others } => {
+                to_response(self.mr_show(&mr, Hide { git: hide_git, others: hide_others }))
+            }
             Request::MrApprove { mr } => to_response(self.mr_approve(&mr).await),
             Request::MrDecline { mr, reason } => to_response(self.mr_decline(&mr, reason).await),
             Request::MrRequestChanges { mr, reason } => to_response(self.mr_request_changes(&mr, reason).await),
@@ -1041,8 +1074,9 @@ impl Core {
             },
             Request::Blame { cwd, path } => to_response(self.blame(&cwd, &path)),
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
-            Request::Comments { thread, base, hide_git, cwd } => {
-                to_response(self.list_comments(&thread, base.as_deref(), hide_git, &cwd).await)
+            Request::Comments { thread, base, hide_git, hide_others, cwd } => {
+                let hide = Hide { git: hide_git, others: hide_others };
+                to_response(self.list_comments(&thread, base.as_deref(), hide, &cwd).await)
             }
             Request::AnchorLines { thread, on, cwd } => to_response(self.anchor_lines(&thread, on, &cwd).await),
             Request::PlaceAnchors { thread, place, cwd } => to_response(self.place_anchors(&thread, place, &cwd).await),
@@ -1237,6 +1271,25 @@ impl Core {
         self.running(thread).is_ok()
             || self.pending.iter().any(|pending| pending.thread == thread)
             || self.sessions.iter().any(|session| session.record.thread == thread && session.live)
+    }
+
+    /// [`Self::agent_at_work`], or a wrapper records the thread on its own,
+    /// which a process other than that wrapper sees only by its lock.
+    pub(crate) fn agent_at_work_anywhere(&self, thread: ThreadId) -> bool {
+        self.agent_at_work(thread) || crate::capture_lock::RecordingLock::held(&self.data_dir, thread)
+    }
+
+    /// The other checkouts at `checkout`'s path whose threads' agents work
+    /// there too, so an edit found through `checkout` is theirs to take in
+    /// as well (ADR 0086).
+    pub(crate) fn sharing(&self, checkout: CheckoutId) -> Vec<CheckoutId> {
+        let Some(held) = self.checkouts.get(&checkout) else {
+            return Vec::new();
+        };
+        self.rows_at(&held.record.path)
+            .filter(|id| *id != checkout)
+            .filter(|id| self.checkouts.get(id).is_some_and(|other| self.agent_at_work_anywhere(other.record.thread)))
+            .collect()
     }
 
     /// Records what changed in a clone left alone while no agent worked in

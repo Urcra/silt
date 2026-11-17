@@ -89,6 +89,10 @@ pub enum Request {
         /// does (ADR 0069); not against a branch, which is git's already.
         #[serde(default)]
         hide_git: bool,
+        /// Leave out the edits of other agents working in the same clone
+        /// (ADR 0086).
+        #[serde(default)]
+        hide_others: bool,
     },
     /// [`Request::Diff`]'s files, each with its counts and size but not its
     /// lines.
@@ -101,6 +105,8 @@ pub enum Request {
         base: Option<String>,
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
     },
     /// For [`Request::Diff`]'s files the person marked seen, whether each is
     /// as they saw it, and the lines new since (ADR 0067).
@@ -114,6 +120,8 @@ pub enum Request {
         /// As [`Request::Diff`]'s.
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
     },
     /// Marks a file of the thread seen, or not, at a version the review read.
     MarkThreadSeen {
@@ -136,6 +144,8 @@ pub enum Request {
         /// As [`Request::Diff`]'s.
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
     },
     /// Searches the server when connected (with `filters`), else this
     /// machine's index.
@@ -229,6 +239,8 @@ pub enum Request {
         /// As [`Request::Diff`]'s.
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
     },
     MrApprove {
         mr: String,
@@ -336,6 +348,8 @@ pub enum Request {
         /// the lines (ADR 0069).
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
         cwd: PathBuf,
     },
     /// Anchors lines for a pending review comment, recording nothing
@@ -1894,6 +1908,7 @@ mod tests {
             NewLink::decl(&config),
             ThreadLink::decl(&config),
             FileEdit::decl(&config),
+            silt_proto::view::SharedEdits::decl(&config),
             FileTouch::decl(&config),
             HistoryEntry::decl(&config),
             ToolView::decl(&config),

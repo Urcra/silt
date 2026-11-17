@@ -105,7 +105,9 @@ pub struct Snapshot {
     pub data: Vec<u8>,
 }
 
-/// A checkout's row in this machine's store.
+/// A checkout's row in this machine's store: one thread's view of a
+/// directory. A clone several agents work in has a row for each of their
+/// threads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CheckoutId(pub i64);
 
@@ -1242,6 +1244,28 @@ impl Store {
         sqlx::query!("UPDATE sessions SET thread_id = ? WHERE checkout_id = ?", thread, checkout).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// The checkouts at `path`, one per thread working there, oldest first.
+    pub async fn checkouts_at(&self, path: &Path) -> Result<Vec<CheckoutRecord>, StoreError> {
+        let path_text = path_text(path);
+        let rows = sqlx::query!(
+            r#"SELECT id AS "id!", thread_id, actor, managed AS "managed: bool" FROM checkouts WHERE path = ? ORDER BY id"#,
+            path_text
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(CheckoutRecord {
+                    id: CheckoutId(row.id),
+                    thread: ThreadId(id_from(&row.thread_id)?),
+                    path: path.to_owned(),
+                    actor: ActorId(id_from(&row.actor)?),
+                    managed: row.managed,
+                })
+            })
+            .collect()
     }
 
     pub async fn checkouts(&self) -> Result<Vec<CheckoutRecord>, StoreError> {

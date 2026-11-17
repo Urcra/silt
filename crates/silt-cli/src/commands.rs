@@ -17,6 +17,7 @@ use silt_daemon::protocol::{
     SearchResult, Sent, SessionStarted, ShowLine, ThreadSummary,
 };
 use silt_git::conventions::{self as project, LinkOutcome, PrepareOutcome};
+use silt_log::Hide;
 use silt_types::CloudSessionId;
 
 use crate::CliError;
@@ -911,9 +912,9 @@ pub fn mr_list(thread: Option<String>) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-pub fn mr_show(mr: &str, hide_git: bool) -> Result<(), Exn<CliError>> {
+pub fn mr_show(mr: &str, hide: Hide) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let details: MrDetails = call(&Request::MrShow { mr: mr.into(), hide_git })?;
+    let details: MrDetails = call(&Request::MrShow { mr: mr.into(), hide_git: hide.git, hide_others: hide.others })?;
     print!("{}", render::safe(&render::merge_request(&details)));
     Ok(())
 }
@@ -1034,10 +1035,12 @@ pub fn diff(
     turn: Option<usize>,
     to_turn: Option<usize>,
     base: Option<String>,
-    hide_git: bool,
+    hide: Hide,
 ) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let diff: String = call(&Request::Diff { thread: thread.into(), turn, to_turn, base, files: None, path: None, hide_git })?;
+    let Hide { git: hide_git, others: hide_others } = hide;
+    let request = Request::Diff { thread: thread.into(), turn, to_turn, base, files: None, path: None, hide_git, hide_others };
+    let diff: String = call(&request)?;
     print!("{}", render::safe(&diff));
     Ok(())
 }
@@ -1142,11 +1145,13 @@ pub fn comment(
     file: Option<String>,
     lines: Option<(usize, usize)>,
     entry: Option<usize>,
-    (base, hide_git): (Option<String>, bool),
+    (base, hide): (Option<String>, Hide),
     text: &str,
 ) -> Result<(), Exn<CliError>> {
     let on = match (file, lines, entry) {
-        (Some(path), Some((start, end)), None) => CommentOn::Lines { path, start, end, base, hide_git },
+        (Some(path), Some((start, end)), None) => {
+            CommentOn::Lines { path, start, end, base, hide_git: hide.git, hide_others: hide.others }
+        }
         (None, None, Some(index)) => CommentOn::Entry { index },
         _ => return Err(fail("comment on either --file with --lines, or --entry")),
     };
@@ -1164,7 +1169,7 @@ pub fn reply(thread: &str, comment: &str, text: &str) -> Result<(), Exn<CliError
     Ok(())
 }
 
-pub fn comments(thread: &str, resolve: Option<&str>, base: Option<String>, hide_git: bool) -> Result<(), Exn<CliError>> {
+pub fn comments(thread: &str, resolve: Option<&str>, base: Option<String>, hide: Hide) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     if let Some(comment) = resolve {
         let resolved: CommentView =
@@ -1172,7 +1177,9 @@ pub fn comments(thread: &str, resolve: Option<&str>, base: Option<String>, hide_
         println!("resolved {}", resolved.id);
         return Ok(());
     }
-    let comments: Vec<CommentView> = call(&Request::Comments { thread: thread.into(), base, hide_git, cwd: current_dir()? })?;
+    let Hide { git: hide_git, others: hide_others } = hide;
+    let request = Request::Comments { thread: thread.into(), base, hide_git, hide_others, cwd: current_dir()? };
+    let comments: Vec<CommentView> = call(&request)?;
     print!("{}", render::safe(&render::comments(&comments)));
     Ok(())
 }

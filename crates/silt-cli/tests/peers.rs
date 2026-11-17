@@ -1,4 +1,4 @@
-//! Agents in one project know about each other (ADR 0086).
+//! Two agents in one clone each record their own work (ADR 0086), and know about each other (ADR 0087).
 
 mod common;
 
@@ -54,6 +54,8 @@ fn thread_named(stderr: &[u8]) -> String {
     line.split("thread ").nth(1).and_then(|rest| rest.split([' ', ',']).next()).expect("thread id").to_owned()
 }
 
+/// Agent A is held in its tool, B starts in the same clone and is held in
+/// its own, then A and B each finish their edit in turn.
 fn two_agents_in_one_clone_are_both_recorded(daemon: bool) {
     let world = world(daemon);
     let laptop = &world.laptop;
@@ -61,14 +63,45 @@ fn two_agents_in_one_clone_are_both_recorded(daemon: bool) {
     let (marker_a, marker_b) = (world.root.path().join("in-tool-a"), world.root.path().join("in-tool-b"));
     let a = in_tool(laptop, &["claude"], &marker_a, envs);
     let b = in_tool(laptop, &["claude"], &marker_b, envs);
+    if daemon {
+        // While both are in a tool call, an edit nobody's hook names could
+        // be either's.
+        fs::write(laptop.repo.join("NOTES.md"), "by hand or by an agent\n").expect("writes");
+        let both_took_it = || {
+            let log = laptop.stdout(&["log"]);
+            let threads: Vec<&str> = log.lines().filter_map(|line| line.split_whitespace().next()).collect();
+            threads.len() == 2 && threads.iter().all(|thread| laptop.stdout(&["show", thread]).contains("NOTES.md"))
+        };
+        assert!(eventually(both_took_it), "both threads take the edit in");
+    }
     let_go(&marker_a);
     let a = finished(a);
     let_go(&marker_b);
     let b = finished(b);
-    for thread in [thread_named(&a.stderr), thread_named(&b.stderr)] {
-        let show = laptop.stdout(&["show", &thread]);
-        assert!(show.contains("Done: farewell added."), "{thread}: {show}");
+    let (thread_a, thread_b) = (thread_named(&a.stderr), thread_named(&b.stderr));
+    assert_ne!(thread_a, thread_b);
+    let (show_a, show_b) = (laptop.stdout(&["show", &thread_a]), laptop.stdout(&["show", &thread_b]));
+    for show in [&show_a, &show_b] {
+        assert!(show.contains("Done: farewell added."), "{show}");
+        assert!(show.contains("    ✎ src/main.rs +17 -0"), "each agent's own edit is under its tool call: {show}");
     }
+    assert!(!show_a.contains("by another agent"), "B's edit came after A was done: {show_a}");
+    let others = show_b.lines().find(|line| line.contains("by another agent")).unwrap_or_else(|| panic!("{show_b}"));
+    assert!(others.starts_with("  ✎ by another agent (claude-code ") && others.ends_with("): src/main.rs +17 -0"), "{others}");
+    if daemon {
+        for show in [&show_a, &show_b] {
+            let unclear = show.lines().find(|line| line.contains("by one of these agents")).unwrap_or_else(|| panic!("{show}"));
+            assert!(unclear.ends_with("NOTES.md +23 -0"), "{unclear}");
+        }
+    }
+    let farewells = |diff: &str| diff.lines().filter(|line| *line == "+fn farewell() {}").count();
+    let diff_b = laptop.stdout(&["diff", &thread_b]);
+    assert_eq!(farewells(&diff_b), 2, "B's tree has both edits: {diff_b}");
+    let without_others = laptop.stdout(&["diff", &thread_b, "--hide-others"]);
+    assert_eq!(farewells(&without_others), 1, "A's edit is left out: {without_others}");
+    assert_eq!(without_others.contains("NOTES.md"), daemon, "an unclear edit may be B's own, so it stays");
+    let main = fs::read_to_string(laptop.repo.join("src/main.rs")).expect("reads");
+    assert_eq!(main.matches("fn farewell() {}").count(), 2, "{main}");
 }
 
 #[test]
@@ -77,7 +110,6 @@ fn two_agents_in_one_clone_are_both_recorded_with_a_daemon() {
 }
 
 #[test]
-#[ignore = "the first agent's hook panics while the clone is bound to the second's thread (docs/research/agents-in-one-clone.md)"]
 fn two_agents_in_one_clone_are_both_recorded_without_a_daemon() {
     two_agents_in_one_clone_are_both_recorded(false);
 }

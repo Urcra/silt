@@ -1,5 +1,5 @@
 import { QueryClient } from '@tanstack/react-query'
-import type { DiffSpec } from './api'
+import type { DiffSpec, Hidden } from './api'
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -34,7 +34,7 @@ export const keys = {
   mrs: ['mrs'] as const,
   artifacts: ['artifacts'] as const,
   mr: (id: string) => ['mrs', id] as const,
-  mrShown: (id: string, hideGit: boolean) => ['mrs', id, hideGit] as const,
+  mrShown: (id: string, hidden: Hidden) => ['mrs', id, hidden] as const,
   inbox: (all: boolean) => ['inbox', all] as const,
   agents: ['agents'] as const,
   designSystems: ['design-systems'] as const,

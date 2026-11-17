@@ -114,10 +114,29 @@ impl Core {
         }
         if let Some(mark) = mark {
             if self.checkouts.contains_key(&checkout) {
+                // Other agents working in the same clone take in the same
+                // edits, each into its own thread (ADR 0086).
+                let rows: Vec<_> = std::iter::once(checkout).chain(self.sharing(checkout)).collect();
                 match scan_for(event, input) {
                     Scan::Nothing => {}
-                    Scan::Paths(paths) => self.ingest_paths(checkout, absolute(&cwd, paths)).await?,
-                    Scan::Checkout => self.rescan(checkout).await?,
+                    Scan::Paths(paths) => {
+                        let paths = absolute(&cwd, paths);
+                        self.deciding = Some(session_id.to_owned());
+                        let ingested = async {
+                            for row in rows {
+                                self.ingest_paths(row, paths.clone()).await?;
+                            }
+                            Ok::<_, CoreError>(())
+                        }
+                        .await;
+                        self.deciding = None;
+                        ingested?;
+                    }
+                    Scan::Checkout => {
+                        for row in rows {
+                            self.rescan(row).await?;
+                        }
+                    }
                 }
             }
             self.record_turn(session_id, mark).await?;

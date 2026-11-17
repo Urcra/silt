@@ -7,7 +7,7 @@ import { isChat } from '../chats'
 import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
 import { readWhole } from '../diffParse'
-import { useHideGit } from '../hideGit'
+import { useHideGit, useHideOthers } from '../hideGit'
 import { appHref, filePath } from '../permalink'
 import { forgeOf, projectName } from '../projects'
 import { keys, message } from '../query'
@@ -570,7 +570,8 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
   const [open, setOpen] = useState(false)
   const [reverting, setReverting] = useState(false)
   const [hideGit] = useHideGit()
-  const of = { turn: turn.number, hideGit }
+  const [hideOthers] = useHideOthers()
+  const of = { turn: turn.number, hideGit, hideOthers }
   // Counted from the files' stats; the lines are read only once asked for, and file by file when too many.
   const stats = useQuery({
     queryKey: keys.diffStats(thread, of),

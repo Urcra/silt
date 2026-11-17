@@ -268,11 +268,15 @@ export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", pat
  * The lines are numbered as a diff with git's rewrites left out
  * shows them (ADR 0069).
  */
-hide_git?: boolean, } | { "on": "anchored", anchor: string, } | { "on": "doc", artifact: string, start: number, end: number, } | { "on": "cell", artifact: string, sheet: number, address: string, } | { "on": "element", artifact: string, anchor: string, };
+hide_git?: boolean, 
+/**
+ * And with other agents' edits left out (ADR 0086).
+ */
+hide_others?: boolean, } | { "on": "anchored", anchor: string, } | { "on": "doc", artifact: string, start: number, end: number, } | { "on": "cell", artifact: string, sheet: number, address: string, } | { "on": "element", artifact: string, anchor: string, };
 
 export type PendingAnchor = { anchor: string, };
 
-export type PlaceAnchors = { base: string | null, anchors: Array<string>, hide_git?: boolean, };
+export type PlaceAnchors = { base: string | null, anchors: Array<string>, hide_git?: boolean, hide_others?: boolean, };
 
 export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, 
 /**
@@ -485,6 +489,17 @@ url: string | null,
 artifact: LinkedArtifact | null, };
 
 export type FileEdit = { path: string, inserted: number, deleted: number, };
+
+export type SharedEdits = { 
+/**
+ * Made by another thread's agent; else by one of `agents`, this
+ * thread's own among them.
+ */
+others: boolean, 
+/**
+ * Each agent with its session's first 8 characters, as `claude 1a2b3c4d`.
+ */
+agents: Array<string>, };
 
 export type FileTouch = { thread: string, 
 /**
@@ -993,7 +1008,11 @@ before_compaction: boolean,
  */
 artifact: string | null, };
 
-export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
+export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, 
+/**
+ * Set for edits that weren't this thread's agent's alone (ADR 0086).
+ */
+shared?: SharedEdits, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
 
 export type Snooze = { 
 /**
@@ -1177,6 +1196,11 @@ export type ThreadSummary = { id: string, repo: string, title: string | null,
  * The command of the agent that recorded its latest session.
  */
 agent: string | null, created_ms: number, messages: number, edits: number, 
+/**
+ * Whether it records edits by other agents that worked in the same
+ * clone, which a diff can leave out (ADR 0086).
+ */
+shared: boolean, 
 /**
  * `here` when checked out on this machine, `remote` when only known
  * from the server, `moved` when another device took it over.

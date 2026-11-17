@@ -11,6 +11,7 @@ function thread(id: string, overrides: Partial<ThreadSummary> = {}, mine: Partia
     created_ms: 0,
     messages: 0,
     edits: 0,
+    shared: false,
     location: 'here',
     forked_from: null,
     owner: '',

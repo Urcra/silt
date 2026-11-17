@@ -5502,6 +5502,7 @@ dependencies = [
  "silt-daemon",
  "silt-design",
  "silt-git",
+ "silt-log",
  "silt-mcp",
  "silt-os",
  "silt-proto",

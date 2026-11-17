@@ -390,18 +390,7 @@ impl Core {
             Some(commit) if isolated => repo.create_managed_checkout(&thread.to_string(), commit, None)?.path,
             _ => repo.root().to_owned(),
         };
-        let checkout_actor = ActorId(uuid::Uuid::new_v4().as_u128());
-        // From the store, as a process other than the daemon doesn't hold
-        // every checkout.
-        let existing = self.store.checkouts().await?.into_iter().find(|checkout| checkout.path == checkout_path);
-        let checkout = match existing {
-            Some(previous) => {
-                self.checkouts.remove(&previous.id);
-                self.store.rebind_checkout(previous.id, thread, checkout_actor).await?;
-                silt_store::CheckoutRecord { thread, actor: checkout_actor, ..previous }
-            }
-            None => self.store.add_checkout(thread, &checkout_path, checkout_actor, isolated, now_ms()).await?,
-        };
+        let checkout = self.bind_checkout(thread, &checkout_path, isolated).await?;
         let checkout_id = checkout.id;
         self.start_checkout(checkout, BTreeMap::new())?;
         self.importing = !already_ran;
@@ -412,6 +401,33 @@ impl Core {
         // `join("")` would add a trailing slash, which changes Claude's slug.
         let agent_cwd = if relative.as_os_str().is_empty() { checkout_path.clone() } else { checkout_path.join(&relative) };
         Ok(CreatedThread { thread, family: family_id, checkout_id, checkout: checkout_path, agent_cwd, repo, head })
+    }
+
+    /// A fresh checkout for `thread` at `path`. It takes over the thread's
+    /// own there, or else one whose thread's agent is gone; beside those of
+    /// agents still working there it's another (ADR 0086). From the store,
+    /// as a process other than the daemon doesn't hold every checkout.
+    pub(crate) async fn bind_checkout(
+        &mut self,
+        thread: ThreadId,
+        path: &Path,
+        managed: bool,
+    ) -> Result<silt_store::CheckoutRecord, CoreError> {
+        let actor = ActorId(uuid::Uuid::new_v4().as_u128());
+        let rows = self.store.checkouts_at(path).await?;
+        let previous = rows
+            .iter()
+            .find(|row| row.thread == thread)
+            .or_else(|| rows.iter().find(|row| !self.agent_at_work_anywhere(row.thread)))
+            .cloned();
+        Ok(match previous {
+            Some(previous) => {
+                self.checkouts.remove(&previous.id);
+                self.store.rebind_checkout(previous.id, thread, actor).await?;
+                silt_store::CheckoutRecord { thread, actor, ..previous }
+            }
+            None => self.store.add_checkout(thread, path, actor, managed, now_ms()).await?,
+        })
     }
 
     /// Waits for the agent to write a session it named itself.
@@ -1243,14 +1259,22 @@ impl Core {
         });
     }
 
+    /// Who made an edit at `checkout`, from every session working at its
+    /// path: two agents may share a clone, each with a checkout (ADR 0086).
     pub(crate) fn author_for(&self, checkout: CheckoutId) -> Author {
+        let Some(held) = self.checkouts.get(&checkout) else {
+            return Author::User;
+        };
+        let thread = held.record.thread;
+        let here: HashSet<CheckoutId> = self.rows_at(&held.record.path).collect();
         let sessions: Vec<attribution::SessionState<'_>> = self
             .sessions
             .iter()
-            .filter(|session| session.record.checkout_id == checkout)
+            .filter(|session| here.contains(&session.record.checkout_id))
             .map(|session| attribution::SessionState {
                 agent: &session.record.agent,
                 session: &session.record.session_id,
+                own: session.record.thread == thread,
                 capture: session.agent.capture(),
                 live: session.live,
                 in_turn: session.in_turn,
@@ -1260,9 +1284,19 @@ impl Core {
             })
             .collect();
         // An agent that hasn't written its session yet, but is running.
-        let pending = self.pending.iter().find(|pending| pending.checkout_id == checkout).map(|pending| pending.agent.id());
+        let pending = self
+            .pending
+            .iter()
+            .filter(|pending| here.contains(&pending.checkout_id))
+            .min_by_key(|pending| pending.thread != thread)
+            .map(|pending| attribution::Pending { agent: pending.agent.id(), own: pending.thread == thread });
         let noticed = self.change_noticed.unwrap_or_else(Instant::now);
-        attribution::author(self.importing, &sessions, pending, noticed)
+        attribution::author(self.importing, &sessions, self.deciding.as_deref(), pending, noticed)
+    }
+
+    /// The checkouts held at `path`, one per thread working there.
+    pub(crate) fn rows_at<'a>(&'a self, path: &'a Path) -> impl Iterator<Item = CheckoutId> + 'a {
+        self.checkouts.values().filter(move |checkout| checkout.record.path == path).map(|checkout| checkout.record.id)
     }
 
     pub(crate) async fn hook(&mut self, event: &str, input: serde_json::Value) -> Response {

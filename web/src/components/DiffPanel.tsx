@@ -1,8 +1,10 @@
+import { useQuery } from '@tanstack/react-query'
 import { memo, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { type Hidden, api } from '../api'
 import { type View, VIEWS, baseOf } from '../diffSpec'
-import { useHideGit } from '../hideGit'
-import { message } from '../query'
+import { useHideGit, useHideOthers } from '../hideGit'
+import { keys, message } from '../query'
 import { keptView } from '../reviewView'
 import { itemOf, useReview } from '../review'
 import { useActions } from '../shortcuts'
@@ -58,10 +60,14 @@ export const DiffPanel = memo(function DiffPanel({
   const [other, setOther] = useState('merge-base')
   const [commit, setCommit] = useState('')
   const base = baseOf(view, other, commit)
-  // Against main the diff is git's own; elsewhere git's rewrites can be left out (ADR 0069).
+  // Against main the diff is git's own; elsewhere git's rewrites (ADR 0069) and other agents' edits (ADR 0086) can be
+  // left out.
   const [hideGitSetting, setHideGit] = useHideGit()
+  const [hideOthersSetting, setHideOthers] = useHideOthers()
+  const shared = useShared(thread)
   const hideGit = hideGitSetting && view !== 'main'
-  const of = { base, hideGit }
+  const hideOthers = hideOthersSetting && view !== 'main' && shared
+  const of = { base, hideGit, hideOthers }
   const review = useReview(thread)
   const { stats, whole, diff, text, files, commenting, unsent, changed, pending, outdated, error } = useThreadDiff(thread, of, review, onCommented, agent)
   const shownReviewed = text !== undefined && reviewed !== undefined
@@ -78,6 +84,7 @@ export const DiffPanel = memo(function DiffPanel({
     <>
       <ChipSelect label="compare" value={view} onChange={(chosen) => setView(chosen as View)} options={VIEWS.map((choice) => ({ id: choice.id, name: choice.label }))} />
       <HideGitBox on={hideGitSetting} onChange={setHideGit} disabled={view === 'main'} />
+      {shared && <HideOthersBox on={hideOthersSetting} onChange={setHideOthers} disabled={view === 'main'} />}
       <Tabs label="layout" tabs={LAYOUTS} value={layout} onChange={setPicked} />
     </>
   )
@@ -104,11 +111,7 @@ export const DiffPanel = memo(function DiffPanel({
       <OutdatedDrafts drafts={outdated} review={review} />
       {error && <p className="text-sm text-danger">{message(error)}</p>}
       {(stats.isPending || (whole && diff.isPending)) && <Skeleton className="h-32" />}
-      {hideGit && (
-        <p role="note" className="text-xs text-fg-2">
-          Without what git rewrote, as a checkout, pull or stash does; what's on disk may differ.
-        </p>
-      )}
+      <HiddenNote hidden={of} />
       {whole === false && <FilesByStats thread={thread} stats={stats.data ?? []} of={of} commenting={commenting} />}
       {whole && text !== undefined && <DiffView text={text} layout={layout} viewFiles={thread} commenting={commenting} anchors={reviewed !== undefined} />}
       {whole && diff.hasNextPage && (
@@ -120,13 +123,25 @@ export const DiffPanel = memo(function DiffPanel({
   )
 })
 
+interface BoxProps {
+  on: boolean
+  onChange: (on: boolean) => void
+  disabled?: boolean
+}
+
 /** Leaves out of the diffs what git itself rewrote, as a checkout, pull or stash does (ADR 0069). */
-export function HideGitBox({ on, onChange, disabled = false }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean }) {
+export function HideGitBox(props: BoxProps) {
+  return <HideBox {...props} label="Hide git’s changes" title="A checkout, pull, merge, rebase, reset or stash the agent ran" />
+}
+
+/** Leaves out of the diffs the edits of other agents working in the same clone (ADR 0086). */
+export function HideOthersBox(props: BoxProps) {
+  return <HideBox {...props} label="Hide other agents’ changes" title="Edits by another agent working in the same clone" />
+}
+
+function HideBox({ on, onChange, disabled = false, label, title }: BoxProps & { label: string; title: string }) {
   return (
-    <label
-      className="flex min-h-8 items-center gap-1.5 text-xs text-fg-2 max-md:min-h-11"
-      title={disabled ? 'Against main, the diff is git’s own' : 'A checkout, pull, merge, rebase, reset or stash the agent ran'}
-    >
+    <label className="flex min-h-8 items-center gap-1.5 text-xs text-fg-2 max-md:min-h-11" title={disabled ? 'Against main, the diff is git’s own' : title}>
       <input
         type="checkbox"
         checked={on && !disabled}
@@ -134,8 +149,25 @@ export function HideGitBox({ on, onChange, disabled = false }: { on: boolean; on
         onChange={(event) => onChange(event.target.checked)}
         className="accent-[var(--accent)] max-md:h-5 max-md:w-5"
       />
-      Hide git’s changes
+      {label}
     </label>
+  )
+}
+
+/** Whether the thread records other agents' edits, the only threads where leaving them out shows anything (ADR 0086). */
+export function useShared(thread: string | undefined): boolean {
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
+  return threads.data?.some((candidate) => candidate.id === thread && candidate.shared) ?? false
+}
+
+/** Says what a diff leaves out, as what's on disk may differ. */
+export function HiddenNote({ hidden }: { hidden: Hidden }) {
+  const left = [hidden.hideGit && 'what git rewrote, as a checkout, pull or stash does', hidden.hideOthers && 'other agents’ edits in this clone'].filter(Boolean)
+  if (left.length === 0) return null
+  return (
+    <p role="note" className="text-xs text-fg-2">
+      Without {left.join(', or ')}; what's on disk may differ.
+    </p>
   )
 }
 
