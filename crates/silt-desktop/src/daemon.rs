@@ -148,6 +148,8 @@ pub fn check(ui: &Url, wait: Duration) -> Answer {
         match stream.read(&mut start[read..]) {
             Ok(0) => break,
             Ok(more) => read += more,
+            // A signal, such as a child's exit, isn't the daemon's answer.
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => return Answer::Up,
             Err(_) => break,
         }
@@ -183,12 +185,16 @@ pub fn only_the_fragment_moves(shown: &Url, moved: &Url) -> bool {
     shown[..url::Position::AfterQuery] == moved[..url::Position::AfterQuery]
 }
 
-/// Whether the window may go to `to`: the daemon's UI, or this app's own
-/// starting page. Anything else, such as a link in a transcript, belongs in
-/// the browser.
+/// Whether the window may go to `to`: the daemon's UI, this app's own
+/// starting page, or a frame the UI writes itself. Anything else, such as a
+/// link in a transcript, belongs in the browser.
 pub fn stays_in_app(ui: Option<&Url>, to: &Url) -> bool {
     let own = to.scheme() == "tauri" || (to.scheme() == "http" && to.host_str() == Some("tauri.localhost"));
-    own || ui.is_some_and(|ui| ui.origin() == to.origin())
+    // WebKitGTK asks about every frame's navigation, not only the window's,
+    // and a canvas's boards, a deck's slides and a design system's preview
+    // are `srcdoc` frames. A window can't be sent to `about:srcdoc` itself.
+    let written = to.as_str() == "about:srcdoc";
+    own || written || ui.is_some_and(|ui| ui.origin() == to.origin())
 }
 
 /// Whether the page at `page` may hear the microphone: only the daemon's own
@@ -242,6 +248,8 @@ mod tests {
         assert!(inside("http://127.0.0.1:4321/t/abc#turn-2"));
         assert!(inside("http://tauri.localhost/index.html"));
         assert!(inside("tauri://localhost/index.html"));
+        assert!(inside("about:srcdoc"));
+        assert!(!inside("about:blank"));
         assert!(!inside("http://127.0.0.1:9999/"));
         assert!(!inside("http://localhost:4321/"));
         assert!(!inside("https://github.com/"));
