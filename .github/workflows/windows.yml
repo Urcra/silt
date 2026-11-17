@@ -32,7 +32,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 90
     env:
-      # The tests don't need the web UI, and building it needs wasm-bindgen.
+      # The tests don't need the web UI, and building it needs Node.js and pnpm.
       SILT_SKIP_WEB_BUILD: "1"
       CARGO_TERM_COLOR: always
     steps:

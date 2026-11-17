@@ -29,7 +29,7 @@ function pageSearch(summary: DesignSummary, clone?: string): DesignSearch {
     source: summary.source,
     name: summary.name,
     ...(clone && summary.source === 'project' ? { clone } : {}),
-    ...(summary.unmerged && summary.thread ? { thread: summary.thread } : {}),
+    ...((summary.unmerged || summary.chat) && summary.thread ? { thread: summary.thread } : {}),
   }
 }
 
@@ -60,7 +60,7 @@ function SystemRow({ summary, clone }: { summary: DesignSummary; clone?: string 
               {use}
             </Tag>
           ))}
-          {summary.thread && <Tag>{summary.unmerged ? 'being made' : 'being changed'}</Tag>}
+          {summary.thread && !summary.chat && <Tag>{summary.unmerged ? 'being made' : 'being changed'}</Tag>}
         </span>
         <span className="truncate font-mono text-2xs text-fg-3">{summary.dir}</span>
       </span>
@@ -74,7 +74,7 @@ function SystemRow({ summary, clone }: { summary: DesignSummary; clone?: string 
   )
 }
 
-/** Settings › Design systems: the repository's systems, project by project, then the person's own. */
+/** Settings › Design systems: the repository's systems, project by project, each chat's, then the person's own. */
 export function DesignSystemsSettings() {
   const catalog = useQuery({ queryKey: keys.designCatalog, queryFn: api.designCatalog })
   const [making, setMaking] = useState(false)
@@ -94,9 +94,9 @@ export function DesignSystemsSettings() {
       {catalog.isError && <p className="text-sm text-danger">{message(catalog.error)}</p>}
       {groups.map((group) =>
         group.systems.length === 0 && !group.project ? null : (
-          <div key={group.project?.repo ?? 'yours'} className="flex flex-col gap-2">
+          <div key={group.project?.repo ?? group.chat?.folder ?? 'yours'} className="flex flex-col gap-2">
             <p className="pt-2 font-mono text-2xs tracking-[0.14em] text-fg-2 uppercase">
-              {group.project ? `${group.project.name} · in the repository` : 'Yours · synced to your devices'}
+              {group.project ? `${group.project.name} · in the repository` : group.chat ? `${group.chat.title} · in a chat` : 'Yours · synced to your devices'}
             </p>
             {group.systems.map((summary) => (
               <SystemRow key={`${summary.name}-${summary.thread ?? ''}`} summary={summary} clone={group.project?.clone} />
@@ -653,7 +653,7 @@ export function DesignSystemPage() {
   const [width, setWidth] = useState<'desktop' | 'phone'>('desktop')
   const [changing, setChanging] = useState(false)
   const detail = page.data
-  const where = detail ? (detail.summary.source === 'personal' ? 'yours' : search.clone?.split('/').pop() ?? 'repository') : ''
+  const where = detail ? (detail.summary.source === 'personal' ? 'yours' : detail.summary.chat ? 'a chat' : search.clone?.split('/').pop() ?? 'repository') : ''
   return (
     <Page
       title={
@@ -676,12 +676,16 @@ export function DesignSystemPage() {
             ))}
             {detail.summary.thread && (
               <Link to="/t/$id" params={{ id: detail.summary.thread }} className="text-xs text-accent-fg hover:text-fg-1">
-                {detail.summary.unmerged ? 'Being made in a thread' : 'Being changed in a thread'}
+                {detail.summary.chat ? 'Made in a chat' : detail.summary.unmerged ? 'Being made in a thread' : 'Being changed in a thread'}
               </Link>
             )}
-            <Button icon="agent" onClick={() => setChanging(true)} disabled={detail.summary.unmerged}>
-              Change it with an agent
-            </Button>
+            {detail.summary.chat && detail.summary.thread ? (
+              <KeepAsMine thread={detail.summary.thread} name={detail.summary.name} />
+            ) : (
+              <Button icon="agent" onClick={() => setChanging(true)} disabled={detail.summary.unmerged}>
+                Change it with an agent
+              </Button>
+            )}
           </>
         )
       }
@@ -725,6 +729,41 @@ export function DesignSystemPage() {
   )
 }
 
+/** Copies a chat's system to the person's own, which every project can use and which syncs, and opens it. */
+function KeepAsMine({ thread, name, small = false }: { thread: string; name: string; small?: boolean }) {
+  const navigate = useNavigate()
+  const queries = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const keep = async () => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      const kept = await api.designKeep(thread, name)
+      void queries.invalidateQueries({ queryKey: keys.designCatalog })
+      void navigate({ to: '/settings/design-systems/system', search: pageSearch(kept) })
+    } catch (failure) {
+      setError(message(failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <span className="inline-flex items-center gap-2">
+      {error && <span className="text-xs text-danger">{error}</span>}
+      {small ? (
+        <button type="button" className="text-xs text-accent-fg hover:text-fg-1 disabled:opacity-50" disabled={busy} onClick={() => void keep()} title="Copy it to your own design systems, which every project can use and which sync">
+          {busy ? 'Keeping…' : 'Keep as mine'}
+        </button>
+      ) : (
+        <Button icon="check" onClick={() => void keep()} disabled={busy} title="Copy it to your own design systems, which every project can use and which sync">
+          {busy ? 'Keeping…' : 'Keep as mine'}
+        </Button>
+      )}
+    </span>
+  )
+}
+
 /** The thread's panel while its agent makes or changes a system: each file as it's written, and the latest component. */
 export function ThreadDesignPanel({ thread, working }: { thread: string; working: boolean }) {
   const design = useQuery({ queryKey: keys.threadDesign(thread), queryFn: () => api.threadDesign(thread), refetchInterval: working ? 3000 : false })
@@ -749,9 +788,12 @@ export function ThreadDesignPanel({ thread, working }: { thread: string; working
           </span>
         </span>
         {detail && (
-          <Link to="/settings/design-systems/system" search={search} className="inline-flex items-center gap-1 text-xs text-accent-fg hover:text-fg-1">
-            Open <Icon name="chevronRight" />
-          </Link>
+          <span className="flex shrink-0 items-center gap-3">
+            {detail.summary.chat && <KeepAsMine thread={thread} name={detail.summary.name} small />}
+            <Link to="/settings/design-systems/system" search={search} className="inline-flex items-center gap-1 text-xs text-accent-fg hover:text-fg-1">
+              Open <Icon name="chevronRight" />
+            </Link>
+          </span>
         )}
       </div>
       {!detail && <p className="text-sm text-fg-2">Nothing written yet. Its files show here as the agent writes them.</p>}

@@ -97,6 +97,30 @@ fn codex_sessions_are_found_and_continue_natively_elsewhere() {
 }
 
 #[test]
+fn qudiks_sessions_continue_natively_elsewhere_and_move_to_codex() {
+    let world = world();
+    let thread = recorded(&world, "qudiks", "Qudiks says done.");
+    let config = fs::read_to_string(world.laptop.agents.join("qudiks/last-config")).expect("qudiks got config");
+    assert!(config.contains("mcp_servers.silt.command="), "{config}");
+    assert!(!world.laptop.agents.join("codex/sessions").exists(), "its rollouts are in its own home, not Codex's");
+
+    let checkout = resume_on_home(&world, &[&thread], &[("FAKE_EXPECT", "Please-add-a-farewell-line")]);
+    assert_eq!(
+        fs::read_to_string(checkout.join("src/main.rs")).expect("read"),
+        "fn main() {}\nfn farewell() {}\nfn qudiks() {}\n"
+    );
+    assert!(fs::read_to_string(world.home.agents.join("qudiks/last-session")).is_ok_and(|id| !id.is_empty()), "resumed");
+    assert!(world.home.stdout(&["show", &thread]).contains("> Continuing in qudiks"), "the continued session is recorded");
+
+    assert!(eventually(|| world.laptop.try_stdout(&["show", &thread]).contains("Continuing in qudiks")));
+    world.laptop.silt_with(
+        &["resume", &thread, "--agent", "codex"],
+        &[("FAKE_EXPECT", "Please-add-a-farewell-line Continuing-in-qudiks Qudiks-says-done")],
+    );
+    assert!(world.laptop.stdout(&["show", &thread]).contains("> Continuing in codex"));
+}
+
+#[test]
 fn the_wrapper_records_an_agent_without_hooks_when_no_daemon_runs() {
     let world = world();
     let laptop = &world.laptop;

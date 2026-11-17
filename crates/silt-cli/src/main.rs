@@ -31,7 +31,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run an agent CLI (claude, codex, gemini, agy, opencode, copilot) with Silt
+    /// Run an agent CLI (claude, codex, qudiks, gemini, agy, opencode, copilot) with Silt
     /// recording the session and every file edit
     Run {
         agent: String,
@@ -40,7 +40,7 @@ enum Command {
     },
     /// Start a chat: an agent CLI in a new folder of its own rather than a project, recorded as a private thread
     Chat {
-        /// The agent CLI to run (claude, codex, gemini, agy, opencode, copilot)
+        /// The agent CLI to run (claude, codex, qudiks, gemini, agy, opencode, copilot)
         #[arg(default_value = "claude")]
         agent: String,
         /// What the chat is about, naming its folder
@@ -57,6 +57,8 @@ enum Command {
     Claude(AgentRun),
     /// Run Codex with Silt recording the session and every file edit
     Codex(AgentRun),
+    /// Run Qudiks, the Codex fork for GitHub Copilot and local endpoints, with Silt recording the session and every file edit
+    Qudiks(AgentRun),
     /// Run Gemini CLI with Silt recording the session and every file edit
     Gemini(AgentRun),
     /// Run Antigravity CLI with Silt recording the session and every file edit
@@ -221,7 +223,15 @@ enum Command {
         id: u64,
         #[arg(long)]
         reject: bool,
+        /// Also let calls like it run without asking: for the rest of this `run`, or the `thread`
+        #[arg(long, value_parser = ["run", "thread"])]
+        grant: Option<String>,
+        /// How long a thread's grant lasts, in minutes
+        #[arg(long, default_value_t = 60)]
+        minutes: u32,
     },
+    /// End a grant, so the calls it let through ask again
+    Revoke { grant: u64 },
     /// Check chart palettes and text contrast, as artifacts' design guidance asks
     Design {
         #[command(subcommand)]
@@ -615,7 +625,7 @@ enum OrgCommand {
     /// machines (owners); rules not given restrict nothing
     Policy {
         org: String,
-        /// The agents allowed, comma-separated (claude, codex, copilot, gemini, agy, opencode)
+        /// The agents allowed, comma-separated (claude, codex, qudiks, copilot, gemini, agy, opencode)
         #[arg(long)]
         agents: Option<String>,
         /// Refuse the agents of a machine's agents.json
@@ -645,7 +655,7 @@ enum OrgCommand {
         /// The most network its sandboxes get: none, gateway, full or host
         #[arg(long)]
         network: Option<String>,
-        /// The most devices its sandboxes get: none, named or all_usb
+        /// The most devices its sandboxes get: none, relayed, named or all_usb
         #[arg(long)]
         devices: Option<String>,
         /// What members may never hand a sandbox, comma-separated: ranges, ports, paths, gpu, docker, ssh_agent
@@ -882,12 +892,14 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Credential { command } => credential::run(command),
         Command::Plugin { command } => plugin::run(command),
         Command::Approvals { all, thread } => plugin::list(all, thread),
-        Command::Approve { id, reject } => plugin::answer(id, reject),
+        Command::Approve { id, reject, grant, minutes } => plugin::answer(id, reject, grant.as_deref(), minutes),
+        Command::Revoke { grant } => plugin::revoke(grant),
         Command::Access { command } => access::run(command),
         Command::Design { command } => design::run(command),
         Command::Model { command } => model::run(command),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
         Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),
+        Command::Qudiks(run) => commands::run_agent("qudiks", run.isolated, &run.args),
         Command::Gemini(run) => commands::run_agent("gemini", run.isolated, &run.args),
         Command::Agy(run) => commands::run_agent("agy", run.isolated, &run.args),
         Command::Opencode(run) => commands::run_agent("opencode", run.isolated, &run.args),

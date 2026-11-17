@@ -17,6 +17,8 @@ pub mod credentials;
 mod design;
 mod design_pages;
 mod design_sync;
+#[cfg(unix)]
+pub mod devices;
 mod disk;
 mod edited;
 mod erase;
@@ -69,6 +71,7 @@ pub mod workspaces;
 pub use blame::blame_from_notes;
 pub use capture::{Captured, capture_here};
 pub use core::CoreError;
+pub use design::note_design_skill;
 pub use recorder::{NewRun, Recorder};
 pub use server::{RunError, holds_lock, run};
 pub use sync_once::{Synced, sync_once};

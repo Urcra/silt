@@ -12,6 +12,12 @@ rust-version = "1.99"
 license = "AGPL-3.0-only"
 publish = false
 
+# silt-wasm's bindings and xtask's generator of their JavaScript must be the
+# same version (ADR 0097).
+[workspace.dependencies]
+wasm-bindgen = "=0.2.126"
+wasm-bindgen-cli-support = "=0.2.126"
+
 # What `silt-bench` measures (ADR 0034): optimized like a release, and
 # incremental so the gate rebuilds it quickly.
 [profile.perf]

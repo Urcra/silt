@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE plugin_grants SET revoked_ms = ? WHERE id = ? AND revoked_ms IS NULL RETURNING thread_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "thread_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "cf4acc582e5d966341629f37cc38e1dbd18f70df4502653b93e0e0c29cf63132"
+}

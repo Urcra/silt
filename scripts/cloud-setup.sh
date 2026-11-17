@@ -26,23 +26,6 @@ step "Rust toolchain from rust-toolchain.toml"
 rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install
 rustup show >/dev/null
 
-# Pinned to silt-wasm's wasm-bindgen. The release's binary takes seconds;
-# building it takes minutes, so that's only the fallback.
-WASM_BINDGEN=0.2.126
-if [ "$(wasm-bindgen --version 2>/dev/null | awk '{print $2}')" != "$WASM_BINDGEN" ]; then
-    step "wasm-bindgen $WASM_BINDGEN"
-    release="wasm-bindgen-$WASM_BINDGEN-x86_64-unknown-linux-musl"
-    bin="${CARGO_HOME:-$HOME/.cargo}/bin"
-    mkdir -p "$bin"
-    if curl -sSfL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$WASM_BINDGEN/$release.tar.gz" |
-        tar xz -C "$bin" --strip-components=1 "$release/wasm-bindgen" "$release/wasm-bindgen-test-runner" "$release/wasm2es6js"; then
-        :
-    else
-        step "no release binary; building wasm-bindgen $WASM_BINDGEN"
-        cargo install --locked wasm-bindgen-cli --version "$WASM_BINDGEN"
-    fi
-fi
-
 # The gate runs the tests with nextest when it's installed, every test
 # binary at once rather than one after another. The release's binary takes
 # seconds; building it takes minutes, so that's only the fallback.

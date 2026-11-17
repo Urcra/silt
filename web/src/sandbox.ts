@@ -1,9 +1,17 @@
-import type { Backend, Devices, Extra, Network, Policy, Reach } from './api'
+import { useQuery } from '@tanstack/react-query'
+import { api, type Backend, type Devices, type Extra, type Network, type Policy, type Reach } from './api'
+import { keys } from './query'
+import { hosted } from './served'
 
 /** Silt's sandbox in the web UI (ADR 0093): its options as Settings shows them, and what a policy gives a run. */
 
 export const BACKENDS: { value: Backend; label: string; detail: string }[] = [
   { value: 'bubblewrap', label: 'bubblewrap', detail: "A process sandbox on Linux: starts at once, and shares this machine's kernel." },
+  {
+    value: 'seatbelt',
+    label: 'Seatbelt',
+    detail: "macOS's own sandbox, through sandbox-exec: starts at once; full internet goes through Silt's gateway, as HTTP(S) only.",
+  },
 ]
 
 /** The backends ADR 0093 plans, listed so the choice reads as one before they can be picked. */
@@ -21,12 +29,17 @@ export const NETWORKS: { value: Network; label: string; detail: string }[] = [
 
 export const DEVICES: { value: Devices; label: string; detail: string }[] = [
   { value: 'none', label: 'None', detail: 'No devices.' },
+  {
+    value: 'relayed',
+    label: 'Relayed by Silt',
+    detail: 'Silt holds each device on this machine and hands the agent a session of it, which outlives the agent: a serial port as a terminal, adb for that one device.',
+  },
   { value: 'named', label: 'Named devices', detail: 'The device nodes themselves, inside the sandbox.' },
   { value: 'all_usb', label: 'All USB', detail: 'Every USB device, for tools that talk to them directly (libusb).' },
 ]
 
 export const NETWORK_ORDER: Network[] = ['none', 'gateway', 'full', 'host']
-export const DEVICE_ORDER: Devices[] = ['none', 'named', 'all_usb']
+export const DEVICE_ORDER: Devices[] = ['none', 'relayed', 'named', 'all_usb']
 
 /** What turning it on hands the agent, as `silt-workspace`'s `Extra::hands_over` says it. */
 export const HANDS_OVER: Record<Extra, string> = {
@@ -43,10 +56,11 @@ export function reachOf(policy: Policy): Reach {
   const allowed = (extra: Extra) => !(policy.refuse ?? []).includes(extra)
   const devices = policy.devices ?? 'none'
   return {
+    backend: policy.backend ?? 'bubblewrap',
     network: policy.network ?? 'full',
     hosts: policy.hosts ?? [],
     devices,
-    device_nodes: devices === 'named' ? (policy.device_nodes ?? []) : [],
+    device_nodes: devices === 'named' || devices === 'relayed' ? (policy.device_nodes ?? []) : [],
     ranges: allowed('ranges') ? (policy.ranges ?? []) : [],
     ports: allowed('ports') ? (policy.ports ?? []) : [],
     paths: allowed('paths') ? (policy.paths ?? {}) : {},
@@ -55,4 +69,10 @@ export function reachOf(policy: Policy): Reach {
     ssh_agent: Boolean(policy.ssh_agent) && allowed('ssh_agent'),
     nested: !policy.no_nested,
   }
+}
+
+/** How many plugin calls wait for the person, for Needs you's empty state. */
+export function useApprovalsWaiting(): number {
+  const approvals = useQuery({ queryKey: keys.allApprovals, queryFn: () => api.approvals(), enabled: !hosted(), refetchInterval: 30_000 })
+  return (approvals.data ?? []).filter((approval) => approval.state === 'pending').length
 }

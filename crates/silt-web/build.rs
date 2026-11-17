@@ -7,9 +7,6 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// silt-wasm's, which the browser replica's bindings must match.
-const WASM_BINDGEN: &str = "0.2.126";
-
 fn main() {
     let web = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets it")).join("../../web");
     let index = web.join("dist/index.html");
@@ -21,11 +18,11 @@ fn main() {
     if let Err(missing) = check_tools() {
         panic!(
             "the web UI isn't built and can't be: {missing}.\n\
-             Building it needs Node.js with pnpm, wasm-bindgen {WASM_BINDGEN} \
-             (`cargo install wasm-bindgen-cli --version {WASM_BINDGEN}`) and the \
-             wasm32-unknown-unknown target (`rustup target add wasm32-unknown-unknown`). \
-             Or install a release binary (scripts/install.sh), or set SILT_SKIP_WEB_BUILD=1 \
-             for a silt without the web UI."
+             Building it needs Node.js with pnpm (`corepack enable pnpm`, or \
+             `npm install -g pnpm`) and the wasm32-unknown-unknown target \
+             (`rustup target add wasm32-unknown-unknown`). Or install a release \
+             binary (scripts/install.sh), or set SILT_SKIP_WEB_BUILD=1 for a silt \
+             without the web UI."
         );
     }
     // Its own target dir: the cargo running this build holds the lock on
@@ -51,11 +48,8 @@ fn check_tools() -> Result<(), String> {
             .filter(|output| output.status.success())
             .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
     };
+    output("node", &["--version"]).ok_or("Node.js isn't installed")?;
     output("pnpm", &["--version"]).ok_or("pnpm isn't installed")?;
-    let bindgen = output("wasm-bindgen", &["--version"]).ok_or("wasm-bindgen isn't installed")?;
-    if !bindgen.ends_with(WASM_BINDGEN) {
-        return Err(format!("wasm-bindgen is {bindgen}, not {WASM_BINDGEN}"));
-    }
     let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
     let sysroot = output(&rustc, &["--print", "sysroot"]).ok_or("rustc can't be run")?;
     if !Path::new(&sysroot).join("lib/rustlib/wasm32-unknown-unknown").is_dir() {

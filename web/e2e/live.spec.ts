@@ -1038,17 +1038,15 @@ test('files attached to a prompt reach the agent and are named in the conversati
   await expect(page.getByRole('list', { name: 'attached files' })).toBeHidden()
 })
 
-test("an agent that takes no images is told a text file's content in the prompt, and an image is refused", async ({ page }) => {
+test("an agent that takes no images is told a text file's content in the prompt, and an image's place on disk", async ({ page }) => {
   await startInNewThread(page, 'Plain agent')
-  await page.getByLabel('attach files').setInputFiles([SHOT])
-  await expect(page.getByText("Plain agent doesn't take files like shot.png")).toBeVisible()
-  await expect(page.getByRole('list', { name: 'attached files' })).toBeHidden()
-
   await page.getByLabel('draft').fill('see this')
-  await page.getByLabel('attach files').setInputFiles([NOTES])
+  await page.getByLabel('attach files').setInputFiles([SHOT, NOTES])
   await page.getByLabel('draft').press('Enter')
-  // The message is Markdown: the file's content shows as a code block.
-  await expect(page.getByText(/^Done: see this\s*notes\.txt:\s*hello$/)).toBeVisible()
+  // The message is Markdown: the saved files are a list, and the file's content a code block.
+  await expect(
+    page.getByText(/^Done: see this\s*Files attached to this prompt, saved where you can read them:\s*shot\.png \(image\/png\): \S+\/attachments\/\S+\/shot\.png\s*notes\.txt:\s*hello$/),
+  ).toBeVisible()
 })
 
 // A screenshot on the clipboard is named `image.png`, whatever it shows.
@@ -1098,16 +1096,22 @@ test("files pasted and dropped into a running thread's composer reach the agent"
   await expect(attached).toBeHidden()
 })
 
-test('an image pasted for an agent known to take none is refused at once', async ({ page }) => {
+test('a spreadsheet too large for a plain request starts a thread, saved where the agent reads it', async ({ page }) => {
   await page.goto(live.alice)
-  await page.getByLabel('agent to start').selectOption({ label: 'Plain agent' })
-  // Known once the daemon has asked the agent what it offers.
-  await page.getByRole('button', { name: 'add to the prompt' }).click()
-  await expect(page.getByRole('menuitem', { name: 'Attach text files (Plain agent takes no images)' })).toBeVisible({ timeout: 30_000 })
-  await page.keyboard.press('Escape')
-  await sendFiles(page, 'first prompt', 'paste', [SCREENSHOT])
-  await expect(page.getByText("Plain agent doesn't take files like pasted-1.png")).toBeVisible()
-  await expect(page.getByRole('list', { name: 'attached files' })).toBeHidden()
+  await page.getByRole('radio', { name: 'Worktree' }).click()
+  await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await page.getByLabel('first prompt').fill('sum the sheet')
+  // An old Excel file's header, then more than the 2 MiB a request without files may carry.
+  const book = Buffer.concat([Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]), Buffer.alloc(3 << 20, 0xff)])
+  await page.getByLabel('attach files').setInputFiles([{ name: 'book.xls', mimeType: 'application/vnd.ms-excel', buffer: book }])
+  await expect(page.getByRole('list', { name: 'attached files' })).toContainText('book.xls')
+  await page.getByLabel('first prompt').press('Enter')
+  const done = page.getByText(/^Done: sum the sheet\s*Files attached to this prompt, saved where you can read them:/)
+  await expect(done).toBeVisible()
+  const saved = (await done.textContent())?.match(/book\.xls \(application\/vnd\.ms-excel\): (\S+book\.xls)/)?.[1]
+  expect(saved).toBeTruthy()
+  expect(readFileSync(saved!).equals(book)).toBe(true)
+  await expect(page.getByText(/\(attached: prompt\/\w+\/book\.xls\)/)).toBeVisible()
 })
 
 test("a review of the agent's changes goes back to it as one prompt", async ({ page }) => {

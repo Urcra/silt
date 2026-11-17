@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Tasks for working on Silt itself: `cargo xtask status`"
+description = "Tasks for working on Silt itself: `cargo xtask status`, `cargo xtask wasm-bindgen`"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,3 +9,6 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+wasm-bindgen-cli-support.workspace = true

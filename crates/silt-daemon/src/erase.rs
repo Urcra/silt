@@ -115,6 +115,8 @@ impl Core {
                 files.push(offset.path);
             }
         }
+        files
+            .extend(threads.iter().map(|thread| crate::acp::attachments_dir(&self.data_dir, *thread)).filter(|dir| dir.exists()));
         let family_gone =
             self.threads.values().filter(|record| record.family == family).all(|record| erasing.contains(&record.id));
         if let Some(record) = self.threads.get(&thread).filter(|record| family_gone && silt_types::is_chat(&record.repo)) {
@@ -206,6 +208,16 @@ impl Core {
         self.drop_threads(&here).await?;
         for thread in &erasure.threads {
             self.store.remove_run_tokens(*thread).await?;
+            // What its sandboxes asked of plugins, and reached, goes too.
+            self.store.remove_plugin_calls(*thread).await?;
+            let log = crate::sandbox::access_log(&self.data_dir, &thread.to_string());
+            if let Err(error) = std::fs::remove_file(&log)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(error.into());
+            }
+            #[cfg(unix)]
+            self.release_devices(*thread);
         }
         for family in families {
             if !self.threads.values().any(|record| record.family == family) {
@@ -251,13 +263,18 @@ impl Core {
     /// variables that move them and where they are by default, chats'
     /// folders, and the local agent's sessions.
     fn erasable_roots(&self) -> Vec<PathBuf> {
-        const HOMES: [(&str, &str); 4] = [
+        const HOMES: [(&str, &str); 5] = [
             ("CLAUDE_CONFIG_DIR", ".claude"),
             ("CODEX_HOME", ".codex"),
+            ("QUDIKS_HOME", ".qudiks"),
             ("GEMINI_CLI_HOME", ".gemini"),
             ("COPILOT_HOME", ".copilot"),
         ];
-        let mut roots = vec![self.data_dir.join("local").join("sessions"), crate::chats::chats_dir(&self.data_dir)];
+        let mut roots = vec![
+            self.data_dir.join("local").join("sessions"),
+            self.data_dir.join("attachments"),
+            crate::chats::chats_dir(&self.data_dir),
+        ];
         let home = silt_os::home_dir();
         for (variable, folder) in HOMES {
             roots.extend(std::env::var_os(variable).map(PathBuf::from));
