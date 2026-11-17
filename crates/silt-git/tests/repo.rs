@@ -314,14 +314,24 @@ fn the_commit_at_a_time_is_the_one_head_was_at() {
     let root = dir.path();
     let repo = Repo::discover(root).expect("discovers");
     let first = repo.head_commit().expect("head").expect("a commit");
-    let between = now_ms() + 1000;
-    std::thread::sleep(std::time::Duration::from_millis(2100));
+    // The reflog is dated by the committer's date, so the second commit is
+    // dated an hour on rather than waited for: the wall clock can step.
+    let later = now_ms().div_euclid(1000) + 3600;
     fs::write(root.join("src/main.rs"), "fn main() { later() }\n").expect("write");
-    git(root, &["commit", "-q", "-am", "later"]);
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-q", "-am", "later"])
+        .env("GIT_COMMITTER_DATE", format!("@{later} +0000"))
+        .env("GIT_AUTHOR_DATE", format!("@{later} +0000"))
+        .status()
+        .expect("git runs");
+    assert!(status.success(), "git commit");
     let second = repo.head_commit().expect("head").expect("a commit");
     assert_ne!(first, second);
-    assert_eq!(repo.commit_at(between).expect("reads"), Some(first));
-    assert_eq!(repo.commit_at(now_ms() + 1000).expect("reads"), Some(second));
+    assert_eq!(repo.commit_at((later - 1800) * 1000).expect("reads"), Some(first));
+    assert_eq!(repo.commit_at((later - 1) * 1000 + 999).expect("reads"), Some(first), "the second before it");
+    assert_eq!(repo.commit_at(later * 1000).expect("reads"), Some(second));
     assert_eq!(repo.commit_at(0).expect("reads"), Some(second), "before any commit, HEAD's own");
 }
 
