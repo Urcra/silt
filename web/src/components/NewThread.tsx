@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { PRESETS, permissionModes, startSettings, startingValue } from '../agentState'
 import { type AgentSetting, api, type CloneInfo, type FoundFolder, type Preset, type Project, type ThreadSummary, type WorkspaceView } from '../api'
 import { agentRefused, modeRefused, presetRefused, rulesLine, serverLine, within, workspaceOf } from '../rules'
@@ -31,6 +31,7 @@ import { CloneHere } from './Projects'
 import { ThreadMark } from './ThreadMark'
 import { addSending } from '../sending'
 import { useTypeahead } from '../typeahead'
+import { usePathCompletion, withoutTrailingSeparator } from '../pathCompletion'
 
 interface Draft {
   text: string
@@ -63,11 +64,17 @@ function whereSays(where: Where, clone: string, base: string, device: string | n
 
 type PickTab = NonNullable<NewThreadSearch['pick']>
 
-/** Opens a folder Silt hasn't seen as a project, picking it once added. */
+/** Opens a folder Silt hasn't seen as a project, picking it once added; its path completes as it's typed. */
 function OpenFolder({ found, onAdded }: { found: FoundFolder[]; onAdded: (path: string) => void }) {
   const [path, setPath] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
+  const completing = usePathCompletion(path, setPath)
+  const listId = useId()
+  const activeOption = useRef<HTMLLIElement>(null)
+  useEffect(() => {
+    activeOption.current?.scrollIntoView({ block: 'nearest' })
+  }, [completing.active])
   const open = (chosen: string) => {
     setError(undefined)
     setBusy(true)
@@ -77,31 +84,77 @@ function OpenFolder({ found, onAdded }: { found: FoundFolder[]; onAdded: (path: 
       .finally(() => setBusy(false))
   }
   const suggested = found.filter((folder) => !folder.added && folder.git && folder.path.toLowerCase().includes(path.trim().toLowerCase())).slice(0, 5)
+  const foundAt = new Map(found.map((folder) => [folder.path, folder]))
   return (
     <form
       className="flex flex-col gap-1.5"
       onSubmit={(event) => {
         event.preventDefault()
-        if (path.trim()) open(path.trim())
+        if (path.trim()) open(withoutTrailingSeparator(path.trim()))
       }}
     >
       <span className="flex gap-1.5">
-        <Input aria-label="folder path" autoFocus placeholder="/home/me/code/app" value={path} onChange={(event) => setPath(event.target.value)} className="min-w-0 flex-1 font-mono text-xs" />
+        <Input
+          aria-label="folder path"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={completing.matches.length > 0}
+          aria-controls={listId}
+          aria-activedescendant={completing.active >= 0 ? `${listId}-${completing.active}` : undefined}
+          autoFocus
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="/home/me/code/app"
+          value={path}
+          onChange={(event) => setPath(event.target.value)}
+          onKeyDown={completing.onKeyDown}
+          className="min-w-0 flex-1 font-mono text-xs"
+        />
         <Button type="submit" variant="primary" disabled={busy || !path.trim()}>
           {busy ? 'Opening…' : 'Open'}
         </Button>
       </span>
-      {suggested.length > 0 && (
-        <ul aria-label="folders found on this machine" className="flex flex-col">
-          {suggested.map((folder) => (
-            <li key={folder.path}>
-              <button type="button" onClick={() => open(folder.path)} className="flex w-full flex-col rounded-sm px-2 py-1.5 text-left hover:bg-surface-2 max-md:min-h-11">
-                <span className="font-mono text-xs">{folder.path}</span>
-                <span className="text-2xs text-fg-2">{[folder.repo || 'no remote', sessionsSaid(folder)].filter(Boolean).join(' · ')}</span>
-              </button>
-            </li>
-          ))}
+      {completing.matches.length > 0 ? (
+        <ul id={listId} role="listbox" aria-label={`folders in ${completing.dir}`} className="flex max-h-60 flex-col overflow-y-auto">
+          {completing.matches.map((folder, index) => {
+            const known = foundAt.get(`${completing.dir}${folder.name}`)
+            const said = known ? sessionsSaid(known) : ''
+            return (
+              <li key={folder.name} id={`${listId}-${index}`} ref={index === completing.active ? activeOption : undefined} role="option" aria-selected={index === completing.active}>
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  // Keeps the focus in the path, to type on from the folder picked.
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => completing.complete(index)}
+                  className={cx(
+                    'flex w-full items-baseline gap-2 rounded-sm px-2 py-1 text-left hover:bg-surface-2 max-md:min-h-11',
+                    index === completing.active && 'bg-surface-2',
+                  )}
+                >
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                    {folder.name}
+                    {completing.dir.slice(-1)}
+                  </span>
+                  {(said || folder.git) && <span className="shrink-0 text-2xs text-fg-2">{said || 'git'}</span>}
+                </button>
+              </li>
+            )
+          })}
         </ul>
+      ) : (
+        suggested.length > 0 && (
+          <ul aria-label="folders found on this machine" className="flex flex-col">
+            {suggested.map((folder) => (
+              <li key={folder.path}>
+                <button type="button" onClick={() => open(folder.path)} className="flex w-full flex-col rounded-sm px-2 py-1.5 text-left hover:bg-surface-2 max-md:min-h-11">
+                  <span className="font-mono text-xs">{folder.path}</span>
+                  <span className="text-2xs text-fg-2">{[folder.repo || 'no remote', sessionsSaid(folder)].filter(Boolean).join(' · ')}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )
       )}
       {error && <p className="text-xs text-danger">{error}</p>}
     </form>
