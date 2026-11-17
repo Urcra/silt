@@ -724,7 +724,18 @@ content and the state shown, and don't redraw a component listed here.\n\n",
                 );
                 for component in &system.components {
                     let _ = writeln!(out, "### `{}`\n\n```html\n{}\n```\n", component.name, component.html);
+                    if let Some(guide) = &component.guide {
+                        let _ = writeln!(out, "{}\n", guide.trim());
+                    }
                 }
+            }
+            if let (Some(dir), false) = (&system.dir, system.assets.is_empty()) {
+                let _ = writeln!(
+                    out,
+                    "## Its assets\n\nIn `{dir}/assets/`: {}. A page can't load them from there: put a logo or an icon in as \
+inline SVG or a `data:` URI read from that file, and read a group's README for where each is used.\n",
+                    system.assets.iter().map(|path| format!("`{path}`")).collect::<Vec<_>>().join(", ")
+                );
             }
         }
         None => {
@@ -981,9 +992,12 @@ mod tests {
                     name: "button".into(),
                     about: "The button.".into(),
                     html: "<!-- The button. -->\n<button class=\"n-button\">Go</button>".into(),
+                    guide: Some("Use one primary per view.".into()),
                 })
                 .into_iter()
                 .collect(),
+            dir: readme.map(|_| "/repo/.silt/design-systems/nous".to_owned()),
+            assets: readme.map(|_| vec!["Logos/mark.svg".to_owned()]).unwrap_or_default(),
         }
     }
 
@@ -1005,7 +1019,8 @@ mod tests {
         assert!(text.contains("Use `accent` sparingly.") && text.contains("- color: --bg, --fg-1"), "{text}");
         assert!(
             text.contains("## Its components")
-                && text.contains("### `button`\n\n```html\n<!-- The button. -->\n<button class=\"n-button\">Go</button>\n```"),
+                && text.contains("### `button`\n\n```html\n<!-- The button. -->\n<button class=\"n-button\">Go</button>\n```\n\nUse one primary per view.")
+                && text.contains("In `/repo/.silt/design-systems/nous/assets/`: `Logos/mark.svg`."),
             "{text}"
         );
         assert!(text.contains("Other design systems: `acme` (ACME, the person's own)."), "{text}");

@@ -179,12 +179,20 @@ pub struct Compiled {
 
 /// `components.css` may be at most this large (ADR 0086).
 pub const COMPONENTS_CSS_BYTES: usize = 128 << 10;
-/// One component's example may be at most this large.
+/// One component's example, or its guidelines, may be at most this large.
 pub const COMPONENT_BYTES: usize = 16 << 10;
 /// A system holds at most this many components...
 pub const MAX_COMPONENTS: usize = 48;
-/// ...and their examples at most this much together.
-pub const COMPONENTS_BYTES: usize = 128 << 10;
+/// ...and their examples and guidelines at most this much together.
+pub const COMPONENTS_BYTES: usize = 256 << 10;
+/// `cover.html` may be at most this large (ADR 0088).
+pub const COVER_BYTES: usize = 64 << 10;
+/// One asset under `assets/` may be at most this large...
+pub const ASSET_BYTES: usize = 1 << 20;
+/// ...a system holds at most this many...
+pub const MAX_ASSETS: usize = 64;
+/// ...and at most this much together.
+pub const ASSETS_BYTES: usize = 4 << 20;
 
 impl Compiled {
     /// Adds a system's `components.css` after its tokens. It's unlayered,
@@ -224,13 +232,23 @@ fn components_css_problem(css: &str) -> Option<&'static str> {
     }
 }
 
-/// One of a system's components: its example markup and the note that
-/// heads it.
+/// One of a system's components: its example markup, the note that heads
+/// it and its guidelines (ADR 0086, ADR 0088).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component {
     pub name: String,
     pub about: String,
     pub html: String,
+    pub guide: Option<String>,
+}
+
+/// A component's files as read: `components/<name>.html` and, when there
+/// is one, `components/<name>.md`.
+#[derive(Debug, Clone, Copy)]
+pub struct ComponentFiles<'a> {
+    pub name: &'a str,
+    pub html: &'a str,
+    pub guide: Option<&'a str>,
 }
 
 /// Whether `name` can name a component: what names a system.
@@ -239,25 +257,38 @@ pub fn valid_component_name(name: &str) -> bool {
 }
 
 /// A system's components from their files, by name, in name order, within
-/// the limits, and what was left out and why.
-pub fn components<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> (Vec<Component>, Vec<String>) {
-    let mut files: Vec<(&str, &str)> = files.into_iter().collect();
-    files.sort_by_key(|(name, _)| *name);
+/// the limits, and what was left out and why. Guidelines too large are
+/// left out alone; the example stays.
+pub fn components<'a>(files: impl IntoIterator<Item = ComponentFiles<'a>>) -> (Vec<Component>, Vec<String>) {
+    let mut files: Vec<ComponentFiles<'a>> = files.into_iter().collect();
+    files.sort_by_key(|files| files.name);
     let mut out = Vec::new();
     let mut dropped = Vec::new();
     let mut total = 0;
-    for (name, html) in files {
+    for ComponentFiles { name, html, guide } in files {
+        let guide = match guide {
+            Some(guide) if guide.len() > COMPONENT_BYTES => {
+                dropped.push(format!("the component {name}'s guidelines are larger than 16 KiB"));
+                None
+            }
+            guide => guide.map(str::trim).filter(|guide| !guide.is_empty()),
+        };
+        let size = html.len() + guide.map_or(0, str::len);
         if !valid_component_name(name) {
             dropped.push(format!("{name:?} isn't a component's name"));
         } else if html.len() > COMPONENT_BYTES {
             dropped.push(format!("the component {name} is larger than 16 KiB"));
         } else if out.len() == MAX_COMPONENTS {
             dropped.push(format!("the component {name} is past the {MAX_COMPONENTS} a system may hold"));
-        } else if total + html.len() > COMPONENTS_BYTES {
-            dropped.push(format!("the component {name} is past the 128 KiB a system's components may hold together"));
+        } else if total + size > COMPONENTS_BYTES {
+            dropped.push(format!("the component {name} is past the 256 KiB a system's components may hold together"));
         } else {
-            total += html.len();
-            out.push(Component { name: name.to_owned(), about: component_note(html), html: html.trim().to_owned() });
+            total += size;
+            let about = Some(component_note(html))
+                .filter(|note| !note.is_empty())
+                .or_else(|| guide.map(first_sentence))
+                .unwrap_or_default();
+            out.push(Component { name: name.to_owned(), about, html: html.trim().to_owned(), guide: guide.map(str::to_owned) });
         }
     }
     (out, dropped)
@@ -270,6 +301,76 @@ fn component_note(html: &str) -> String {
         .and_then(|rest| rest.split_once("-->"))
         .map(|(note, _)| note.split_whitespace().collect::<Vec<_>>().join(" "))
         .unwrap_or_default()
+}
+
+/// A guideline file's summary: its first sentence, past any heading.
+fn first_sentence(guide: &str) -> String {
+    let prose =
+        guide.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).collect::<Vec<_>>().join(" ");
+    let end = prose.find(". ").map_or(prose.len(), |at| at + 1);
+    prose[..end].to_owned()
+}
+
+/// A system's cover, or why it can't be drawn.
+pub fn cover(html: &str) -> Result<String, String> {
+    let html = html.trim();
+    if html.len() > COVER_BYTES { Err("cover.html is larger than 64 KiB".into()) } else { Ok(html.to_owned()) }
+}
+
+/// What an asset is, by its path under `assets/`: `<Group>/<file>` with
+/// plain names and a picture's, a PDF's or a group README's extension; none
+/// for anything else, which a system doesn't keep.
+pub fn asset_type(path: &str) -> Option<&'static str> {
+    let (group, file) = path.split_once('/')?;
+    let plain = |part: &str| {
+        (1..=64).contains(&part.len())
+            && part.as_bytes()[0].is_ascii_alphanumeric()
+            && part.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+            && !part.contains("..")
+    };
+    if !plain(group) || !plain(file) {
+        return None;
+    }
+    if file == "README.md" {
+        return Some("text/markdown");
+    }
+    let extension = file.rsplit_once('.')?.1.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        _ => return None,
+    })
+}
+
+/// The assets a system keeps of those found, by path and size, in path
+/// order, within the limits, and what was left out and why.
+pub fn assets(found: impl IntoIterator<Item = (String, usize)>) -> (Vec<(String, &'static str, usize)>, Vec<String>) {
+    let mut found: Vec<(String, usize)> = found.into_iter().collect();
+    found.sort();
+    let mut out = Vec::new();
+    let mut dropped = Vec::new();
+    let mut total = 0;
+    for (path, size) in found {
+        match asset_type(&path) {
+            None => dropped.push(format!("assets/{path} isn't a picture, a PDF or a group's README")),
+            Some(_) if size > ASSET_BYTES => dropped.push(format!("assets/{path} is larger than 1 MiB")),
+            Some(_) if out.len() == MAX_ASSETS => {
+                dropped.push(format!("assets/{path} is past the {MAX_ASSETS} a system may hold"))
+            }
+            Some(_) if total + size > ASSETS_BYTES => {
+                dropped.push(format!("assets/{path} is past the 4 MiB a system's assets may hold together"))
+            }
+            Some(media_type) => {
+                total += size;
+                out.push((path, media_type, size));
+            }
+        }
+    }
+    (out, dropped)
 }
 
 /// Compiles `tokens` into custom properties: the first theme's on `:root`,
@@ -651,6 +752,145 @@ fn type_class(style: &TypeStyle, group_family: Option<&str>, families: &BTreeMap
     Ok(rule)
 }
 
+/// A token as a page shows it: its family, name, value per theme with
+/// colour aliases followed to a value, and usage note (ADR 0088). A value
+/// that holds in every theme is under `*`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenRow {
+    pub family: String,
+    pub name: String,
+    pub values: BTreeMap<String, String>,
+    pub usage: String,
+}
+
+/// A type style as a page shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeRow {
+    pub name: String,
+    pub group: String,
+    pub family: String,
+    pub font_size: String,
+    pub line_height: Option<String>,
+    pub font_weight: Option<String>,
+    pub letter_spacing: Option<String>,
+    pub usage: String,
+}
+
+/// A system's themes by id and name, the first being its primary.
+pub fn theme_list(tokens: &Tokens) -> Vec<(String, String)> {
+    tokens
+        .color
+        .as_ref()
+        .map(|colors| {
+            colors
+                .themes
+                .iter()
+                .map(|theme| (theme.id.clone(), if theme.name.is_empty() { theme.id.clone() } else { theme.name.clone() }))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Every token, colours first then each other family in file order, with
+/// values for display. Nothing here is compiled or trusted: a page shows
+/// these as text.
+pub fn token_rows(tokens: &Tokens) -> Vec<TokenRow> {
+    let mut out = Vec::new();
+    if let Some(colors) = &tokens.color {
+        let themes: Vec<&str> = colors.themes.iter().map(|theme| theme.id.as_str()).collect();
+        let by_name: BTreeMap<&str, &Token> = colors.tokens.iter().map(|token| (token.name.as_str(), token)).collect();
+        let raw = |token: &Token, theme: Option<&str>| -> Option<String> {
+            match &token.value {
+                TokenValue::One(value) => Some(value.clone()),
+                TokenValue::ByTheme(values) => theme
+                    .and_then(|theme| values.get(theme))
+                    .or_else(|| themes.first().and_then(|first| values.get(*first)))
+                    .or_else(|| values.values().next())
+                    .cloned(),
+            }
+        };
+        let resolve = |mut value: String, theme: Option<&str>| {
+            for _ in 0..16 {
+                let Some(alias) = value.trim().strip_prefix('{').and_then(|rest| rest.strip_suffix('}')).map(str::to_owned)
+                else {
+                    break;
+                };
+                match by_name.get(alias.as_str()).and_then(|target| raw(target, theme)) {
+                    Some(next) => value = next,
+                    None => break,
+                }
+            }
+            value
+        };
+        for token in &colors.tokens {
+            let values: BTreeMap<String, String> = match &token.value {
+                TokenValue::One(value) if !value.trim().starts_with('{') => [("*".to_owned(), value.clone())].into(),
+                _ if themes.is_empty() => {
+                    raw(token, None).map(|value| [("*".to_owned(), resolve(value, None))].into()).unwrap_or_default()
+                }
+                _ => themes
+                    .iter()
+                    .filter_map(|theme| raw(token, Some(theme)).map(|value| ((*theme).to_owned(), resolve(value, Some(theme)))))
+                    .collect(),
+            };
+            out.push(TokenRow { family: "color".into(), name: token.name.clone(), values, usage: token.usage.clone() });
+        }
+    }
+    for (family, value) in &tokens.rest {
+        if matches!(family.as_str(), "version" | "meta" | "description") {
+            continue;
+        }
+        let Ok(family_tokens) = serde_json::from_value::<Family>(value.clone()) else {
+            continue;
+        };
+        for token in family_tokens.tokens {
+            let values = match token.value {
+                TokenValue::One(value) => [("*".to_owned(), value)].into(),
+                TokenValue::ByTheme(values) => values,
+            };
+            out.push(TokenRow { family: family.clone(), name: token.name, values, usage: token.usage });
+        }
+    }
+    out
+}
+
+/// Every type style, with its family's stack.
+pub fn type_rows(tokens: &Tokens) -> Vec<TypeRow> {
+    let Some(typography) = &tokens.typography else {
+        return Vec::new();
+    };
+    let text = |value: &Option<serde_json::Value>| {
+        value.as_ref().map(|value| match value {
+            serde_json::Value::String(text) => text.clone(),
+            other => other.to_string(),
+        })
+    };
+    typography
+        .groups
+        .iter()
+        .flat_map(|group| {
+            group.styles.iter().map(move |style| {
+                let key = style.family.as_deref().or(group.family.as_deref());
+                TypeRow {
+                    name: style.name.clone(),
+                    group: group.name.clone(),
+                    family: key.and_then(|key| typography.families.get(key)).cloned().unwrap_or_default(),
+                    font_size: style.font_size.clone(),
+                    line_height: text(&style.line_height),
+                    font_weight: text(&style.font_weight),
+                    letter_spacing: style.letter_spacing.clone(),
+                    usage: style.usage.clone(),
+                }
+            })
+        })
+        .collect()
+}
+
+/// What `tokens.json`'s `meta.source` says the system was made from.
+pub fn made_from(tokens: &Tokens) -> Option<String> {
+    tokens.rest.get("meta")?.get("source")?.as_str().map(str::to_owned)
+}
+
 /// The token names a system defines, by family, for the agent's guide.
 pub fn token_names(tokens: &Tokens) -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -794,28 +1034,91 @@ mod tests {
         }
     }
 
+    fn files<'a>(name: &'a str, html: &'a str, guide: Option<&'a str>) -> ComponentFiles<'a> {
+        ComponentFiles { name, html, guide }
+    }
+
     #[test]
     fn components_are_named_noted_and_kept_within_their_limits() {
         let big = "x".repeat(COMPONENT_BYTES + 1);
         let (kept, dropped) = components([
-            ("row", "  <!-- A list row:\n   28px tall. -->\n<a class=\"r\">x</a>\n"),
-            ("Bad name", "<b>x</b>"),
-            ("huge", big.as_str()),
-            ("button", "<button>x</button>"),
+            files("row", "  <!-- A list row:\n   28px tall. -->\n<a class=\"r\">x</a>\n", None),
+            files("Bad name", "<b>x</b>", None),
+            files("huge", big.as_str(), None),
+            files("button", "<button>x</button>", Some("# Button\n\nStarts an action. Use one primary per view.")),
+            files("tag", "<i>t</i>", Some(big.as_str())),
         ]);
         let names: Vec<&str> = kept.iter().map(|component| component.name.as_str()).collect();
-        assert_eq!(names, ["button", "row"]);
+        assert_eq!(names, ["button", "row", "tag"]);
         assert_eq!(kept[1].about, "A list row: 28px tall.");
         assert_eq!(kept[1].html, "<!-- A list row:\n   28px tall. -->\n<a class=\"r\">x</a>");
-        assert_eq!(kept[0].about, "");
-        assert_eq!(dropped.len(), 2, "{dropped:?}");
+        assert_eq!(kept[0].about, "Starts an action.", "with no note, the guidelines' first sentence");
+        assert_eq!(kept[0].guide.as_deref(), Some("# Button\n\nStarts an action. Use one primary per view."));
+        assert_eq!(kept[2].guide, None, "guidelines too large go; the example stays");
+        assert_eq!(dropped.len(), 3, "{dropped:?}");
 
         let names: Vec<String> = (0..=MAX_COMPONENTS).map(|n| format!("c{n:02}")).collect();
-        let (kept, dropped) = components(names.iter().map(|name| (name.as_str(), "<i></i>")));
+        let (kept, dropped) = components(names.iter().map(|name| files(name, "<i></i>", None)));
         assert_eq!((kept.len(), dropped.len()), (MAX_COMPONENTS, 1));
         let half = "x".repeat(COMPONENT_BYTES);
-        let (kept, dropped) = components((0..9).map(|n| (["a", "b", "c", "d", "e", "f", "g", "h", "i"][n], half.as_str())));
+        let letters = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+        let (kept, dropped) = components(letters.iter().map(|name| files(name, &half, Some(&half))));
         assert_eq!((kept.len(), dropped.len()), (8, 1), "{dropped:?}");
+    }
+
+    #[test]
+    fn tokens_read_for_a_page_follow_aliases_per_theme() {
+        let tokens = parse(
+            r##"{"name":"A","meta":{"source":"code"},
+              "color":{"themes":[{"id":"light","name":"Light"},{"id":"dark"}],"tokens":[
+                {"name":"accent","value":{"light":"#d9883a","dark":"#dfa055"},"usage":"Primary."},
+                {"name":"link","value":"{accent}","usage":"Links."},
+                {"name":"ink","value":"#111"}]},
+              "type":{"families":{"sans":"Inter, sans-serif"},"groups":[{"name":"Text","family":"sans","styles":[
+                {"name":"body","fontSize":"15px","lineHeight":1.6,"fontWeight":400}]}]},
+              "spacing":{"tokens":[{"name":"space-4","value":"16px","usage":"Gutters."}]}}"##,
+        )
+        .expect("tokens");
+        assert_eq!(theme_list(&tokens), [("light".to_owned(), "Light".to_owned()), ("dark".to_owned(), "dark".to_owned())]);
+        let rows = token_rows(&tokens);
+        let link = rows.iter().find(|row| row.name == "link").expect("link");
+        assert_eq!(link.values, [("dark".to_owned(), "#dfa055".to_owned()), ("light".to_owned(), "#d9883a".to_owned())].into());
+        assert_eq!(rows.iter().find(|row| row.name == "ink").expect("ink").values, [("*".to_owned(), "#111".to_owned())].into());
+        let space = rows.iter().find(|row| row.name == "space-4").expect("space");
+        assert_eq!((space.family.as_str(), space.usage.as_str()), ("spacing", "Gutters."));
+        let body = &type_rows(&tokens)[0];
+        assert_eq!(
+            (body.family.as_str(), body.line_height.as_deref(), body.font_weight.as_deref()),
+            ("Inter, sans-serif", Some("1.6"), Some("400"))
+        );
+        assert_eq!(made_from(&tokens).as_deref(), Some("code"));
+    }
+
+    #[test]
+    fn a_cover_and_assets_are_kept_within_their_limits() {
+        assert_eq!(cover("  <svg></svg>\n").as_deref(), Ok("<svg></svg>"));
+        assert!(cover(&"x".repeat(COVER_BYTES + 1)).is_err());
+
+        assert_eq!(asset_type("Logos/acme-mark.svg"), Some("image/svg+xml"));
+        assert_eq!(asset_type("Icons/README.md"), Some("text/markdown"));
+        assert_eq!(asset_type("Images/hero.JPG"), Some("image/jpeg"));
+        for refused in
+            ["mark.svg", "Logos/../x.svg", "Logos/.hidden.svg", "Logos/a b.svg", "Logos/x.html", "Logos/sub/x.svg", "Logos/x.js"]
+        {
+            assert_eq!(asset_type(refused), None, "{refused}");
+        }
+        let (kept, dropped) = assets([
+            ("Logos/b.png".to_owned(), 10),
+            ("Logos/a.svg".to_owned(), 10),
+            ("Logos/big.png".to_owned(), ASSET_BYTES + 1),
+            ("Logos/x.html".to_owned(), 1),
+        ]);
+        assert_eq!(kept, [("Logos/a.svg".to_owned(), "image/svg+xml", 10), ("Logos/b.png".to_owned(), "image/png", 10)]);
+        assert_eq!(dropped.len(), 2, "{dropped:?}");
+        let many = (0..=MAX_ASSETS).map(|n| (format!("Icons/i{n:02}.svg"), 1));
+        assert_eq!(assets(many).0.len(), MAX_ASSETS);
+        let heavy = (0..5).map(|n| (format!("Images/i{n}.png"), ASSET_BYTES));
+        assert_eq!(assets(heavy).0.len(), 4);
     }
 
     #[test]
@@ -832,7 +1135,7 @@ mod tests {
         out.add_components(css);
         assert!(out.dropped.is_empty(), "{:?}", out.dropped);
 
-        let (kept, dropped) = components(nous.components.iter().map(|(name, html)| (name.as_str(), html.as_str())));
+        let (kept, dropped) = components(nous.components.iter().map(|(name, html)| files(name, html, None)));
         assert!(dropped.is_empty(), "{dropped:?}");
         assert_eq!(kept.len(), nous.components.len());
         for component in &kept {

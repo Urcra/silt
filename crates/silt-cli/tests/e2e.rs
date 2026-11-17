@@ -2233,6 +2233,88 @@ fn an_artifact_takes_the_repositorys_design_system() {
     assert!(data["design_system"] == "nous" && data["style"].is_string(), "a data page's charts take its colours: {data}");
 }
 
+/// Settings › Design systems lists the repository's systems and the
+/// person's with what picks each, shows one with its components, tokens and
+/// assets, and starts an agent that makes one, remembering which thread is
+/// making which (ADR 0088).
+#[test]
+fn design_systems_are_listed_shown_and_made_by_an_agent() {
+    let env = Env::new();
+    let systems = env.repo.join(".silt/design-systems");
+    copy_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.silt/design-systems/nous"), &systems.join("nous"));
+    fs::create_dir_all(systems.join("nous/assets/Logos")).expect("mkdir");
+    fs::write(systems.join("nous/assets/Logos/mark.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\"/>").expect("mark");
+    fs::write(systems.join("default"), "nous\n").expect("write");
+    git(&env.repo, &["add", "."]);
+    git(&env.repo, &["commit", "-q", "-m", "design system"]);
+    let mine = env.silt_home.join("design-systems/mine");
+    fs::create_dir_all(&mine).expect("mkdir");
+    fs::write(
+        mine.join("tokens.json"),
+        r##"{"name":"Mine","color":{"themes":[{"id":"light"}],"tokens":[{"name":"bg","value":"#fff"}]}}"##,
+    )
+    .expect("tokens");
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+
+    let catalog = api.ok("GET", "/api/design-systems/catalog", None);
+    let groups = catalog["groups"].as_array().expect("groups");
+    let project = &groups[0];
+    let nous = &project["systems"][0];
+    assert_eq!(
+        (nous["name"].as_str(), nous["title"].as_str(), nous["components"].as_u64()),
+        (Some("nous"), Some("Nous"), Some(17))
+    );
+    assert!(nous["uses"][0].as_str().is_some_and(|uses| uses.ends_with("'s default")), "{nous}");
+    let personal = groups.last().expect("the person's");
+    assert!(personal["project"].is_null() && personal["systems"][0]["name"] == "mine", "{personal}");
+
+    let clone = env.repo.display().to_string();
+    let page = api.ok("GET", &format!("/api/design-systems/system?source=project&name=nous&clone={clone}"), None);
+    assert!(page["css"].as_str().is_some_and(|css| css.contains(".n-button")), "the frame's CSS");
+    assert_eq!(page["components"].as_array().map(Vec::len), Some(17));
+    assert!(page["tokens"].as_array().is_some_and(|tokens| tokens.iter().any(|token| token["name"] == "accent")));
+    assert_eq!(page["assets"][0]["path"], "Logos/mark.svg");
+    let asset =
+        api.ok("GET", &format!("/api/design-systems/asset?source=project&name=nous&clone={clone}&path=Logos/mark.svg"), None);
+    assert_eq!(asset["media_type"], "image/svg+xml");
+    let (refused, _) =
+        api.call("GET", &format!("/api/design-systems/asset?source=project&name=nous&clone={clone}&path=../tokens.json"), None);
+    assert!(!refused, "only its assets");
+    let (refused, _) = api.call("GET", "/api/design-systems/system?source=project&name=nous&clone=/tmp", None);
+    assert!(!refused, "only a known clone");
+
+    let (taken, said) = api.call(
+        "POST",
+        "/api/design-systems/start",
+        Some(serde_json::json!({"title": "Nous", "agent": "v1", "keep": "repo", "clone": clone, "from": "code"})),
+    );
+    assert!(!taken && said.to_string().contains("already"), "{said}");
+    let started = api.ok(
+        "POST",
+        "/api/design-systems/start",
+        Some(serde_json::json!({"title": "Harbor", "agent": "v1", "keep": "repo", "clone": clone, "from": "code"})),
+    );
+    let thread = started.as_str().expect("the thread").to_owned();
+    let mut prompt = String::new();
+    eventually(|| {
+        let history = api.ok("GET", &format!("/api/threads/{thread}/history"), None);
+        let first =
+            history["entries"].as_array().and_then(|entries| entries.iter().find(|entry| entry["kind"] == "user").cloned());
+        prompt = first.and_then(|entry| entry["text"].as_str().map(str::to_owned)).unwrap_or_default();
+        !prompt.is_empty()
+    });
+    assert!(prompt.starts_with("Make a design system called Harbor") && prompt.contains("silt_use_skill"), "{prompt}");
+    settled_history(&api, &thread, &format!("Done: {prompt}"));
+    let making = api.ok("GET", &format!("/api/threads/{thread}/design-system"), None);
+    assert_eq!((making["name"].as_str(), making["keep"].as_str()), (Some("harbor"), Some("repo")), "{making}");
+    assert!(making["detail"].is_null(), "nothing written yet");
+    let (known, _) = api.call("GET", "/api/threads/none/design-system", None);
+    assert!(!known, "an unknown thread is refused");
+}
+
 fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
     fs::create_dir_all(to).expect("mkdir");
     for entry in fs::read_dir(from).expect("read dir").flatten() {

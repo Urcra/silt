@@ -14,6 +14,7 @@ mod connectors;
 mod control;
 mod core;
 mod design;
+mod design_pages;
 mod design_sync;
 mod disk;
 mod edited;
