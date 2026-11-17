@@ -46,7 +46,7 @@ impl fmt::Display for AgentKey {
 pub const KNOWN_AGENTS: [(&str, &[&str], &str); 8] = [
     ("claude", &["claude-code", "claude-acp"], "Claude Code"),
     ("codex", &["codex", "codex-acp"], "Codex"),
-    ("qudiks", &["qudiks"], "Qudiks"),
+    ("qudiks", &["qudiks", "qudiks-acp"], "Qudiks"),
     ("copilot", &["copilot-cli", "github-copilot-cli"], "GitHub Copilot"),
     ("gemini", &["gemini-cli", "gemini"], "Gemini CLI"),
     ("agy", &["antigravity-cli", "antigravity-acp"], "Antigravity"),
