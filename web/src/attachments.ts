@@ -27,19 +27,28 @@ export function filesFrom(data: DataTransfer | null): File[] {
   return [...data.items].filter((item) => item.kind === 'file').flatMap((item) => item.getAsFile() ?? [])
 }
 
-/** What an agent takes attached to a prompt: `null` until it's known. */
-export type Takes = { agent: string; images: boolean | null; files: boolean | null }
+/** The largest file a prompt takes, and all of a prompt's files together, as the daemon's `acp::decode` has them. */
+export const FILE_BYTES = 10 << 20
+export const FILES_BYTES = 25 << 20
+
+/** Why `files` can't be added to those `attached`, if they can't: refused before they're read and sent. */
+export function tooLarge(files: { name: string; size: number }[], attached: number): string | null {
+  const large = files.find((file) => file.size > FILE_BYTES)
+  if (large) return `${large.name} is too large: a prompt takes files of up to 10 MiB`
+  const total = files.reduce((sum, file) => sum + file.size, attached)
+  return total > FILES_BYTES ? 'These files are too large together: a prompt takes up to 25 MiB of files' : null
+}
 
 /**
- * The files a prompt carries. `add` names pasted ones apart and refuses images the agent is known not to take,
- * rather than leave the daemon to refuse the prompt.
+ * The files a prompt carries. `add` names pasted ones apart. Any file goes: one the agent can't read in the
+ * prompt itself, such as a spreadsheet, the daemon saves where the agent can read it.
  */
-export function useAttachments(takes: Takes) {
+export function useAttachments() {
   const [attached, setAttached] = useState<PromptAttachment[]>([])
   const add = async (files: File[], pasted = false) => {
+    const refused = tooLarge(files, attached.reduce((sum, file) => sum + (file.data.length * 3) / 4, 0))
+    if (refused) throw new Error(refused)
     const named = files.map((file, index) => ({ file, name: pasted ? pastedName(file, attached.length + index + 1) : file.name }))
-    const refused = takes.images === false && named.find(({ file }) => file.type.startsWith('image/'))
-    if (refused) throw new Error(`${takes.agent} doesn't take files like ${refused.name}`)
     const read = await Promise.all(named.map(({ file, name }) => readAttachment(file, name)))
     setAttached((before) => [...before, ...read])
   }
@@ -48,9 +57,5 @@ export function useAttachments(takes: Takes) {
   return { attached, add, remove, restore, clear: () => setAttached([]) }
 }
 
-/** What the composer's + offers to attach, for what the agent can read. */
-export function attachChoice(takes: Takes): { label: string; accept?: string } {
-  if (takes.images !== false) return { label: 'Attach files or images' }
-  const accept = takes.files === false ? 'text/*,.md,.json,.ts,.tsx,.rs,.py,.toml,.yaml,.yml' : undefined
-  return { label: `Attach text files (${takes.agent} takes no images)`, accept }
-}
+/** What the composer's + offers to attach. */
+export const ATTACH = { label: 'Attach files or images' }

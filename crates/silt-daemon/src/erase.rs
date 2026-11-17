@@ -115,6 +115,8 @@ impl Core {
                 files.push(offset.path);
             }
         }
+        files
+            .extend(threads.iter().map(|thread| crate::acp::attachments_dir(&self.data_dir, *thread)).filter(|dir| dir.exists()));
         let family_gone =
             self.threads.values().filter(|record| record.family == family).all(|record| erasing.contains(&record.id));
         if let Some(record) = self.threads.get(&thread).filter(|record| family_gone && silt_types::is_chat(&record.repo)) {
@@ -257,7 +259,11 @@ impl Core {
             ("GEMINI_CLI_HOME", ".gemini"),
             ("COPILOT_HOME", ".copilot"),
         ];
-        let mut roots = vec![self.data_dir.join("local").join("sessions"), crate::chats::chats_dir(&self.data_dir)];
+        let mut roots = vec![
+            self.data_dir.join("local").join("sessions"),
+            self.data_dir.join("attachments"),
+            crate::chats::chats_dir(&self.data_dir),
+        ];
         let home = silt_os::home_dir();
         for (variable, folder) in HOMES {
             roots.extend(std::env::var_os(variable).map(PathBuf::from));

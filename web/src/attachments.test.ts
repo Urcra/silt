@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { pastedName } from './attachments'
+import { FILE_BYTES, FILES_BYTES, pastedName, tooLarge } from './attachments'
 
 test('a screenshot the clipboard names image.png is numbered', () => {
   expect(pastedName({ name: 'image.png', type: 'image/png' }, 1)).toBe('pasted-1.png')
@@ -14,4 +14,11 @@ test('a pasted file without a name is named by its type', () => {
 
 test("a copied file keeps its own name", () => {
   expect(pastedName({ name: 'diagram.png', type: 'image/png' }, 1)).toBe('diagram.png')
+})
+
+test('files over what a prompt takes are refused before they are read', () => {
+  expect(tooLarge([{ name: 'book.xls', size: FILE_BYTES }], 0)).toBeNull()
+  expect(tooLarge([{ name: 'book.xls', size: FILE_BYTES + 1 }], 0)).toMatch(/^book\.xls is too large/)
+  expect(tooLarge([{ name: 'a.xls', size: FILE_BYTES }, { name: 'b.xls', size: FILE_BYTES }], 0)).toBeNull()
+  expect(tooLarge([{ name: 'c.xls', size: FILE_BYTES }], FILES_BYTES - FILE_BYTES + 1)).toMatch(/too large together/)
 })
