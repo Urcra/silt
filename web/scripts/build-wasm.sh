@@ -1,8 +1,9 @@
 #!/bin/sh
 # Builds the browser replica (crates/silt-wasm) into src/wasm, where the web
-# UI imports it. Needs `cargo install wasm-bindgen-cli --version 0.2.126`.
+# UI imports it. The bindings come from xtask, which links the same
+# wasm-bindgen as silt-wasm (ADR 0095).
 set -eu
 cd "$(dirname "$0")/../.."
-cargo build -q -p silt-wasm --target wasm32-unknown-unknown --release
+cargo build -q --locked -p silt-wasm --target wasm32-unknown-unknown --release
 target=${CARGO_TARGET_DIR:-target}
-wasm-bindgen --target web --out-dir web/src/wasm "$target/wasm32-unknown-unknown/release/silt_wasm.wasm"
+cargo run -q --locked -p xtask -- wasm-bindgen "$target/wasm32-unknown-unknown/release/silt_wasm.wasm" web/src/wasm
