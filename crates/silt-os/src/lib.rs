@@ -13,6 +13,10 @@ mod wsl;
 
 #[cfg(target_os = "linux")]
 pub mod sandbox;
+#[cfg(unix)]
+pub mod seatbelt;
+#[cfg(unix)]
+pub mod serial;
 
 #[cfg(unix)]
 mod unix;

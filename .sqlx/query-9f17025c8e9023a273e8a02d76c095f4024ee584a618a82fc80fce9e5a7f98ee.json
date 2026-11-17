@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE plugin_calls SET state = ?, outcome = COALESCE(?, outcome), answered_ms = COALESCE(?, answered_ms) WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "9f17025c8e9023a273e8a02d76c095f4024ee584a618a82fc80fce9e5a7f98ee"
+}

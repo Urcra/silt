@@ -127,8 +127,10 @@ pub fn bwrap_args(plan: &SandboxPlan, ids: Ids, seccomp: &File, resolv: Option<&
     for mount in &plan.mounts {
         let path = mount.path.as_os_str();
         if let Some(source) = &mount.source {
-            // Something else shown in its place, read-only.
-            push(&["--ro-bind".as_ref(), source.as_os_str(), path]);
+            // Something else shown in its place: a relay's terminal for a
+            // device, else read-only.
+            let how = if mount.kind == MountKind::Device { "--dev-bind" } else { "--ro-bind" };
+            push(&[how.as_ref(), source.as_os_str(), path]);
             continue;
         }
         match mount.kind {
@@ -311,7 +313,7 @@ pub fn read_plan(path: &Path) -> io::Result<SandboxPlan> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silt_workspace::{Mount, Policy, Reach, RunPaths, plan};
+    use silt_workspace::{Mount, PathDir, Policy, Reach, RunPaths, plan};
 
     #[test]
     fn a_route_message_is_well_formed() {
@@ -388,5 +390,52 @@ mod tests {
         let said = String::from_utf8_lossy(&output.stdout);
         assert!(!said.contains("SEEN") && said.contains("WROTE") && said.contains("LOCKED"), "{said}");
         assert!(checkout.join("made").exists());
+    }
+
+    #[test]
+    fn a_relative_link_under_a_linked_path_folder_runs() {
+        let Some(tools) = tools(Network::None).ok().filter(|tools| check(tools).is_ok()) else {
+            eprintln!("skipped: bubblewrap can't make a sandbox here");
+            return;
+        };
+        // As fnm lays it out: a shell's folder, under a tmpfs in the sandbox,
+        // links to an installation whose `bin/tool` links to `../lib/…`.
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let installation = root.join("node-versions/v22/installation");
+        std::fs::create_dir_all(installation.join("bin")).unwrap();
+        std::fs::create_dir_all(installation.join("lib")).unwrap();
+        std::fs::write(installation.join("lib/tool.sh"), "#!/bin/sh\necho RAN\n").unwrap();
+        std::fs::set_permissions(installation.join("lib/tool.sh"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink("../lib/tool.sh", installation.join("bin/tool")).unwrap();
+        std::fs::create_dir_all(root.join("multishells")).unwrap();
+        let shell = root.join("multishells/42_1");
+        std::os::unix::fs::symlink(&installation, &shell).unwrap();
+        let checkout = root.join("app");
+        std::fs::create_dir_all(&checkout).unwrap();
+        let program = seccomp_program().unwrap();
+        std::fs::write(root.join("seccomp.bpf"), program).unwrap();
+        let run = |path_dir: PathDir| {
+            let paths = RunPaths {
+                checkout: checkout.clone(),
+                silt: "/bin/sh".into(),
+                scratch: root.join("run"),
+                path_dirs: vec![path_dir],
+                ..RunPaths::default()
+            };
+            let plan = plan(&paths, &Reach::of(&Policy { network: Some(Network::None), ..Policy::default() }));
+            let seccomp = File::open(root.join("seccomp.bpf")).unwrap();
+            inherit(&seccomp).unwrap();
+            let tool = shell.join("bin/tool").into_os_string();
+            let args = bwrap_args(&plan, Ids::here(), &seccomp, None, &[tool]);
+            let output = std::process::Command::new(&tools.bwrap).args(&args).output().unwrap();
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        };
+        let bin = shell.join("bin");
+        let alone = run(PathDir { path: bin.clone(), real: Some(installation.join("bin")), link: None });
+        assert!(!alone.contains("RAN"), "the folder alone leaves ../lib dangling: {alone}");
+        let linked =
+            run(PathDir { path: bin, real: Some(installation.join("bin")), link: Some((shell.clone(), installation.clone())) });
+        assert!(linked.contains("RAN"), "{linked}");
     }
 }

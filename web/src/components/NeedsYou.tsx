@@ -19,6 +19,8 @@ import { useInWorkspace } from '../workspaceFilter'
 import { PermissionCard, SignInCard } from './Agent'
 import { Markdown } from './Markdown'
 import { Page } from './Page'
+import { PendingApprovals } from './Sandbox'
+import { useApprovalsWaiting } from '../sandbox'
 import { AnswerForm } from './ToolSteps'
 
 /** A card on the phone's first screen: what it is, what it asks, and how to answer (the Phone board). */
@@ -443,7 +445,9 @@ export function NeedsYou() {
   const titleOf = (thread: string) => threads.data?.find((summary) => summary.id === thread)?.title ?? 'Untitled thread'
   const replies = (inbox.data ?? []).filter((entry) => !entry.read && ['comment', 'reply', 'mention'].includes(entry.kind))
   const phone = usePhone()
-  if (!phone && waiting.length > 0)
+  const approvals = useApprovalsWaiting()
+  // Plugin calls to approve show as cards, above the rest.
+  if (!phone && waiting.length > 0 && approvals === 0)
     return (
       <Page flush label="needs you" title="Needs you" actions={<QueueKeys />}>
         <Queue
@@ -470,7 +474,8 @@ export function NeedsYou() {
       <section aria-label="waiting on you" className="mx-auto flex w-full max-w-2xl flex-col gap-3 px-4 py-4">
         {threads.isPending && <Skeleton className="h-24" />}
         {threads.error && <p className="text-danger">{message(threads.error)}</p>}
-        {threads.isSuccess && waiting.length === 0 && replies.length === 0 && (
+        <PendingApprovals titleOf={titleOf} />
+        {threads.isSuccess && waiting.length === 0 && replies.length === 0 && approvals === 0 && (
           <EmptyState title="Nothing waits on you">Agents that ask for something, reviews and replies show here.</EmptyState>
         )}
         <ul className="flex flex-col gap-3">

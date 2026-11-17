@@ -37,7 +37,7 @@ fn rollouts(home: &Path) -> Vec<PathBuf> {
 
 /// The rollouts of days from `since_ms` on. Days are named in local time,
 /// so the day before counts too.
-fn rollouts_since(home: &Path, since_ms: i64) -> Vec<PathBuf> {
+pub(crate) fn rollouts_since(home: &Path, since_ms: i64) -> Vec<PathBuf> {
     let stamp = crate::time::file_stamp(since_ms.saturating_sub(24 * 60 * 60 * 1000));
     rollouts_from(home, &[&stamp[..4], &stamp[5..7], &stamp[8..10]])
 }
@@ -153,6 +153,11 @@ pub fn plan_restore(
     });
     let rewrites = Rewrites::new(session, None, &cwd.to_string_lossy(), &root.to_string_lossy());
     Restore { transcript: path.clone(), writes: vec![Write::Transcript { path, lines: rewrites.lines(&session.main) }] }
+}
+
+/// The rollout of session `id` in the Codex home `home`.
+pub fn transcript_in(home: &Path, id: &str) -> Option<PathBuf> {
+    rollouts(home).into_iter().find(|path| rollout_id(path).as_deref() == Some(id))
 }
 
 /// The first line's `session_meta` payload.
@@ -457,6 +462,12 @@ pub fn rollout_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<S
 pub struct Codex;
 
 impl Agent for Codex {
+    fn model_apis(&self) -> &'static [crate::ModelApi] {
+        &crate::CODEX_APIS
+    }
+    fn model_hosts(&self) -> &'static [&'static str] {
+        &["api.openai.com", "auth.openai.com", "chatgpt.com"]
+    }
     fn homes(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         vec![crate::home_from(home, env, "CODEX_HOME", ".codex")]
     }
@@ -491,7 +502,7 @@ impl Agent for Codex {
     }
 
     fn transcript(&self, cwd: &Path, id: &str) -> Option<PathBuf> {
-        rollouts(&home_in(cwd)?).into_iter().find(|path| rollout_id(path).as_deref() == Some(id))
+        transcript_in(&home_in(cwd)?, id)
     }
 
     fn side_transcripts(&self, transcript: &Path) -> Vec<(String, PathBuf)> {
@@ -516,16 +527,7 @@ impl Agent for Codex {
     }
 
     fn bypass_flag(&self, args: &[String]) -> Option<String> {
-        crate::flag_in(
-            args,
-            &["--dangerously-bypass-approvals-and-sandbox", "--yolo", "--full-auto"],
-            &[
-                ("--sandbox", &["danger-full-access"]),
-                ("-s", &["danger-full-access"]),
-                ("--ask-for-approval", &["never"]),
-                ("-a", &["never"]),
-            ],
-        )
+        bypass_flag(args)
     }
 
     fn sandbox_support(&self) -> crate::SandboxSupport {
@@ -533,36 +535,58 @@ impl Agent for Codex {
     }
 
     fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError> {
-        let mut launch = Launch::new(self.command());
-        let mut prompt = None;
-        match &plan.start {
-            Start::Resume { id } => {
-                launch.arg("resume");
-                prompt = Some(id.clone());
-            }
-            Start::Primed { prompt: text, .. } => prompt = Some(text.clone()),
-            Start::New { .. } => {}
-        }
-        let toml = |value: &Value| value.to_string();
-        launch.arg("-c").arg(format!("mcp_servers.silt.command={}", toml(&json!(plan.mcp.command.to_string_lossy()))));
-        launch.arg("-c").arg(format!("mcp_servers.silt.args={}", toml(&json!(plan.mcp.args))));
-        if let Some(instructions) = &plan.instructions {
-            launch.arg("-c").arg(format!("developer_instructions={}", toml(&json!(instructions))));
-        }
-        if plan.locks.sandbox {
-            launch.arg("-c").arg("sandbox_mode=\"workspace-write\"");
-        }
-        if plan.locks.no_bypass {
-            launch.arg("-c").arg("approval_policy=\"on-request\"");
-        }
-        for arg in &plan.args {
-            launch.arg(arg);
-        }
-        if let Some(prompt) = prompt {
-            launch.arg(prompt);
-        }
-        Ok(launch)
+        Ok(launch_as(self.command(), plan, &["approval_policy=\"on-request\""]))
     }
+}
+
+/// The first of `args` that stops Codex, or a fork of it, asking.
+pub(crate) fn bypass_flag(args: &[String]) -> Option<String> {
+    crate::flag_in(
+        args,
+        &["--dangerously-bypass-approvals-and-sandbox", "--yolo", "--full-auto"],
+        &[
+            ("--sandbox", &["danger-full-access"]),
+            ("-s", &["danger-full-access"]),
+            ("--ask-for-approval", &["never"]),
+            ("-a", &["never"]),
+        ],
+    )
+}
+
+/// The run of `command`, a Codex or a fork of it, with `asking`, the
+/// settings that make it ask before it acts, when its workspace says so.
+pub(crate) fn launch_as(command: &str, plan: &LaunchPlan, asking: &[&str]) -> Launch {
+    let mut launch = Launch::new(command);
+    let mut prompt = None;
+    match &plan.start {
+        Start::Resume { id } => {
+            launch.arg("resume");
+            prompt = Some(id.clone());
+        }
+        Start::Primed { prompt: text, .. } => prompt = Some(text.clone()),
+        Start::New { .. } => {}
+    }
+    let toml = |value: &Value| value.to_string();
+    launch.arg("-c").arg(format!("mcp_servers.silt.command={}", toml(&json!(plan.mcp.command.to_string_lossy()))));
+    launch.arg("-c").arg(format!("mcp_servers.silt.args={}", toml(&json!(plan.mcp.args))));
+    if let Some(instructions) = &plan.instructions {
+        launch.arg("-c").arg(format!("developer_instructions={}", toml(&json!(instructions))));
+    }
+    if plan.locks.sandbox {
+        launch.arg("-c").arg("sandbox_mode=\"workspace-write\"");
+    }
+    if plan.locks.no_bypass {
+        for setting in asking {
+            launch.arg("-c").arg(*setting);
+        }
+    }
+    for arg in &plan.args {
+        launch.arg(arg);
+    }
+    if let Some(prompt) = prompt {
+        launch.arg(prompt);
+    }
+    launch
 }
 
 #[cfg(test)]

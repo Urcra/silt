@@ -67,7 +67,7 @@ pub enum WorkspaceCommand {
     /// Change a workspace's rules; those its org sets apply as well
     Policy {
         workspace: String,
-        /// The agents allowed, comma-separated (claude, codex, copilot, gemini, agy, opencode), or `any`
+        /// The agents allowed, comma-separated (claude, codex, qudiks, copilot, gemini, agy, opencode), or `any`
         #[arg(long)]
         agents: Option<String>,
         /// Whether agents from agents.json are allowed: on or off
@@ -106,7 +106,7 @@ pub enum WorkspaceCommand {
         /// The hosts "through Silt only" reaches, comma-separated, such as `*.github.com`, or `any`
         #[arg(long)]
         hosts: Option<String>,
-        /// Which devices its sandboxes get: none, named or all_usb
+        /// Which devices its sandboxes get: none, relayed, named or all_usb
         #[arg(long)]
         devices: Option<String>,
         /// The device nodes `--devices named` gives, comma-separated, or `none`
@@ -465,9 +465,10 @@ pub(crate) fn parse_reach(
     };
     let devices = match devices {
         None | Some("any") => None,
-        Some(name) => {
-            Some(silt_workspace::Devices::parse(name).ok_or_else(|| fail(format!("no devices {name}: none, named or all_usb")))?)
-        }
+        Some(name) => Some(
+            silt_workspace::Devices::parse(name)
+                .ok_or_else(|| fail(format!("no devices {name}: none, relayed, named or all_usb")))?,
+        ),
     };
     let refuse = entries(refuse.unwrap_or_default())
         .map(|name| {

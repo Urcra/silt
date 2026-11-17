@@ -124,6 +124,50 @@ const NOT_AGENTS: [&str; 9] = ["cli", "code", "cursor", "factory", "github", "ki
 /// download the registry's separate build.
 const OWN_CLIS: [(&str, &str, &[&str]); 1] = [("antigravity-acp", "agy", &["acp"])];
 
+/// Forks of a registry agent's CLI that its adapter runs as well, offered
+/// as agents of their own: the fork's id, the agent it forks, its CLI, its
+/// name and description, and the variable naming the CLI to the adapter.
+struct Fork {
+    id: &'static str,
+    of: &'static str,
+    cli: &'static str,
+    name: &'static str,
+    description: &'static str,
+    variable: &'static str,
+}
+
+/// Qudiks keeps Codex's app-server, which Codex's adapter drives, and
+/// adds GitHub Copilot and local endpoints to it.
+const FORKS: [Fork; 1] = [Fork {
+    id: "qudiks-acp",
+    of: "codex-acp",
+    cli: "qudiks",
+    name: "Qudiks",
+    description: "Codex's fork for GitHub Copilot, OpenAI API credits and local endpoints, through Codex's ACP adapter",
+    variable: "CODEX_PATH",
+}];
+
+fn fork(agent_id: &str) -> Option<&'static Fork> {
+    FORKS.iter().find(|fork| fork.id == agent_id)
+}
+
+/// The forks of `agents` that run through one of their adapters.
+fn forks_of(agents: &[AgentInfo]) -> Vec<AgentInfo> {
+    FORKS
+        .iter()
+        .filter_map(|fork| {
+            let of = agents.iter().find(|agent| agent.id == fork.of)?;
+            Some(AgentInfo {
+                id: fork.id.to_owned(),
+                name: fork.name.to_owned(),
+                description: fork.description.to_owned(),
+                distribution: of.distribution.clone(),
+                clis: vec![fork.cli.to_owned()],
+            })
+        })
+        .collect()
+}
+
 fn own_cli(agent_id: &str) -> Option<(&'static str, &'static [&'static str])> {
     OWN_CLIS.into_iter().find(|(id, _, _)| *id == agent_id).map(|(_, program, args)| (program, args))
 }
@@ -187,10 +231,11 @@ pub fn parse(text: &str) -> Vec<AgentInfo> {
     let Ok(document) = serde_json::from_str::<Document>(text) else {
         return Vec::new();
     };
-    document
+    let mut agents: Vec<AgentInfo> = document
         .agents
         .into_iter()
         .filter_map(|agent| serde_json::from_value::<Entry>(agent).ok())
+        .filter(|entry| fork(&entry.id).is_none())
         .map(|entry| AgentInfo {
             clis: entry.clis(),
             id: entry.id,
@@ -199,7 +244,9 @@ pub fn parse(text: &str) -> Vec<AgentInfo> {
             distribution: entry.distribution.for_this_machine(),
         })
         .filter(|agent| agent.distribution != Distribution::Unavailable)
-        .collect()
+        .collect();
+    agents.extend(forks_of(&agents));
+    agents
 }
 
 /// The registry as cached in `data_dir`, or the bundled snapshot.
@@ -264,6 +311,7 @@ pub fn agent_environment(agent_id: &str, data_dir: &Path) -> Vec<(String, String
     let vendor: &[&str] = match agent_id {
         id if id.contains("claude") => &["ANTHROPIC_", "CLAUDE_"],
         id if id.contains("codex") || id.contains("openai") => &["OPENAI_", "CODEX_"],
+        id if id.contains("qudiks") => &["OPENAI_", "CODEX_", "QUDIKS_"],
         id if id.contains("gemini") => &["GEMINI_", "GOOGLE_"],
         id if id.contains("antigravity") => &["GEMINI_", "GOOGLE_", "AGY_", "ANTIGRAVITY_"],
         id if id.contains("copilot") => &["GITHUB_", "GH_", "COPILOT_"],
@@ -439,9 +487,23 @@ pub struct AgentCommand {
 /// distribution into `data_dir` first when needed.
 pub async fn command(agent: &AgentInfo, data_dir: &Path) -> Result<AgentCommand, RegistryError> {
     let programs = silt_os::Programs::on(&silt_os::linux_path(&std::env::var_os("PATH").unwrap_or_default()));
-    if let Some(own) = own_command(agent, &programs) {
+    command_with(agent, data_dir, &programs).await
+}
+
+/// [`command`], finding programs in `programs`.
+async fn command_with(agent: &AgentInfo, data_dir: &Path, programs: &silt_os::Programs) -> Result<AgentCommand, RegistryError> {
+    if let Some(own) = own_command(agent, programs) {
         return Ok(own);
     }
+    let mut command = adapter_command(agent, data_dir).await?;
+    if let Some(fork) = fork(&agent.id) {
+        let cli = programs.find(fork.cli).ok_or_else(|| RegistryError::NoBuild(agent.id.clone()))?;
+        command.env.push((fork.variable.to_owned(), cli.to_string_lossy().into_owned()));
+    }
+    Ok(command)
+}
+
+async fn adapter_command(agent: &AgentInfo, data_dir: &Path) -> Result<AgentCommand, RegistryError> {
     match &agent.distribution {
         Distribution::Command { program, args, env } => {
             Ok(AgentCommand { program: program.clone(), args: args.clone(), env: env.clone() })
@@ -655,6 +717,7 @@ mod tests {
         assert!(clis("github-copilot-cli").contains(&"copilot".to_owned()));
         assert!(clis("gemini").contains(&"gemini".to_owned()));
         assert!(clis("antigravity-acp").contains(&"agy".to_owned()));
+        assert_eq!(clis("qudiks-acp"), ["qudiks"], "Qudiks, not Codex, shows it's installed");
         assert!(clis("cursor").contains(&"cursor-agent".to_owned()));
         assert!(!clis("cursor").contains(&"cursor".to_owned()), "an editor's launcher");
         assert!(!clis("minimax-code").contains(&"code".to_owned()), "VS Code's launcher");
@@ -712,5 +775,33 @@ mod tests {
         );
         let elsewhere = silt_os::Programs::on(data.path().as_os_str());
         assert_eq!(own_command(&antigravity, &elsewhere), None);
+    }
+
+    #[test]
+    fn qudiks_runs_through_codex_s_adapter_pointed_at_its_cli() {
+        let agents = parse(SNAPSHOT);
+        let codex = agents.iter().find(|agent| agent.id == "codex-acp").expect("Codex is listed");
+        let qudiks = agents.iter().find(|agent| agent.id == "qudiks-acp").expect("Qudiks follows it");
+        assert_eq!((qudiks.name.as_str(), &qudiks.distribution), ("Qudiks", &codex.distribution));
+        assert!(parse(r#"{"agents": []}"#).is_empty(), "no Qudiks without Codex's adapter");
+        let listed = parse(r#"{"agents": [{"id": "qudiks-acp", "name": "Other", "distribution": {"npx": {"package": "x"}}}]}"#);
+        assert!(listed.is_empty(), "a registry entry can't take its id");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn qudiks_s_adapter_is_given_the_qudiks_on_path() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let bin = tempfile::tempdir().expect("tempdir");
+        let qudiks = bin.path().join("qudiks");
+        std::fs::write(&qudiks, "#!/bin/sh\n").expect("write");
+        std::fs::set_permissions(&qudiks, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let agent = parse(SNAPSHOT).into_iter().find(|agent| agent.id == "qudiks-acp").expect("listed");
+        let programs = silt_os::Programs::on(bin.path().as_os_str());
+        assert!(is_installed(&agent, bin.path(), &programs));
+        let command = command_with(&agent, bin.path(), &programs).await.expect("a command");
+        assert_eq!(command.env, [("CODEX_PATH".to_owned(), qudiks.to_string_lossy().into_owned())]);
+        let elsewhere = silt_os::Programs::on(std::ffi::OsStr::new(""));
+        assert!(!is_installed(&agent, bin.path(), &elsewhere));
     }
 }

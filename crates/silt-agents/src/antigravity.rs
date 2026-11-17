@@ -457,6 +457,12 @@ fn link_all_but(from: &Path, into: &Path, except: &[&str]) -> io::Result<()> {
 pub struct Antigravity;
 
 impl Agent for Antigravity {
+    fn model_apis(&self) -> &'static [crate::ModelApi] {
+        &crate::GEMINI_APIS
+    }
+    fn model_hosts(&self) -> &'static [&'static str] {
+        &["generativelanguage.googleapis.com", "cloudcode-pa.googleapis.com", "oauth2.googleapis.com", "accounts.google.com"]
+    }
     fn homes(&self, home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         vec![home.join(".gemini"), home.join(".antigravity")]
     }

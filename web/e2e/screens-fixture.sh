@@ -28,10 +28,14 @@ FAKE_SAY="Retry blob uploads on a 5xx" FAKE_LINE="fn retry() {}" "$silt" fork "$
 fork=$("$silt" log | awk '/fork of/ { print $1; exit }')
 "$silt" mr create --thread "$fork" --title "Retry blob uploads on 5xx" > /dev/null
 
-# A design system of Alice's own (ADR 0088), with no web fonts, so its frames draw the same on every machine; in her
-# data folder rather than her repository, where new files would show in her threads' changes.
+# A design system of Alice's own (ADR 0088), in her data folder rather than her repository, where new files would
+# show in her threads' changes. Its face is a file of its own, the web UI's IBM Plex Sans, so its frames draw the same
+# on every machine: `system-ui` is whatever fontconfig picks there.
 harbor="$SILT_HOME/design-systems/harbor"
-mkdir -p "$harbor/components"
+mkdir -p "$harbor/components" "$harbor/fonts"
+for weight in 400 500 600 700; do
+    cp "$root/web/node_modules/@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-$weight-normal.woff2" "$harbor/fonts/harbor-sans-$weight.woff2"
+done
 cat > "$harbor/tokens.json" <<'TOKENS'
 {
   "name": "Harbor",
@@ -51,7 +55,13 @@ cat > "$harbor/tokens.json" <<'TOKENS'
     ]
   },
   "type": {
-    "families": { "sans": "system-ui, sans-serif" },
+    "fonts": [
+      { "family": "Harbor Sans", "file": "fonts/harbor-sans-400.woff2", "weight": "400" },
+      { "family": "Harbor Sans", "file": "fonts/harbor-sans-500.woff2", "weight": "500" },
+      { "family": "Harbor Sans", "file": "fonts/harbor-sans-600.woff2", "weight": "600" },
+      { "family": "Harbor Sans", "file": "fonts/harbor-sans-700.woff2", "weight": "700" }
+    ],
+    "families": { "sans": "\"Harbor Sans\", sans-serif" },
     "groups": [{ "name": "Text", "family": "sans", "styles": [
       { "name": "body", "fontSize": "14px", "lineHeight": 1.55, "fontWeight": 400, "usage": "Running text." },
       { "name": "title", "fontSize": "20px", "lineHeight": 1.25, "fontWeight": 600, "usage": "Page titles." }

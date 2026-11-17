@@ -169,6 +169,12 @@ pub fn transcript_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Ve
 pub struct ClaudeCode;
 
 impl Agent for ClaudeCode {
+    fn model_apis(&self) -> &'static [crate::ModelApi] {
+        &crate::CLAUDE_APIS
+    }
+    fn model_hosts(&self) -> &'static [&'static str] {
+        &["api.anthropic.com", "console.anthropic.com", "claude.ai", "statsig.anthropic.com"]
+    }
     fn homes(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         // Without its own folder, Claude Code keeps its settings in the home folder too.
         match env("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {

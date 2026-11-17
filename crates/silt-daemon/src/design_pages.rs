@@ -11,13 +11,13 @@ use silt_design::SystemName;
 use crate::core::{Core, CoreError};
 use crate::design::{self, DesignThread, PERSONAL_DIR, PROJECT_DIR, System};
 use crate::protocol::{
-    DesignAssetData, DesignCatalog, DesignDetail, DesignFrom, DesignGroup, DesignKeep, DesignProject, DesignSource, DesignStart,
-    StartOptions, ThreadDesign,
+    DesignAssetData, DesignCatalog, DesignChat, DesignDetail, DesignFrom, DesignGroup, DesignKeep, DesignProject, DesignSource,
+    DesignStart, DesignSummary, StartOptions, ThreadDesign,
 };
 
 impl Core {
-    /// Every system: each project's, then the person's, with the ones
-    /// threads are still making in their own folders.
+    /// Every system: each project's, each chat's, then the person's, with
+    /// the ones threads are still making in their own folders.
     pub(crate) fn design_catalog(&self) -> DesignCatalog {
         let picks = design::project_choices(&self.data_dir);
         let workspaces = self.workspaces();
@@ -84,15 +84,68 @@ impl Core {
             if !systems.is_empty() {
                 let project =
                     DesignProject { repo: repo.clone(), name: project_name(repo, clone), clone: clone.display().to_string() };
-                groups.push(DesignGroup { project: Some(project), systems });
+                groups.push(DesignGroup { project: Some(project), chat: None, systems });
             }
         }
+        groups.extend(self.chat_design_groups());
         let personal: Vec<_> = design::systems(None, &self.data_dir)
             .iter()
             .map(|system| system.summary(uses(system, None, None), making(system.name.as_str(), DesignKeep::Personal), false))
             .collect();
-        groups.push(DesignGroup { project: None, systems: personal });
+        groups.push(DesignGroup { project: None, chat: None, systems: personal });
         DesignCatalog { groups }
+    }
+
+    /// Each chat's own systems, newest chat first: one is often made in a
+    /// chat before there's a project to keep it.
+    fn chat_design_groups(&self) -> Vec<DesignGroup> {
+        let mut folders: Vec<(PathBuf, silt_types::ThreadId)> = self
+            .threads
+            .keys()
+            .filter(|thread| self.is_chat(**thread))
+            .filter_map(|thread| Some((self.chat_folder_here(*thread)?, *thread)))
+            .collect();
+        folders.sort_by(|a, b| b.0.cmp(&a.0));
+        folders.dedup_by(|a, b| a.0 == b.0);
+        folders
+            .into_iter()
+            .filter_map(|(folder, thread)| {
+                let default = design::project_default(&folder);
+                let systems: Vec<DesignSummary> = design::systems(Some(&folder), &self.data_dir)
+                    .into_iter()
+                    .filter(|system| system.source == DesignSource::Project)
+                    .map(|system| {
+                        let uses = if default.as_deref() == Some(system.name.as_str()) {
+                            vec!["the chat's default".to_owned()]
+                        } else {
+                            Vec::new()
+                        };
+                        DesignSummary { chat: true, ..system.summary(uses, Some(thread.to_string()), false) }
+                    })
+                    .collect();
+                if systems.is_empty() {
+                    return None;
+                }
+                let title = self.thread_title(thread).unwrap_or_else(|| "Chat".to_owned());
+                let chat = DesignChat { thread: thread.to_string(), title, folder: folder.display().to_string() };
+                Some(DesignGroup { project: None, chat: Some(chat), systems })
+            })
+            .collect()
+    }
+
+    /// Copies a system a thread's folder holds, a chat's, to the person's
+    /// own, so every project can use it and it syncs.
+    pub(crate) fn keep_design_system(&self, thread: &str, name: &str) -> Result<DesignSummary, CoreError> {
+        let id = self.find_thread(thread)?;
+        let system = self
+            .thread_system(id, name, DesignSource::Project)
+            .ok_or_else(|| CoreError::Invalid(format!("the thread's folder has no design system {name}")))?;
+        crate::design_sync::keep_as_personal(&self.data_dir, system.name.as_str(), system.dir())?;
+        let kept = design::systems(None, &self.data_dir)
+            .into_iter()
+            .find(|system| system.name.as_str() == name)
+            .ok_or_else(|| CoreError::Invalid(format!("{name} wasn't kept")))?;
+        Ok(kept.summary(Vec::new(), None, false))
     }
 
     /// One system's page.
@@ -104,8 +157,10 @@ impl Core {
         thread: Option<&str>,
     ) -> Result<DesignDetail, CoreError> {
         let (system, thread) = self.find_design_system(source, name, clone, thread)?;
-        let unmerged = thread.is_some();
-        Ok(system.detail(system.summary(Vec::new(), thread, unmerged)))
+        let chat = source == DesignSource::Project
+            && thread.as_deref().and_then(|thread| self.find_thread(thread).ok()).is_some_and(|id| self.is_chat(id));
+        let unmerged = thread.is_some() && !chat;
+        Ok(system.detail(DesignSummary { chat, ..system.summary(Vec::new(), thread, unmerged) }))
     }
 
     /// One of a system's assets, which only its own `assets/` holds.
@@ -274,7 +329,7 @@ impl Core {
             .find(|(known, _)| self.find_thread(known).ok() == Some(id))
             .map(|(_, record)| record)
         else {
-            return Ok(None);
+            return Ok(self.written_design(id, thread));
         };
         let source = match record.keep {
             DesignKeep::Repo => DesignSource::Project,
@@ -285,6 +340,50 @@ impl Core {
             system.detail(system.summary(Vec::new(), Some(thread.to_owned()), unmerged))
         });
         Ok(Some(ThreadDesign { name: record.name, title: record.title, keep: record.keep, changing: record.changing, detail }))
+    }
+
+    /// The system a thread asked in its own words wrote: the one written
+    /// last since it loaded the design-system skill, in its folder or the
+    /// person's; else, for a chat, the one its folder last had written.
+    fn written_design(&self, id: silt_types::ThreadId, thread: &str) -> Option<ThreadDesign> {
+        let folder = self.thread_folder(id);
+        let since = design::skill_threads(&self.data_dir)
+            .into_iter()
+            .find(|(known, _)| self.find_thread(known).ok() == Some(id))
+            .map(|(_, since_ms)| since_ms);
+        let with_written = |systems: Vec<System>| -> Vec<(System, design::Written)> {
+            systems
+                .into_iter()
+                .filter_map(|system| {
+                    let written = design::written(system.dir())?;
+                    Some((system, written))
+                })
+                .collect()
+        };
+        let chat = self.is_chat(id);
+        let found = since
+            .and_then(|since_ms| {
+                design::written_since(with_written(design::systems(folder.as_deref(), &self.data_dir)), since_ms)
+            })
+            .or_else(|| {
+                let folder = folder.as_deref().filter(|_| chat)?;
+                let own = design::systems(Some(folder), &self.data_dir)
+                    .into_iter()
+                    .filter(|system| system.source == DesignSource::Project)
+                    .collect();
+                design::written_since(with_written(own), i64::MIN).map(|(system, _)| (system, false))
+            });
+        let (system, changing) = found?;
+        let in_folder = system.source == DesignSource::Project;
+        let summary = system.summary(Vec::new(), Some(thread.to_owned()), in_folder && !chat);
+        let summary = DesignSummary { chat: in_folder && chat, ..summary };
+        Some(ThreadDesign {
+            name: summary.name.clone(),
+            title: summary.title.clone(),
+            keep: if in_folder { DesignKeep::Repo } else { DesignKeep::Personal },
+            changing,
+            detail: Some(system.detail(summary)),
+        })
     }
 }
 

@@ -16,11 +16,12 @@ import { store, stored } from '../stored'
 import { ago } from '../time'
 import { Button, Icon, Input, Kbd, Popover, Skeleton, Tabs, cx, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
-import { type Takes, attachChoice, useAttachments } from '../attachments'
+import { ATTACH, useAttachments } from '../attachments'
 import { NEW_THREAD_DRAFT, useDraft } from '../drafts'
 import { useHeldSend } from '../heldSend'
 import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
+import { UsageRing } from './UsageRing'
 import { CloudLaunches } from './Cloud'
 import { ImportOffer } from './ImportOffer'
 import { hosted } from '../served'
@@ -541,8 +542,7 @@ export function NewThread() {
   const settingValue = (setting: AgentSetting) => startingValue(setting, chosenSettings[setting.id], agentDefaults?.settings?.[setting.id])
   // Claude's modes (Manual, Accept edits, Plan, Auto) are its permissions, which then stand in for the preset (ADR 0048).
   const modesArePermissions = permissionModes(modes)
-  const takes: Takes = { agent: agentName || 'the agent', images: seen?.takes_images ?? null, files: seen?.takes_files ?? null }
-  const { attached, add, remove, clear } = useAttachments(takes)
+  const { attached, add, remove, clear } = useAttachments()
   const attach = (files: File[], pasted = false) => {
     setError(undefined)
     add(files, pasted).catch((failure: unknown) => setError(message(failure)))
@@ -715,10 +715,11 @@ export function NewThread() {
                       options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says, refused: presetRefused(workspace, choice.id) }))}
                     />
                   )}
+                  {agent && <UsageRing agent={agent} />}
                 </>
               )
             }
-            attach={attachChoice(takes)}
+            attach={ATTACH}
             enter="start"
             send={{ label: 'Start', title: chosenWhere === 'cloud' ? 'Start in the cloud' : 'Start and open it', disabled: !ready, busy: starting, submit: true }}
             menu={[

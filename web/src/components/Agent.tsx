@@ -6,11 +6,12 @@ import { useNow } from '../now'
 import { tokens } from '../transcript'
 import { keys, message } from '../query'
 import { hosted } from '../served'
+import { UsageRing } from './UsageRing'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
 import { Button, Dot, Icon, Input, Kbd, Spinner, buttonClass, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
 import { agentRefused, modeRefused, presetRefused, workspaceOf } from '../rules'
-import { type Takes, attachChoice, useAttachments } from '../attachments'
+import { ATTACH, useAttachments } from '../attachments'
 import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
 import { ComposerBox, RoundButton } from './Composer'
@@ -477,10 +478,7 @@ export function AgentDock({
   const [mode, setChosenMode] = useState<string>()
   const chosenMode = mode ?? seen?.modes?.current
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
-  const takes: Takes = live
-    ? { agent: status.agent, images: status.takes_images, files: status.takes_files }
-    : { agent: seen?.name ?? 'the agent', images: seen?.takes_images ?? null, files: seen?.takes_files ?? null }
-  const { attached, add, remove, clear, restore } = useAttachments(takes)
+  const { attached, add, remove, clear, restore } = useAttachments()
   const chooseAgent = (chosen: string) => {
     setAgent(chosen)
     setChosenMode(undefined)
@@ -709,6 +707,7 @@ export function AgentDock({
           options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says, refused: presetRefused(workspace, choice.id) }))}
         />
       )}
+      {(live ? status.agent_id : startable && agent) && <UsageRing agent={live ? status.agent_id : agent} thread={thread} />}
     </>
   )
 
@@ -751,7 +750,7 @@ export function AgentDock({
         waiting={status?.state === 'awaiting_input' || status?.state === 'awaiting_permission'}
         onCycle={cycle}
         onFiles={attachable ? attach : undefined}
-        attach={attachChoice(takes)}
+        attach={ATTACH}
         commands={(live ? status.commands : undefined) ?? seen?.commands}
         voice={!hosted()}
         placeholder={

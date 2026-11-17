@@ -194,6 +194,9 @@ pub struct Core {
     pub(crate) next_token: u64,
     /// Plugin calls waiting for, or answered by, the person (ADR 0093).
     pub(crate) approvals: crate::plugins::Approvals,
+    /// Devices held for threads' sandboxes (ADR 0093).
+    #[cfg(unix)]
+    pub(crate) relays: crate::devices::Relays,
     /// When the watcher noticed the changes being taken in, for crediting
     /// them to the tool that was running then.
     pub(crate) change_noticed: Option<Instant>,
@@ -268,6 +271,8 @@ pub struct Core {
     pub(crate) notes_settings: crate::notes::NotesSettings,
     /// The local models here and their downloads (ADR 0092).
     pub(crate) models: std::sync::Arc<crate::models::LocalModelsHere>,
+    /// What each agent's plan has used (ADR 0095).
+    pub(crate) usage: std::sync::Arc<crate::usage::Usage>,
     /// Each server's last sync error, by URL.
     pub(crate) sync_errors: HashMap<String, String>,
     /// The HEAD commit each checkout was last seen at.
@@ -412,6 +417,7 @@ impl Core {
         core.load_sessions().await?;
         core.load_agent_runs().await?;
         core.load_thread_states().await?;
+        core.recover_plugin_calls().await?;
         // Queued rather than done here, so the socket is already taking
         // requests while they run; they still come before any request.
         for checkout in core.checkouts.values() {
@@ -540,6 +546,8 @@ impl Core {
             index_transcripts: silt_agents::Transcripts::default(),
             next_token: 0,
             approvals: crate::plugins::Approvals::default(),
+            #[cfg(unix)]
+            relays: crate::devices::Relays::default(),
             change_noticed: None,
             deciding: None,
             marks_awaited: HashMap::new(),
@@ -572,6 +580,7 @@ impl Core {
             last_listings: HashMap::new(),
             notes_settings: crate::notes::NotesSettings::default(),
             models,
+            usage: std::sync::Arc::new(crate::usage::Usage::new()),
             sync_errors: HashMap::new(),
             heads: HashMap::new(),
             head_stamps: HashMap::new(),
@@ -646,6 +655,14 @@ impl Core {
             }
             if let Request::ArtifactGuide { design_system } = *asking {
                 let _ = reply.send(to_response(self.artifact_guide(&token, design_system).await));
+                return;
+            }
+            if let Request::DesignSkillUsed { .. } = *asking {
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => crate::design::note_design_skill(&self.data_dir, &thread).map(|()| "noted"),
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
                 return;
             }
             if let Request::ArtifactRead { id, version } = *asking {
@@ -749,7 +766,7 @@ impl Core {
             }
             match *asking {
                 Request::PluginTools => {
-                    let _ = reply.send(to_response(self.plugin_tools(&token).await));
+                    self.plugin_tools(&token, reply).await;
                     return;
                 }
                 Request::PluginCall { tool, input } => {
@@ -793,10 +810,44 @@ impl Core {
             Request::Plugins => Response::ok(crate::plugins::load(&self.data_dir)),
             Request::PluginPut { plugin } => to_response(crate::plugins::put(&self.data_dir, *plugin).map(|()| "saved")),
             Request::PluginRemove { name } => to_response(crate::plugins::remove(&self.data_dir, &name).map(|()| "removed")),
-            Request::Approvals { thread } => Response::ok(self.approvals_view(thread.as_deref())),
-            Request::ApprovalAnswer { id, approve, hash } => {
-                to_response(self.approval_answer(id, approve, &hash).map(|()| if approve { "approved" } else { "rejected" }))
+            Request::Approvals { thread, all } => to_response(self.approvals_view(thread.as_deref(), all).await),
+            Request::ApprovalAnswer { id, approve, hash, grant } => to_response(
+                self.approval_answer(id, approve, &hash, grant).await.map(|()| if approve { "approved" } else { "rejected" }),
+            ),
+            Request::BindRunToken { token, thread } => {
+                let bound = match self.find_thread(&thread) {
+                    Ok(thread) => {
+                        self.store.bind_run_token(blake3::hash(token.as_bytes()).as_bytes(), thread).await.map_err(Into::into)
+                    }
+                    Err(error) => Err(error),
+                };
+                to_response(bound.map(|()| "bound"))
             }
+            Request::RelayDevices { thread, devices } => {
+                #[cfg(unix)]
+                let relayed = match self.find_thread(&thread) {
+                    Ok(thread) => self.relay_devices(thread, &devices).await,
+                    Err(error) => Err(error),
+                };
+                #[cfg(not(unix))]
+                let relayed: Result<Vec<crate::sandbox::Relayed>, CoreError> = {
+                    let _ = (thread, devices);
+                    Err(CoreError::Invalid("Silt relays devices on Linux and macOS".into()))
+                };
+                to_response(relayed)
+            }
+            Request::ReleaseDevice { thread, device } => {
+                #[cfg(unix)]
+                let released = self.find_thread(&thread).and_then(|thread| self.release_device(thread, &device));
+                #[cfg(not(unix))]
+                let released: Result<(), CoreError> = {
+                    let _ = (thread, device);
+                    Err(CoreError::Invalid("Silt relays devices on Linux and macOS".into()))
+                };
+                to_response(released.map(|()| "released"))
+            }
+            Request::GrantRevoke { id } => to_response(self.grant_revoke(id).await.map(|()| "revoked")),
+            Request::Access { thread } => to_response(self.access_view(&thread).await),
             Request::PutArtifact { .. } => Response::error("only an agent's run shows the person something, with its token"),
             Request::ArtifactGuide { .. } => Response::error("only an agent's run asks for its artifact guide, with its token"),
             Request::DesignSystems { clone } => Response::ok(self.design_systems(clone.as_deref())),
@@ -809,6 +860,10 @@ impl Core {
                 to_response(self.design_asset(source, &name, clone.as_deref(), thread.as_deref(), &path))
             }
             Request::ThreadDesignSystem { thread } => to_response(self.thread_design(&thread)),
+            Request::DesignSkillUsed { thread } => {
+                to_response(crate::design::note_design_skill(&self.data_dir, &thread).map(|()| "noted"))
+            }
+            Request::KeepDesignSystem { thread, name } => to_response(self.keep_design_system(&thread, &name)),
             Request::ArtifactSettings => Response::ok(crate::design::artifact_settings(&self.data_dir)),
             Request::SetArtifactSettings { settings } => {
                 to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))
@@ -1202,6 +1257,12 @@ impl Core {
                 return answer_later(reply, self.presence(&thread, file, line, draft, leaving));
             }
             Request::AcpAgents => Response::ok(self.acp_agents()),
+            Request::AgentUsage { agent, thread } => {
+                // A thread's folder may be in a workspace whose agents sign in apart; a thread not here asks as this machine.
+                let cwd = thread.and_then(|thread| self.find_thread(&thread).and_then(|thread| self.clone_of(thread)).ok());
+                let usage = self.usage.clone();
+                return answer_later(reply, Ok(async move { usage.of(&agent, cwd.as_deref()).await }));
+            }
             Request::AcpStart { thread, clone, agent, options } => {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent, options).await)
             }

@@ -18,12 +18,14 @@ pub mod gemini;
 pub mod history;
 pub mod oneshot;
 pub mod opencode;
+pub mod qudiks;
 mod render;
 mod rewrite;
 pub mod sign_in;
 mod tail;
 pub mod time;
 pub mod tool;
+pub mod usage;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -364,7 +366,50 @@ pub trait Agent: Send + Sync {
     fn homes(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         Vec::new()
     }
+    /// The model APIs it calls with a key from a variable, which Silt's
+    /// gateway adds instead, so its sandbox never holds the key (ADR 0093).
+    fn model_apis(&self) -> &'static [ModelApi] {
+        &[]
+    }
+    /// The hosts it needs to work at all, sign-ins included, which a
+    /// sandbox that reaches only listed hosts reaches too.
+    fn model_hosts(&self) -> &'static [&'static str] {
+        &[]
+    }
 }
+
+/// A model API an agent calls with a key it reads from `variable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelApi {
+    pub variable: &'static str,
+    pub host: &'static str,
+    /// The header the key goes in, lower-case.
+    pub header: &'static str,
+    /// What goes before the key in it, such as `Bearer`; empty for none.
+    pub scheme: &'static str,
+}
+
+const ANTHROPIC: [ModelApi; 3] = [
+    ModelApi { variable: "ANTHROPIC_API_KEY", host: "api.anthropic.com", header: "x-api-key", scheme: "" },
+    ModelApi { variable: "ANTHROPIC_AUTH_TOKEN", host: "api.anthropic.com", header: "authorization", scheme: "Bearer" },
+    ModelApi { variable: "CLAUDE_CODE_OAUTH_TOKEN", host: "api.anthropic.com", header: "authorization", scheme: "Bearer" },
+];
+const OPENAI: [ModelApi; 2] = [
+    ModelApi { variable: "OPENAI_API_KEY", host: "api.openai.com", header: "authorization", scheme: "Bearer" },
+    ModelApi { variable: "CODEX_API_KEY", host: "api.openai.com", header: "authorization", scheme: "Bearer" },
+];
+const GEMINI: [ModelApi; 2] = [
+    ModelApi { variable: "GEMINI_API_KEY", host: "generativelanguage.googleapis.com", header: "x-goog-api-key", scheme: "" },
+    ModelApi { variable: "GOOGLE_API_KEY", host: "generativelanguage.googleapis.com", header: "x-goog-api-key", scheme: "" },
+];
+const OPENROUTER: ModelApi =
+    ModelApi { variable: "OPENROUTER_API_KEY", host: "openrouter.ai", header: "authorization", scheme: "Bearer" };
+
+pub(crate) const CLAUDE_APIS: [ModelApi; 3] = ANTHROPIC;
+pub(crate) const CODEX_APIS: [ModelApi; 2] = OPENAI;
+pub(crate) const GEMINI_APIS: [ModelApi; 2] = GEMINI;
+pub(crate) const OPENCODE_APIS: [ModelApi; 8] =
+    [ANTHROPIC[0], ANTHROPIC[1], ANTHROPIC[2], OPENAI[0], OPENAI[1], GEMINI[0], GEMINI[1], OPENROUTER];
 
 /// `$variable` when the run sets it, else `dir` in the home folder.
 pub(crate) fn home_from(home: &Path, env: &dyn Fn(&str) -> Option<String>, variable: &str, dir: &str) -> PathBuf {
@@ -372,10 +417,18 @@ pub(crate) fn home_from(home: &Path, env: &dyn Fn(&str) -> Option<String>, varia
 }
 
 /// The environment variables that say where agents keep their sessions.
-pub const HOME_VARIABLES: [&str; 5] = ["HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "COPILOT_HOME"];
+pub const HOME_VARIABLES: [&str; 6] =
+    ["HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "QUDIKS_HOME", "GEMINI_CLI_HOME", "COPILOT_HOME"];
 
-pub const AGENTS: [&dyn Agent; 6] =
-    [&claude::ClaudeCode, &codex::Codex, &gemini::Gemini, &antigravity::Antigravity, &opencode::OpenCode, &copilot::Copilot];
+pub const AGENTS: [&dyn Agent; 7] = [
+    &claude::ClaudeCode,
+    &codex::Codex,
+    &qudiks::Qudiks,
+    &gemini::Gemini,
+    &antigravity::Antigravity,
+    &opencode::OpenCode,
+    &copilot::Copilot,
+];
 
 /// The agent recorded as `name`, or run as the command `name`, including
 /// the sessions Silt records itself for agents the web UI starts.
@@ -472,25 +525,34 @@ pub fn set_workspace_homes(homes: Vec<(PathBuf, String, PathBuf)>) {
 /// `variable`'s home for an agent run in `cwd`: the one its folder's
 /// workspace sets, else this process's.
 pub(crate) fn agent_home_in(variable: &str, dir: &str, cwd: &Path) -> Option<PathBuf> {
+    workspace_home(variable, cwd).or_else(|| agent_home(variable, dir))
+}
+
+/// `variable`'s value in the workspace holding `cwd`, when it sets one.
+pub(crate) fn workspace_home(variable: &str, cwd: &Path) -> Option<PathBuf> {
     let homes = WORKSPACE_HOMES.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     homes
         .iter()
         .filter(|(folder, name, _)| name == variable && cwd.starts_with(folder))
         .max_by_key(|(folder, _, _)| folder.components().count())
         .map(|(_, _, home)| home.clone())
-        .or_else(|| agent_home(variable, dir))
 }
 
 /// Every home `variable` names: this process's, then each workspace's.
 pub(crate) fn agent_homes(variable: &str, dir: &str) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = agent_home(variable, dir).into_iter().collect();
-    let homes = WORKSPACE_HOMES.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-    for (_, name, home) in homes.iter() {
-        if name == variable && !found.contains(home) {
-            found.push(home.clone());
+    for home in workspace_homes(variable) {
+        if !found.contains(&home) {
+            found.push(home);
         }
     }
     found
+}
+
+/// Each workspace's value of `variable`.
+pub(crate) fn workspace_homes(variable: &str) -> Vec<PathBuf> {
+    let homes = WORKSPACE_HOMES.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+    homes.iter().filter(|(_, name, _)| name == variable).map(|(_, _, home)| home.clone()).collect()
 }
 
 pub(crate) fn home() -> Option<PathBuf> {

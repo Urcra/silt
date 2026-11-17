@@ -19,7 +19,7 @@ silt-checkout = { path = "../silt-checkout" }
 silt-log = { path = "../silt-log" }
 silt-types = { path = "../silt-types" }
 thiserror = "2.0.21"
-wasm-bindgen = "=0.2.126"
+wasm-bindgen.workspace = true
 
 [dev-dependencies]
 silt-crdt = { path = "../silt-crdt" }

@@ -112,16 +112,13 @@ impl Core {
     /// A new folder for `thread` to continue or fork in, named after what
     /// it's about.
     pub(crate) fn new_chat_folder_for(&self, thread: ThreadId) -> Result<PathBuf, CoreError> {
-        let words = self
-            .threads
-            .get(&thread)
-            .and_then(|record| self.families.get(&record.family))
-            .and_then(|family| {
-                let history: Vec<&silt_log::Delta> = family.history(thread).into_iter().map(|item| item.delta).collect();
-                crate::views::title(&history)
-            })
-            .unwrap_or_default();
-        new_folder(&self.data_dir, &words)
+        new_folder(&self.data_dir, &self.thread_title(thread).unwrap_or_default())
+    }
+
+    pub(crate) fn thread_title(&self, thread: ThreadId) -> Option<String> {
+        let family = self.families.get(&self.threads.get(&thread)?.family)?;
+        let history: Vec<&silt_log::Delta> = family.history(thread).into_iter().map(|item| item.delta).collect();
+        crate::views::title(&history)
     }
 }
 

@@ -1,6 +1,11 @@
 //! Tasks for working on Silt rather than using it, kept out of the `silt`
-//! binary: `cargo xtask status [--root <dir>]` shows milestone and task
-//! progress from ROADMAP.md and TASKS.md.
+//! binary:
+//! - `cargo xtask status [--root <dir>]` shows milestone and task progress
+//!   from ROADMAP.md and TASKS.md;
+//! - `cargo xtask wasm-bindgen <wasm> <out-dir>` writes the browser
+//!   replica's JavaScript bindings, as `wasm-bindgen --target web` would,
+//!   with the version silt-wasm links, so nobody installs a matching CLI
+//!   (ADR 0097).
 
 use std::env;
 use std::fmt::Write;
@@ -30,7 +35,8 @@ fn main() -> ExitCode {
     let result = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["status"] => status(None),
         ["status", "--root", root] => status(Some(PathBuf::from(root))),
-        _ => Err("usage: cargo xtask status [--root <dir>]".to_owned()),
+        ["wasm-bindgen", wasm, out_dir] => wasm_bindgen(Path::new(wasm), Path::new(out_dir)),
+        _ => Err("usage: cargo xtask status [--root <dir>]\n       cargo xtask wasm-bindgen <wasm> <out-dir>".to_owned()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -50,6 +56,17 @@ fn status(root: Option<PathBuf>) -> Result<(), String> {
     let tasks = read(&root.join("TASKS.md"))?;
     print!("{}", render(&parse_roadmap(&roadmap), &parse_tasks(&tasks)));
     Ok(())
+}
+
+/// The settings `wasm-bindgen --target web` runs with where they differ
+/// from the library's own defaults.
+fn wasm_bindgen(wasm: &Path, out_dir: &Path) -> Result<(), String> {
+    let mut bindgen = wasm_bindgen_cli_support::Bindgen::new();
+    bindgen.input_path(wasm).typescript(true).omit_default_module_path(false);
+    bindgen
+        .web(true)
+        .and_then(|bindgen| bindgen.generate(out_dir))
+        .map_err(|error| format!("wasm-bindgen on {}: {error:#}", wasm.display()))
 }
 
 fn find_repo_root() -> Result<PathBuf, String> {

@@ -705,9 +705,21 @@ pub enum Request {
     /// Starts a thread whose agent makes a design system, or changes one;
     /// answers the thread.
     DesignStart(DesignStart),
-    /// The design system a thread was started to make or change, if any.
+    /// The design system a thread was started to make or change, or wrote
+    /// since it loaded the design-system skill, if any.
     ThreadDesignSystem {
         thread: String,
+    },
+    /// A thread loaded the design-system skill; a run's own thread when
+    /// inside [`Request::Scoped`].
+    DesignSkillUsed {
+        thread: String,
+    },
+    /// Copies a system a thread's folder holds, a chat's, to the person's
+    /// own; answers the copy's row.
+    KeepDesignSystem {
+        thread: String,
+        name: String,
     },
     /// Picks a project's design system on this machine, or drops the pick.
     SetProjectDesignSystem {
@@ -757,18 +769,48 @@ pub enum Request {
     PluginRemove {
         name: String,
     },
-    /// Plugin calls waiting for the person or answered, a thread's alone
-    /// when one is named.
+    /// Plugin calls waiting for the person, a thread's alone when one is
+    /// named; with `all`, those answered too.
     Approvals {
         #[serde(default)]
         thread: Option<String>,
+        #[serde(default)]
+        all: bool,
     },
     /// The person's answer to an approval, naming the hash of the request
-    /// they were shown.
+    /// they were shown, and what else it allows from then on.
     ApprovalAnswer {
         id: u64,
         approve: bool,
         hash: String,
+        #[serde(default)]
+        grant: Option<crate::plugins::GrantScope>,
+    },
+    /// Binds a terminal run's token, made before its new thread was, to the
+    /// thread (ADR 0093).
+    BindRunToken {
+        token: String,
+        thread: String,
+    },
+    /// Holds `devices` for the thread's sandboxes, or hands back those it
+    /// holds already (ADR 0093).
+    RelayDevices {
+        thread: String,
+        devices: Vec<String>,
+    },
+    /// Lets go of a device relayed to the thread, ending its session.
+    ReleaseDevice {
+        thread: String,
+        device: String,
+    },
+    /// Ends a grant: calls it covered ask again.
+    GrantRevoke {
+        id: u64,
+    },
+    /// What reached a thread's sandboxes through Silt: plugin calls,
+    /// grants, and what the gateway refused (ADR 0093).
+    Access {
+        thread: String,
     },
     /// A request of an agent's history tools, answered only for the
     /// workspace its run's token was made for (ADR 0065).
@@ -839,6 +881,13 @@ pub enum Request {
     /// The agents the web UI can start, and the clones to start new threads
     /// in.
     AcpAgents,
+    /// How much of its plan `agent` has used, with the sign-in it would run
+    /// with in `thread`'s folder, else this machine's (ADR 0095).
+    AgentUsage {
+        agent: String,
+        #[serde(default)]
+        thread: Option<String>,
+    },
     /// Starts an ACP agent in `thread`, or in a new thread of `clone`
     /// (ADR 0014). Answers with the thread.
     AcpStart {
@@ -1273,16 +1322,28 @@ pub struct DesignComponentView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct DesignCatalog {
-    /// Each project's own, then the person's.
+    /// Each project's own, each chat's, then the person's.
     pub groups: Vec<DesignGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct DesignGroup {
-    /// The project whose repository keeps them; none for the person's own.
+    /// The project whose repository keeps them; none for a chat's or the
+    /// person's own.
     pub project: Option<DesignProject>,
+    /// The chat whose folder keeps them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<DesignChat>,
     pub systems: Vec<DesignSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignChat {
+    pub thread: String,
+    pub title: String,
+    pub folder: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1316,6 +1377,9 @@ pub struct DesignSummary {
     /// It's only in that thread's folder so far.
     #[serde(default)]
     pub unmerged: bool,
+    /// It's in that thread's folder, a chat's, which nothing merges.
+    #[serde(default)]
+    pub chat: bool,
 }
 
 /// One design system's page.
@@ -1506,6 +1570,34 @@ pub struct ImportCandidate {
     pub transcript: PathBuf,
     pub cwd: Option<PathBuf>,
     pub started_ms: Option<i64>,
+}
+
+/// How much of its plan an agent has used (ADR 0095).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct AgentUsage {
+    /// The agent's name, such as Claude Code.
+    pub agent: String,
+    /// Its plan's name, such as Max, where the agent says.
+    pub plan: Option<String>,
+    pub limits: Vec<UsageLimit>,
+    /// Where the person sees all of it.
+    pub page: String,
+    /// Why there are no limits to show, such as an API key or no sign-in.
+    pub unavailable: Option<String>,
+    /// Read from what the agent last recorded, as asking failed.
+    pub recorded: bool,
+    pub read_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct UsageLimit {
+    /// Such as 5-hour limit or Premium requests.
+    pub name: String,
+    /// 0 to 100.
+    pub used_percent: f64,
+    pub resets_at_ms: Option<i64>,
 }
 
 /// The local models on this machine and what it can run (ADR 0092).
@@ -2345,6 +2437,12 @@ mod tests {
             crate::plugins::Outcome::decl(&config),
             crate::plugins::ApprovalState::decl(&config),
             crate::plugins::ApprovalView::decl(&config),
+            crate::plugins::GrantScope::decl(&config),
+            crate::plugins::CallView::decl(&config),
+            crate::plugins::GrantView::decl(&config),
+            crate::plugins::AccessView::decl(&config),
+            crate::plugins::NetworkRefusal::decl(&config),
+            crate::plugins::RelayView::decl(&config),
             BusSubscription::decl(&config),
             CloneInfo::decl(&config),
             CloudLaunch::decl(&config),
@@ -2393,6 +2491,7 @@ mod tests {
             DesignCatalog::decl(&config),
             DesignGroup::decl(&config),
             DesignProject::decl(&config),
+            DesignChat::decl(&config),
             DesignSummary::decl(&config),
             DesignDetail::decl(&config),
             DesignTheme::decl(&config),
@@ -2469,6 +2568,8 @@ mod tests {
             VoiceEvent::decl(&config),
             VoiceStatus::decl(&config),
             LocalModels::decl(&config),
+            AgentUsage::decl(&config),
+            UsageLimit::decl(&config),
             ModelDevice::decl(&config),
             LocalModel::decl(&config),
             FoundModel::decl(&config),

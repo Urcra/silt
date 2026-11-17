@@ -7,6 +7,7 @@ import { apiUrl } from './served'
 import { askedServer } from './workspace'
 import type {
   AgentChoices,
+  AgentUsage,
   ArtifactContent,
   ArtifactListed,
   ConnectorTool,
@@ -19,6 +20,7 @@ import type {
   DesignDetail,
   DesignAssetData,
   DesignStart,
+  DesignSummary,
   ThreadDesign,
   CommentLocation,
   CommentOn,
@@ -66,7 +68,9 @@ import type {
   ThreadSeenView,
   ThreadSummary,
   TurnInfo,
+  AccessView,
   ApprovalView,
+  GrantScope,
   Plugin,
   VoiceStatus,
   Workspaces,
@@ -389,6 +393,9 @@ export const api = {
     request<PresenceReply>('POST', `${thread(id)}/presence`, state),
   live: (id: string) => request<LiveState>('GET', `${thread(id)}/live`),
   agents: () => request<AgentChoices>('GET', '/api/agents'),
+  /** How much of its plan `agent` has used, with the sign-in it runs with in `thread` (ADR 0095); a daemon's only. */
+  usage: (agent: string, thread?: string) =>
+    request<AgentUsage>('GET', `/api/agents/${encodeURIComponent(agent)}/usage${thread ? `?thread=${encodeURIComponent(thread)}` : ''}`),
   /** Starts `agent` in a thread, a clone, or with neither a new chat (`options.chat`, ADR 0059). */
   startAgent: (agent: string, where: { thread: string } | { clone: string } | Record<string, never>, options: Partial<StartOptions> = {}) =>
     request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),
@@ -435,6 +442,7 @@ export const api = {
     request<DesignAssetData>('GET', `/api/design-systems/asset?${designQuery(where)}&path=${encodeURIComponent(path)}`),
   designStart: (start: DesignStart) => request<string>('POST', '/api/design-systems/start', start),
   threadDesign: (id: string) => request<ThreadDesign | null>('GET', `${thread(id)}/design-system`),
+  designKeep: (thread: string, name: string) => request<DesignSummary>('POST', '/api/design-systems/keep', { thread, name }),
   artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),
   setArtifactSettings: (settings: ArtifactSettings) => request<string>('PUT', '/api/artifact-settings', settings),
   projectDesignSystems: () => request<Record<string, string>>('GET', '/api/projects/design-systems'),
@@ -446,7 +454,12 @@ export const api = {
   // Plugin calls waiting for the person, and this machine's plugins (ADR 0093).
   approvals: (thread?: string) => request<ApprovalView[]>('GET', thread ? `/api/approvals?thread=${encodeURIComponent(thread)}` : '/api/approvals'),
   /** Answers an approval, naming the hash of the request shown, so it answers only that. */
-  answerApproval: (id: number, approve: boolean, hash: string) => request<string>('POST', `/api/approvals/${id}`, { approve, hash }),
+  answerApproval: (id: number, approve: boolean, hash: string, grant: GrantScope | null = null) =>
+    request<string>('POST', `/api/approvals/${id}`, { approve, hash, grant }),
+  revokeGrant: (id: number) => request<string>('DELETE', `/api/grants/${id}`),
+  access: (thread: string) => request<AccessView>('GET', `/api/threads/${encodeURIComponent(thread)}/access`),
+  releaseDevice: (thread: string, device: string) =>
+    request<string>('POST', `/api/threads/${encodeURIComponent(thread)}/devices/release`, { device }),
   plugins: () => request<Plugin[]>('GET', '/api/plugins'),
   putPlugin: (plugin: Plugin) => request<string>('PUT', `/api/plugins/${encodeURIComponent(plugin.name)}`, plugin),
   status: () => request<DaemonStatus>('GET', '/api/status'),
@@ -515,4 +528,4 @@ export function short(id: string): string {
 }
 
 /** Agent CLIs Silt can continue a thread with. */
-export const AGENTS = ['claude', 'codex', 'gemini', 'agy', 'opencode', 'copilot'] as const
+export const AGENTS = ['claude', 'codex', 'qudiks', 'gemini', 'agy', 'opencode', 'copilot'] as const

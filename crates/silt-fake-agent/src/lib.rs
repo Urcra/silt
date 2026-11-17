@@ -14,6 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
+pub mod codex;
+
 /// Ends a stand-in with a code a test can tell apart, and why.
 pub struct Failed(pub u8, pub String);
 

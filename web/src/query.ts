@@ -15,6 +15,8 @@ export const keys = {
   // Under `threads`, so a launch's thread arriving fetches them again.
   cloudLaunches: ['threads', 'cloud'] as const,
   thread: (id: string) => ['thread', id] as const,
+  // Not under the thread, whose every event would ask the agent's provider again.
+  usage: (agent: string, thread: string | undefined) => ['usage', agent, thread ?? ''] as const,
   history: (id: string) => ['thread', id, 'history'] as const,
   // Not under the thread: what a blob holds never changes, so a thread event needn't fetch it again.
   artifact: (id: string, blob: string) => ['artifact', id, blob] as const,
@@ -33,6 +35,8 @@ export const keys = {
   threadSeen: (id: string, spec: DiffSpec) => ['thread', id, 'seen', spec] as const,
   mrs: ['mrs'] as const,
   approvals: (thread: string) => ['approvals', thread] as const,
+  allApprovals: ['approvals'] as const,
+  access: (thread: string) => ['approvals', 'access', thread] as const,
   plugins: ['plugins'] as const,
   artifacts: ['artifacts'] as const,
   mr: (id: string) => ['mrs', id] as const,

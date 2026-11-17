@@ -1,7 +1,7 @@
 import { Link } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { type ReactNode, useState } from 'react'
-import { api, type AgentStatus, type ApprovalView, type BackendView, type Extra, type Plugin, type Policy, type Reach, type ThreadSummary } from '../api'
+import { api, type AgentStatus, type ApprovalView, type BackendView, type CallView, type Extra, type GrantScope, type Plugin, type Policy, type Reach, type ThreadSummary } from '../api'
 import { keys, message } from '../query'
 import { workspaceOf } from '../rules'
 import { BACKENDS, DEVICE_ORDER, DEVICES, HANDS_OVER, NETWORK_ORDER, NETWORKS, PLANNED_BACKENDS, reachOf } from '../sandbox'
@@ -26,6 +26,7 @@ function networkLine(reach: Reach): string {
 function devicesLine(reach: Reach): string {
   if (reach.devices === 'all_usb') return 'All USB'
   if (reach.devices === 'named' && reach.device_nodes.length) return reach.device_nodes.join(', ')
+  if (reach.devices === 'relayed' && reach.device_nodes.length) return `${reach.device_nodes.join(', ')} (relayed)`
   return 'None'
 }
 
@@ -77,7 +78,7 @@ export function SandboxShield({ thread, summary, agent }: { thread: string; summ
           <div className="flex items-center gap-2 border-b border-line-subtle px-3 py-2.5">
             <Icon name="shield" className="h-3.5 w-3.5" />
             <span className="flex-1 text-sm font-medium">{heading}</span>
-            {view && <span className="font-mono text-2xs text-fg-2">{view.workspace.name}{reach ? ` · ${view?.effective.backend ?? 'bubblewrap'}` : ''}</span>}
+            {view && <span className="font-mono text-2xs text-fg-2">{view.workspace.name}{reach ? ` · ${view?.effective.backend ?? reach.backend}` : ''}</span>}
           </div>
           {reach ? (
             <>
@@ -107,6 +108,14 @@ export function SandboxShield({ thread, summary, agent }: { thread: string; summ
   )
 }
 
+/** What approving may also allow: nothing more, or calls like it for the run or the thread a while. */
+const GRANTS: { value: string; label: (change: boolean) => string; scope: GrantScope | null }[] = [
+  { value: 'once', label: () => 'ask again next time', scope: null },
+  { value: 'run', label: (change) => `allow ${change ? 'changes' : 'reads'} like it for this run`, scope: { for: 'run' } },
+  { value: 'hour', label: (change) => `allow ${change ? 'changes' : 'reads'} like it in this thread for an hour`, scope: { for: 'thread', minutes: 60 } },
+  { value: 'day', label: (change) => `allow ${change ? 'changes' : 'reads'} like it in this thread for 8 hours`, scope: { for: 'thread', minutes: 480 } },
+]
+
 function remaining(createdMs: number, now: number): string {
   const left = Math.max(0, createdMs + 15 * 60 * 1000 - now)
   const minutes = Math.floor(left / 60000)
@@ -115,15 +124,16 @@ function remaining(createdMs: number, now: number): string {
 }
 
 /** A plugin's call waiting for the person (ADR 0093), drawn from Silt's own copy of the request, never the agent's account of it. */
-export function ApprovalCard({ approval, first }: { approval: ApprovalView; first: boolean }) {
+export function ApprovalCard({ approval, first, title }: { approval: ApprovalView; first: boolean; title?: string }) {
   const queries = useQueryClient()
   const [error, setError] = useState<string>()
   const [sending, setSending] = useState(false)
+  const [grant, setGrant] = useState<string>('once')
   const answer = (approve: boolean) => {
     setError(undefined)
     setSending(true)
     api
-      .answerApproval(approval.id, approve, approval.hash)
+      .answerApproval(approval.id, approve, approval.hash, approve ? GRANTS.find((choice) => choice.value === grant)?.scope ?? null : null)
       .then(() => void queries.invalidateQueries({ queryKey: ['approvals'] }))
       .catch((failure: unknown) => setError(message(failure)))
       .finally(() => setSending(false))
@@ -132,7 +142,7 @@ export function ApprovalCard({ approval, first }: { approval: ApprovalView; firs
     if (first && !sending && !document.querySelector('dialog[open]')) answer(true)
   })
   const now = useNow(1000)
-  const change = approval.tool.endsWith('_mutate') || approval.tool.endsWith('_run')
+  const change = approval.change
   return (
     <div role="group" aria-label="approval" className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3">
       <span className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-fg-2">
@@ -140,6 +150,7 @@ export function ApprovalCard({ approval, first }: { approval: ApprovalView; firs
         The agent asks to {change ? 'change' : 'read'} {approval.environment} through <span className="font-medium text-fg-1">{approval.plugin}</span>
         <Tag tone="warn">{approval.environment}</Tag>
         <Tag>{approval.tool}</Tag>
+        {title && <span className="truncate">· {title}</span>}
       </span>
       <span className="font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase">Silt will send exactly this, once</span>
       <pre className="max-h-80 overflow-y-auto rounded-sm border border-line bg-bg px-2.5 py-2 font-mono text-xs whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
@@ -155,6 +166,25 @@ export function ApprovalCard({ approval, first }: { approval: ApprovalView; firs
         <Button disabled={sending} onClick={() => answer(false)}>
           Reject
         </Button>
+        {approval.once ? (
+          <span className="ml-auto text-xs text-fg-2">{approval.environment}: once only</span>
+        ) : (
+          <label className="ml-auto flex items-center gap-1.5 text-xs text-fg-2">
+            Then
+            <select
+              aria-label="what else it allows"
+              className="h-7 rounded-sm border border-line bg-bg px-1.5 text-xs text-fg-1"
+              value={grant}
+              onChange={(event) => setGrant(event.target.value)}
+            >
+              {GRANTS.map((choice) => (
+                <option key={choice.value} value={choice.value}>
+                  {choice.label(change)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </span>
       <span className="text-2xs text-fg-2">
         Shown from Silt's own copy of the request, not the agent's description of it. The agent can't change it now; what you approve is what is sent.
@@ -253,7 +283,9 @@ export function ReachSettings({
   const orgRequires = Boolean(org?.policy.silt_sandbox)
   const sandboxed = Boolean(policy.silt_sandbox) || orgRequires
   const orgBackend = org?.policy.backend ?? null
-  const backend = orgBackend ?? policy.backend ?? 'bubblewrap'
+  // Unset, it's the one this machine has, as the daemon picks it.
+  const here = backends.find((known) => known.unavailable === null)?.backend ?? 'bubblewrap'
+  const backend = orgBackend ?? policy.backend ?? here
   const unavailable = backends.find((known) => known.backend === backend)?.unavailable ?? null
   const refused = new Set(org?.policy.refuse ?? [])
   const mostNetwork = org?.policy.network ? NETWORK_ORDER.indexOf(org.policy.network) : NETWORK_ORDER.length - 1
@@ -380,6 +412,9 @@ export function ReachSettings({
             {policy.devices === 'named' && (
               <ListInput label="Device nodes" placeholder="/dev/ttyUSB0, /dev/bus/usb/001/004" value={policy.device_nodes ?? []} onChange={(device_nodes) => onChange({ device_nodes })} />
             )}
+            {policy.devices === 'relayed' && (
+              <ListInput label="Devices to relay" placeholder="/dev/ttyUSB0@115200, adb:R58M30ABCD" value={policy.device_nodes ?? []} onChange={(device_nodes) => onChange({ device_nodes })} />
+            )}
           </div>
         </div>
         <div className={ROW}>
@@ -464,7 +499,7 @@ export function WorkspacePlugins({ workspace, name }: { workspace: string; name:
             <label key={plugin.name} className="flex cursor-pointer items-center gap-2.5 border-b border-line-subtle px-4 py-2.5 text-sm last:border-b-0">
               <input type="checkbox" aria-label={`${plugin.name} in ${name}`} className="accent-[var(--accent)]" checked={on} onChange={(event) => turn(plugin, event.target.checked)} />
               <span className="font-medium">{plugin.name}</span>
-              <Tag>{plugin.kind.type === 'graphql' ? 'GraphQL' : (plugin.kind.argv[0] ?? 'command')}</Tag>
+              <Tag>{plugin.kind.type === 'graphql' ? 'GraphQL' : plugin.kind.type === 'mcp' ? 'MCP' : (plugin.kind.argv[0] ?? 'command')}</Tag>
               {Object.entries(plugin.environments).map(([environment, rules]) => (
                 <Tag key={environment} tone={rules.changes === 'ask' ? 'warn' : 'neutral'}>
                   {environment}
@@ -482,6 +517,192 @@ export function WorkspacePlugins({ workspace, name }: { workspace: string; name:
         )}
       </div>
       {error && <p className="text-xs text-danger">{error}</p>}
+    </section>
+  )
+}
+
+function Heading({ children }: { children: ReactNode }) {
+  return <h3 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{children}</h3>
+}
+
+function clock(ms: number): string {
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function callSaid(call: CallView): { tone: 'ok' | 'warn' | 'danger' | 'neutral'; said: string } {
+  const outcome = call.outcome
+  if (call.state === 'pending') return { tone: 'warn', said: 'waiting for you' }
+  if (call.state === 'running') return { tone: 'warn', said: 'running' }
+  if (call.state === 'expired') return { tone: 'neutral', said: 'approval expired' }
+  if (!outcome) return { tone: 'neutral', said: call.state }
+  switch (outcome.status) {
+    case 'done':
+      return { tone: 'ok', said: call.asked ? 'you approved · ran' : call.grant !== null ? 'ran under a grant' : 'ran without asking' }
+    case 'refused':
+      return { tone: 'danger', said: `refused: ${outcome.why}` }
+    case 'failed':
+      return { tone: 'danger', said: `failed before it was sent: ${outcome.error}` }
+    case 'unknown':
+      return { tone: 'warn', said: `outcome unknown: ${outcome.why}` }
+    case 'pending':
+      return { tone: 'warn', said: 'waiting for you' }
+  }
+}
+
+const TONE_DOT = { ok: 'bg-ok', warn: 'bg-warn', danger: 'bg-danger', neutral: 'bg-fg-3' } as const
+
+/**
+ * The thread's Access tab (ADR 0093): what its sandbox reaches, the grants in force, each plugin call and how it
+ * ended, and what the gateway refused.
+ */
+export function AccessPanel({ thread, agent }: { thread: string; agent: AgentStatus | null | undefined }) {
+  const queries = useQueryClient()
+  const access = useQuery({ queryKey: keys.access(thread), queryFn: () => api.access(thread), enabled: !hosted() })
+  const [error, setError] = useState<string>()
+  const revoke = (id: number) => {
+    setError(undefined)
+    api.revokeGrant(id).then(
+      () => void queries.invalidateQueries({ queryKey: keys.allApprovals }),
+      (failure: unknown) => setError(message(failure)),
+    )
+  }
+  const release = (device: string) => {
+    setError(undefined)
+    api.releaseDevice(thread, device).then(
+      () => void queries.invalidateQueries({ queryKey: keys.allApprovals }),
+      (failure: unknown) => setError(message(failure)),
+    )
+  }
+  const reach = agent && agent.state !== 'stopped' ? agent.sandbox : null
+  const grants = (access.data?.grants ?? []).filter((grant) => grant.active)
+  return (
+    <div className="flex flex-col gap-6 px-5 py-5 text-sm">
+      <section aria-label="this run" className="flex flex-col gap-2">
+        <Heading>This run</Heading>
+        {reach ? (
+          <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs">
+            <span className="text-fg-2">Sandbox</span>
+            <span className="font-mono">{reach.backend}</span>
+            <span className="text-fg-2">Network</span>
+            <span className="font-mono">{networkLine(reach)}</span>
+            {alsoLine(reach) && (
+              <>
+                <span className="text-fg-2">Also allowed</span>
+                <span className="font-mono">{alsoLine(reach)}</span>
+              </>
+            )}
+            <span className="text-fg-2">Devices</span>
+            <span className="font-mono">{devicesLine(reach)}</span>
+          </div>
+        ) : (
+          <p className="text-xs text-fg-2">{agent && agent.state !== 'stopped' ? "Not in Silt's sandbox." : 'No agent runs here now.'}</p>
+        )}
+      </section>
+      <section aria-label="granted" className="flex flex-col gap-2">
+        <Heading>Granted</Heading>
+        {grants.length === 0 && <p className="text-xs text-fg-2">Nothing beyond each call you approve.</p>}
+        {grants.map((grant) => (
+          <div key={grant.id} className="flex items-start gap-2">
+            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-ok" />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span>
+                {grant.plugin} · {grant.environment} · {grant.change ? 'changes' : 'reads'}
+              </span>
+              <span className="font-mono text-2xs text-fg-2">
+                {grant.run_only ? 'this run' : 'this thread'}
+                {grant.until_ms !== null ? ` · until ${clock(grant.until_ms)}` : ''}
+              </span>
+            </span>
+            <Button variant="ghost" onClick={() => revoke(grant.id)} aria-label={`revoke ${grant.plugin} ${grant.environment}`}>
+              Revoke
+            </Button>
+          </div>
+        ))}
+        <p className="text-2xs text-fg-2">Grants stay with this thread. A fork starts with none.</p>
+      </section>
+      {(access.data?.devices.length ?? 0) > 0 && (
+        <section aria-label="devices and sessions" className="flex flex-col gap-2">
+          <Heading>Devices and sessions</Heading>
+          {access.data?.devices.map((device) => (
+            <div key={device.device} className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-ok" />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate font-mono text-xs">{device.device}</span>
+                <span className="font-mono text-2xs text-fg-2">
+                  {device.kind === 'adb' ? 'adb, for this device only' : 'serial session'} · held since {clock(device.since_ms)}
+                </span>
+              </span>
+              <Button variant="ghost" onClick={() => release(device.device)} aria-label={`release ${device.device}`}>
+                Release
+              </Button>
+            </div>
+          ))}
+          <p className="text-2xs text-fg-2">Silt keeps each session while the agent restarts; releasing ends it.</p>
+        </section>
+      )}
+      <section aria-label="plugin calls" className="flex flex-col gap-2">
+        <Heading>Plugin calls</Heading>
+        {access.data?.calls.length === 0 && <p className="text-xs text-fg-2">None yet.</p>}
+        {(access.data?.calls ?? []).map((call) => {
+          const { tone, said } = callSaid(call)
+          return (
+            <details key={call.id} className="group">
+              <summary className="flex cursor-pointer list-none items-start gap-2">
+                <span className={cx('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', TONE_DOT[tone])} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate">
+                    {call.plugin || 'no plugin'} · {call.tool} · {call.environment}
+                  </span>
+                  <span className="truncate font-mono text-2xs text-fg-2">
+                    {clock(call.created_ms)} · {said}
+                  </span>
+                </span>
+              </summary>
+              <pre className="mt-1.5 ml-3.5 max-h-48 overflow-y-auto rounded-sm border border-line bg-bg px-2 py-1.5 font-mono text-2xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+                {call.shown}
+              </pre>
+            </details>
+          )
+        })}
+      </section>
+      {(access.data?.refused.length ?? 0) > 0 && (
+        <section aria-label="refused" className="flex flex-col gap-2">
+          <Heading>Refused by the gateway</Heading>
+          {access.data?.refused.map((refused, index) => (
+            <div key={`${refused.time_ms}-${index}`} className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-danger" />
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate font-mono text-xs">
+                  {refused.host}:{refused.port}
+                </span>
+                <span className="font-mono text-2xs text-fg-2">
+                  {clock(refused.time_ms)} · {refused.why}
+                </span>
+              </span>
+            </div>
+          ))}
+        </section>
+      )}
+      {error && <p className="text-xs text-danger">{error}</p>}
+    </div>
+  )
+}
+
+/** Every plugin call waiting for the person, for Needs you. */
+export function PendingApprovals({ titleOf }: { titleOf: (thread: string) => string }) {
+  const approvals = useQuery({ queryKey: keys.allApprovals, queryFn: () => api.approvals(), enabled: !hosted(), refetchInterval: 30_000 })
+  const waiting = (approvals.data ?? []).filter((approval) => approval.state === 'pending')
+  if (waiting.length === 0) return null
+  return (
+    <section aria-label="plugin calls waiting on you" className="flex flex-col gap-3">
+      {waiting.map((approval, index) => (
+        <div key={approval.id} className="flex flex-col gap-1">
+          <ApprovalCard approval={approval} first={index === 0} title={titleOf(approval.thread)} />
+          <Link to="/t/$id" params={{ id: approval.thread }} className="self-end text-xs text-accent-fg">
+            Open the thread
+          </Link>
+        </div>
+      ))}
     </section>
   )
 }

@@ -302,6 +302,12 @@ fn record_ids(lines: &[String]) -> Vec<String> {
 pub struct OpenCode;
 
 impl Agent for OpenCode {
+    fn model_apis(&self) -> &'static [crate::ModelApi] {
+        &crate::OPENCODE_APIS
+    }
+    fn model_hosts(&self) -> &'static [&'static str] {
+        &["api.anthropic.com", "api.openai.com", "generativelanguage.googleapis.com", "openrouter.ai", "models.dev"]
+    }
     fn homes(&self, home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         [".local/share/opencode", ".config/opencode", ".local/state/opencode"].iter().map(|dir| home.join(dir)).collect()
     }

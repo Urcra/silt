@@ -45,6 +45,10 @@ pub(crate) struct System {
 }
 
 impl System {
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     pub(crate) fn readme(&self) -> String {
         read_capped(&self.dir.join("README.md"), README_BYTES).unwrap_or_default()
     }
@@ -253,6 +257,7 @@ impl System {
             uses,
             thread,
             unmerged,
+            chat: false,
         }
     }
 
@@ -464,6 +469,75 @@ pub(crate) fn record_design_thread(data_dir: &Path, thread: &str, record: Design
     all.insert(thread.to_owned(), record);
     let json = serde_json::to_vec_pretty(&all).map_err(|error| CoreError::Invalid(error.to_string()))?;
     write_atomically(&data_dir.join(DESIGN_THREADS), &json)
+}
+
+/// When each thread first loaded the design-system skill, by thread, for
+/// threads asked for a system in their own words rather than from Settings.
+const SKILL_THREADS: &str = "design-skill-threads.json";
+
+pub(crate) fn skill_threads(data_dir: &Path) -> BTreeMap<String, i64> {
+    read_capped(&data_dir.join(SKILL_THREADS), 4 << 20).and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default()
+}
+
+/// Notes that `thread` loaded the design-system skill, keeping the first
+/// time it did, so what it writes from then on shows beside it.
+pub fn note_design_skill(data_dir: &Path, thread: &str) -> Result<(), CoreError> {
+    let mut all = skill_threads(data_dir);
+    if all.contains_key(thread) {
+        return Ok(());
+    }
+    all.insert(thread.to_owned(), crate::core::now_ms());
+    let json = serde_json::to_vec_pretty(&all).map_err(|error| CoreError::Invalid(error.to_string()))?;
+    fs::create_dir_all(data_dir)?;
+    write_atomically(&data_dir.join(SKILL_THREADS), &json)
+}
+
+/// When a system's files were first and last written, in ms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Written {
+    pub(crate) oldest_ms: i64,
+    pub(crate) newest_ms: i64,
+}
+
+/// [`Written`] for the files in `dir`, looking at a bounded number of them.
+pub(crate) fn written(dir: &Path) -> Option<Written> {
+    const MOST_FILES: usize = 4096;
+    let mut span: Option<Written> = None;
+    let mut pending = vec![dir.to_owned()];
+    let mut seen = 0;
+    while let Some(folder) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&folder) else { continue };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > MOST_FILES {
+                return span;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                pending.push(entry.path());
+                continue;
+            }
+            let Some(ms) = meta.modified().ok().and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok()) else {
+                continue;
+            };
+            let ms = i64::try_from(ms.as_millis()).unwrap_or(i64::MAX);
+            span = Some(span.map_or(Written { oldest_ms: ms, newest_ms: ms }, |span| Written {
+                oldest_ms: span.oldest_ms.min(ms),
+                newest_ms: span.newest_ms.max(ms),
+            }));
+        }
+    }
+    span
+}
+
+/// Of `systems`, the one written last at or after `since_ms`, and whether
+/// it held files from before then, so it was changed rather than made.
+pub(crate) fn written_since<T>(systems: Vec<(T, Written)>, since_ms: i64) -> Option<(T, bool)> {
+    systems
+        .into_iter()
+        .filter(|(_, written)| written.newest_ms >= since_ms)
+        .max_by_key(|(_, written)| written.newest_ms)
+        .map(|(system, written)| (system, written.oldest_ms < since_ms))
 }
 
 pub(crate) fn read_capped(path: &Path, limit: u64) -> Option<String> {
@@ -930,5 +1004,26 @@ mod tests {
         let css = find(&all, "acme").expect("acme").compiled().expect("css");
         assert!(css.css.contains("d09GMg=="), "{}", css.css);
         assert!(!css.css.contains("c2VjcmV0"), "{}", css.css);
+    }
+
+    #[test]
+    fn a_thread_shows_the_system_it_wrote_last_since_it_loaded_the_skill() {
+        let written = |oldest_ms, newest_ms| Written { oldest_ms, newest_ms };
+        let systems = vec![("before", written(10, 90)), ("changed", written(50, 150)), ("made", written(120, 140))];
+        assert_eq!(written_since(systems.clone(), 100), Some(("changed", true)));
+        assert_eq!(written_since(systems[2..].to_vec(), 100), Some(("made", false)));
+        assert_eq!(written_since(systems[..1].to_vec(), 100), None, "nothing written since");
+    }
+
+    #[test]
+    fn a_thread_keeps_when_it_first_loaded_the_skill() {
+        let data = tempfile::tempdir().expect("tempdir");
+        note_design_skill(data.path(), "t1").expect("noted");
+        let first = skill_threads(data.path())["t1"];
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        note_design_skill(data.path(), "t1").expect("again");
+        note_design_skill(data.path(), "t2").expect("another");
+        let all = skill_threads(data.path());
+        assert_eq!((all["t1"], all.len()), (first, 2));
     }
 }

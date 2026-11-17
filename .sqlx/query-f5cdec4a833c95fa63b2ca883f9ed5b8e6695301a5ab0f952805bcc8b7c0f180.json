@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE run_tokens SET thread_id = ? WHERE hash = ? AND thread_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "f5cdec4a833c95fa63b2ca883f9ed5b8e6695301a5ab0f952805bcc8b7c0f180"
+}

@@ -174,7 +174,8 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/live", get(live))
         .route("/api/threads/{id}/presence", post(presence))
         .route("/api/agents", get(agents))
-        .route("/api/agents/start", post(agent_start))
+        .route("/api/agents/start", post(agent_start).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
+        .route("/api/agents/{agent}/usage", get(agent_usage))
         .route("/api/clones/branches", get(branches))
         .route("/api/cloud", get(cloud_launches).post(cloud_start))
         .route("/api/threads/{id}/cloud/send", post(cloud_send))
@@ -208,6 +209,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/design-systems/system", get(design_system))
         .route("/api/design-systems/asset", get(design_asset))
         .route("/api/design-systems/start", post(design_start))
+        .route("/api/design-systems/keep", post(keep_design_system))
         .route("/api/threads/{id}/design-system", get(thread_design))
         .route("/api/artifact-settings", get(artifact_settings).put(set_artifact_settings))
         .route("/api/projects/design-systems", get(project_design_systems).put(set_project_design_system))
@@ -235,6 +237,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/inbox/read", post(inbox_read))
         .route("/api/approvals", get(approvals))
         .route("/api/approvals/{id}", post(approval_answer))
+        .route("/api/grants/{id}", delete(grant_revoke))
+        .route("/api/threads/{id}/access", get(access))
+        .route("/api/threads/{id}/devices/release", post(release_device))
         .route("/api/plugins", get(plugins))
         .route("/api/plugins/{name}", put(plugin_put).delete(plugin_remove))
         .route("/api/mrs", get(merge_requests))
@@ -1353,6 +1358,16 @@ async fn agents(State(web): State<Web>) -> HttpResponse {
 }
 
 #[derive(Deserialize)]
+struct UsageQuery {
+    #[serde(default)]
+    thread: Option<String>,
+}
+
+async fn agent_usage(State(web): State<Web>, Path(agent): Path<String>, Query(query): Query<UsageQuery>) -> HttpResponse {
+    ask(&web, Request::AgentUsage { agent, thread: query.thread }).await
+}
+
+#[derive(Deserialize)]
 struct AgentStart {
     #[serde(default)]
     thread: Option<String>,
@@ -1467,6 +1482,16 @@ async fn design_start(State(web): State<Web>, Json(start): Json<crate::protocol:
 
 async fn thread_design(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
     ask(&web, Request::ThreadDesignSystem { thread }).await
+}
+
+#[derive(Deserialize)]
+struct KeepDesignSystem {
+    thread: String,
+    name: String,
+}
+
+async fn keep_design_system(State(web): State<Web>, Json(body): Json<KeepDesignSystem>) -> HttpResponse {
+    ask(&web, Request::KeepDesignSystem { thread: body.thread, name: body.name }).await
 }
 
 async fn project_design_systems(State(web): State<Web>) -> HttpResponse {
@@ -1844,20 +1869,41 @@ async fn inbox_read(State(web): State<Web>, Query(on): Query<OnServer>, Json(rea
 #[derive(Deserialize)]
 struct ApprovalsQuery {
     thread: Option<String>,
+    #[serde(default)]
+    all: bool,
 }
 
 async fn approvals(State(web): State<Web>, Query(query): Query<ApprovalsQuery>) -> HttpResponse {
-    ask(&web, Request::Approvals { thread: query.thread }).await
+    ask(&web, Request::Approvals { thread: query.thread, all: query.all }).await
 }
 
 #[derive(Deserialize)]
 struct ApprovalBody {
     approve: bool,
     hash: String,
+    #[serde(default)]
+    grant: Option<crate::plugins::GrantScope>,
 }
 
 async fn approval_answer(State(web): State<Web>, Path(id): Path<u64>, Json(body): Json<ApprovalBody>) -> HttpResponse {
-    ask(&web, Request::ApprovalAnswer { id, approve: body.approve, hash: body.hash }).await
+    ask(&web, Request::ApprovalAnswer { id, approve: body.approve, hash: body.hash, grant: body.grant }).await
+}
+
+async fn grant_revoke(State(web): State<Web>, Path(id): Path<u64>) -> HttpResponse {
+    ask(&web, Request::GrantRevoke { id }).await
+}
+
+#[derive(Deserialize)]
+struct ReleaseBody {
+    device: String,
+}
+
+async fn release_device(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<ReleaseBody>) -> HttpResponse {
+    ask(&web, Request::ReleaseDevice { thread, device: body.device }).await
+}
+
+async fn access(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::Access { thread }).await
 }
 
 async fn plugins(State(web): State<Web>) -> HttpResponse {
