@@ -59,10 +59,38 @@ pub struct Relay {
     pub socket: PathBuf,
 }
 
+/// A folder of a run's `PATH`, with the links on the way to it resolved
+/// outside, as the plan does no I/O.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PathDir {
+    pub path: PathBuf,
+    /// Where it really is, every link followed.
+    pub real: Option<PathBuf>,
+    /// Its deepest ancestor that's a link, or itself, and where that link
+    /// leads. Mounting the folder alone would leave a relative link in it
+    /// such as `npx -> ../lib/…` dangling: `..` climbs out of the mount.
+    pub link: Option<(PathBuf, PathBuf)>,
+}
+
+impl From<PathBuf> for PathDir {
+    fn from(path: PathBuf) -> Self {
+        Self { path, real: None, link: None }
+    }
+}
+
+impl From<&str> for PathDir {
+    fn from(path: &str) -> Self {
+        PathBuf::from(path).into()
+    }
+}
+
 /// Where a run's things are on this machine.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunPaths {
     pub home: Option<PathBuf>,
+    /// The home folder with its links followed, where that differs, so a
+    /// link can't bring it in under another name.
+    pub real_home: Option<PathBuf>,
     /// The thread's checkout, which the agent works in.
     pub checkout: PathBuf,
     /// Its git dir when that's outside the checkout, as a managed
@@ -73,13 +101,15 @@ pub struct RunPaths {
     /// Where the agent keeps its sessions and settings.
     pub agent_homes: Vec<PathBuf>,
     /// Each folder of the run's `PATH`.
-    pub path_dirs: Vec<PathBuf>,
+    pub path_dirs: Vec<PathDir>,
     /// The `silt` its hooks and MCP server run.
     pub silt: PathBuf,
     /// More it reads, such as an agent program Silt downloaded.
     pub read_only: Vec<PathBuf>,
     /// Silt's own data, hidden wherever it is.
     pub data_dir: Option<PathBuf>,
+    /// The same with its links followed, where that differs.
+    pub real_data_dir: Option<PathBuf>,
     /// Files Silt wrote for this run, such as the agent's settings.
     pub scratch: PathBuf,
     /// The socket that answers for this run only.
@@ -111,7 +141,7 @@ pub struct SandboxPlan {
 const SYSTEM: [&str; 11] = ["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt", "/nix", "/snap"];
 
 /// Toolchains under the home folder, read-only.
-const TOOLCHAINS: [&str; 17] = [
+const TOOLCHAINS: [&str; 18] = [
     ".cargo",
     ".rustup",
     ".nvm",
@@ -126,6 +156,7 @@ const TOOLCHAINS: [&str; 17] = [
     ".local/lib",
     ".local/share/pnpm",
     ".local/share/mise",
+    ".local/share/fnm",
     ".gitconfig",
     ".config/git",
     ".config/mise",
@@ -167,109 +198,114 @@ const CREDENTIALS: [&str; 22] = [
 /// what git or Silt would later run from read-only again; and what `reach`
 /// hands over.
 pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
-    let mut mounts = Vec::new();
-    let mut add = |kind: MountKind, path: PathBuf| {
-        // Read-only inside something read-only already adds nothing, and
-        // mounting it again can fail where it's a link.
-        let covered = kind == MountKind::ReadOnly
-            && mounts
-                .iter()
-                .rev()
-                .find(|mount: &&Mount| path.starts_with(&mount.path))
-                .is_some_and(|mount| mount.kind == MountKind::ReadOnly);
-        if !covered && !mounts.iter().any(|mount: &Mount| mount.path == path && mount.kind == kind) {
-            mounts.push(Mount { kind, path, source: None });
-        }
-    };
+    let mut mounts = Mounts::default();
     for dir in SYSTEM {
-        add(MountKind::ReadOnly, dir.into());
+        mounts.at(MountKind::ReadOnly, dir.into());
     }
     for dir in ["/tmp", "/var/tmp", "/run"] {
-        add(MountKind::Tmpfs, dir.into());
+        mounts.at(MountKind::Tmpfs, dir.into());
     }
     let home = paths.home.as_deref();
     if let Some(home) = home {
         for dir in TOOLCHAINS {
-            add(MountKind::ReadOnly, home.join(dir));
+            mounts.at(MountKind::ReadOnly, home.join(dir));
         }
     }
     // Folders the person's PATH names, wherever they are, so the tools the
-    // agent calls are there; never the home folder itself.
-    // never one that holds the home folder or Silt's data.
-    let holds = |dir: &Path, inside: Option<&Path>| inside.is_some_and(|inside| inside.starts_with(dir));
+    // agent calls are there; never one that holds the home folder or Silt's
+    // data, by any name.
+    let homes: Vec<&Path> = home.into_iter().chain(paths.real_home.as_deref()).collect();
+    let data: Vec<&Path> = paths.data_dir.as_deref().into_iter().chain(paths.real_data_dir.as_deref()).collect();
+    let private: Vec<&Path> = homes.iter().chain(&data).copied().collect();
+    let refused =
+        |dir: &Path| !dir.is_absolute() || dir.starts_with("/proc") || private.iter().any(|private| private.starts_with(dir));
+    // A link's target is shown under the link's name, out of reach of the
+    // credentials hidden below by their own names.
+    let secret = |dir: &Path| {
+        data.iter().any(|data| dir.starts_with(data))
+            || homes.iter().any(|home| {
+                CREDENTIALS.iter().map(|file| home.join(file)).any(|file| file.starts_with(dir) || dir.starts_with(&file))
+            })
+    };
     for dir in &paths.path_dirs {
-        if dir.is_absolute() && !dir.starts_with("/proc") && !holds(dir, home) && !holds(dir, paths.data_dir.as_deref()) {
-            add(MountKind::ReadOnly, dir.clone());
+        if refused(&dir.path) || dir.real.as_deref().is_some_and(refused) {
+            continue;
+        }
+        match &dir.link {
+            Some((link, target)) if !refused(link) && !refused(target) && !secret(target) => {
+                mounts.add(Mount { kind: MountKind::ReadOnly, path: link.clone(), source: Some(target.clone()) });
+            }
+            _ => mounts.at(MountKind::ReadOnly, dir.path.clone()),
         }
     }
-    add(MountKind::ReadOnly, paths.silt.clone());
+    mounts.at(MountKind::ReadOnly, paths.silt.clone());
     for path in &paths.read_only {
-        add(MountKind::ReadOnly, path.clone());
+        mounts.at(MountKind::ReadOnly, path.clone());
     }
     if let Some(home) = home {
         for dir in CACHES {
-            add(MountKind::ReadWrite, home.join(dir));
+            mounts.at(MountKind::ReadWrite, home.join(dir));
         }
         for file in CREDENTIALS {
-            add(MountKind::Hide, home.join(file));
+            mounts.at(MountKind::Hide, home.join(file));
         }
     }
     // Then the run's own corner of it comes back, below.
     if let Some(data) = &paths.data_dir {
-        add(MountKind::Hide, data.clone());
+        mounts.at(MountKind::Hide, data.clone());
     }
     for dir in &paths.git_shared {
-        add(MountKind::ReadOnly, dir.clone());
+        mounts.at(MountKind::ReadOnly, dir.clone());
     }
-    add(MountKind::ReadWrite, paths.checkout.clone());
+    mounts.at(MountKind::ReadWrite, paths.checkout.clone());
     if let Some(git_dir) = &paths.git_dir {
-        add(MountKind::ReadWrite, git_dir.clone());
+        mounts.at(MountKind::ReadWrite, git_dir.clone());
     }
     for dir in &paths.agent_homes {
-        add(MountKind::ReadWrite, dir.clone());
+        mounts.at(MountKind::ReadWrite, dir.clone());
     }
-    add(MountKind::ReadWrite, paths.scratch.clone());
+    mounts.at(MountKind::ReadWrite, paths.scratch.clone());
     for (path, writable) in &reach.paths {
-        add(if *writable { MountKind::ReadWrite } else { MountKind::ReadOnly }, PathBuf::from(path));
+        mounts.at(if *writable { MountKind::ReadWrite } else { MountKind::ReadOnly }, PathBuf::from(path));
     }
     // Run later by git or Silt outside the sandbox, so never writable in it
     // (B2.3, CVE-2026-25725).
     let git_dir = paths.git_dir.clone().unwrap_or_else(|| paths.checkout.join(".git"));
     for protected in [git_dir.join("config"), git_dir.join("hooks"), paths.checkout.join(".silt")] {
-        add(MountKind::ReadOnly, protected);
+        mounts.at(MountKind::ReadOnly, protected);
     }
     match reach.devices {
         Devices::None => {}
         Devices::Named => {
             for node in &reach.device_nodes {
-                add(MountKind::Device, node.into());
+                mounts.at(MountKind::Device, node.into());
             }
         }
         Devices::AllUsb => {
-            add(MountKind::Device, "/dev/bus/usb".into());
-            add(MountKind::ReadOnly, "/sys".into());
-            add(MountKind::ReadOnly, "/run/udev".into());
+            mounts.at(MountKind::Device, "/dev/bus/usb".into());
+            mounts.at(MountKind::ReadOnly, "/sys".into());
+            mounts.at(MountKind::ReadOnly, "/run/udev".into());
         }
     }
     if reach.gpu {
-        add(MountKind::Device, "/dev/dri".into());
-        add(MountKind::ReadOnly, "/sys".into());
+        mounts.at(MountKind::Device, "/dev/dri".into());
+        mounts.at(MountKind::ReadOnly, "/sys".into());
     }
     if reach.docker {
-        add(MountKind::ReadWrite, "/var/run/docker.sock".into());
-        add(MountKind::ReadWrite, "/run/docker.sock".into());
+        mounts.at(MountKind::ReadWrite, "/var/run/docker.sock".into());
+        mounts.at(MountKind::ReadWrite, "/run/docker.sock".into());
     }
     if reach.ssh_agent
         && let Some(socket) = &paths.ssh_agent_socket
     {
-        add(MountKind::ReadWrite, socket.clone());
+        mounts.at(MountKind::ReadWrite, socket.clone());
     }
     if let Some(socket) = &paths.run_socket {
-        add(MountKind::ReadWrite, socket.clone());
+        mounts.at(MountKind::ReadWrite, socket.clone());
     }
     let allowed: Vec<String> = reach.ranges.clone();
     SandboxPlan {
-        mounts,
+        mounts: mounts.0,
         network: reach.network,
         blocked: ALWAYS_BLOCKED.iter().map(|range| (*range).to_owned()).collect(),
         allowed,
@@ -277,6 +313,30 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
         nested: reach.nested,
         cwd: paths.checkout.clone(),
         relays: Vec::new(),
+    }
+}
+
+#[derive(Default)]
+struct Mounts(Vec<Mount>);
+
+impl Mounts {
+    fn at(&mut self, kind: MountKind, path: PathBuf) {
+        self.add(Mount { kind, path, source: None });
+    }
+
+    fn add(&mut self, mount: Mount) {
+        // Read-only inside something read-only already adds nothing, and
+        // mounting it again can fail where it's a link.
+        let covered = mount.kind == MountKind::ReadOnly
+            && self
+                .0
+                .iter()
+                .rev()
+                .find(|earlier| mount.path.starts_with(&earlier.path))
+                .is_some_and(|earlier| earlier.kind == MountKind::ReadOnly);
+        if !covered && !self.0.contains(&mount) {
+            self.0.push(mount);
+        }
     }
 }
 
@@ -307,6 +367,7 @@ mod tests {
     fn paths() -> RunPaths {
         RunPaths {
             home: Some("/home/ana".into()),
+            real_home: None,
             checkout: "/home/ana/work/api/.silt/checkouts/t1".into(),
             git_dir: Some("/home/ana/work/api/.git/silt/clones/t1".into()),
             git_shared: vec!["/home/ana/work/api/.git/objects".into()],
@@ -315,6 +376,7 @@ mod tests {
             silt: "/home/ana/.cargo/bin/silt".into(),
             read_only: Vec::new(),
             data_dir: Some("/home/ana/.local/share/silt".into()),
+            real_data_dir: None,
             scratch: "/home/ana/.local/share/silt/runs/t1-1".into(),
             run_socket: Some("/home/ana/.local/share/silt/agents.sock".into()),
             ssh_agent_socket: Some("/run/user/1000/ssh-agent.sock".into()),
@@ -384,6 +446,72 @@ mod tests {
         }
         assert_eq!(plan.sees(Path::new("/home/ana/.local/share/silt/runs/t1-1/sandbox.json")), Some(true), "its own corner");
         assert_eq!(plan.sees(Path::new("/home/ana/.local/share/silt/agents.sock")), Some(true));
+    }
+
+    /// fnm's shell folder: `/run/user/1000/fnm_multishells/<pid>_<ts>` links
+    /// to a node installation whose `bin/npx` links to `../lib/…`.
+    fn linked(link: &str, target: &str) -> PathDir {
+        PathDir {
+            path: format!("{link}/bin").into(),
+            real: Some(format!("{target}/bin").into()),
+            link: Some((link.into(), target.into())),
+        }
+    }
+
+    #[test]
+    fn a_path_folder_under_a_link_brings_its_links_target() {
+        let node = "/home/ana/.local/share/fnm/node-versions/v22.11.0/installation";
+        let shell = "/run/user/1000/fnm_multishells/4242_1731000000000";
+        let paths = RunPaths { path_dirs: vec![linked(shell, node)], ..paths() };
+        let plan = plan(&paths, &Reach::of(&Policy::default()));
+        let mount = plan.mounts.iter().find(|mount| mount.path == Path::new(shell)).expect("the link's folder");
+        assert_eq!((mount.kind, mount.source.as_deref()), (MountKind::ReadOnly, Some(Path::new(node))));
+        assert_eq!(plan.sees(&Path::new(shell).join("bin/npx")), Some(false));
+        assert_eq!(plan.sees(&Path::new(shell).join("lib/node_modules/npm/bin/npx-cli.js")), Some(false), "where ../lib leads");
+        assert_eq!(plan.sees(&Path::new(node).join("bin/node")), Some(false), "fnm's own folder is a toolchain");
+        assert_eq!(plan.sees(Path::new("/run/user/1000/bus")), None);
+    }
+
+    #[test]
+    fn a_links_target_never_brings_the_home_folder_silts_data_or_credentials() {
+        let real_home = RunPaths { real_home: Some("/var/home/ana".into()), ..paths() };
+        for (paths, target) in [
+            (paths(), "/home/ana"),
+            (paths(), "/home"),
+            (paths(), "/home/ana/.local/share/silt"),
+            (paths(), "/home/ana/.local/share/silt/agents"),
+            (paths(), "/home/ana/.config"),
+            (paths(), "/home/ana/.aws"),
+            (paths(), "/home/ana/.aws/cli"),
+            (real_home.clone(), "/var/home"),
+            (real_home, "/var/home/ana/.config"),
+        ] {
+            let paths = RunPaths { path_dirs: vec![linked("/run/x", target)], ..paths };
+            let plan = plan(&paths, &Reach::of(&Policy::default()));
+            assert!(!plan.mounts.iter().any(|mount| mount.source.is_some()), "{target}: {:?}", plan.mounts);
+            assert!(!plan.mounts.iter().any(|mount| mount.path == Path::new("/run/x")), "{target}");
+            assert_eq!(plan.sees(Path::new("/run/x/bin/tool")), Some(false), "{target}: the folder alone, as before");
+            assert_eq!(plan.sees(Path::new("/run/x/.ssh/id_ed25519")), None, "{target}");
+        }
+    }
+
+    #[test]
+    fn a_path_folder_that_is_the_home_folder_by_another_name_is_not_mounted() {
+        let paths = RunPaths {
+            real_home: Some("/var/home/ana".into()),
+            path_dirs: vec![
+                PathDir {
+                    path: "/run/x".into(),
+                    real: Some("/home/ana".into()),
+                    link: Some(("/run/x".into(), "/home/ana".into())),
+                },
+                PathDir { path: "/var/home".into(), real: Some("/var/home".into()), link: None },
+            ],
+            ..paths()
+        };
+        let plan = plan(&paths, &Reach::of(&Policy::default()));
+        assert!(!plan.mounts.iter().any(|mount| mount.path == Path::new("/run/x") || mount.path == Path::new("/var/home")));
+        assert_eq!(plan.sees(Path::new("/run/x/Documents/taxes.pdf")), None);
     }
 
     #[test]
