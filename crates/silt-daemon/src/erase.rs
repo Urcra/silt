@@ -251,9 +251,10 @@ impl Core {
     /// variables that move them and where they are by default, chats'
     /// folders, and the local agent's sessions.
     fn erasable_roots(&self) -> Vec<PathBuf> {
-        const HOMES: [(&str, &str); 4] = [
+        const HOMES: [(&str, &str); 5] = [
             ("CLAUDE_CONFIG_DIR", ".claude"),
             ("CODEX_HOME", ".codex"),
+            ("QUDIKS_HOME", ".qudiks"),
             ("GEMINI_CLI_HOME", ".gemini"),
             ("COPILOT_HOME", ".copilot"),
         ];

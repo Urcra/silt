@@ -67,7 +67,7 @@ pub enum WorkspaceCommand {
     /// Change a workspace's rules; those its org sets apply as well
     Policy {
         workspace: String,
-        /// The agents allowed, comma-separated (claude, codex, copilot, gemini, agy, opencode), or `any`
+        /// The agents allowed, comma-separated (claude, codex, qudiks, copilot, gemini, agy, opencode), or `any`
         #[arg(long)]
         agents: Option<String>,
         /// Whether agents from agents.json are allowed: on or off

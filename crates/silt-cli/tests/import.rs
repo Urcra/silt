@@ -107,6 +107,16 @@ fn sessions_from_before_silt_are_imported_once_kept_here_and_sent_redacted() {
 }
 
 #[test]
+fn qudiks_sessions_are_imported_from_its_own_home() {
+    let world = world();
+    let laptop = &world.laptop;
+    run_agent_alone(laptop, &common::fake_agent("qudiks"), &laptop.repo, &[]);
+    let qudiks = laptop.stdout(&["import", "--agent", "qudiks", "."]);
+    assert!(qudiks.contains("imported 1 sessions") && qudiks.contains("qudiks"), "{qudiks}");
+    assert!(laptop.stdout(&["import", "--agent", "codex", "."]).contains("no sessions to import"), "Codex's home is apart");
+}
+
+#[test]
 fn import_takes_paths_and_an_agent() {
     let world = world();
     let laptop = &world.laptop;

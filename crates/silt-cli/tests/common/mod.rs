@@ -202,7 +202,7 @@ impl Machine {
         git(root, &["clone", "-q", "-c", "core.autocrlf=false", &origin.to_string_lossy(), &home.join("repo").to_string_lossy()]);
         let fake = fake_claude();
         let agents = home.join("agents");
-        for name in ["codex", "gemini", "copilot", "opencode"] {
+        for name in ["codex", "qudiks", "gemini", "copilot", "opencode"] {
             fs::create_dir_all(agents.join(name)).expect("mkdir");
         }
         fs::create_dir_all(agents.join("logs")).expect("mkdir");
@@ -230,11 +230,13 @@ impl Machine {
             .env("CLAUDE_CONFIG_DIR", &self.claude_dir)
             .env("SILT_CLAUDE_BIN", &self.fake)
             .env("SILT_CODEX_BIN", fake_agent("codex"))
+            .env("SILT_QUDIKS_BIN", fake_agent("qudiks"))
             .env("SILT_GEMINI_BIN", fake_agent("gemini"))
             .env("SILT_AGY_BIN", fake_agent("agy"))
             .env("SILT_COPILOT_BIN", fake_agent("copilot"))
             .env("SILT_OPENCODE_BIN", fake_agent("opencode"))
             .env("CODEX_HOME", self.agents.join("codex"))
+            .env("QUDIKS_HOME", self.agents.join("qudiks"))
             .env("GEMINI_CLI_HOME", self.agents.join("gemini"))
             .env("COPILOT_HOME", self.agents.join("copilot"))
             .env("FAKE_OPENCODE_DIR", self.agents.join("opencode"))
