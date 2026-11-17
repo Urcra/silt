@@ -65,3 +65,23 @@ test("with git's changes hidden, a file is read without them", async () => {
   await waitFor(() => expect(screen.getByText('fn mine() {}')).toBeInTheDocument())
   expect(asked).toEqual([`/api/threads/${THREAD}/diff?git=hide&path=src%2Fa.rs`])
 })
+
+test("with other agents' changes hidden too, a file is read without either", async () => {
+  const asked: string[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) => {
+      asked.push(path)
+      return new Response(JSON.stringify('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+fn ours() {}\n'))
+    }),
+  )
+  const stats: DiffStat[] = [{ path: 'src/a.rs', old_path: null, added: 1, removed: 1, binary: false, size: 80 }]
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <FilesByStats thread={THREAD} stats={stats} of={{ base: '', hideGit: true, hideOthers: true }} />
+    </QueryClientProvider>,
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'open src/a.rs' }))
+  await waitFor(() => expect(screen.getByText('fn ours() {}')).toBeInTheDocument())
+  expect(asked).toEqual([`/api/threads/${THREAD}/diff?git=hide&others=hide&path=src%2Fa.rs`])
+})

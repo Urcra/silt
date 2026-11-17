@@ -8,10 +8,18 @@ import { askedServer } from './workspace'
 import type {
   AgentChoices,
   ArtifactContent,
+  ArtifactListed,
+  ConnectorTool,
+  PageConnector,
   ArtifactSettings,
   ChatSettings,
   CloudLaunch,
   DesignSystemView,
+  DesignCatalog,
+  DesignDetail,
+  DesignAssetData,
+  DesignStart,
+  ThreadDesign,
   CommentLocation,
   CommentOn,
   CommentView,
@@ -63,6 +71,11 @@ import type {
   WorkspacesView,
 } from './api.generated'
 
+/** Who views a thread's pages: their id in page data, their level, and the names of the people the thread knows. */
+/** A tool a page offers the agent answering its question; the page runs it (ADR 0072). */
+export type SampleTool = { name: string; description: string; input_schema?: unknown }
+export type PageViewer = { id: string; level: 'read' | 'comment' | 'collaborator' | 'owner'; people: Record<string, string> }
+
 export type * from './api.generated'
 
 const TOKEN_KEY = 'silt-token'
@@ -86,7 +99,10 @@ export async function takeTokenFromUrl(): Promise<void> {
   if (token || code) window.history.replaceState(null, '', window.location.pathname + window.location.search)
 }
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  /** The code a page reads for a refusal, as the daemon or server said it (ADR 0072). */
+  refusal: string | null = null
+}
 
 export function token(): string {
   return sessionStorage.getItem(TOKEN_KEY) ?? ''
@@ -105,9 +121,35 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   })
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
-    throw new ApiError((data as { error?: string }).error ?? `request failed (${response.status})`)
+    const said = data as { error?: string; message?: string; refusal?: string | null }
+    const failure = new ApiError(said.error ?? said.message ?? `request failed (${response.status})`)
+    failure.refusal = typeof said.refusal === 'string' ? said.refusal : null
+    throw failure
   }
   return data as T
+}
+
+/** A file the API answers with, as bytes. */
+async function requestBlob(path: string): Promise<Blob> {
+  const response = await fetch(apiUrl(path), {
+    headers: { Authorization: `Bearer ${sessionStorage.getItem(TOKEN_KEY) ?? ''}`, 'X-Silt-Request': '1' },
+  })
+  if (!response.ok) throw new ApiError(`request failed (${response.status})`)
+  return response.blob()
+}
+
+/** A sheet as its viewer shows it (ADR 0077). */
+export type SheetView = {
+  rows: string[]
+  columns: string[]
+  raw: string[][]
+  values: string[][]
+  sheets?: number
+  names?: string[]
+  widths?: (number | null)[]
+  formats?: (string | null)[]
+  /** Cells' own number formats by address, `B3`, which go before their column's. */
+  cell_formats?: Record<string, string>
 }
 
 /** The search form's fields, as typed; `since` is a date. */
@@ -121,13 +163,43 @@ export interface SearchForm {
 }
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
-/** Which of a thread's changes a diff shows: those of `turn`, or of turns `turn` to `toTurn`, else since `base`; with
- * `hideGit`, without what git itself rewrote (ADR 0069). */
-export interface DiffSpec {
+
+/** Where a design system is: a project's clone, the person's own, or the folder of the thread making it. */
+export interface DesignWhere {
+  source: 'project' | 'personal'
+  name: string
+  clone?: string
+  thread?: string
+}
+
+function designQuery(where: DesignWhere): string {
+  const query = new URLSearchParams({ source: where.source, name: where.name })
+  if (where.clone) query.set('clone', where.clone)
+  if (where.thread) query.set('thread', where.thread)
+  return query.toString()
+}
+
+/** What a diff leaves out: with `hideGit`, what git itself rewrote (ADR 0069); with `hideOthers`, the edits of other
+ * agents working in the same clone (ADR 0089). */
+export interface Hidden {
+  hideGit?: boolean
+  hideOthers?: boolean
+}
+
+const hiddenParams = (params: URLSearchParams, hidden: Hidden) => {
+  if (hidden.hideGit) params.set('git', 'hide')
+  if (hidden.hideOthers) params.set('others', 'hide')
+  return params
+}
+
+/** The same, as a comment's or its anchors' lines say how they're numbered. */
+export const hiddenLines = (hidden: Hidden) => ({ hide_git: hidden.hideGit ?? false, hide_others: hidden.hideOthers ?? false })
+
+/** Which of a thread's changes a diff shows: those of `turn`, or of turns `turn` to `toTurn`, else since `base`. */
+export interface DiffSpec extends Hidden {
   turn?: number
   toTurn?: number
   base?: string
-  hideGit?: boolean
 }
 
 const diffParams = (options: DiffSpec) => {
@@ -135,8 +207,7 @@ const diffParams = (options: DiffSpec) => {
   if (options.turn !== undefined) params.set('turn', String(options.turn))
   if (options.toTurn !== undefined) params.set('to_turn', String(options.toTurn))
   if (options.base) params.set('base', options.base)
-  if (options.hideGit) params.set('git', 'hide')
-  return params
+  return hiddenParams(params, options)
 }
 /** Names which server to ask, on a machine signed in to several (ADR 0032). */
 const onServer = (server?: string | null) => (server ? `?server=${encodeURIComponent(server)}` : '')
@@ -166,6 +237,90 @@ export const api = {
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   /** An artifact's content, by the blob a version of it names (ADR 0068). */
   artifact: (id: string, blob: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${blob}`),
+  /** A read or write of an artifact's page data (ADR 0072). */
+  pageData: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/data`, asked),
+  /** What the person allowed or refused an artifact's page, by capability (ADR 0072). */
+  artifactGrants: (id: string, artifact: string) => request<Record<string, 'granted' | 'refused'>>('GET', `${thread(id)}/artifacts/${artifact}/grants`),
+  /** Kept for what `version`, the one the person saw, declares of `capability`. */
+  setArtifactGrant: (id: string, artifact: string, capability: string, state: 'granted' | 'refused' | null, version?: number) =>
+    request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/grants`, { capability, state, version: version ?? null }),
+  /** A version an HTML artifact's page saves itself as; refused as a conflict unless `base` is the latest (ADR 0072). */
+  publishArtifact: (id: string, artifact: string, html: string, base: number) =>
+    request<{ id: string; version: number }>('POST', `${thread(id)}/artifacts/${artifact}/publish`, { html, base }),
+  /** The files people added to an artifact's page (ADR 0074). */
+  pageAssets: (id: string, artifact: string, asked: { op: 'add'; name: string; media_type: string; data: string } | { op: 'list' } | { op: 'delete'; id: string }) =>
+    request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/assets`, asked),
+  /** The thread's files, for a page that declares `files` (ADR 0078). */
+  pageFiles: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/files`, asked),
+  /** Every artifact in the threads the person can read, for the Artifacts page (ADR 0075). */
+  artifacts: () => request<ArtifactListed[]>('GET', '/api/artifacts'),
+  /** An artifact's thumbnail, drawn the first time it's asked for where a headless browser is installed (ADR 0075). */
+  artifactThumbnail: (id: string, artifact: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${artifact}/thumbnail`),
+  pinArtifact: (id: string, artifact: string, pinned: boolean) => request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/pin`, { pinned }),
+  /** Hides an artifact for everyone, or shows it again; the thread's owner's to do. */
+  archiveArtifact: (id: string, artifact: string, archived: boolean) =>
+    request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/archive`, { archived }),
+  /** A page's call of the viewer's page connectors (ADR 0080). */
+  pageMcp: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/mcp`, asked),
+  /** The MCP servers this machine lists for pages (ADR 0080). */
+  pageConnectors: () => request<PageConnector[]>('GET', '/api/page-connectors'),
+  setPageConnectors: (connectors: PageConnector[]) => request<unknown>('PUT', '/api/page-connectors', connectors),
+  importPageConnectors: () => request<PageConnector[]>('POST', '/api/page-connectors/import'),
+  connectorTools: (name: string) => request<ConnectorTool[]>('GET', `/api/page-connectors/${encodeURIComponent(name)}/tools`),
+  /** Keeps a header's value for an HTTP connector in this computer's keyring, or forgets it with `null`. */
+  setConnectorSecret: (name: string, header: string, value: string | null) =>
+    request<unknown>('PUT', `/api/page-connectors/${encodeURIComponent(name)}/secret`, { header, value }),
+  /** A doc's text, or edits of it (ADR 0077). */
+  docData: (
+    id: string,
+    artifact: string,
+    asked: { op: 'read' } | { op: 'edit'; edits: { pos: number; delete: number; insert: string }[]; base?: string | null },
+  ) => request<{ text: string; base?: string }>('POST', `${thread(id)}/artifacts/${artifact}/doc`, asked),
+  /** A sheet's cells and values, or changes to it (ADR 0077). */
+  sheetData: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/sheet`, asked),
+  sheetXlsx: (id: string, artifact: string) => requestBlob(`${thread(id)}/artifacts/${artifact}/sheet.xlsx`),
+  /** Who views the thread's pages, for their `user` capability. */
+  pageViewer: (id: string) => request<PageViewer>('GET', `${thread(id)}/viewer`),
+  /** A page's question for an agent, its answer streamed as `sample` events named `ask` where the bus carries them. */
+  /** One of the files people added to a page, for a view Silt draws itself, such as a whiteboard's images. */
+  pageAsset: (id: string, artifact: string, asset: string) =>
+    request<ArtifactContent>('GET', `${thread(id)}/artifacts/${artifact}/assets/${encodeURIComponent(asset)}`),
+  /** Keeps a doc, a sheet or a whiteboard as it stands as its next version (ADR 0077). */
+  saveVersion: (id: string, artifact: string, note: string) =>
+    request<{ id: string; version: number }>('POST', `${thread(id)}/artifacts/${artifact}/versions`, { note }),
+  /** A doc or a deck printed to a PDF by this computer's headless browser, from the page drawn of it. */
+  artifactPdf: (id: string, artifact: string, html: string) => request<ArtifactContent>('POST', `${thread(id)}/artifacts/${artifact}/pdf`, { html }),
+  /** A page's answer to the agent's call of a tool it gave its question. */
+  /** Stops a page's question while this machine's agent answers it. */
+  sampleStop: (id: string, artifact: string, ask: string) =>
+    request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/stop`),
+  sampleToolResult: (id: string, artifact: string, ask: string, call: number, result: { ok: boolean; value?: unknown; error?: string }) =>
+    request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/tools/${call}`, result),
+  /** What the agent has said so far of a page's question in the hosted app, which a device answers. */
+  sampleSoFar: (id: string, artifact: string, ask: string) =>
+    request<{ text: string; calls?: { call: number; name: string; input: unknown }[] }>(
+      'GET',
+      `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}`,
+    ),
+  sample: (
+    id: string,
+    artifact: string,
+    ask: string,
+    input: unknown,
+    images: { media_type: string; data: string }[] = [],
+    tools: SampleTool[] = [],
+    model: { model_tier?: string; model?: string } = {},
+  ) =>
+    request<{ text: string; truncated: boolean; model_applied?: string }>('POST', `${thread(id)}/artifacts/${artifact}/sample`, {
+      ask,
+      input,
+      images,
+      tools,
+      model,
+    }),
+  /** A key that opens one version of an HTML artifact in a frame, at the path it answers (ADR 0074). */
+  artifactFrame: (id: string, artifact: string, ask: { version: number; theme: 'light' | 'dark'; parent: string; boot?: unknown }) =>
+    request<{ path: string; expires_in_ms: number }>('POST', `${thread(id)}/artifacts/${artifact}/frame`, ask),
   /** A thread's history; with `limit`, only that many entries from the `offset`th. */
   history: (id: string, offset?: number, limit?: number) =>
     request<HistoryPage>('GET', `${thread(id)}/history${limit === undefined ? '' : `?offset=${offset ?? 0}&limit=${limit}`}`),
@@ -200,11 +355,10 @@ export const api = {
   /** For the diff's files, the turns that last wrote their new lines. */
   diffTurns: (id: string, options: DiffSpec = {}) => request<FileTurns[]>('GET', `${thread(id)}/diff/turns?${diffParams(options)}`),
   /** With `base`, a diff base, code comments say where they are there too. */
-  comments: (id: string, base?: string, hideGit = false) => {
+  comments: (id: string, base?: string, hidden: Hidden = {}) => {
     const params = new URLSearchParams()
     if (base) params.set('base', base)
-    if (hideGit) params.set('git', 'hide')
-    const query = params.toString()
+    const query = hiddenParams(params, hidden).toString()
     return request<CommentView[]>('GET', `${thread(id)}/comments${query ? `?${query}` : ''}`)
   },
   commentsSent: (id: string, comments: string[]) => request<CommentView[]>('POST', `${thread(id)}/comments/sent`, { comments }),
@@ -272,6 +426,13 @@ export const api = {
   workspaces: () => request<WorkspacesView>('GET', '/api/workspaces'),
   // The person's design systems and Silt's own, for a workspace's default (ADR 0071).
   designSystems: (clone?: string) => request<DesignSystemView[]>('GET', clone ? `/api/design-systems?clone=${encodeURIComponent(clone)}` : '/api/design-systems'),
+  // Settings › Design systems: every system, one system's page, its assets, and the threads that make one (ADR 0088).
+  designCatalog: () => request<DesignCatalog>('GET', '/api/design-systems/catalog'),
+  designSystem: (where: DesignWhere) => request<DesignDetail>('GET', `/api/design-systems/system?${designQuery(where)}`),
+  designAsset: (where: DesignWhere, path: string) =>
+    request<DesignAssetData>('GET', `/api/design-systems/asset?${designQuery(where)}&path=${encodeURIComponent(path)}`),
+  designStart: (start: DesignStart) => request<string>('POST', '/api/design-systems/start', start),
+  threadDesign: (id: string) => request<ThreadDesign | null>('GET', `${thread(id)}/design-system`),
   artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),
   setArtifactSettings: (settings: ArtifactSettings) => request<string>('PUT', '/api/artifact-settings', settings),
   projectDesignSystems: () => request<Record<string, string>>('GET', '/api/projects/design-systems'),
@@ -326,8 +487,10 @@ export const api = {
   share: (id: string, user: string, remove: boolean) => request<string>('POST', `${thread(id)}/share`, { user, remove }),
   offerMergeRequest: (id: string, title: string) => request<MrSummary>('POST', `${thread(id)}/mrs`, { title }),
   mergeRequests: () => request<MrSummary[]>('GET', '/api/mrs'),
-  mergeRequest: (id: string, hideGit = false) =>
-    request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}${hideGit ? '?git=hide' : ''}`),
+  mergeRequest: (id: string, hidden: Hidden = {}) => {
+    const query = hiddenParams(new URLSearchParams(), hidden).toString()
+    return request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}${query ? `?${query}` : ''}`)
+  },
   approve: (id: string) => request<MrSummary>('POST', `/api/mrs/${encodeURIComponent(id)}/approve`),
   writeGuide: (id: string, text?: string) =>
     request<string>('POST', `/api/mrs/${encodeURIComponent(id)}/guide`, text === undefined ? {} : { text }),

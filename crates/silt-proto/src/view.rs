@@ -19,6 +19,10 @@ pub struct ThreadSummary {
     pub created_ms: i64,
     pub messages: usize,
     pub edits: usize,
+    /// Whether it records edits by other agents that worked in the same
+    /// clone, which a diff can leave out (ADR 0089).
+    #[serde(default)]
+    pub shared: bool,
     /// `here` when checked out on this machine, `remote` when only known
     /// from the server, `moved` when another device took it over.
     pub location: String,
@@ -153,6 +157,10 @@ pub enum ShowLine {
     Edits {
         tool_use_id: Option<String>,
         files: Vec<FileEdit>,
+        /// Set for edits that weren't this thread's agent's alone (ADR 0089).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
+        shared: Option<SharedEdits>,
     },
     Compaction {
         summary: Option<String>,
@@ -168,6 +176,17 @@ pub enum ShowLine {
     Event {
         text: String,
     },
+}
+
+/// Edits in a clone other agents work in too (ADR 0089).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SharedEdits {
+    /// Made by another thread's agent; else by one of `agents`, this
+    /// thread's own among them.
+    pub others: bool,
+    /// Each agent with its session's first 8 characters, as `claude 1a2b3c4d`.
+    pub agents: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,6 +219,9 @@ pub struct SearchResult {
     /// The agent compacted its context after it.
     #[serde(default)]
     pub before_compaction: bool,
+    /// The doc or sheet whose text it's in.
+    #[serde(default)]
+    pub artifact: Option<String>,
 }
 
 /// Server search filters (ADR 0011); dates are milliseconds since the epoch.
@@ -430,6 +452,102 @@ pub struct ArtifactView {
     /// version's frame is given; read with the same route as the content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    /// What this version changed (ADR 0073).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// What the artifact is, as its card says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The capabilities the version's page may use, each with its config
+    /// (ADR 0072).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "Record<string, Record<string, unknown>> | null"))]
+    pub capabilities: Option<crate::artifact::Capabilities>,
+    /// The person this version was saved for, when the page saved itself
+    /// rather than an agent making it (ADR 0072).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    /// An HTML version's runtime contract, which its page's `silt` is
+    /// (ADR 0072).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<String>,
+    /// The files beside an HTML version's page, by path, which its frame
+    /// fetches relative to itself (ADR 0074).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<std::collections::BTreeMap<String, crate::artifact::ArtifactFile>>,
+}
+
+impl ArtifactView {
+    /// What `blob` is served as, when this version names it: its page, the
+    /// CSS its design system compiled to, or one of its files.
+    pub fn media_type_of(&self, blob: &str) -> Option<String> {
+        if self.blob == blob {
+            return Some(self.media_type.clone());
+        }
+        if self.style.as_deref() == Some(blob) {
+            return Some("text/css".to_owned());
+        }
+        self.files.as_ref()?.values().find(|file| file.blob == blob).map(|file| file.media_type.clone())
+    }
+}
+
+/// One artifact on the Artifacts page (ADR 0075): its latest version,
+/// the thread it's in, and whether the person pinned it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ArtifactListed {
+    pub thread: String,
+    pub thread_title: Option<String>,
+    pub repo: String,
+    pub owner: String,
+    /// Whether the thread is the person's own.
+    pub mine: bool,
+    pub artifact: ArtifactView,
+    /// When its latest version was made.
+    pub time_ms: i64,
+    pub pinned: bool,
+    /// Hidden by the thread's owner; shown only when asked for.
+    pub archived: bool,
+}
+
+/// An artifact the person pinned, kept by their server so it follows
+/// them between machines (ADR 0075).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ArtifactPin {
+    pub thread: String,
+    pub artifact: String,
+    #[serde(default)]
+    pub pinned: bool,
+}
+
+/// The listing as the page shows it: one row per artifact, a fork's copy
+/// left out unless it made a version of its own, pinned ones first, then
+/// the most recently changed.
+pub fn artifact_listing(mut rows: Vec<ArtifactListed>) -> Vec<ArtifactListed> {
+    // A version a fork inherited has the same id, version and content as the
+    // source's, so the first thread to have it keeps it.
+    rows.sort_by(|a, b| a.time_ms.cmp(&b.time_ms).then_with(|| a.thread.cmp(&b.thread)));
+    let mut seen = std::collections::HashSet::new();
+    rows.retain(|row| seen.insert((row.artifact.id.clone(), row.artifact.version, row.artifact.blob.clone())));
+    rows.sort_by(|a, b| b.pinned.cmp(&a.pinned).then_with(|| b.time_ms.cmp(&a.time_ms)));
+    rows
+}
+
+/// The latest version of each artifact among a thread's history `entries`,
+/// with when it was made.
+pub fn latest_artifacts<'a>(entries: impl IntoIterator<Item = &'a HistoryEntry>) -> Vec<(ArtifactView, i64)> {
+    let mut latest: std::collections::BTreeMap<String, (ArtifactView, i64)> = std::collections::BTreeMap::new();
+    for entry in entries {
+        let Some(artifact) = &entry.artifact else { continue };
+        if artifact.inline {
+            continue;
+        }
+        let newer = latest.get(&artifact.id).is_none_or(|(kept, _)| artifact.version > kept.version);
+        if newer {
+            latest.insert(artifact.id.clone(), (artifact.clone(), entry.time_ms));
+        }
+    }
+    latest.into_values().collect()
 }
 
 /// An artifact's content, as its route answers it.
@@ -542,6 +660,29 @@ pub enum CommentLocation {
         /// they're there: a diff shows a comment on deleted lines beside them.
         #[serde(default)]
         before: Option<LineSpan>,
+    },
+    /// Where the commented text of a doc is now, by character; `outdated`
+    /// once it's deleted.
+    Doc {
+        artifact: String,
+        start: usize,
+        end: usize,
+        excerpt: String,
+        outdated: bool,
+    },
+    /// Where the commented cell of a sheet is now, and what it holds;
+    /// `outdated` once its row or column is gone.
+    Cell {
+        artifact: String,
+        sheet: u16,
+        address: String,
+        excerpt: String,
+        outdated: bool,
+    },
+    /// The element of a page the comment is on, by its anchor (ADR 0085).
+    Element {
+        artifact: String,
+        anchor: String,
     },
     Unknown,
 }
@@ -674,10 +815,19 @@ pub enum CommentOn {
         /// shows them (ADR 0069).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         hide_git: bool,
+        /// And with other agents' edits left out (ADR 0089).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hide_others: bool,
     },
     /// Lines held by an anchor a pending review comment took when it was
     /// written, so it lands where its text is now (ADR 0066).
     Anchored { anchor: String },
+    /// Characters `start..end` of a doc's text as it stands (ADR 0077).
+    Doc { artifact: String, start: usize, end: usize },
+    /// A sheet's cell, by its address as the sheet stands, `B3`.
+    Cell { artifact: String, sheet: u16, address: String },
+    /// An element of an HTML artifact's page, by its anchor (ADR 0085).
+    Element { artifact: String, anchor: String },
 }
 
 /// Where a pending review comment's lines are held, as the daemon anchored
@@ -689,8 +839,9 @@ pub struct PendingAnchor {
 }
 
 /// Anchors of pending review comments to place in the thread as it is now,
-/// and at `base` too, as comments are; with `hide_git`, as a diff without
-/// git's rewrites numbers the lines (ADR 0069).
+/// and at `base` too, as comments are; with `hide_git` and `hide_others`, as
+/// a diff without git's rewrites or other agents' edits numbers the lines
+/// (ADR 0069, ADR 0089).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PlaceAnchors {
@@ -699,6 +850,14 @@ pub struct PlaceAnchors {
     pub anchors: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_git: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_others: bool,
+}
+
+impl PlaceAnchors {
+    pub fn hide(&self) -> silt_log::Hide {
+        silt_log::Hide { git: self.hide_git, others: self.hide_others }
+    }
 }
 
 /// One of the person's signed-in devices (ADR 0026).
@@ -823,11 +982,15 @@ pub struct FileQuery {
 pub struct GitQuery {
     #[serde(default)]
     pub git: Option<String>,
+    /// `hide` leaves out the edits of other agents working in the same
+    /// clone (ADR 0089).
+    #[serde(default)]
+    pub others: Option<String>,
 }
 
 impl GitQuery {
-    pub fn hide_git(&self) -> bool {
-        self.git.as_deref() == Some("hide")
+    pub fn hide(&self) -> silt_log::Hide {
+        silt_log::Hide { git: self.git.as_deref() == Some("hide"), others: self.others.as_deref() == Some("hide") }
     }
 }
 

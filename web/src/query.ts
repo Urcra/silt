@@ -1,5 +1,5 @@
 import { QueryClient } from '@tanstack/react-query'
-import type { DiffSpec } from './api'
+import type { DiffSpec, Hidden } from './api'
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -32,11 +32,16 @@ export const keys = {
   diffTurns: (id: string, spec: DiffSpec) => ['thread', id, 'diff-turns', spec] as const,
   threadSeen: (id: string, spec: DiffSpec) => ['thread', id, 'seen', spec] as const,
   mrs: ['mrs'] as const,
+  artifacts: ['artifacts'] as const,
   mr: (id: string) => ['mrs', id] as const,
-  mrShown: (id: string, hideGit: boolean) => ['mrs', id, hideGit] as const,
+  mrShown: (id: string, hidden: Hidden) => ['mrs', id, hidden] as const,
   inbox: (all: boolean) => ['inbox', all] as const,
   agents: ['agents'] as const,
   designSystems: ['design-systems'] as const,
+  designCatalog: ['design-systems', 'catalog'] as const,
+  designSystem: (where: object) => ['design-systems', 'system', where] as const,
+  designAsset: (where: object, path: string) => ['design-systems', 'asset', where, path] as const,
+  threadDesign: (id: string) => ['thread', id, 'design-system'] as const,
   artifactSettings: ['artifact-settings'] as const,
   cloneDesignSystems: (clone: string) => ['design-systems', 'clone', clone] as const,
   projectDesignSystems: ['design-systems', 'projects'] as const,

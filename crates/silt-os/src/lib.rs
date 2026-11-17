@@ -8,6 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+mod secrets;
 mod wsl;
 
 #[cfg(unix)]
@@ -30,6 +31,8 @@ pub use wsl::{WslPath, in_wsl, is_distribution_name, linux_path, wsl_path};
 /// Makes `dir`, or an existing one, reachable by this user alone. One that
 /// isn't a plain directory of this user's is refused: in a shared place it
 /// could be a trap.
+pub use secrets::{secret, set_secret};
+
 pub fn make_private_dir(dir: &Path) -> io::Result<()> {
     imp::make_private_dir(dir)
 }
@@ -116,6 +119,11 @@ pub fn spawn_detached(command: &mut std::process::Command) -> io::Result<()> {
 /// what it starts too.
 pub fn own_group(command: &mut tokio::process::Command) {
     imp::own_group(command);
+}
+
+/// [`own_group`] for a process started without tokio.
+pub fn own_group_std(command: &mut std::process::Command) {
+    imp::own_group_std(command);
 }
 
 /// Stops the process `pid` started with `own_group`, and everything it

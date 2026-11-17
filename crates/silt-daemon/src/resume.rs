@@ -6,7 +6,7 @@ use silt_crdt::InodeKind;
 use silt_git::Repo;
 use silt_log::{Author, ConvOp, Delta, Family, GitOp, HistorySource, LogError, Op, SessionFile, SessionRef};
 use silt_store::{CheckoutId, ThreadRecord};
-use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, GitOid, ThreadId};
+use silt_types::{BlobHash, DeltaId, FamilyId, GitOid, ThreadId};
 use tracing::warn;
 
 use crate::core::{CanonicalCwd, Core, CoreError, RepoBases, now_ms};
@@ -386,17 +386,7 @@ impl Core {
     }
 
     async fn attach_checkout(&mut self, thread: ThreadId, path: &Path, managed: bool) -> Result<CheckoutId, CoreError> {
-        let actor = ActorId(uuid::Uuid::new_v4().as_u128());
-        let existing =
-            self.checkouts.values().find(|checkout| checkout.record.path == path).map(|checkout| checkout.record.clone());
-        let record = match existing {
-            Some(previous) => {
-                self.checkouts.remove(&previous.id);
-                self.store.rebind_checkout(previous.id, thread, actor).await?;
-                silt_store::CheckoutRecord { thread, actor, ..previous }
-            }
-            None => self.store.add_checkout(thread, path, actor, managed, now_ms()).await?,
-        };
+        let record = self.bind_checkout(thread, path, managed).await?;
         let id = record.id;
         self.start_checkout(record, BTreeMap::new())?;
         Ok(id)
@@ -469,7 +459,7 @@ impl Core {
         let checkout_id = self
             .checkouts
             .values()
-            .find(|candidate| candidate.record.path == checkout)
+            .find(|candidate| candidate.record.path == checkout && candidate.record.thread == thread)
             .map(|candidate| candidate.record.id)
             .expect("attached above");
         let same = if target.id() == source.id() {

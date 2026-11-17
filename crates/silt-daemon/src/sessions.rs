@@ -20,6 +20,14 @@ use crate::attribution;
 use crate::core::{CanonicalCwd, Core, CoreError, Event, now_ms, to_response};
 use crate::protocol::{Response, SessionStarted};
 
+/// When a transcript was last written, which its marks read now were
+/// written by: a busy machine reads them well after.
+fn written_by(metadata: &fs::Metadata) -> Instant {
+    let now = Instant::now();
+    let ago = metadata.modified().ok().and_then(|modified| SystemTime::now().duration_since(modified).ok());
+    ago.and_then(|ago| now.checked_sub(ago)).unwrap_or(now)
+}
+
 /// How long edits wait for the transcript of an agent without Silt's
 /// hooks: agents flush their transcripts late, and some only write a tool
 /// call once it finished.
@@ -47,6 +55,9 @@ pub(crate) struct StagedLine {
     pub(crate) delta: Delta,
     pub(crate) rows: Vec<SearchRow>,
     pub(crate) marks: Vec<Mark>,
+    /// For an agent without hooks, the prompt the line carries, which its
+    /// peers hear it was asked (ADR 0090).
+    pub(crate) prompt: Option<String>,
 }
 
 /// Records staged from one session file, to store in one write.
@@ -390,18 +401,7 @@ impl Core {
             Some(commit) if isolated => repo.create_managed_checkout(&thread.to_string(), commit, None)?.path,
             _ => repo.root().to_owned(),
         };
-        let checkout_actor = ActorId(uuid::Uuid::new_v4().as_u128());
-        // From the store, as a process other than the daemon doesn't hold
-        // every checkout.
-        let existing = self.store.checkouts().await?.into_iter().find(|checkout| checkout.path == checkout_path);
-        let checkout = match existing {
-            Some(previous) => {
-                self.checkouts.remove(&previous.id);
-                self.store.rebind_checkout(previous.id, thread, checkout_actor).await?;
-                silt_store::CheckoutRecord { thread, actor: checkout_actor, ..previous }
-            }
-            None => self.store.add_checkout(thread, &checkout_path, checkout_actor, isolated, now_ms()).await?,
-        };
+        let checkout = self.bind_checkout(thread, &checkout_path, isolated).await?;
         let checkout_id = checkout.id;
         self.start_checkout(checkout, BTreeMap::new())?;
         self.importing = !already_ran;
@@ -412,6 +412,33 @@ impl Core {
         // `join("")` would add a trailing slash, which changes Claude's slug.
         let agent_cwd = if relative.as_os_str().is_empty() { checkout_path.clone() } else { checkout_path.join(&relative) };
         Ok(CreatedThread { thread, family: family_id, checkout_id, checkout: checkout_path, agent_cwd, repo, head })
+    }
+
+    /// A fresh checkout for `thread` at `path`. It takes over the thread's
+    /// own there, or else one whose thread's agent is gone; beside those of
+    /// agents still working there it's another (ADR 0089). From the store,
+    /// as a process other than the daemon doesn't hold every checkout.
+    pub(crate) async fn bind_checkout(
+        &mut self,
+        thread: ThreadId,
+        path: &Path,
+        managed: bool,
+    ) -> Result<silt_store::CheckoutRecord, CoreError> {
+        let actor = ActorId(uuid::Uuid::new_v4().as_u128());
+        let rows = self.store.checkouts_at(path).await?;
+        let previous = rows
+            .iter()
+            .find(|row| row.thread == thread)
+            .or_else(|| rows.iter().find(|row| !self.agent_at_work_anywhere(row.thread)))
+            .cloned();
+        Ok(match previous {
+            Some(previous) => {
+                self.checkouts.remove(&previous.id);
+                self.store.rebind_checkout(previous.id, thread, actor).await?;
+                silt_store::CheckoutRecord { thread, actor, ..previous }
+            }
+            None => self.store.add_checkout(thread, path, actor, managed, now_ms()).await?,
+        })
     }
 
     /// Waits for the agent to write a session it named itself.
@@ -450,6 +477,7 @@ impl Core {
             checkout_id: new.checkout_id,
         };
         self.store.add_session(&record, now_ms()).await?;
+        self.store.session_revived(&record.agent, &record.session_id, now_ms()).await?;
         let mut readers: HashMap<String, Box<dyn Reader>> = HashMap::new();
         let mut main_reader = new.agent.reader();
         for line in &new.restored {
@@ -761,6 +789,8 @@ impl Core {
             if let Some(session) = self.session_mut(id) {
                 session.live = false;
                 session.in_turn = false;
+                let agent = session.record.agent.clone();
+                self.store.session_ended(&agent, id, now_ms()).await?;
             }
         }
         Ok("ended")
@@ -797,8 +827,14 @@ impl Core {
             self.tail_session(id).await?;
         }
         for checkout in checkouts {
-            if self.checkouts.contains_key(&checkout) {
+            let Some(held) = self.checkouts.get(&checkout) else {
+                continue;
+            };
+            if !self.awaits_tool_marks(checkout, Instant::now()) {
                 self.rescan(checkout).await?;
+            } else if self.resident {
+                let path = held.record.path.clone();
+                self.settle_changes(checkout, vec![path], Instant::now());
             }
         }
         Ok(())
@@ -821,11 +857,23 @@ impl Core {
             checkouts.extend(self.session(id).map(|session| session.record.checkout_id));
         }
         for checkout in checkouts {
-            if self.checkouts.contains_key(&checkout) {
+            if self.checkouts.contains_key(&checkout) && !self.holds_for_marks(checkout) {
                 self.rescan(checkout).await?;
             }
         }
         Ok(())
+    }
+
+    /// Whether a step, which has no watcher to say when files changed,
+    /// holds the checkout's changes back for its agent's tool marks: for
+    /// the settling window from the first step that held them.
+    fn holds_for_marks(&mut self, checkout: CheckoutId) -> bool {
+        let since = *self.marks_awaited.entry(checkout).or_insert_with(Instant::now);
+        let held = self.awaits_tool_marks(checkout, since);
+        if !held {
+            self.marks_awaited.remove(&checkout);
+        }
+        held
     }
 
     /// Whether the thread's agent needs `record_step`: its session is still
@@ -976,7 +1024,9 @@ impl Core {
         let Ok(mut file) = fs::File::open(path) else {
             return Ok(false);
         };
-        let length = file.metadata()?.len();
+        let metadata = file.metadata()?;
+        let length = metadata.len();
+        let written = written_by(&metadata);
         if length < offset {
             // The agent rewound its transcript; what it dropped stays recorded.
             offset = length;
@@ -1006,14 +1056,19 @@ impl Core {
                     return Err(error);
                 }
             };
+            if let Some(prompt) = &staged.prompt {
+                self.noted_prompt(session_id, prompt).await?;
+            }
             batch.push(staged.family, staged.delta, staged.rows, end);
             if !staged.marks.is_empty() {
                 self.store_batch(session_id, key, &mut batch, read_to(end)).await?;
-                self.apply_marks(session_id, staged.marks).await?;
+                self.apply_marks(session_id, staged.marks, written).await?;
             }
         }
         // Lines that recorded nothing still count as read.
         let read = read_to(consumed);
+        let agent = self.session(session_id).expect("caller checked").record.agent.clone();
+        self.store.session_seen(&agent, session_id, now_ms()).await?;
         if !batch.deltas.is_empty() {
             self.store_batch(session_id, key, &mut batch, read).await?;
         } else if self.session(session_id).and_then(|session| session.offsets.get(key)) != Some(&read) {
@@ -1038,8 +1093,11 @@ impl Core {
         read: Option<SessionFileOffset>,
     ) -> Result<(), CoreError> {
         let staged = self.stage_line(session_id, key, line)?;
+        if let Some(prompt) = &staged.prompt {
+            self.noted_prompt(session_id, prompt).await?;
+        }
         self.store_lines(session_id, key, staged.family, &[staged.delta], &staged.rows, read).await?;
-        self.apply_marks(session_id, staged.marks).await
+        self.apply_marks(session_id, staged.marks, Instant::now()).await
     }
 
     /// Applies a transcript record to its family in memory, with what it
@@ -1063,9 +1121,11 @@ impl Core {
                 Some((entry.kind().to_owned(), text))
             })
             .collect();
+        let unhooked = agent.capture() != Capture::Hooks && key == "main";
+        let prompt = texts.iter().find(|(kind, _)| kind == "user").map(|(_, text)| text.clone()).filter(|_| unhooked);
         let (delta, rows) = self.stage_conv(family, thread, agent_author(&reference), op, texts)?;
-        let marks = if agent.capture() != Capture::Hooks && key == "main" { parsed.marks } else { Vec::new() };
-        Ok(StagedLine { family, delta, rows, marks })
+        let marks = if unhooked { parsed.marks } else { Vec::new() };
+        Ok(StagedLine { family, delta, rows, marks, prompt })
     }
 
     async fn store_batch(
@@ -1101,14 +1161,25 @@ impl Core {
         Ok(())
     }
 
-    async fn apply_marks(&mut self, session_id: &str, marks: Vec<Mark>) -> Result<(), CoreError> {
+    async fn apply_marks(&mut self, session_id: &str, marks: Vec<Mark>, written: Instant) -> Result<(), CoreError> {
         for mark in marks {
-            self.apply_mark(session_id, mark).await?;
+            self.apply_mark(session_id, mark, written).await?;
         }
         Ok(())
     }
 
-    pub(crate) async fn apply_mark(&mut self, session_id: &str, mark: Mark) -> Result<(), CoreError> {
+    /// What an agent without hooks was asked, read from its transcript.
+    async fn noted_prompt(&self, session_id: &str, prompt: &str) -> Result<(), CoreError> {
+        let (Some(session), Some(doing)) = (self.session(session_id), crate::peers::doing_of(prompt)) else {
+            return Ok(());
+        };
+        self.store.session_doing(&session.record.agent, session_id, &doing).await?;
+        Ok(())
+    }
+
+    /// Applies a mark written by `written`: when a tool or turn closed, as
+    /// edits are credited by how close they came to it.
+    pub(crate) async fn apply_mark(&mut self, session_id: &str, mark: Mark, written: Instant) -> Result<(), CoreError> {
         let open = self.open_tool(session_id).map(str::to_owned);
         let session = self.session_mut(session_id).expect("caller checked");
         let mark = match mark {
@@ -1124,23 +1195,28 @@ impl Core {
                 TurnMark::ToolStarted { tool_use_id, tool }
             }
             Mark::ToolFinished { tool_use_id } => {
-                session.closed_tool = Some((tool_use_id.clone(), Instant::now()));
+                session.closed_tool = Some((tool_use_id.clone(), written));
                 TurnMark::ToolFinished { tool_use_id }
             }
             Mark::Stopped => {
                 session.in_turn = false;
                 if let Some(tool) = open {
-                    session.closed_tool = Some((tool, Instant::now()));
+                    session.closed_tool = Some((tool, written));
                 }
-                session.turn_closed = Some(Instant::now());
+                session.turn_closed = Some(written);
                 TurnMark::Stopped
             }
         };
         // As a hook does when a tool or turn ends (ADR 0018): what changed
         // was made by it, however late a busy machine's watcher would tell.
-        let checkout = session.record.checkout_id;
+        let (checkout, agent) = (session.record.checkout_id, session.record.agent.clone());
         if matches!(mark, TurnMark::ToolFinished { .. } | TurnMark::Stopped) && self.checkouts.contains_key(&checkout) {
             self.rescan(checkout).await?;
+        }
+        match mark {
+            TurnMark::PromptSubmitted => self.store.session_idle(&agent, session_id, false).await?,
+            TurnMark::Stopped => self.store.session_idle(&agent, session_id, true).await?,
+            _ => {}
         }
         self.record_turn(session_id, mark).await
     }
@@ -1243,14 +1319,45 @@ impl Core {
         });
     }
 
+    /// Who made an edit at `checkout`, from every session working at its
+    /// path: two agents may share a clone, each with a checkout (ADR 0089).
     pub(crate) fn author_for(&self, checkout: CheckoutId) -> Author {
+        self.author_noticed(checkout, self.change_noticed.unwrap_or_else(Instant::now))
+    }
+
+    /// Whether edits noticed at `noticed` should wait for the transcripts
+    /// again: an agent that marks its turns and tools only there runs in
+    /// the clone, and so far no tool of its is known to have made them.
+    /// Its prompt and tool marks may still be on the way, and a busy
+    /// machine writes and reads them late, so they get the whole settling
+    /// window.
+    pub(crate) fn awaits_tool_marks(&self, checkout: CheckoutId, noticed: Instant) -> bool {
+        let Some(held) = self.checkouts.get(&checkout) else {
+            return false;
+        };
+        let here: HashSet<CheckoutId> = self.rows_at(&held.record.path).collect();
+        let transcript_agent = self.sessions.iter().any(|session| {
+            here.contains(&session.record.checkout_id) && session.live && session.agent.capture() == Capture::Transcript
+        });
+        transcript_agent
+            && noticed.elapsed() < attribution::MARK_SETTLE
+            && matches!(self.author_noticed(checkout, noticed), Author::User | Author::Agent { tool_use_id: None, .. })
+    }
+
+    fn author_noticed(&self, checkout: CheckoutId, noticed: Instant) -> Author {
+        let Some(held) = self.checkouts.get(&checkout) else {
+            return Author::User;
+        };
+        let thread = held.record.thread;
+        let here: HashSet<CheckoutId> = self.rows_at(&held.record.path).collect();
         let sessions: Vec<attribution::SessionState<'_>> = self
             .sessions
             .iter()
-            .filter(|session| session.record.checkout_id == checkout)
+            .filter(|session| here.contains(&session.record.checkout_id))
             .map(|session| attribution::SessionState {
                 agent: &session.record.agent,
                 session: &session.record.session_id,
+                own: session.record.thread == thread,
                 capture: session.agent.capture(),
                 live: session.live,
                 in_turn: session.in_turn,
@@ -1260,9 +1367,18 @@ impl Core {
             })
             .collect();
         // An agent that hasn't written its session yet, but is running.
-        let pending = self.pending.iter().find(|pending| pending.checkout_id == checkout).map(|pending| pending.agent.id());
-        let noticed = self.change_noticed.unwrap_or_else(Instant::now);
-        attribution::author(self.importing, &sessions, pending, noticed)
+        let pending = self
+            .pending
+            .iter()
+            .filter(|pending| here.contains(&pending.checkout_id))
+            .min_by_key(|pending| pending.thread != thread)
+            .map(|pending| attribution::Pending { agent: pending.agent.id(), own: pending.thread == thread });
+        attribution::author(self.importing, &sessions, self.deciding.as_deref(), pending, noticed)
+    }
+
+    /// The checkouts held at `path`, one per thread working there.
+    pub(crate) fn rows_at<'a>(&'a self, path: &'a Path) -> impl Iterator<Item = CheckoutId> + 'a {
+        self.checkouts.values().filter(move |checkout| checkout.record.path == path).map(|checkout| checkout.record.id)
     }
 
     pub(crate) async fn hook(&mut self, event: &str, input: serde_json::Value) -> Response {

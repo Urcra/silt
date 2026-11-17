@@ -70,6 +70,7 @@ impl Login {
         let writer: Writer = Arc::new(Mutex::new(pty.master.take_writer().map_err(std::io::Error::other)?));
         let answers = writer.clone();
         let mut printed = report.clone();
+        let (drained, read_all) = std::sync::mpsc::channel::<()>();
         std::thread::spawn(move || {
             let mut buffer = [0; 4096];
             // The end of the last read, should a question be split across two.
@@ -87,9 +88,13 @@ impl Login {
                 carried.drain(..carried.len().saturating_sub(CURSOR_ASKED.len() - 1));
                 printed(LoginEvent::Output(chunk.to_vec()));
             }
+            let _ = drained.send(());
         });
         std::thread::spawn(move || {
             let success = child.wait().is_ok_and(|status| status.success());
+            // What it printed last comes before its end; a terminal that never
+            // says it's done, as Windows' may while it's open, waits no longer.
+            let _ = read_all.recv_timeout(std::time::Duration::from_secs(2));
             report(LoginEvent::Exited { success });
         });
         Ok(Self { _master: pty.master, writer, killer })

@@ -8,6 +8,7 @@ import { threadDoing } from '../threadLook'
 import { useNow } from '../now'
 import { projectName, shortPath } from '../projects'
 import { keys, message } from '../query'
+import { byActivity } from '../sections'
 import type { NewThreadSearch } from '../router'
 import { useMedia } from '../media'
 import { formatKeys } from '../shortcuts'
@@ -420,7 +421,7 @@ function PickUp({ repo, drafts, onDraft }: { repo: string; drafts: Draft[]; onDr
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const recent = (threads.data ?? [])
     .filter((thread) => thread.repo === repo && !thread.mine.settled && !thread.merged)
-    .sort((a, b) => b.last_ms - a.last_ms)
+    .sort(byActivity)
     .slice(0, 4)
   const mine = drafts.filter((draft) => !draft.project || draft.project === repo)
   if (recent.length === 0 && mine.length === 0) return null

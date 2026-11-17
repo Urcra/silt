@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, type CommentView } from './api'
+import { api, type CommentView, hiddenLines } from './api'
 import { message } from './query'
 import { type ReviewItem, type ReviewState, reviewPrompt } from './review'
 import { toast } from './ui'
@@ -43,7 +43,7 @@ export function useFinishReview({ thread, review, unsent, items, agent, onSent, 
       // Each draft becomes a comment first, and leaves the review once it is one, so a failure halfway repeats none.
       for (const draft of drafts) {
         const { at } = draft
-        const on = draft.anchor ? { on: 'anchored' as const, anchor: draft.anchor } : { on: 'lines' as const, path: at.path, start: at.start, end: at.end, base: draft.base, hide_git: draft.hideGit ?? false }
+        const on = draft.anchor ? { on: 'anchored' as const, anchor: draft.anchor } : { on: 'lines' as const, path: at.path, start: at.start, end: at.end, base: draft.base, ...hiddenLines(draft) }
         const made = await api.addComment(thread, on, draft.text)
         review.remove(draft.id)
         ids.push(made.id)

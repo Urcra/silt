@@ -533,7 +533,7 @@ impl Core {
         } else {
             silt_workspace::AgentChoice::Known { key: silt_workspace::agent_key(&agent.id), name: agent.name.clone() }
         };
-        rules.check_agent(&choice, can_sandbox(silt_agents::SandboxSupport::None, &policy)).map_err(refused)?;
+        rules.check_agent(&choice, silt_agents::SandboxSupport::None).map_err(refused)?;
         rules.check_model(&choice, on_local_model).map_err(refused)?;
         let preset = match (preset, policy.max_preset) {
             (Some(preset), Some(cap)) if !chosen && !preset.within(cap) => Some(cap),
@@ -599,16 +599,6 @@ fn locks_for(data_dir: &Path, all: &Workspaces, workspace: &Workspace, policy: &
         deny.extend(others_folders(all, &workspace.id));
     }
     silt_agents::Locks { no_bypass: !policy.allows_full_access(), sandbox: policy.sandbox_required(), deny }
-}
-
-/// Whether `agent` can run under `policy`'s sandbox rules.
-pub(crate) fn can_sandbox(support: silt_agents::SandboxSupport, policy: &Policy) -> bool {
-    use silt_agents::SandboxSupport;
-    match support {
-        SandboxSupport::Isolate => true,
-        SandboxSupport::Sandbox => !policy.isolated,
-        SandboxSupport::None => !policy.sandbox_required(),
-    }
 }
 
 /// What an agent's history tools may read (ADR 0065): its workspace, and
@@ -741,7 +731,7 @@ fn check_run(
     let policy = rules.effective();
     let choice =
         silt_workspace::AgentChoice::Known { key: silt_workspace::agent_key(agent.id()), name: agent.display_name().to_owned() };
-    rules.check_agent(&choice, can_sandbox(agent.sandbox_support(), &policy)).map_err(refused)?;
+    rules.check_agent(&choice, agent.sandbox_support()).map_err(refused)?;
     rules.check_model(&choice, silt_llm::local_model_in_args(args).is_some()).map_err(refused)?;
     if let Some(flag) = agent.bypass_flag(args) {
         rules.check_flag(&flag, agent.display_name()).map_err(refused)?;

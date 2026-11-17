@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use silt_crdt::{Anchor, InodeId, InodeKind, Parent, TextOp, is_valid_name};
-use silt_types::{BlobHash, CloudSessionId, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
+use silt_crdt::{Anchor, CharId, InodeId, InodeKind, Parent, TextOp, is_valid_name};
+use silt_types::{ArtifactId, BlobHash, CloudSessionId, DeltaId, DeltaSpan, DeviceId, Frontier, GitOid, ThreadId};
 
 /// One entry in a family's log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +24,23 @@ pub enum Author {
     },
     /// Content brought in from git or another existing state.
     Import,
+    /// Made by the agent of another thread working in the same clone; one
+    /// session, or several when it's unclear which (ADR 0089).
+    Others {
+        sessions: Vec<SessionRef>,
+    },
+    /// Made by one of several agents working in the same clone, this
+    /// thread's own among them; it's unclear which (ADR 0089).
+    Agents {
+        sessions: Vec<SessionRef>,
+    },
+}
+
+impl Author {
+    /// Whether an agent made it, this thread's or another's.
+    pub fn is_agents(&self) -> bool {
+        matches!(self, Self::Agent { .. } | Self::Others { .. } | Self::Agents { .. })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +94,83 @@ pub enum Op {
     },
     Mr(MrOp),
     Comment(CommentOp),
+    /// An artifact's page data (ADR 0072); last, as stored deltas name
+    /// variants by position.
+    Page(PageOp),
+}
+
+/// A write to an artifact's page data (ADR 0072): its documents, the files
+/// people added (ADR 0074), and the text and grids of docs and sheets
+/// (ADR 0077). JSON travels as text, which postcard can store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PageOp {
+    /// The document at `path` becomes `value`, JSON.
+    Set {
+        artifact: ArtifactId,
+        path: String,
+        value: String,
+    },
+    /// The top-level fields of `fields`, a JSON object, go into the
+    /// document at `path`; a null field removes it.
+    Patched {
+        artifact: ArtifactId,
+        path: String,
+        fields: String,
+    },
+    Deleted {
+        artifact: ArtifactId,
+        path: String,
+    },
+    /// A file someone added to the page, kept as `_assets/<asset>`.
+    Asset {
+        artifact: ArtifactId,
+        asset: String,
+        blob: BlobHash,
+        name: String,
+        media_type: String,
+        size: u64,
+    },
+    /// An edit of a doc's text.
+    Text {
+        artifact: ArtifactId,
+        op: TextOp,
+    },
+    /// An edit of a sheet's rows or columns, one character per line.
+    Lines {
+        artifact: ArtifactId,
+        sheet: u16,
+        axis: Axis,
+        op: TextOp,
+    },
+    /// A sheet's cell, as typed, at a row and a column by their ids.
+    Cell {
+        artifact: ArtifactId,
+        sheet: u16,
+        row: CharId,
+        column: CharId,
+        raw: String,
+    },
+}
+
+/// A sheet's two kinds of lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Axis {
+    Rows,
+    Columns,
+}
+
+impl PageOp {
+    pub fn artifact(&self) -> ArtifactId {
+        match self {
+            Self::Set { artifact, .. }
+            | Self::Patched { artifact, .. }
+            | Self::Deleted { artifact, .. }
+            | Self::Asset { artifact, .. }
+            | Self::Text { artifact, .. }
+            | Self::Lines { artifact, .. }
+            | Self::Cell { artifact, .. } => *artifact,
+        }
+    }
 }
 
 /// A comment on a thread (ADR 0011), identified by its `Added` delta's id.
@@ -105,13 +199,22 @@ pub enum CommentOp {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommentTarget {
     /// A conversation delta.
     Message { delta: DeltaId },
     /// Lines of a file: `start` before their first character and `end`
     /// after their last, so the comment follows the code through edits.
     Code { inode: InodeId, start: Anchor, end: Anchor },
+    /// Text of an artifact's doc, anchored as code is (ADR 0077); last, as
+    /// stored deltas name variants by position.
+    Page { artifact: ArtifactId, start: Anchor, end: Anchor },
+    /// A sheet's cell, by its row's and column's ids, so it follows the cell
+    /// as rows and columns go in or out; last, as above.
+    Cell { artifact: ArtifactId, sheet: u16, row: silt_crdt::CharId, column: silt_crdt::CharId },
+    /// An element of an HTML artifact's page, by the anchor the page gave
+    /// it: a name of its own or a CSS path (ADR 0085); last, as above.
+    Element { artifact: ArtifactId, anchor: String },
 }
 
 /// A merge request's life (ADR 0010). It is identified by the id of its
@@ -149,7 +252,7 @@ impl Op {
     /// How many ids the operation consumes.
     pub fn units(&self) -> usize {
         match self {
-            Self::Text { op, .. } => op.units(),
+            Self::Text { op, .. } | Self::Page(PageOp::Text { op, .. } | PageOp::Lines { op, .. }) => op.units(),
             _ => 1,
         }
     }
@@ -168,6 +271,8 @@ pub enum ShapeError {
     InvalidName(String),
     #[error("a thread can't fork from or merge itself")]
     SelfReference,
+    #[error("an artifact's page data is malformed: {0}")]
+    Page(&'static str),
 }
 
 impl Delta {
@@ -181,7 +286,8 @@ impl Delta {
             | Op::SetContent { content: Content::Blob(hash), .. }
             | Op::Conv(ConvOp::Attachment { blob: hash, .. })
             | Op::Conv(ConvOp::SessionTranslated { lines: hash, .. })
-            | Op::Git(GitOp::Bundle { blob: hash, .. }) => Some(*hash),
+            | Op::Git(GitOp::Bundle { blob: hash, .. })
+            | Op::Page(PageOp::Asset { blob: hash, .. }) => Some(*hash),
             _ => None,
         }
     }
@@ -200,6 +306,7 @@ impl Delta {
                 Err(ShapeError::InvalidName(name.clone()))
             }
             Op::Fork { from } | Op::Merge { from, .. } if *from == self.thread => Err(ShapeError::SelfReference),
+            Op::Page(op) => page_shape(op),
             _ => Ok(()),
         }
     }
@@ -333,4 +440,35 @@ pub enum GitOp {
     Made {
         spans: Vec<DeltaSpan>,
     },
+}
+
+/// What an artifact's page op must be, whoever wrote it (ADR 0016).
+fn page_shape(op: &PageOp) -> Result<(), ShapeError> {
+    use crate::page::{CELL_BYTES, is_document, is_document_path, is_fields};
+    match op {
+        PageOp::Set { path, value, .. } if !is_document_path(path) || !is_document(value) => {
+            Err(ShapeError::Page("a document is a path and a JSON value of at most 64 KiB"))
+        }
+        PageOp::Patched { path, fields, .. } if !is_document_path(path) || !is_fields(fields) => {
+            Err(ShapeError::Page("a patch is a path and a JSON object of at most 64 KiB"))
+        }
+        PageOp::Deleted { path, .. } if !is_document_path(path) => Err(ShapeError::Page("not a document's path")),
+        PageOp::Asset { asset, name, media_type, size, .. }
+            if !(1..=64).contains(&asset.len())
+                || !asset.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                || name.len() > 255
+                || media_type.len() > 127
+                || *size > 20 << 20 =>
+        {
+            Err(ShapeError::Page("an asset's id, name, type or size is out of bounds"))
+        }
+        PageOp::Text { op: TextOp::Delete { pos, len }, .. } | PageOp::Lines { op: TextOp::Delete { pos, len }, .. }
+            if pos.checked_add(*len).is_none() =>
+        {
+            Err(ShapeError::TextRange)
+        }
+        PageOp::Lines { sheet, .. } | PageOp::Cell { sheet, .. } if *sheet >= 16 => Err(ShapeError::Page("a sheet is 0 to 15")),
+        PageOp::Cell { raw, .. } if raw.len() > CELL_BYTES => Err(ShapeError::Page("a cell holds at most 8 KiB")),
+        _ => Ok(()),
+    }
 }

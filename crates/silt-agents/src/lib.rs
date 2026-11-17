@@ -16,6 +16,7 @@ mod entry;
 mod error;
 pub mod gemini;
 pub mod history;
+pub mod oneshot;
 pub mod opencode;
 mod render;
 mod rewrite;
@@ -31,6 +32,7 @@ pub use entry::{Entry, Task, TaskKind, TaskStatus};
 pub use error::AgentError;
 pub use render::{Role, render_transcript, translated_text};
 pub use rewrite::{CheckedSession, RecordedSession, Rewrites, is_safe_id, is_side_file_name};
+pub use silt_workspace::SandboxSupport;
 pub use tail::{complete_lines, complete_lines_ending};
 
 use conventions::NativeConventions;
@@ -211,16 +213,6 @@ pub struct Locks {
     pub sandbox: bool,
     /// What its sandbox and file tools may not read or write.
     pub deny: Vec<PathBuf>,
-}
-
-/// Which of a workspace's sandbox rules Silt can hold an agent to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SandboxSupport {
-    None,
-    /// Its own sandbox, turned on per run.
-    Sandbox,
-    /// Its sandbox, and paths it denies reading.
-    Isolate,
 }
 
 /// The first of `args` that is one of `flags`, alone or as `--flag=value`,

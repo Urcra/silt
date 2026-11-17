@@ -44,10 +44,15 @@ export function old(thread: ThreadSummary, now: number): boolean {
   return now - thread.last_ms > OLD_AFTER_MS && ['active', 'snoozed', 'settled'].includes(section(thread, now))
 }
 
+/** Newest activity first; on a tie, the newest thread, so the order never rests on the list's own. */
+export function byActivity(a: ThreadSummary, b: ThreadSummary): number {
+  return b.last_ms - a.last_ms || b.created_ms - a.created_ms || a.id.localeCompare(b.id)
+}
+
 /** The threads of each section, newest activity first. */
 export function sections(threads: ThreadSummary[], now: number): Record<Section, ThreadSummary[]> {
   const out: Record<Section, ThreadSummary[]> = { needs_you: [], pinned: [], working: [], active: [], snoozed: [], settled: [] }
-  for (const thread of [...threads].sort((a, b) => b.last_ms - a.last_ms)) out[section(thread, now)].push(thread)
+  for (const thread of [...threads].sort(byActivity)) out[section(thread, now)].push(thread)
   return out
 }
 

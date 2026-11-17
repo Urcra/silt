@@ -193,6 +193,19 @@ fn a_nested_attributes_file_counts_once_it_is_noticed() {
 }
 
 #[test]
+fn filters_built_again_follow_an_attributes_file_changed_since() {
+    let dir = repo_with_commit();
+    let root = dir.path();
+    let repo = Repo::discover(root).expect("discovers");
+    let smudge = |repo: &Repo| repo.filters().expect("filters").to_worktree("x.bat", b"a\n").expect("smudge");
+    assert_eq!(smudge(&repo), b"a\n");
+    fs::write(root.join(".gitattributes"), "*.bat text eol=crlf\n").expect("write");
+    assert_eq!(smudge(&repo), b"a\r\n", "the worktree's attributes files are read again");
+    fs::write(root.join(".gitattributes"), "").expect("write");
+    assert_eq!(smudge(&repo), b"a\n");
+}
+
+#[test]
 fn checks_more_ignored_paths_than_a_pipe_holds() {
     let dir = tempfile::tempdir().expect("tempdir");
     let status = std::process::Command::new("git").args(["init", "-q"]).current_dir(dir.path()).status().expect("git");
@@ -314,14 +327,24 @@ fn the_commit_at_a_time_is_the_one_head_was_at() {
     let root = dir.path();
     let repo = Repo::discover(root).expect("discovers");
     let first = repo.head_commit().expect("head").expect("a commit");
-    let between = now_ms() + 1000;
-    std::thread::sleep(std::time::Duration::from_millis(2100));
+    // The reflog is dated by the committer's date, so the second commit is
+    // dated an hour on rather than waited for: the wall clock can step.
+    let later = now_ms().div_euclid(1000) + 3600;
     fs::write(root.join("src/main.rs"), "fn main() { later() }\n").expect("write");
-    git(root, &["commit", "-q", "-am", "later"]);
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-q", "-am", "later"])
+        .env("GIT_COMMITTER_DATE", format!("@{later} +0000"))
+        .env("GIT_AUTHOR_DATE", format!("@{later} +0000"))
+        .status()
+        .expect("git runs");
+    assert!(status.success(), "git commit");
     let second = repo.head_commit().expect("head").expect("a commit");
     assert_ne!(first, second);
-    assert_eq!(repo.commit_at(between).expect("reads"), Some(first));
-    assert_eq!(repo.commit_at(now_ms() + 1000).expect("reads"), Some(second));
+    assert_eq!(repo.commit_at((later - 1800) * 1000).expect("reads"), Some(first));
+    assert_eq!(repo.commit_at((later - 1) * 1000 + 999).expect("reads"), Some(first), "the second before it");
+    assert_eq!(repo.commit_at(later * 1000).expect("reads"), Some(second));
     assert_eq!(repo.commit_at(0).expect("reads"), Some(second), "before any commit, HEAD's own");
 }
 

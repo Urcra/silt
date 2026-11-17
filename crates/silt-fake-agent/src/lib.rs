@@ -35,6 +35,15 @@ pub fn io(error: std::io::Error) -> Failed {
     Failed(1, error.to_string())
 }
 
+/// Gives a hook its input. A hook may exit without reading it, as `true`
+/// does, and the agent goes on, so a closed pipe is no failure.
+pub fn feed_hook(child: &mut std::process::Child, input: &[u8]) -> Step {
+    match child.stdin.take().expect("piped").write_all(input) {
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => other.map_err(io),
+    }
+}
+
 /// Appends `text`, making the file and its folder as an agent would, as in
 /// a chat's empty folder (ADR 0059).
 pub fn append(path: &Path, text: &str) -> Step {

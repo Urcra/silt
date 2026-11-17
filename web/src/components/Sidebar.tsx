@@ -10,7 +10,7 @@ import { useNow } from '../now'
 import { openPalette } from '../palette'
 import { projectName, projects } from '../projects'
 import { keys } from '../query'
-import { type Section, old, section, sections, unread } from '../sections'
+import { type Section, byActivity, old, section, sections, unread } from '../sections'
 import { hosted } from '../served'
 import { formatKeys } from '../shortcuts'
 import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
@@ -143,7 +143,7 @@ function ProjectGroup({
 }) {
   const [open, setOpen] = useState(!older)
   const [showRest, setShowRest] = useState(false)
-  const newest = [...threads].sort((a, b) => b.last_ms - a.last_ms)
+  const newest = [...threads].sort(byActivity)
   const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
   const shown = newest.filter((thread) => !held(thread))
   const rest = newest.filter(held)
@@ -201,7 +201,7 @@ function ProjectGroup({
 /** The chats, newest first, with what's old, settled or snoozed behind a count, as a project's threads are (ADR 0059). */
 function ChatGroup({ threads, now }: { threads: ThreadSummary[]; now: number }) {
   const [showRest, setShowRest] = useState(false)
-  const newest = [...threads].sort((a, b) => b.last_ms - a.last_ms)
+  const newest = [...threads].sort(byActivity)
   const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
   const shown = newest.filter((thread) => !held(thread))
   const rest = newest.filter(held)
@@ -386,6 +386,9 @@ export function Sidebar() {
       )}
       <NavItem to="/threads" icon="list">
         All threads
+      </NavItem>
+      <NavItem to="/artifacts" icon="image">
+        Artifacts
       </NavItem>
       <NavItem to="/mrs" icon="merge" count={reviews || undefined} also={path.startsWith('/mr/')}>
         Merge requests

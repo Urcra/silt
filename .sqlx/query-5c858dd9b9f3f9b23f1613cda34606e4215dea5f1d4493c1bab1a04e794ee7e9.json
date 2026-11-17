@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT thread_id, artifact_id FROM artifact_pins WHERE user_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "artifact_pins",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "artifact_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "artifact_pins",
+            "name": "artifact_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "5c858dd9b9f3f9b23f1613cda34606e4215dea5f1d4493c1bab1a04e794ee7e9"
+}

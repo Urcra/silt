@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR REPLACE INTO artifact_pins (user_id, thread_id, artifact_id, at_ms) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "191715992dad9a8411ad023f9569c8f3cf881933fdc62a794f9b1075e89d864b"
+}

@@ -79,8 +79,8 @@ pub enum WorkspaceCommand {
         /// Agents run only with their own sandbox on: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
         sandbox: Option<bool>,
-        /// The sandbox also hides Silt's data and other workspaces: on or off
-        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        /// The sandbox also keeps agents out of Silt's data and other workspaces' folders: on or off
+        #[arg(long = "hide-other-workspaces", alias = "isolated", value_parser = crate::admin::parse_on_off)]
         isolated: Option<bool>,
         /// Projects keep the workspace's server: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
@@ -91,6 +91,9 @@ pub enum WorkspaceCommand {
         /// In a Local only workspace, agents' history tools read every project in it, not only their own: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
         wide_history: Option<bool>,
+        /// The page connectors its pages may call, comma-separated, or `any`
+        #[arg(long)]
+        connectors: Option<String>,
     },
     /// Set or unset a variable given to every agent started in a workspace, such as its own CLAUDE_CONFIG_DIR
     Env {
@@ -221,6 +224,7 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
             sandbox,
             isolated,
             home_locked,
+            connectors,
             local_only,
             wide_history,
         } => {
@@ -264,6 +268,12 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
             }
             if let Some(locked) = home_locked {
                 policy.home_locked = locked;
+            }
+            if let Some(connectors) = connectors {
+                policy.connectors = match connectors.trim() {
+                    "any" | "" => None,
+                    list => Some(list.split(',').map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned).collect()),
+                };
             }
             Ok(format!("{}'s rules: {}", workspace.name, policy_text(policy)))
         }
@@ -337,7 +347,7 @@ fn policy_text(policy: &silt_workspace::Policy) -> String {
         parts.push("no custom agents".into());
     }
     if policy.isolated {
-        parts.push("isolated".into());
+        parts.push("other workspaces' files hidden".into());
     } else if policy.sandbox {
         parts.push("sandboxed".into());
     }
@@ -346,6 +356,13 @@ fn policy_text(policy: &silt_workspace::Policy) -> String {
     }
     if policy.local_only {
         parts.push(if policy.wide_history { "local only, history across it" } else { "local only, history by project" }.into());
+    }
+    if let Some(connectors) = &policy.connectors {
+        parts.push(if connectors.is_empty() {
+            "no page connector".to_owned()
+        } else {
+            format!("page connectors {}", connectors.iter().cloned().collect::<Vec<_>>().join(", "))
+        });
     }
     parts.join(" · ")
 }
@@ -431,7 +448,7 @@ fn which(view: &WorkspacesView) -> Result<(), Exn<CliError>> {
     println!(
         "  sandbox      {}",
         if policy.isolated {
-            "required, isolated"
+            "required, hiding other workspaces' files"
         } else if policy.sandbox {
             "required"
         } else {

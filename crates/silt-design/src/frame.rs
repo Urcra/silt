@@ -36,6 +36,23 @@ pub fn policy(vendor: Option<&str>) -> String {
     )
 }
 
+/// [`policy`] for a frame served at `files`, an absolute URL ending in `/`,
+/// whose page loads and fetches its own files and assets from there
+/// (ADR 0074); a frame's origin is opaque, so it names the address itself.
+pub fn policy_with_files(vendor: Option<&str>, files: &str) -> String {
+    let (scripts, styles, fonts) = match vendor {
+        Some(vendor) => (vendor.to_owned(), vendor.to_owned(), vendor.to_owned()),
+        None => (SCRIPT_SOURCES.join(" "), STYLE_SOURCES.join(" "), FONT_SOURCES.join(" ")),
+    };
+    format!(
+        "default-src 'none'; script-src 'unsafe-inline' {scripts} {files}; style-src 'unsafe-inline' {styles} {files}; font-src data: {fonts} {files}; img-src data: blob: {files}; media-src data: blob: {files}; connect-src {files}"
+    )
+}
+
+/// The policy a version's own file is served under when a browser could
+/// render it as a page of its own: a sandbox that runs nothing.
+pub const FILE_POLICY: &str = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'";
+
 /// `text` with every allowlisted CDN address going through `vendor`, an
 /// absolute URL ending in `/`.
 pub fn through_vendor(text: &str, vendor: &str) -> String {
@@ -113,43 +130,229 @@ fn exact(version: &str) -> bool {
         && pre.is_none_or(|pre| !pre.is_empty() && pre.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.'))
 }
 
-/// The script a checked page runs first: the theme on its root, and what
-/// goes wrong told to the page holding its frame, as the web UI's frame
-/// script does for a viewer.
-const CHECK_SCRIPT: &str = "(function(){var root=document.documentElement;var seen={},problems=[];\
+/// The viewer's theme, set on a frame's root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Theme {
+    Light,
+    Dark,
+}
+
+impl Theme {
+    pub fn parse(theme: &str) -> Option<Self> {
+        match theme {
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+}
+
+/// The first script's opening, before the theme and the parent's origin.
+pub const FIRST_SCRIPT_START: &str = "(function(){var root=document.documentElement;";
+
+/// The rest of the first script: every message it sends carries `boot`'s
+/// nonce, which a document the frame navigates to lacks, and it answers the
+/// holding page's `hello?` after each load with it (ADR 0072). It follows
+/// the theme the page holding the frame sends, and tells that page what text is selected, for a comment to
+/// quote, what went wrong, and when the page has settled (ADR 0071). It
+/// hands the page's Mermaid diagrams to the holding page, which draws them
+/// and sends back images, so no library loads and nothing in them runs
+/// (ADR 0073).
+pub const FIRST_SCRIPT_END: &str = "var nonce=typeof boot.nonce==='string'?boot.nonce:'';function post(m){m.nonce=nonce;parent.postMessage(m,to)}\
+addEventListener('message',function(e){var d=e.data;if(e.source!==parent||!d)return;if(d.silt==='hello?')post({silt:'hello'});\
+if(d.silt==='theme'&&(d.theme==='light'||d.theme==='dark'))root.setAttribute('data-theme',d.theme);\
+if(d.silt==='mermaid-drawn'&&typeof d.src==='string'&&d.src.indexOf('data:image/svg+xml')===0){\
+var at=document.querySelector('[data-silt-mermaid=\"'+(d.i|0)+'\"]');if(!at)return;var img=document.createElement('img');\
+img.src=d.src;img.alt=at.getAttribute('aria-label')||'Diagram';img.setAttribute('data-silt-mermaid',String(d.i|0));\
+img.setAttribute('aria-label',img.alt);img.style.maxWidth='100%';at.replaceWith(img)}});\
+document.addEventListener('mouseup',function(){var t=String(getSelection()||'').trim();post({silt:'selection',text:t.slice(0,500)})});\
+var seen={},problems=[];\
 function report(kind,text){text=String(text).slice(0,300);if(seen[kind+text]||problems.length>=20)return;seen[kind+text]=1;\
-problems.push({kind:kind,text:text});parent.postMessage({silt:'problems',problems:problems.slice()},'*')}\
+problems.push({kind:kind,text:text});post({silt:'problems',problems:problems.slice()})}\
 document.addEventListener('securitypolicyviolation',function(e){report('blocked',(e.blockedURI||'inline')+' ('+e.effectiveDirective+')')});\
 addEventListener('error',function(e){if(e.message)report('error',e.message+(e.lineno?' (line '+e.lineno+')':''))});\
 addEventListener('unhandledrejection',function(e){var r=e.reason;report('error','Unhandled rejection: '+(r&&r.message||r))});\
 addEventListener('load',function(){setTimeout(function(){var w=root.scrollWidth,v=root.clientWidth;\
-if(w>v+1)report('overflow','The page is '+w+'px wide in a '+v+'px frame');parent.postMessage({silt:'checked'},'*')},300)});})();";
+if(w>v+1)report('overflow','The page is '+w+'px wide in a '+v+'px frame');post({silt:'checked'})},300);\
+var pres=document.querySelectorAll('pre.mermaid'),list=[];for(var i=0;i<pres.length&&i<20;i++){var t=pres[i].textContent||'';\
+if(t.length>65536)continue;pres[i].setAttribute('data-silt-mermaid',String(i));list.push({i:i,text:t})}\
+if(list.length)post({silt:'mermaid',diagrams:list})});";
 
-/// An HTML version as a frame loads it to be checked: the policy, the
-/// theme, the check's script and the design system's CSS, then the page.
-pub fn checked_document(html: &str, style: Option<&str>, theme: &str) -> String {
+/// The bridge's frame side (ADR 0072): `silt.use`, `silt.hot`, and the
+/// viewer's own storage, inside the first script.
+pub const FIRST_SCRIPT_BRIDGE: &str = include_str!("bridge.js");
+
+/// What a page composed without the first script gets, as the offline copy
+/// is: a `silt` whose every capability is `null`, so a page written for
+/// Silt still opens anywhere.
+pub const OFFLINE_STUB: &str = "window.silt=Object.freeze({version:'1',use:function(){return Promise.resolve(null)},\
+hot:Object.freeze({data:null,snapshot:function(){},ready:function(start){start({})}})});";
+
+/// A read-only link's `silt`, after `docs` (ADR 0072).
+pub const FROZEN_DB: &str = include_str!("frozen.js");
+
+/// What a read-only link's frame gets in place of the first script: `db`
+/// reading `docs`, a JSON object of the documents its reader may read,
+/// frozen where the link is, and nothing else.
+pub fn frozen_script(docs: &str) -> String {
+    let docs = serde_json::from_str::<serde_json::Value>(docs)
+        .ok()
+        .filter(serde_json::Value::is_object)
+        .map_or_else(|| "{}".to_owned(), |_| script_safe(docs));
+    format!("(function(){{var docs={docs};{FROZEN_DB}}})();")
+}
+
+/// JSON safe inside a script element: no `<` at all, so neither `</script`
+/// nor `<!--` can end or re-escape it.
+fn script_safe(json: &str) -> String {
+    json.replace('<', "\\u003c").replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029")
+}
+
+/// The most the holding page hands a frame of a viewer's storage and kept
+/// state, as JSON.
+pub const BOOT_BYTES: usize = 2 << 20;
+
+/// Whether `origin` is a bare `http(s)://host[:port]`, safe to write into
+/// the first script as the target of its messages.
+pub fn is_origin(origin: &str) -> bool {
+    let rest = origin.strip_prefix("https://").or_else(|| origin.strip_prefix("http://"));
+    rest.is_some_and(|host| {
+        !host.is_empty()
+            && host.len() <= 255
+            && host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'[' | b']'))
+    })
+}
+
+/// The first script a frame runs: the theme on its root, messages to
+/// `parent`, the origin of the page holding it, or to any when unknown, and
+/// `boot`, a JSON object of what the holding page kept for this viewer.
+pub fn first_script(theme: Option<Theme>, parent: Option<&str>, boot: Option<&str>) -> String {
+    let theme = theme.map(|theme| format!("root.setAttribute('data-theme','{}');", theme.as_str())).unwrap_or_default();
+    let to = parent.filter(|origin| is_origin(origin)).unwrap_or("*");
+    let boot = boot_json(boot);
+    format!("{FIRST_SCRIPT_START}{theme}var to='{to}';var boot={boot};{FIRST_SCRIPT_END}{FIRST_SCRIPT_BRIDGE}}})();")
+}
+
+/// `boot` as a JSON object safe inside a script element, or `{}`. It's
+/// checked, then kept as written, so the web UI's composer writes the same.
+fn boot_json(boot: Option<&str>) -> String {
+    let object = boot
+        .filter(|text| text.len() <= BOOT_BYTES)
+        .filter(|text| serde_json::from_str::<serde_json::Value>(text).is_ok_and(|value| value.is_object()));
+    match object {
+        Some(text) => script_safe(text),
+        None => "{}".to_owned(),
+    }
+}
+
+/// What goes into a frame ahead of the page.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameParts<'a> {
+    /// The CSS the version's design system compiled to.
+    pub style: Option<&'a str>,
+    pub theme: Option<Theme>,
+    /// The first script; an offline copy has none.
+    pub probe: bool,
+    /// Silt's vendor route, an absolute URL ending in `/`, when libraries
+    /// and fonts load through it.
+    pub vendor: Option<&'a str>,
+    /// The origin of the page holding the frame.
+    pub parent: Option<&'a str>,
+    /// The policy as a `<meta>`; a page served with it as a header leaves
+    /// it out.
+    pub policy_meta: bool,
+    /// What the holding page kept for this viewer, as a JSON object: their
+    /// storage, and the state the last version left (ADR 0072).
+    pub boot: Option<&'a str>,
+    /// Without the first script: the documents a read-only link's `db`
+    /// reads, as a JSON object (ADR 0072).
+    pub frozen: Option<&'a str>,
+}
+
+impl Default for FrameParts<'_> {
+    fn default() -> Self {
+        Self { style: None, theme: None, probe: true, vendor: None, parent: None, policy_meta: true, boot: None, frozen: None }
+    }
+}
+
+/// A page's doctype, or the standard one when it has none, and the rest.
+pub fn split_doctype(html: &str) -> (&str, &str) {
     let trimmed = html.trim_start();
     let doctype_end = trimmed
         .get(..9)
         .filter(|start| start.eq_ignore_ascii_case("<!doctype"))
         .and_then(|_| trimmed.find('>'))
         .map(|end| end + 1);
-    let (doctype, rest) = match doctype_end {
+    match doctype_end {
         Some(end) => trimmed.split_at(end),
         None => ("<!doctype html>", trimmed),
+    }
+}
+
+/// An HTML version as its frame loads it, on every surface: its doctype,
+/// the policy, the first script and the design system's CSS ahead of
+/// anything of its own, so it renders as written.
+pub fn compose(html: &str, parts: &FrameParts<'_>) -> String {
+    let (html, style) = match parts.vendor {
+        Some(vendor) => (through_vendor(html, vendor), parts.style.map(|css| through_vendor(css, vendor))),
+        None => (html.to_owned(), parts.style.map(str::to_owned)),
     };
-    let theme = if theme == "dark" { "dark" } else { "light" };
+    let (doctype, rest) = split_doctype(&html);
+    let policy = if parts.policy_meta {
+        format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{}\">", policy(parts.vendor))
+    } else {
+        String::new()
+    };
+    let script = if parts.probe {
+        format!("<script>{}</script>", first_script(parts.theme, parts.parent, parts.boot))
+    } else if let Some(docs) = parts.frozen {
+        format!("<script>{}</script>", frozen_script(docs))
+    } else {
+        format!("<script>{OFFLINE_STUB}</script>")
+    };
+    // The CSS can't close its own element, whatever a peer put in it.
     let style =
         style.map(|css| format!("<style data-silt=\"design-system\">{}</style>", css.replace("</", "<\\/"))).unwrap_or_default();
-    format!(
-        "{doctype}<meta http-equiv=\"Content-Security-Policy\" content=\"{}\"><script>document.documentElement.setAttribute('data-theme','{theme}');{CHECK_SCRIPT}</script>{style}{rest}",
-        policy(None)
-    )
+    format!("{doctype}{policy}{script}{style}{rest}")
+}
+
+/// An HTML version as a frame loads it to be checked, in `theme`.
+pub fn checked_document(html: &str, style: Option<&str>, theme: Theme) -> String {
+    compose(html, &FrameParts { style, theme: Some(theme), ..FrameParts::default() })
+}
+
+#[cfg(test)]
+mod files_policy_tests {
+    #[test]
+    fn a_frame_with_files_reaches_its_own_address_and_nothing_else() {
+        let policy = super::policy_with_files(None, "http://127.0.0.1:9/f/k/");
+        assert!(policy.contains("connect-src http://127.0.0.1:9/f/k/"), "{policy}");
+        assert!(policy.contains("img-src data: blob: http://127.0.0.1:9/f/k/"), "{policy}");
+        assert!(policy.starts_with("default-src 'none';"));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_read_only_links_frame_reads_its_frozen_documents_and_nothing_else() {
+        let docs = r#"{"votes/a": {"pick": "</script><b>"}}"#;
+        let framed = compose("<p>x</p>", &FrameParts { probe: false, frozen: Some(docs), ..FrameParts::default() });
+        assert!(framed.contains("var docs={\"votes/a\": {\"pick\": \"\\u003c/script>\\u003cb>\"}}"), "{framed}");
+        assert_eq!(framed.matches("</script>").count(), 1, "the documents can't end the script: {framed}");
+        assert!(framed.contains("'not_granted'") && !framed.contains("silt:'call'"), "writes refused, nothing asked of a parent");
+        let bad = compose("<p>x</p>", &FrameParts { probe: false, frozen: Some("[1]"), ..FrameParts::default() });
+        assert!(bad.contains("var docs={};"), "{bad}");
+    }
 
     #[test]
     fn the_policy_names_the_cdns_or_only_the_vendor_route() {
@@ -191,10 +394,130 @@ mod tests {
 
     #[test]
     fn a_checked_page_gets_the_policy_theme_and_tokens_first() {
-        let page = checked_document("<!DOCTYPE html><p>hi</p>", Some(":root{--bg:#fff}</style>"), "dark");
+        let page = checked_document("<!DOCTYPE html><p>hi</p>", Some(":root{--bg:#fff}</style>"), Theme::Dark);
         assert!(page.starts_with("<!DOCTYPE html><meta http-equiv=\"Content-Security-Policy\""), "{page}");
         assert!(page.contains("setAttribute('data-theme','dark')") && page.contains("'securitypolicyviolation'"));
+        assert!(page.contains("var to='*';") && page.contains("silt:'checked'"));
         assert!(page.ends_with(":root{--bg:#fff}<\\/style></style><p>hi</p>"), "{page}");
+    }
+
+    #[test]
+    fn messages_go_only_to_a_plain_origin() {
+        assert!(first_script(None, Some("http://127.0.0.1:7777"), None).contains("var to='http://127.0.0.1:7777';"));
+        assert!(first_script(None, Some("https://silt.example"), None).contains("var to='https://silt.example';"));
+        for forged in ["https://a.example/'+alert(1)+'", "javascript:alert(1)", "https://", "https://a b", "file:///x"] {
+            assert!(first_script(None, Some(forged), None).contains("var to='*';"), "{forged}");
+        }
+    }
+
+    #[test]
+    fn a_page_without_a_doctype_gets_one_and_vendor_addresses_are_rewritten() {
+        let vendor = "http://127.0.0.1:7777/vendor/";
+        let page = compose(
+            "  <script src=\"https://unpkg.com/react@18.3.1/x.js\"></script>",
+            &FrameParts {
+                probe: false,
+                vendor: Some(vendor),
+                style: Some("@import url(https://fonts.googleapis.com/css2?family=Inter);"),
+                ..FrameParts::default()
+            },
+        );
+        assert!(page.starts_with("<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' http://127.0.0.1:7777/vendor/;"), "{page}");
+        assert!(
+            page.contains("url(http://127.0.0.1:7777/vendor/fonts.googleapis.com/css2")
+                && page.ends_with("vendor/unpkg.com/react@18.3.1/x.js\"></script>"),
+            "{page}"
+        );
+        let bare = compose("<p>x</p>", &FrameParts { probe: false, policy_meta: false, ..FrameParts::default() });
+        assert_eq!(
+            bare,
+            format!("<!doctype html><script>{OFFLINE_STUB}</script><p>x</p>"),
+            "a page without the first script gets the stub"
+        );
+    }
+
+    /// The web UI composes frames in TypeScript; this writes what it must
+    /// agree with, and the cases a vitest checks it against.
+    #[test]
+    fn frame_ts() {
+        let quoted = |text: &str| serde_json::to_string(text).expect("a string serializes");
+        let list =
+            |items: &[&str]| format!("[{}] as const", items.iter().map(|item| quoted(item)).collect::<Vec<_>>().join(", "));
+        let case = |html, style, theme, probe, vendor, parent, policy_meta| {
+            (html, FrameParts { style, theme, probe, vendor, parent, policy_meta, boot: None, frozen: None })
+        };
+        let cases = [
+            case("<!DOCTYPE html><html><body><p>hi</p></body></html>", None, None, true, None, None, true),
+            case(
+                "  <p>no doctype</p>",
+                Some(":root{--bg:#fff}</style>"),
+                Some(Theme::Dark),
+                true,
+                None,
+                Some("http://127.0.0.1:7777"),
+                true,
+            ),
+            case(
+                "<!doctype html><script src=\"https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js\"></script>",
+                Some("@import url(//fonts.googleapis.com/css2?family=Inter);"),
+                Some(Theme::Light),
+                true,
+                Some("http://127.0.0.1:7777/vendor/"),
+                Some("https://silt.example"),
+                true,
+            ),
+            case("<p>offline</p>", Some("a{}"), None, false, None, None, true),
+            case("<p>served with a header</p>", None, Some(Theme::Light), true, None, Some("https://a.example/'+x+'"), false),
+            case("<!DOCTYPE html  >\n<p>odd doctype</p>", None, None, true, None, None, true),
+        ];
+        let mut cases = cases.to_vec();
+        let boot = r#"{"storage":{"local":{"tab":"</script><b>"}},"hot":{"n":3}}"#;
+        cases.push(("<p>remembered</p>", FrameParts { boot: Some(boot), ..FrameParts::default() }));
+        cases.push(("<p>not an object</p>", FrameParts { boot: Some("[1,2]"), ..FrameParts::default() }));
+        let fixtures = cases
+            .iter()
+            .map(|(html, parts)| {
+                let out = compose(html, parts);
+                let option = |value: Option<&str>| value.map_or_else(|| "null".to_owned(), quoted);
+                format!(
+                    "  {{ html: {}, style: {}, theme: {}, probe: {}, vendor: {}, parent: {}, policyMeta: {}, boot: {}, out: {} }},",
+                    quoted(html),
+                    option(parts.style),
+                    option(parts.theme.map(Theme::as_str)),
+                    parts.probe,
+                    option(parts.vendor),
+                    option(parts.parent),
+                    parts.policy_meta,
+                    option(parts.boot),
+                    quoted(&out)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let generated = format!(
+            "// What an artifact's frame gets, written by `UPDATE_FRAME=1 cargo test -p silt-design frame_ts`\n// from crates/silt-design/src/frame.rs. Don't edit by hand.\n\n\
+export const SCRIPT_SOURCES = {}\nexport const STYLE_SOURCES = {}\nexport const FONT_SOURCES = {}\nexport const VENDOR_HOSTS = {}\n\n\
+export const FIRST_SCRIPT_START = {}\nexport const FIRST_SCRIPT_END = {}\nexport const FIRST_SCRIPT_BRIDGE = {}\nexport const OFFLINE_STUB = {}\n\n\
+/** Frames composed by `silt_design::frame::compose`, which the web UI's must match. */\n\
+export const FRAME_FIXTURES: {{ html: string; style: string | null; theme: 'light' | 'dark' | null; probe: boolean; vendor: string | null; parent: string | null; policyMeta: boolean; boot: string | null; out: string }}[] = [\n{fixtures}\n]\n",
+            list(&SCRIPT_SOURCES),
+            list(&STYLE_SOURCES),
+            list(&FONT_SOURCES),
+            list(&VENDOR_HOSTS),
+            quoted(FIRST_SCRIPT_START),
+            quoted(FIRST_SCRIPT_END),
+            quoted(FIRST_SCRIPT_BRIDGE),
+            quoted(OFFLINE_STUB),
+        );
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/frame.generated.ts");
+        if std::env::var_os("UPDATE_FRAME").is_some() {
+            std::fs::write(&path, &generated).expect("writes the frame's contract");
+        }
+        let written = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            written == generated,
+            "web/src/frame.generated.ts is out of date: run `UPDATE_FRAME=1 cargo test -p silt-design frame_ts`"
+        );
     }
 
     #[test]

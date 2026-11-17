@@ -20,6 +20,12 @@ use crate::{ApiError, Caller, Server, UserId, id_bytes, id_from};
 
 /// How long the browser waits for the daemon to answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
+/// How long a stop waits to reach the device answering the question.
+const STOP_WAIT: Duration = Duration::from_secs(10);
+/// How long a page's read of the thread's files waits on a device before the server reads them itself.
+const FILES_WAIT: Duration = Duration::from_secs(8);
+/// How long a page's question waits for an agent's answer (ADR 0072).
+const SAMPLE_WAIT: Duration = Duration::from_secs(120);
 /// How long a prompt left for an offline device waits for it.
 const QUEUED_WAIT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
@@ -43,6 +49,12 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/mrs/{id}", get(mr_details))
         .route("/app/api/mrs/{id}/seen", axum::routing::put(mr_seen))
         .route("/app/api/threads/{id}/files/at", get(file_at))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/sample", post(sample))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/sample/{ask}", get(sample_so_far))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/sample/{ask}/stop", post(sample_stop))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/sample/{ask}/tools/{call}", post(sample_tool_result))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/files", post(page_files))
+        .route("/app/api/threads/{id}/artifacts/{artifact}/mcp", post(page_mcp))
 }
 
 /// A file at a version for a permalink, from one of the person's devices,
@@ -59,6 +71,176 @@ async fn file_at(
     Ok(Json(ask_any_device(&server, browser, thread, command).await?))
 }
 
+#[derive(Deserialize)]
+struct SampleAsk {
+    /// The page's name for the question, under which what's said so far
+    /// is read while it streams.
+    #[serde(default)]
+    ask: Option<String>,
+    input: Value,
+    #[serde(default)]
+    images: Vec<silt_proto::artifact::SampleImage>,
+    #[serde(default)]
+    model: silt_proto::artifact::SampleModel,
+    #[serde(default)]
+    tools: Vec<silt_proto::artifact::SampleTool>,
+}
+
+/// A page's question, answered by the agent of one of the person's own
+/// online computers (ADR 0072), as the server runs no agent.
+async fn sample(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(asked): Json<SampleAsk>,
+) -> Result<Json<Value>, Refused> {
+    let thread = thread_for(&server, browser.user, &id).await?;
+    let latest = crate::browse::readable_artifact(&server, browser.user, &id, &artifact, None).await?;
+    if !latest.capabilities.as_ref().is_some_and(|declared| declared.contains_key("sample")) {
+        return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare sample")));
+    }
+    consented(&server, browser.user, &id, &artifact, "sample").await?;
+    let question = silt_proto::artifact::sample_question(&asked.input).map_err(|why| Refused(StatusCode::BAD_REQUEST, why))?;
+    silt_proto::artifact::sample_images(&asked.images).map_err(|why| Refused(StatusCode::BAD_REQUEST, why))?;
+    let declared = latest.capabilities.clone().unwrap_or_default();
+    if !asked.images.is_empty() && !silt_proto::artifact::sample_takes_images(&declared) {
+        return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare sample with images")));
+    }
+    asked.model.resolved().map_err(|why| Refused(StatusCode::BAD_REQUEST, why))?;
+    silt_proto::artifact::sample_tools(&asked.tools).map_err(|why| Refused(StatusCode::BAD_REQUEST, why))?;
+    if !asked.tools.is_empty() && asked.ask.is_none() {
+        return Err(Refused(StatusCode::BAD_REQUEST, "a question with tools has a name, for its calls to reach the page".into()));
+    }
+    if !server.shared.control.may_sample(browser.user) {
+        return Err(Refused(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!("rate limited: your pages ask at most {} questions a minute", crate::control::SAMPLES_PER_MINUTE),
+        ));
+    }
+    let command = RemoteCommand::Sample { question, images: asked.images, model: asked.model, tools: asked.tools };
+    let ask =
+        asked.ask.filter(|ask| (1..=64).contains(&ask.len()) && ask.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+    let watched = ask.clone().map(|ask| (browser.user, ask));
+    // Forgotten however this ends, a browser that went away included.
+    let _forget = ask.map(|ask| Forget { server: server.clone(), user: browser.user, ask });
+    let answered = ask_device_watched(&server, browser, thread, command, SAMPLE_WAIT, watched).await;
+    Ok(Json(answered?))
+}
+
+/// The page stopped asking its question named `ask`: the device answering
+/// it hears so and ends its agent's run. Nothing is waited for.
+async fn sample_stop(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, _, ask)): Path<(String, String, String)>,
+) -> Result<StatusCode, Refused> {
+    let thread = thread_for(&server, browser.user, &id).await?;
+    let Some((relay, device)) = server.shared.control.asked_on(browser.user, &ask) else { return Ok(StatusCode::NO_CONTENT) };
+    let command = RemoteCommand::StopSample { relay };
+    if let Err(needs) = browser.capabilities.allow(&command) {
+        return Err(Refused(StatusCode::FORBIDDEN, format!("this phone may not {needs}; change that on the Devices page")));
+    }
+    let stop =
+        Relay { device, thread, sender: browser.user, from: None, capabilities: browser.capabilities, command, ttl: STOP_WAIT };
+    control::relay(&server, stop).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// What the agent has said so far of a page's question named `ask`, while
+/// a device answers it.
+async fn sample_so_far(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((_, _, ask)): Path<(String, String, String)>,
+) -> Result<Json<Value>, Refused> {
+    let text = server.shared.control.said_so_far(browser.user, &ask).unwrap_or_default();
+    let calls = server.shared.control.calls_waiting(browser.user, &ask);
+    Ok(Json(serde_json::json!({ "text": text, "calls": calls })))
+}
+
+/// The page's answer to the agent's call of one of its tools, which the
+/// device answering the question waits for.
+async fn sample_tool_result(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((_, _, ask, call)): Path<(String, String, String, u32)>,
+    Json(result): Json<Value>,
+) -> Result<StatusCode, Refused> {
+    if server.shared.control.answer_call(browser.user, &ask, call, result) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(Refused(StatusCode::NOT_FOUND, "no such call is waiting".into()))
+    }
+}
+
+/// The thread's files for a page, read by one of the person's devices that
+/// holds the family (ADR 0078), or, when none answers, folded here from the
+/// family's deltas and its git mirror.
+async fn page_files(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(asked): Json<silt_proto::page::FilesRequest>,
+) -> Result<Json<Value>, Refused> {
+    let thread = thread_for(&server, browser.user, &id).await?;
+    let latest = crate::browse::readable_artifact(&server, browser.user, &id, &artifact, None).await?;
+    if !latest.capabilities.as_ref().is_some_and(|declared| declared.contains_key("files")) {
+        return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare files")));
+    }
+    consented(&server, browser.user, &id, &artifact, "files").await?;
+    let config = latest.capabilities.as_ref().and_then(|declared| declared.get("files")).cloned().unwrap_or_default();
+    // A device reads its own files at once, so one that's slow to answer has likely gone, and the server answers instead.
+    match ask_device_within(&server, browser, thread, RemoteCommand::PageFiles { artifact, asked: asked.clone() }, FILES_WAIT)
+        .await
+    {
+        Err(Refused(StatusCode::CONFLICT, _)) => {
+            Ok(Json(crate::browse::projected_files(&server, browser.user, &id, config, asked).await?))
+        }
+        answered => Ok(Json(answered?)),
+    }
+}
+
+/// A page's call of the person's page connectors, run by one of their own
+/// online computers, where the connectors are (ADR 0080).
+async fn page_mcp(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, artifact)): Path<(String, String)>,
+    Json(asked): Json<Value>,
+) -> Result<Json<Value>, Refused> {
+    let thread = thread_for(&server, browser.user, &id).await?;
+    let latest = crate::browse::readable_artifact(&server, browser.user, &id, &artifact, None).await?;
+    if !latest.capabilities.as_ref().is_some_and(|declared| declared.contains_key("mcp")) {
+        return Err(Refused(StatusCode::BAD_REQUEST, format!("artifact {artifact} doesn't declare mcp")));
+    }
+    consented(&server, browser.user, &id, &artifact, "mcp").await?;
+    Ok(Json(ask_device_within(&server, browser, thread, RemoteCommand::PageMcp { artifact, asked }, SAMPLE_WAIT).await?))
+}
+
+/// Forgets a named question when its request ends.
+struct Forget {
+    server: Server,
+    user: UserId,
+    ask: String,
+}
+
+impl Drop for Forget {
+    fn drop(&mut self) {
+        self.server.shared.control.forget_ask(self.user, &self.ask);
+    }
+}
+
+/// Refuses a page's call of `capability` unless the person allowed what the
+/// artifact's latest version declares of it. The page holding the frame
+/// asks them; this stands behind it (ADR 0072).
+async fn consented(server: &Server, user: UserId, id: &str, artifact: &str, capability: &str) -> Result<(), Refused> {
+    let grants = crate::browse::grants_held(server, user, id, artifact).await?;
+    if grants.get(capability).is_some_and(|state| state == "granted") {
+        return Ok(());
+    }
+    Err(Refused(StatusCode::FORBIDDEN, format!("not_granted: the person hasn't allowed this page {capability}")))
+}
+
 /// How long one device's view of a merge request stands in for asking
 /// again, as the hosted app fetches every few seconds.
 const MR_VIEW_FOR: Duration = Duration::from_secs(15);
@@ -66,6 +248,29 @@ const MR_VIEW_FOR: Duration = Duration::from_secs(15);
 /// Has one of the person's online devices answer `command`, trying each
 /// until one can: any that holds the family can.
 async fn ask_any_device(server: &Server, browser: Browser, thread: ThreadId, command: RemoteCommand) -> Result<Value, Refused> {
+    ask_device_within(server, browser, thread, command, ANSWER_WAIT).await
+}
+
+async fn ask_device_within(
+    server: &Server,
+    browser: Browser,
+    thread: ThreadId,
+    command: RemoteCommand,
+    wait: Duration,
+) -> Result<Value, Refused> {
+    ask_device_watched(server, browser, thread, command, wait, None).await
+}
+
+/// [`ask_device_within`], noting each command relayed as the one answering
+/// `watched`, a person's named question, so what's said so far can be read.
+async fn ask_device_watched(
+    server: &Server,
+    browser: Browser,
+    thread: ThreadId,
+    command: RemoteCommand,
+    wait: Duration,
+    watched: Option<(crate::UserId, String)>,
+) -> Result<Value, Refused> {
     if let Err(needs) = browser.capabilities.allow(&command) {
         return Err(Refused(StatusCode::FORBIDDEN, format!("this phone may not {needs}; change that on the Devices page")));
     }
@@ -81,10 +286,13 @@ async fn ask_any_device(server: &Server, browser: Browser, thread: ThreadId, com
             from: None,
             capabilities: browser.capabilities,
             command: command.clone(),
-            ttl: ANSWER_WAIT,
+            ttl: wait,
         };
         let id = control::relay(server, relay).await?;
-        match control::answer_of(server, id, ANSWER_WAIT).await? {
+        if let Some((user, ask)) = &watched {
+            server.shared.control.asked(*user, ask.clone(), id, device.id);
+        }
+        match control::answer_of(server, id, wait).await? {
             Some(answer) if answer.ok => return Ok(answer.data),
             Some(answer) => last = answer.message,
             None => last = format!("{} didn't answer", device.name),
@@ -93,13 +301,14 @@ async fn ask_any_device(server: &Server, browser: Browser, thread: ThreadId, com
     Err(Refused(StatusCode::CONFLICT, last))
 }
 
-/// Whose view of which merge request, with git's rewrites left out or not
-/// (ADR 0069).
+/// Whose view of which merge request, with git's rewrites and other
+/// agents' edits left out or not (ADR 0069, ADR 0089).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct MrView {
     user: crate::UserId,
     mr: String,
     hide_git: bool,
+    hide_others: bool,
 }
 
 /// A merge request as the server holds it, with its files and diff from
@@ -110,22 +319,21 @@ async fn mr_details(
     Path(id): Path<String>,
     Query(query): Query<silt_proto::view::GitQuery>,
 ) -> Result<Json<Value>, Refused> {
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let Json(own) = crate::browse::merge_request(State(server.clone()), Extension(browser), Path(id.clone())).await?;
     let mut details = serde_json::to_value(&own).map_err(crate::ServerError::from)?;
     if !browser.capabilities.review {
         return Ok(Json(details));
     }
     let (_, request, _) = crate::browse::seen_request(&server, browser.user, &id).await?;
-    let key = MrView { user: browser.user, mr: request.id.to_string(), hide_git };
+    let key = MrView { user: browser.user, mr: request.id.to_string(), hide_git, hide_others };
     let cached =
         server.shared.mr_views.lock().await.get(&key).filter(|(at, _)| at.elapsed() < MR_VIEW_FOR).map(|(_, view)| view.clone());
     let view = match cached {
         Some(view) => Some(view),
         None => {
-            let asked =
-                ask_any_device(&server, browser, request.target, RemoteCommand::MrShow { mr: request.id.to_string(), hide_git })
-                    .await;
+            let command = RemoteCommand::MrShow { mr: request.id.to_string(), hide_git, hide_others };
+            let asked = ask_any_device(&server, browser, request.target, command).await;
             let view = asked.ok();
             if let Some(view) = &view {
                 server.shared.mr_views.lock().await.insert(key, (std::time::Instant::now(), view.clone()));
@@ -158,8 +366,8 @@ async fn mr_seen(
     let command = RemoteCommand::MrSeen { mr: request.id.to_string(), path: body.path, seen: body.seen };
     let answer = ask_any_device(&server, browser, request.target, command).await?;
     let mut views = server.shared.mr_views.lock().await;
-    for hide_git in [false, true] {
-        views.remove(&MrView { user: browser.user, mr: request.id.to_string(), hide_git });
+    for (hide_git, hide_others) in [(false, false), (true, false), (false, true), (true, true)] {
+        views.remove(&MrView { user: browser.user, mr: request.id.to_string(), hide_git, hide_others });
     }
     drop(views);
     Ok(Json(answer))
@@ -192,7 +400,8 @@ pub(crate) struct Refused(StatusCode, String);
 
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({ "error": self.1 }))).into_response()
+        let refusal = silt_proto::refusal_of(&self.1).or((self.0 == StatusCode::FORBIDDEN).then_some("not_granted"));
+        (self.0, Json(json!({ "error": self.1, "refusal": refusal }))).into_response()
     }
 }
 

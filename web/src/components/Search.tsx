@@ -29,6 +29,8 @@ const ROLE: Record<string, string> = {
   tool_result: 'tool output',
   compaction: 'summary',
   comment: 'comment',
+  doc: 'doc',
+  sheet: 'sheet',
 }
 
 /** Hits by thread, in the order their best hit came. */
@@ -74,7 +76,15 @@ function ThreadHits({
       <ul className="flex flex-col">
         {shown.map((hit, index) => (
           <li key={index} className="grid grid-cols-[64px_84px_minmax(0,1fr)] items-baseline gap-3 border-b border-line-subtle px-3 py-2 text-sm last:border-b-0 max-md:grid-cols-[56px_minmax(0,1fr)]">
-            {hit.turn !== null ? (
+            {hit.artifact ? (
+              <Link
+                className="font-mono text-2xs text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center"
+                to="/t/$id/artifacts/$artifact"
+                params={{ id: thread, artifact: hit.artifact }}
+              >
+                open
+              </Link>
+            ) : hit.turn !== null ? (
               <Link
                 className="font-mono text-2xs text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center"
                 to="/t/$id"

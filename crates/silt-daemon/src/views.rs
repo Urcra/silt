@@ -2,13 +2,15 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use silt_agents::{Entry, Transcripts};
 use silt_crdt::{InodeId, InodeKind, VersionVector};
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, FileView, GitMade, GitOp, HistoryItem, HistorySource, Op, TurnMark};
+use silt_log::{
+    Author, BaseText, ConvOp, Delta, Family, FileView, GitOp, Hidden, Hide, HistoryItem, HistorySource, Op, TurnMark,
+};
 use silt_store::ThreadRecord;
 use silt_types::{DeltaId, FamilyId, Frontier, GitOid, ThreadId};
 use similar::TextDiff;
 
 use crate::core::{Core, CoreError, RepoBases, touched_inode};
-use silt_proto::view::{DiffStat, FileAt};
+use silt_proto::view::{DiffStat, FileAt, SharedEdits};
 
 use crate::homes::Home;
 
@@ -23,6 +25,7 @@ pub(crate) struct LoggedSummary {
     agent: Option<String>,
     messages: usize,
     edits: usize,
+    shared: bool,
     forked_from: Option<String>,
     lease: Option<silt_types::DeviceId>,
     last_ms: Option<i64>,
@@ -76,6 +79,7 @@ impl Core {
                     agent: logged.agent,
                     messages: logged.messages,
                     edits: logged.edits,
+                    shared: logged.shared,
                     location: location.into(),
                     forked_from: logged.forked_from,
                     owner: record.owner.clone(),
@@ -160,6 +164,7 @@ impl Core {
             }),
             messages,
             edits: deltas.iter().filter(|delta| matches!(delta.op, Op::Text { .. })).count(),
+            shared: deltas.iter().any(|delta| matches!(delta.author, Author::Others { .. })),
             forked_from: forked_from.map(|from| from.to_string()),
             lease: deltas.iter().rev().find_map(|delta| match delta.op {
                 Op::Lease { device, .. } => Some(device),
@@ -233,8 +238,12 @@ impl Core {
                             }
                             Entry::ToolResult { tool_use_id, text, .. } => {
                                 lines.push(ShowLine::Entry { kind: "tool_result".into(), text });
-                                if let Some(files) = edits.get(&Some(tool_use_id.clone())) {
-                                    lines.push(ShowLine::Edits { tool_use_id: Some(tool_use_id), files: files.clone() });
+                                if let Some(files) = edits.get(&(Some(tool_use_id.clone()), None)) {
+                                    lines.push(ShowLine::Edits {
+                                        tool_use_id: Some(tool_use_id),
+                                        files: files.clone(),
+                                        shared: None,
+                                    });
                                 }
                             }
                             Entry::Compaction { summary } => lines.push(ShowLine::Compaction { summary }),
@@ -250,8 +259,8 @@ impl Core {
                 _ => {}
             }
         }
-        if let Some(files) = edits.get(&None) {
-            lines.push(ShowLine::Edits { tool_use_id: None, files: files.clone() });
+        for ((_, shared), files) in edits.iter().filter(|((tool, _), _)| tool.is_none()) {
+            lines.push(ShowLine::Edits { tool_use_id: None, files: files.clone(), shared: shared.clone() });
         }
         lines
     }
@@ -262,9 +271,9 @@ impl Core {
         turns: TurnRange,
         base: Option<&str>,
         only: Only<'_>,
-        hide_git: bool,
+        hide: Hide,
     ) -> Result<String, CoreError> {
-        Ok(render_diff(&self.diff_changes(thread, turns, base, only, hide_git)?))
+        Ok(render_diff(&self.diff_changes(thread, turns, base, only, hide)?))
     }
 
     /// [`Self::diff`]'s files, each with its counts and how long its part of
@@ -274,9 +283,9 @@ impl Core {
         thread: ThreadId,
         turns: TurnRange,
         base: Option<&str>,
-        hide_git: bool,
+        hide: Hide,
     ) -> Result<Vec<DiffStat>, CoreError> {
-        Ok(self.diff_changes(thread, turns, base, Only::default(), hide_git)?.iter().map(diff_stat).collect())
+        Ok(self.diff_changes(thread, turns, base, Only::default(), hide)?.iter().map(diff_stat).collect())
     }
 
     /// The family a thread's diff reads, here.
@@ -289,22 +298,22 @@ impl Core {
         Ok((family_id, family))
     }
 
-    /// The files a diff of `thread` changes; with `hide_git`, without what
-    /// git itself rewrote (ADR 0069).
+    /// The files a diff of `thread` changes, without what `hide` leaves out:
+    /// what git itself rewrote (ADR 0069), other agents' edits (ADR 0089).
     pub(crate) fn diff_changes(
         &self,
         thread: ThreadId,
         turns: TurnRange,
         base: Option<&str>,
         only: Only<'_>,
-        hide_git: bool,
+        hide: Hide,
     ) -> Result<Vec<FileChange>, CoreError> {
         let (family_id, family) = self.diff_family(thread)?;
         Ok(match diff_range(family, thread, turns, base)? {
             DiffRange::Git { head, rev } => self.diff_against_git(family_id, &head, rev, only)?,
             DiffRange::Versions { from, to } => {
-                let git_made = hide_git.then(|| GitMade::of(family.log()));
-                self.changes_in(family_id, &from, &to, only, git_made.as_ref())
+                let hidden = Hidden::of(family.log(), hide);
+                self.changes_in(family_id, &from, &to, only, hidden.as_ref())
             }
         })
     }
@@ -405,36 +414,37 @@ impl Core {
         self.changes_in(family_id, before, after, Only::default(), None)
     }
 
-    /// [`Self::changes`] with the edits git made left out on both sides
-    /// (ADR 0069).
-    pub(crate) fn changes_without_git(
+    /// [`Self::changes`] with what `hide` names left out on both sides
+    /// (ADR 0069, ADR 0089).
+    pub(crate) fn changes_hiding(
         &self,
         family_id: FamilyId,
         before: &VersionVector,
         after: &VersionVector,
+        hide: Hide,
     ) -> Vec<FileChange> {
-        let git_made = self.families().get(&family_id).map(|family| GitMade::of(family.log()));
-        self.changes_in(family_id, before, after, Only::default(), git_made.as_ref())
+        let hidden = self.families().get(&family_id).and_then(|family| Hidden::of(family.log(), hide));
+        self.changes_in(family_id, before, after, Only::default(), hidden.as_ref())
     }
 
     /// [`Self::changes`], in path order, only those `only` names, without
-    /// the edits in `git_made`.
+    /// the edits in `hidden`.
     fn changes_in(
         &self,
         family_id: FamilyId,
         before: &VersionVector,
         after: &VersionVector,
         only: Only<'_>,
-        git_made: Option<&GitMade>,
+        hidden: Option<&Hidden>,
     ) -> Vec<FileChange> {
         let Some(family) = self.families().get(&family_id) else {
             return Vec::new();
         };
         let repo = self.family_repo(family_id).ok();
         let mut bases = repo.as_ref().map(RepoBases);
-        let git_made = git_made.filter(|made| !made.is_empty());
-        let seen = |vv: &VersionVector, id: DeltaId| vv.contains(id) && !git_made.is_some_and(|made| made.contains(id));
-        let file_at = |inode: InodeId, vv: &VersionVector| match git_made {
+        let hidden = hidden.filter(|hidden| !hidden.is_empty());
+        let seen = |vv: &VersionVector, id: DeltaId| vv.contains(id) && !hidden.is_some_and(|hidden| hidden.contains(id));
+        let file_at = |inode: InodeId, vv: &VersionVector| match hidden {
             Some(_) => family.file_where(inode, |id| seen(vv, id)),
             None => family.file_at(inode, vv),
         };
@@ -526,6 +536,7 @@ impl Core {
                         time_ms: Some(hit.time_ms),
                         turn: None,
                         before_compaction: false,
+                        artifact: hit.artifact,
                     }));
                 }
                 Err(error) if !filters.is_empty() => {
@@ -613,9 +624,55 @@ impl Core {
                 repo: None,
                 turn: None,
                 before_compaction: false,
+                artifact: None,
             })
-            .collect();
-        Ok((hits, deltas))
+            .collect::<Vec<_>>();
+        // A doc's or a sheet's hit comes first: it's the text as it stands.
+        let edited = self.edited_hits(query, limit, &keep);
+        let deltas = std::iter::repeat_n(None, edited.len()).chain(deltas).collect();
+        Ok((edited.into_iter().chain(hits).collect(), deltas))
+    }
+
+    /// Hits in the current text of the docs and sheets of the threads
+    /// `keep` keeps, newest first; their text isn't in the index, as it's
+    /// the sum of every edit rather than any one delta.
+    fn edited_hits(&self, query: &str, limit: u32, keep: impl Fn(ThreadId) -> bool) -> Vec<SearchResult> {
+        let mut found = Vec::new();
+        for summary in self.thread_summaries() {
+            let Ok(thread) = self.find_thread(&summary.id) else { continue };
+            if !keep(thread) {
+                continue;
+            }
+            let entries = self.history_entries(thread);
+            for (artifact, time_ms) in silt_proto::view::latest_artifacts(entries.iter().map(|(_, entry)| entry)) {
+                let Ok(id) = artifact.id.parse::<silt_types::ArtifactId>() else { continue };
+                let text = match artifact.kind.as_str() {
+                    "doc" => self.doc_text(thread, id),
+                    "sheet" => (0..self.sheet_count(thread, id))
+                        .map(|sheet| silt_proto::edited::sheet_text(&self.sheet_cells(thread, id, sheet)))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    _ => continue,
+                };
+                if let Some(snippet) = silt_proto::edited::text_hit(&text, query) {
+                    found.push(SearchResult {
+                        thread: summary.id.clone(),
+                        kind: artifact.kind.clone(),
+                        snippet,
+                        owner: None,
+                        status: None,
+                        repo: None,
+                        time_ms: Some(time_ms),
+                        turn: None,
+                        before_compaction: false,
+                        artifact: Some(artifact.id.clone()),
+                    });
+                }
+            }
+        }
+        found.sort_by_key(|hit| std::cmp::Reverse(hit.time_ms));
+        found.truncate(limit as usize);
+        found
     }
 
     /// When each of these deltas was made, from the families here.
@@ -712,14 +769,24 @@ fn clip_title(text: &str) -> String {
     if text.chars().count() <= TITLE_CHARS { text.to_owned() } else { text.chars().take(TITLE_CHARS).collect::<String>() + "…" }
 }
 
-/// Files each tool call changed (`None`: changes made outside tool calls).
-fn edits_by_tool(family: &Family, thread: ThreadId) -> BTreeMap<Option<String>, Vec<FileEdit>> {
-    let mut counts: BTreeMap<Option<String>, BTreeMap<InodeId, (usize, usize)>> = BTreeMap::new();
+/// Who made a group of edits in [`edits_by_tool`].
+type EditsBy = (Option<String>, Option<SharedEdits>);
+
+/// Files each tool call changed (`None`: changes made outside tool calls),
+/// and apart from them those not this thread's agent's alone (ADR 0089).
+fn edits_by_tool(family: &Family, thread: ThreadId) -> BTreeMap<EditsBy, Vec<FileEdit>> {
+    let shared = |others, sessions: &[silt_log::SessionRef]| {
+        let agents = sessions.iter().map(|session| format!("{} {:.8}", session.agent, session.id)).collect();
+        Some(SharedEdits { others, agents })
+    };
+    let mut counts: BTreeMap<EditsBy, BTreeMap<InodeId, (usize, usize)>> = BTreeMap::new();
     for delta in family.log().iter().filter(|delta| delta.thread == thread) {
         let tool = match &delta.author {
-            Author::Agent { tool_use_id, .. } => tool_use_id.clone(),
-            Author::User => None,
+            Author::Agent { tool_use_id, .. } => (tool_use_id.clone(), None),
+            Author::User => (None, None),
             Author::Import => continue,
+            Author::Others { sessions } => (None, shared(true, sessions)),
+            Author::Agents { sessions } => (None, shared(false, sessions)),
         };
         let Some(inode) = touched_inode(delta) else {
             continue;
@@ -998,7 +1065,8 @@ fn turn_end(family: &Family, thread: ThreadId, start: &Frontier, next: &Frontier
     let within = |delta: &&Delta| delta.thread == thread && !from.contains(delta.span.first()) && to.contains(delta.span.first());
     let in_turn: Vec<&Delta> = family.log().iter().filter(within).collect();
     let stop = in_turn.iter().position(|delta| matches!(&delta.op, Op::Conv(ConvOp::Turn { mark: TurnMark::Stopped, .. })))?;
-    let late = in_turn[stop + 1..].iter().copied().filter(|delta| matches!(delta.author, Author::Agent { .. }));
+    let late =
+        in_turn[stop + 1..].iter().copied().filter(|delta| matches!(delta.author, Author::Agent { .. } | Author::Agents { .. }));
     Some(graph.minimize(std::iter::once(in_turn[stop]).chain(late).map(|delta| delta.span.last())))
 }
 

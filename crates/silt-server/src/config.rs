@@ -34,6 +34,10 @@ pub struct Config {
     /// viewer never contacts one (ADR 0071).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub artifact_proxy: bool,
+    /// The most the files people add to one artifact's page may take, in
+    /// MiB (ADR 0074).
+    #[serde(default = "default_artifact_assets_mib")]
+    pub artifact_assets_mib: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,8 +65,13 @@ impl Default for Config {
             trash_days: default_trash_days(),
             forges: Vec::new(),
             artifact_proxy: false,
+            artifact_assets_mib: default_artifact_assets_mib(),
         }
     }
+}
+
+fn default_artifact_assets_mib() -> u64 {
+    silt_proto::artifact::PAGE_ASSETS_BYTES >> 20
 }
 
 fn default_listen() -> String {

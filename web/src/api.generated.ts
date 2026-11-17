@@ -9,7 +9,15 @@ streaming: string, };
 
 export type AgentState = "starting" | "idle" | "working" | "awaiting_permission" | "awaiting_input" | "error" | "stopped";
 
-export type Capabilities = { answer_permissions: boolean, send_prompts: boolean, run_agents: boolean, review: boolean, };
+export type Capabilities = { answer_permissions: boolean, send_prompts: boolean, run_agents: boolean, review: boolean, 
+/**
+ * Ask one of the person's computers' agents a page's question (ADR 0072).
+ */
+sample: boolean, 
+/**
+ * Call the person's page connectors on one of their computers (ADR 0080).
+ */
+page_tools: boolean, };
 
 export type InboxAction = { "do": "permission", id: number, title: string, options: Array<[string, string]>, } | { "do": "plan" };
 
@@ -226,7 +234,7 @@ export type ChoiceAsked = {
  */
 value: string, label: string, description: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "lagged" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "lagged" };
 
 export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<string>, };
 
@@ -251,7 +259,7 @@ export type CommentLocation = { "at": "entry", index: number, excerpt: string, }
  * Where they are in the base the comments were asked against, when
  * they're there: a diff shows a comment on deleted lines beside them.
  */
-before: LineSpan | null, } | { "at": "unknown" };
+before: LineSpan | null, } | { "at": "doc", artifact: string, start: number, end: number, excerpt: string, outdated: boolean, } | { "at": "cell", artifact: string, sheet: number, address: string, excerpt: string, outdated: boolean, } | { "at": "element", artifact: string, anchor: string, } | { "at": "unknown" };
 
 export type LineSpan = { start: number, end: number, };
 
@@ -260,11 +268,15 @@ export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", pat
  * The lines are numbered as a diff with git's rewrites left out
  * shows them (ADR 0069).
  */
-hide_git?: boolean, } | { "on": "anchored", anchor: string, };
+hide_git?: boolean, 
+/**
+ * And with other agents' edits left out (ADR 0089).
+ */
+hide_others?: boolean, } | { "on": "anchored", anchor: string, } | { "on": "doc", artifact: string, start: number, end: number, } | { "on": "cell", artifact: string, sheet: number, address: string, } | { "on": "element", artifact: string, anchor: string, };
 
 export type PendingAnchor = { anchor: string, };
 
-export type PlaceAnchors = { base: string | null, anchors: Array<string>, hide_git?: boolean, };
+export type PlaceAnchors = { base: string | null, anchors: Array<string>, hide_git?: boolean, hide_others?: boolean, };
 
 export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, 
 /**
@@ -478,6 +490,17 @@ artifact: LinkedArtifact | null, };
 
 export type FileEdit = { path: string, inserted: number, deleted: number, };
 
+export type SharedEdits = { 
+/**
+ * Made by another thread's agent; else by one of `agents`, this
+ * thread's own among them.
+ */
+others: boolean, 
+/**
+ * Each agent with its session's first 8 characters, as `claude 1a2b3c4d`.
+ */
+agents: Array<string>, };
+
 export type FileTouch = { thread: string, 
 /**
  * The prompt of the turn the edits were made in.
@@ -608,9 +631,90 @@ design_system?: string | null,
  * The blob holding the CSS that system's tokens compiled to, which the
  * version's frame is given; read with the same route as the content.
  */
-style?: string | null, };
+style?: string | null, 
+/**
+ * What this version changed (ADR 0073).
+ */
+note?: string | null, 
+/**
+ * What the artifact is, as its card says.
+ */
+description?: string | null, 
+/**
+ * The capabilities the version's page may use, each with its config
+ * (ADR 0072).
+ */
+capabilities?: Record<string, Record<string, unknown>> | null, 
+/**
+ * The person this version was saved for, when the page saved itself
+ * rather than an agent making it (ADR 0072).
+ */
+by?: string | null, 
+/**
+ * An HTML version's runtime contract, which its page's `silt` is
+ * (ADR 0072).
+ */
+contract?: string | null, 
+/**
+ * The files beside an HTML version's page, by path, which its frame
+ * fetches relative to itself (ADR 0074).
+ */
+files?: { [key in string]: ArtifactFile } | null, };
 
-export type DesignSource = "project" | "personal" | "builtin";
+export type ArtifactFile = { blob: string, size: number, media_type: string, };
+
+export type ArtifactListed = { thread: string, thread_title: string | null, repo: string, owner: string, 
+/**
+ * Whether the thread is the person's own.
+ */
+mine: boolean, artifact: ArtifactView, 
+/**
+ * When its latest version was made.
+ */
+time_ms: number, pinned: boolean, 
+/**
+ * Hidden by the thread's owner; shown only when asked for.
+ */
+archived: boolean, };
+
+export type PageConnector = { name: string, 
+/**
+ * A stdio server's program, with `args`.
+ */
+command: string | null, args: Array<string>, 
+/**
+ * A Streamable HTTP server's address.
+ */
+url: string | null, 
+/**
+ * Headers sent to an HTTP server, each from the environment variable
+ * it names, so no secret is kept in the file.
+ */
+header_env: { [key in string]: string }, 
+/**
+ * Headers sent to an HTTP server whose values this machine's keyring
+ * keeps, set in Settings; the file names them only.
+ */
+header_secret: Array<string>, 
+/**
+ * The environment variables a stdio server gets beyond the few every
+ * program needs ([`BASE_ENV`]), by name; nothing else of the daemon's
+ * environment reaches it.
+ */
+pass_env: Array<string>, 
+/**
+ * The tools pages may call, by name; every one is off until ticked.
+ */
+tools: { [key in string]: boolean }, };
+
+export type ConnectorTool = { name: string, description: string | null, 
+/**
+ * The server marks it as only reading; anything else is an action the
+ * viewer confirms each time.
+ */
+read_only: boolean, input_schema: unknown, };
+
+export type DesignSource = "project" | "personal";
 
 export type ArtifactSettings = { 
 /**
@@ -631,7 +735,139 @@ title: string, source: DesignSource, readme?: string | null,
 /**
  * Its custom properties and type classes, by family.
  */
-tokens?: { [key in string]: Array<string> }, };
+tokens?: { [key in string]: Array<string> }, 
+/**
+ * Its components, given with its README (ADR 0086).
+ */
+components?: Array<DesignComponentView>, 
+/**
+ * Its folder and its assets' paths under `assets/`, given with its
+ * README (ADR 0088).
+ */
+dir?: string | null, assets?: Array<string>, };
+
+export type DesignComponentView = { name: string, about: string, html: string, 
+/**
+ * Its guidelines, `components/<name>.md` (ADR 0088).
+ */
+guide?: string | null, };
+
+export type DesignCatalog = { 
+/**
+ * Each project's own, then the person's.
+ */
+groups: Array<DesignGroup>, };
+
+export type DesignGroup = { 
+/**
+ * The project whose repository keeps them; none for the person's own.
+ */
+project: DesignProject | null, systems: Array<DesignSummary>, };
+
+export type DesignProject = { repo: string, name: string, clone: string, };
+
+export type DesignSummary = { name: string, title: string, source: DesignSource, 
+/**
+ * Its folder.
+ */
+dir: string, 
+/**
+ * A few of its colours, in its first theme.
+ */
+swatches: Array<string>, colors: number, type_styles: number, components: number, 
+/**
+ * What picks it as a default: "repo's default", "picked for web on
+ * this machine", "default for Work".
+ */
+uses: Array<string>, 
+/**
+ * The thread still making or changing it, when one is.
+ */
+thread?: string | null, 
+/**
+ * It's only in that thread's folder so far.
+ */
+unmerged: boolean, };
+
+export type DesignDetail = { summary: DesignSummary, readme: string, 
+/**
+ * Where it was made from, as its tokens' `meta.source` says.
+ */
+made_from?: string | null, themes: Array<DesignTheme>, 
+/**
+ * Its tokens with their values per theme, colours first.
+ */
+tokens: Array<DesignToken>, type_styles: Array<DesignTypeStyle>, 
+/**
+ * The CSS its tokens and components compile to, as a frame gets it.
+ */
+css: string, components: Array<DesignComponentView>, cover?: string | null, assets: Array<DesignAssetView>, 
+/**
+ * Every file in its folder, by path.
+ */
+files: Array<string>, 
+/**
+ * What its files hold that Silt left out, and why.
+ */
+dropped: Array<string>, };
+
+export type DesignTheme = { id: string, name: string, };
+
+export type DesignToken = { family: string, name: string, 
+/**
+ * Its value by theme id; one value holds in every theme under `*`.
+ */
+values: { [key in string]: string }, usage: string, };
+
+export type DesignTypeStyle = { name: string, group: string, 
+/**
+ * Its font stack, from its family.
+ */
+family: string, font_size: string, line_height: string | null, font_weight: string | null, letter_spacing: string | null, usage: string, };
+
+export type DesignAssetView = { path: string, media_type: string, size: number, };
+
+export type DesignAssetData = { media_type: string, data: string, };
+
+export type DesignFrom = "code" | "website" | "description";
+
+export type DesignKeep = "repo" | "personal";
+
+export type DesignStart = { 
+/**
+ * The system's name as people read it, such as "Harbor"; its folder's
+ * name comes from it.
+ */
+title: string, agent: string, keep: DesignKeep, 
+/**
+ * The project: the one built from, the one whose repository keeps it,
+ * or both.
+ */
+clone: string | null, from: DesignFrom | null, 
+/**
+ * The website's address, for one made from a website.
+ */
+link: string | null, 
+/**
+ * What to make it from, for one made from a description, or anything
+ * else the person adds.
+ */
+notes: string | null, 
+/**
+ * A brand guide, screenshots or anything else sent with the prompt.
+ */
+attachments: Array<PromptAttachment>, 
+/**
+ * What to change in the system `name`, which exists; a new one when
+ * unset.
+ */
+change: string | null, name: string | null, };
+
+export type ThreadDesign = { name: string, title: string, keep: DesignKeep, changing: boolean, 
+/**
+ * What's written so far; none until the folder has its tokens.
+ */
+detail: DesignDetail | null, };
 
 export type ArtifactContent = { media_type: string, 
 /**
@@ -898,9 +1134,17 @@ turn: number | null,
 /**
  * The agent compacted its context after it.
  */
-before_compaction: boolean, };
+before_compaction: boolean, 
+/**
+ * The doc or sheet whose text it's in.
+ */
+artifact: string | null, };
 
-export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
+export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, 
+/**
+ * Set for edits that weren't this thread's agent's alone (ADR 0089).
+ */
+shared?: SharedEdits, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
 
 export type Snooze = { 
 /**
@@ -1048,8 +1292,9 @@ max_preset?: Preset | null,
  */
 sandbox?: boolean, 
 /**
- * The sandbox also hides Silt's data and other workspaces; implies
- * `sandbox`.
+ * "Hide other workspaces' files": the sandbox also keeps the agent out
+ * of Silt's data and other workspaces' folders; implies `sandbox`.
+ * History tools are scoped to their workspace without it.
  */
 isolated?: boolean, 
 /**
@@ -1067,7 +1312,12 @@ local_only?: boolean,
  * In a Local only workspace, agents' history tools read the whole
  * workspace rather than their own project.
  */
-wide_history?: boolean, };
+wide_history?: boolean, 
+/**
+ * The page connectors its artifacts' pages may call, by name; any
+ * when unset (ADR 0080).
+ */
+connectors?: Array<string> | null, };
 
 export type OrgPolicy = { org: string, server: string, policy: Policy, };
 
@@ -1090,6 +1340,11 @@ export type ThreadSummary = { id: string, repo: string, title: string | null,
  * The command of the agent that recorded its latest session.
  */
 agent: string | null, created_ms: number, messages: number, edits: number, 
+/**
+ * Whether it records edits by other agents that worked in the same
+ * clone, which a diff can leave out (ADR 0089).
+ */
+shared: boolean, 
 /**
  * `here` when checked out on this machine, `remote` when only known
  * from the server, `moved` when another device took it over.

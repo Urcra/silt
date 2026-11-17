@@ -26,6 +26,7 @@ silt-acp = { path = "../silt-acp" }
 silt-agents = { path = "../silt-agents" }
 silt-checkout = { path = "../silt-checkout" }
 silt-crdt = { path = "../silt-crdt" }
+silt-sheet = { path = "../silt-sheet" }
 silt-design = { path = "../silt-design" }
 silt-vendor = { path = "../silt-vendor" }
 silt-git = { path = "../silt-git" }
@@ -34,7 +35,7 @@ silt-local = { path = "../silt-local" }
 silt-log = { path = "../silt-log" }
 silt-mcp = { path = "../silt-mcp" }
 silt-os = { path = "../silt-os" }
-silt-proto = { path = "../silt-proto" }
+silt-proto = { path = "../silt-proto", features = ["xlsx"] }
 silt-redact = { path = "../silt-redact" }
 silt-store = { path = "../silt-store" }
 silt-sync = { path = "../silt-sync" }
@@ -45,9 +46,11 @@ thiserror = "2.0.21"
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "net", "sync", "time", "macros", "fs", "io-util", "process"] }
 tracing = "0.1.44"
 uuid = { version = "1.28.0", features = ["v4", "v7"] }
+rmcp = { version = "3.10.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 
 [dev-dependencies]
 silt-proto = { path = "../silt-proto", features = ["ts"] }
 silt-workspace = { path = "../silt-workspace", features = ["ts"] }
 tempfile = "3.27.0"
-ts-rs = "12.0.1"
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }

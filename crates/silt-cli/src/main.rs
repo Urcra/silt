@@ -1,6 +1,7 @@
 mod admin;
 mod artifact_check;
 mod commands;
+mod design;
 mod desktop;
 mod mcp;
 mod model;
@@ -14,6 +15,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use exn::Exn;
 use silt_daemon::protocol::{Request, SearchFilters};
+use silt_log::Hide;
 use silt_proto::OrgChange;
 
 #[derive(Debug, Parser)]
@@ -186,6 +188,11 @@ enum Command {
         #[command(subcommand)]
         command: workspace::WorkspaceCommand,
     },
+    /// Check chart palettes and text contrast, as artifacts' design guidance asks
+    Design {
+        #[command(subcommand)]
+        command: design::DesignCommand,
+    },
     /// List recorded threads, or with --commit the threads and turns that
     /// made a commit
     Log {
@@ -212,6 +219,9 @@ enum Command {
         /// pull, merge, rebase, reset or stash does; not against a branch
         #[arg(long)]
         hide_git: bool,
+        /// Leave out the edits of other agents working in the same clone
+        #[arg(long)]
+        hide_others: bool,
     },
     /// Search conversations: your team's through the server when connected
     Search {
@@ -272,6 +282,9 @@ enum Command {
         /// Number --lines as `silt diff --hide-git` shows them
         #[arg(long, requires = "lines")]
         hide_git: bool,
+        /// Number --lines as `silt diff --hide-others` shows them
+        #[arg(long, requires = "lines")]
+        hide_others: bool,
         /// Answer this comment, by its id as `silt comments` shows it
         #[arg(long, conflicts_with_all = ["file", "entry"])]
         reply: Option<String>,
@@ -289,6 +302,9 @@ enum Command {
         /// Number lines as `silt diff --hide-git` shows them
         #[arg(long, conflicts_with = "resolve")]
         hide_git: bool,
+        /// Number lines as `silt diff --hide-others` shows them
+        #[arg(long, conflicts_with = "resolve")]
+        hide_others: bool,
     },
     /// Other threads changing a file or directory of this repository
     InFlight {
@@ -355,6 +371,9 @@ enum Command {
         #[arg(long)]
         ui: bool,
     },
+    /// Serve the tools a page gave its question to the agent answering it
+    #[command(hide = true)]
+    SampleTools { file: PathBuf },
 }
 
 #[derive(Debug, Subcommand)]
@@ -393,6 +412,9 @@ enum MrCommand {
         /// Leave out what git itself rewrote in the fork's tool calls
         #[arg(long)]
         hide_git: bool,
+        /// Leave out the edits of other agents working in the fork's clone
+        #[arg(long)]
+        hide_others: bool,
     },
     /// Merge it into its target (on the device working on the target)
     Approve { mr: String },
@@ -551,12 +573,15 @@ enum OrgCommand {
         /// Agents run only with their own sandbox on
         #[arg(long)]
         sandbox: bool,
-        /// The sandbox also hides Silt's data and other workspaces
-        #[arg(long)]
+        /// The sandbox also keeps agents out of Silt's data and other workspaces' folders
+        #[arg(long = "hide-other-workspaces", alias = "isolated")]
         isolated: bool,
         /// Projects keep this server: no other, and not one machine only
         #[arg(long)]
         home_locked: bool,
+        /// The page connectors its projects' pages may call, comma-separated
+        #[arg(long)]
+        connectors: Option<String>,
     },
 }
 
@@ -782,6 +807,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Run { agent, run } => commands::run_agent(&agent, run.isolated, &run.args),
         Command::Chat { agent, about, workspace, args } => commands::chat(&agent, about.as_deref(), workspace.as_deref(), &args),
         Command::Workspace { command } => workspace::run(command),
+        Command::Design { command } => design::run(command),
         Command::Model { command } => model::run(command),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
         Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),
@@ -813,7 +839,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Mr { command } => match command {
             MrCommand::Create { thread, title, summary } => commands::mr_create(thread, title, summary),
             MrCommand::List { thread } => commands::mr_list(thread),
-            MrCommand::Show { mr, hide_git } => commands::mr_show(&mr, hide_git),
+            MrCommand::Show { mr, hide_git, hide_others } => commands::mr_show(&mr, Hide { git: hide_git, others: hide_others }),
             MrCommand::Approve { mr } => commands::mr_approve(&mr),
             MrCommand::Decline { mr, reason } => commands::mr_decline(&mr, reason),
             MrCommand::RequestChanges { mr, reason } => commands::mr_request_changes(&mr, &reason.join(" ")),
@@ -848,7 +874,7 @@ fn run() -> Result<(), Exn<CliError>> {
             OrgCommand::Add { org, user, owner } => admin::org_change(OrgChange::AddMember { org, user, owner }),
             OrgCommand::Remove { org, user } => admin::org_change(OrgChange::RemoveMember { org, user }),
             OrgCommand::Default { org, visibility } => admin::org_change(OrgChange::DefaultVisibility { org, visibility }),
-            OrgCommand::Policy { org, agents, no_custom_agents, max_preset, sandbox, isolated, home_locked } => {
+            OrgCommand::Policy { org, agents, no_custom_agents, max_preset, sandbox, isolated, home_locked, connectors } => {
                 let max_preset = match max_preset.as_deref().map(|name| silt_workspace::Preset::parse(name).ok_or(name)) {
                     Some(Err(name)) => return Err(commands::fail(format!("no preset {name}"))),
                     Some(Ok(preset)) => Some(preset),
@@ -863,6 +889,8 @@ fn run() -> Result<(), Exn<CliError>> {
                     sandbox,
                     isolated,
                     home_locked,
+                    connectors: connectors
+                        .map(|list| list.split(',').map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned).collect()),
                     // A Local only workspace has no server, so no org's policy reaches it.
                     local_only: false,
                     wide_history: false,
@@ -897,7 +925,9 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Log { commit: None } => commands::log(),
         Command::Log { commit: Some(commit) } => commands::find_commit(&commit),
         Command::Show { thread } => commands::show(&thread),
-        Command::Diff { thread, turn, to_turn, base, hide_git } => commands::diff(&thread, turn, to_turn, base, hide_git),
+        Command::Diff { thread, turn, to_turn, base, hide_git, hide_others } => {
+            commands::diff(&thread, turn, to_turn, base, Hide { git: hide_git, others: hide_others })
+        }
         Command::Search { query, repo, author, status, branch, file, since, until } => {
             commands::search(&query.join(" "), SearchFilters { repo, author, status, branch, file, since, until })
         }
@@ -905,15 +935,18 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Blame { file, notes } => commands::blame(&file, notes),
         Command::History { thread, offset, limit } => commands::history(&thread, offset, limit),
         Command::Open { no_browser } => commands::open(no_browser),
-        Command::Comment { thread, file, lines, entry, base: _, hide_git: _, reply: Some(comment), text }
+        Command::Comment { thread, file, lines, entry, base: _, hide_git: _, hide_others: _, reply: Some(comment), text }
             if file.is_none() && lines.is_none() && entry.is_none() =>
         {
             commands::reply(&thread, &comment, &text.join(" "))
         }
-        Command::Comment { thread, file, lines, entry, base, hide_git, reply: _, text } => {
-            commands::comment(&thread, file, lines, entry, (base, hide_git), &text.join(" "))
+        Command::Comment { thread, file, lines, entry, base, hide_git, hide_others, reply: _, text } => {
+            let hide = Hide { git: hide_git, others: hide_others };
+            commands::comment(&thread, file, lines, entry, (base, hide), &text.join(" "))
         }
-        Command::Comments { thread, resolve, base, hide_git } => commands::comments(&thread, resolve.as_deref(), base, hide_git),
+        Command::Comments { thread, resolve, base, hide_git, hide_others } => {
+            commands::comments(&thread, resolve.as_deref(), base, Hide { git: hide_git, others: hide_others })
+        }
         Command::Server { command } => match command {
             ServerCommand::Init { data, listen, public_url, admin, password_stdin, systemd, service_user, force } => {
                 admin::server_init(admin::InitOptions {
@@ -952,6 +985,7 @@ fn run() -> Result<(), Exn<CliError>> {
             DaemonCommand::Compact => commands::daemon_compact(),
         },
         Command::Mcp { thread, checkout, token, ui } => mcp::serve(&thread, checkout, token, ui),
+        Command::SampleTools { file } => mcp::serve_page_tools(&file),
         Command::Reference => {
             print!("{}", reference::markdown(&<Cli as clap::CommandFactory>::command()));
             Ok(())

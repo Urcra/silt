@@ -53,6 +53,7 @@ mod presence;
 mod projects;
 mod push;
 mod relayed;
+mod rooms;
 mod session_store;
 mod sign_in;
 mod visibility;
@@ -220,6 +221,10 @@ struct Shared {
     passwords: accounts::PasswordChecks,
     /// Families whose pull request comments may need an update (ADR 0042).
     bridge: Option<bridge::Jobs>,
+    /// What each frame key opens (ADR 0074).
+    frames: std::sync::Mutex<silt_proto::frames::FrameKeys<browse::FrameGrant>>,
+    /// The rooms of the pages people view in the hosted app (ADR 0081).
+    page_rooms: std::sync::Mutex<rooms::Rooms>,
 }
 
 #[derive(Clone)]
@@ -302,6 +307,8 @@ impl Server {
                 mr_views: Mutex::new(HashMap::new()),
                 passwords: accounts::PasswordChecks::default(),
                 bridge,
+                frames: std::sync::Mutex::default(),
+                page_rooms: std::sync::Mutex::default(),
                 config,
                 http,
             }),
@@ -333,6 +340,9 @@ impl Server {
             .route("/v1/blobs/{hash}", put(put_blob).get(get_blob).layer(DefaultBodyLimit::max(LARGE_BODY)))
             .route("/v1/visibility", put(set_visibility))
             .route("/v1/search", get(search))
+            .route("/v1/rooms", get(rooms::device_socket))
+            .route("/v1/rooms/mux", get(rooms::device_mux))
+            .route("/v1/rooms/agent", post(rooms::agent))
             .route("/v1/in-flight", get(in_flight))
             .route("/v1/device", delete(logout_device))
             .route("/v1/threads/{id}/collaborators", post(collab::share))
@@ -345,12 +355,15 @@ impl Server {
             .route("/v1/control", get(control::poll))
             .route("/v1/control/agents", put(control::report))
             .route("/v1/control/{id}", post(control::answer))
+            .route("/v1/control/{id}/progress", post(control::progress))
+            .route("/v1/control/{id}/tool", post(control::tool_call))
             .route("/v1/inbox", get(inbox::list))
             .route("/v1/inbox/read", post(inbox::read))
             .route("/v1/me/notifications", get(inbox::settings).put(inbox::change_setting))
             .route("/v1/orgs", get(orgs::list))
             .route("/v1/projects", get(projects::list))
             .route("/v1/me/threads", get(me::threads))
+            .route("/v1/me/artifact-pins", get(browse::device_pins).put(browse::device_pin))
             .route("/v1/me/threads/{thread}", patch(me::change_thread))
             .route("/v1/me/seen", get(me::seen))
             .route("/v1/me/seen/{mr}", put(me::mark_seen))
@@ -381,6 +394,8 @@ impl Server {
             .route("/login", get(pages::login_page).post(pages::login))
             .route("/fonts/{name}", get(app::font))
             .route("/vendor/{host}/{*path}", get(links::vendor_file))
+            .route("/f/{key}/", get(browse::serve_frame))
+            .route("/f/{key}/{*path}", get(browse::frame_file))
             .route("/logout", post(pages::logout))
             .route("/devices/revoke", post(pages::revoke_device))
             .route("/sessions/end-others", post(pages::end_other_sessions))
@@ -477,7 +492,26 @@ pub(crate) struct ApiError(StatusCode, ErrorReply);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.0, Json(self.1)).into_response()
+        // The web app reads `error` and a page's `refusal` (ADR 0072); sync
+        // clients read the reply's own fields.
+        let message = match &self.1 {
+            ErrorReply::Invalid { message } | ErrorReply::Forbidden { message } => Some(message.clone()),
+            _ => None,
+        };
+        let refusal = match &self.1 {
+            ErrorReply::Forbidden { .. } => Some("not_granted"),
+            _ => message.as_deref().and_then(silt_proto::refusal_of),
+        };
+        let mut body = serde_json::to_value(&self.1).unwrap_or_default();
+        if let Some(object) = body.as_object_mut() {
+            if let Some(message) = message {
+                object.entry("error").or_insert(message.into());
+            }
+            if let Some(refusal) = refusal {
+                object.insert("refusal".into(), refusal.into());
+            }
+        }
+        (self.0, Json(body)).into_response()
     }
 }
 
@@ -500,6 +534,11 @@ pub(crate) fn bad_request(message: impl Into<String>) -> ApiError {
 
 pub(crate) fn forbidden(message: impl Into<String>) -> ApiError {
     ApiError(StatusCode::FORBIDDEN, ErrorReply::Forbidden { message: message.into() })
+}
+
+/// A write over a version that's no longer the latest.
+pub(crate) fn conflict(message: impl Into<String>) -> ApiError {
+    ApiError(StatusCode::CONFLICT, ErrorReply::Invalid { message: message.into() })
 }
 
 pub(crate) fn not_found() -> ApiError {
@@ -1034,19 +1073,22 @@ async fn search(
     .bind(limit)
     .fetch_all(&server.shared.db)
     .await?;
-    let hits = rows
-        .iter()
-        .map(|row| SearchHit {
-            thread: ThreadId(id_from(row.get("thread_id"))),
-            repo: row.get("repo"),
-            owner: row.get("owner"),
-            status: thread_status(row.get("status")),
-            branch: row.get("branch"),
-            kind: row.get("kind"),
-            snippet: row.get("snippet"),
-            time_ms: row.get("time_ms"),
-        })
-        .collect();
+    let indexed = rows.iter().map(|row| SearchHit {
+        thread: ThreadId(id_from(row.get("thread_id"))),
+        repo: row.get("repo"),
+        owner: row.get("owner"),
+        status: thread_status(row.get("status")),
+        branch: row.get("branch"),
+        kind: row.get("kind"),
+        snippet: row.get("snippet"),
+        time_ms: row.get("time_ms"),
+        artifact: None,
+    });
+    // A doc's or a sheet's hit comes first: it's the text as it stands.
+    let limit = usize::try_from(limit).unwrap_or(0);
+    let mut hits = browse::edited_hits(&server, caller.user, &query, limit).await?;
+    hits.extend(indexed);
+    hits.truncate(limit);
     Ok(Json(SearchReply { hits }))
 }
 

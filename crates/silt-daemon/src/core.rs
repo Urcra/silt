@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
 use silt_crdt::InodeId;
 use silt_git::{ListedFile, Repo};
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Op, ThreadState, ThreadView};
+use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Hide, Op, ThreadState, ThreadView};
 use silt_proto::{Listing, Visibility};
 use silt_redact::Redactor;
 use silt_store::{CheckoutId, CheckoutRecord, SearchRow, SessionRead, SessionRecord, Store, ThreadRecord};
@@ -195,6 +195,12 @@ pub struct Core {
     /// When the watcher noticed the changes being taken in, for crediting
     /// them to the tool that was running then.
     pub(crate) change_noticed: Option<Instant>,
+    /// The session whose hook named the files being taken in, which made
+    /// those edits whoever else has a tool open (ADR 0089).
+    pub(crate) deciding: Option<String>,
+    /// When a step without a watcher first held a checkout's changes back
+    /// for its agent's tool marks.
+    pub(crate) marks_awaited: HashMap<CheckoutId, Instant>,
     /// Set while a new thread takes in its clone's uncommitted changes,
     /// which are part of where it starts, not edits made in it.
     pub(crate) importing: bool,
@@ -221,8 +227,8 @@ pub struct Core {
     /// The cloud sessions started here, newest last (ADR 0040).
     pub(crate) cloud_launches: Vec<crate::protocol::CloudLaunch>,
     /// Families whose next pull waits until then, after a delta that
-    /// couldn't apply yet.
-    pub(crate) pull_paused: HashMap<FamilyId, Instant>,
+    /// couldn't apply yet, and how long they waited this time.
+    pub(crate) pull_paused: HashMap<FamilyId, (Instant, Duration)>,
     /// Agents the web UI started, by thread.
     pub(crate) acp: HashMap<ThreadId, crate::acp::AcpRun>,
     pub(crate) events: mpsc::UnboundedSender<Event>,
@@ -292,6 +298,18 @@ pub struct Core {
     /// Threads a wrapper recorded on its own until this daemon took them
     /// over.
     pub(crate) adopted: HashSet<ThreadId>,
+    /// The rooms of the pages open on this machine (ADR 0081).
+    pub(crate) rooms: silt_proto::rooms::Hub,
+    /// The page connectors' running MCP clients (ADR 0080).
+    pub(crate) page_clients: std::sync::Arc<crate::connectors::Clients>,
+    /// When each artifact's page last asked `sample`, for its rate.
+    pub(crate) samples: HashMap<String, Vec<Instant>>,
+    /// How many page questions this machine's agent answers now, across pages.
+    pub(crate) sampling: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Questions whose pages offered tools, by name (ADR 0072).
+    pub(crate) sample_calls: HashMap<String, crate::sample::WaitingTools>,
+    /// What stops each named question running now, by thread, artifact and name.
+    pub(crate) sample_stops: HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// What changed, for browsers listening (ADR 0021).
     pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
     /// How each thread's agent stands as last stored (ADR 0022).
@@ -451,15 +469,44 @@ impl Core {
         };
         let (loaded, entries) = tokio::join!(load::family_unread(&core.store, thread.family, repo.as_ref()), entries);
         core.take_loaded(thread.family, loaded?);
+        let mut sessions = vec![record];
         if let (Some(checkout), Some(entries)) = (checkout, entries?) {
-            let id = checkout.id;
+            let (id, path) = (checkout.id, checkout.path.clone());
             core.hold_checkout(checkout, entries)?;
             if let Some(Ok(Ok(check))) = filters.map(std::thread::JoinHandle::join) {
                 core.checkout(id)?.repo.knows_git_cli_filters(check);
             }
+            sessions.extend(core.hold_sharing(&path, id).await?);
         }
-        core.take_sessions(vec![record]).await?;
+        core.take_sessions(sessions).await?;
         Ok(core)
+    }
+
+    /// Holds the other checkouts at `path` whose threads' agents work there
+    /// too, with their families, and returns their sessions: an edit found
+    /// here is theirs to take in as well, and their open tools say who made
+    /// it (ADR 0089).
+    async fn hold_sharing(&mut self, path: &Path, own: CheckoutId) -> Result<Vec<SessionRecord>, CoreError> {
+        let mut held = Vec::new();
+        for record in self.store.checkouts_at(path).await? {
+            let Some(family) = self.threads.get(&record.thread).map(|thread| thread.family) else {
+                continue;
+            };
+            if record.id == own || !self.agent_at_work_anywhere(record.thread) {
+                continue;
+            }
+            if !self.families.contains_key(&family) {
+                let repo = Repo::discover(path).ok();
+                self.take_loaded(family, load::family_unread(&self.store, family, repo.as_ref()).await?);
+            }
+            let entries = stored_entries(&self.store, record.id).await?;
+            held.push(record.id);
+            self.hold_checkout(record, entries)?;
+        }
+        if held.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self.store.sessions().await?.into_iter().filter(|session| held.contains(&session.checkout_id)).collect())
     }
 
     /// A core for a process other than the daemon, holding no family yet.
@@ -491,6 +538,8 @@ impl Core {
             index_transcripts: silt_agents::Transcripts::default(),
             next_token: 0,
             change_noticed: None,
+            deciding: None,
+            marks_awaited: HashMap::new(),
             importing: false,
             recorded_at: None,
             index_queued: false,
@@ -534,6 +583,12 @@ impl Core {
             exe: std::env::current_exe().ok().and_then(|exe| ExeStamp::of(&exe).map(|stamp| (exe, stamp))),
             resident,
             adopted: HashSet::new(),
+            samples: HashMap::new(),
+            sampling: std::sync::Arc::default(),
+            sample_calls: HashMap::new(),
+            sample_stops: HashMap::new(),
+            page_clients: std::sync::Arc::default(),
+            rooms: silt_proto::rooms::Hub::default(),
             bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
             agent_runs: HashMap::new(),
             summary_cache: Mutex::new(HashMap::new()),
@@ -573,7 +628,7 @@ impl Core {
         }
         if let Request::Scoped { token, asking } = request {
             if let Request::PutArtifact { artifact } = *asking {
-                let _ = reply.send(to_response(self.put_artifact(&token, artifact).await));
+                let _ = reply.send(to_response(self.put_artifact(&token, *artifact).await));
                 return;
             }
             if let Request::ArtifactGuide { design_system } = *asking {
@@ -582,6 +637,101 @@ impl Core {
             }
             if let Request::ArtifactRead { id, version } = *asking {
                 let _ = reply.send(to_response(self.artifact_read(&token, &id, version).await));
+                return;
+            }
+            if let Request::PageData { artifact, asked, as_level, .. } = *asking {
+                let _ = reply.send(to_response(self.run_page_data(&token, &artifact, asked, as_level).await));
+                return;
+            }
+            if let Request::PageAssets { artifact, asked, .. } = *asking {
+                // The agent adds a file to a page it made, as its people do.
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.page_assets(&thread, &artifact, asked).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
+            if let Request::Agents { .. } | Request::Message { .. } = &*asking {
+                // An agent the web UI runs speaks for its own thread only.
+                let answer = match self.run_thread(&token).await.and_then(|thread| self.find_thread(&thread)) {
+                    Ok(thread) => match *asking {
+                        Request::Message { to, text, .. } => self.message(thread, &to, &text).await,
+                        _ => self.agents(thread).await,
+                    },
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
+            if let Request::PageAsset { artifact, asset, .. } = *asking {
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.page_asset(&thread, &artifact, &asset).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
+            if let Request::RoomAgent { artifact, emit, presence, .. } = *asking {
+                // A thread that syncs with a server meets its views in the
+                // server's room, so the agent speaks there.
+                let remote = match self.run_thread(&token).await {
+                    Ok(thread) => {
+                        self.find_thread(&thread).ok().and_then(|id| self.remote_for(id).cloned()).map(|remote| (thread, remote))
+                    }
+                    Err(_) => None,
+                };
+                if let Some((thread, remote)) = remote {
+                    tokio::spawn(async move {
+                        let answer = remote
+                            .room_agent(&thread, &artifact, emit, presence)
+                            .await
+                            .map_err(|error| CoreError::Invalid(error.to_string()));
+                        let _ = reply.send(to_response(answer));
+                    });
+                    return;
+                }
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => self.room_agent(&thread, &artifact, emit, presence).map(|(deliveries, heard)| {
+                        // What the agent said reaches the open views through the web server.
+                        let _ = self.bus.send(crate::protocol::BusEvent::Room {
+                            deliveries: serde_json::to_value(deliveries).unwrap_or_default(),
+                        });
+                        heard
+                    }),
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
+            if let Request::DocData { artifact, asked, .. } = *asking {
+                let writes = !matches!(asked, silt_proto::edited::DocRequest::Read);
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => {
+                        let answer = self.doc_data(&thread, &artifact, asked).await;
+                        if writes && answer.is_ok() {
+                            self.agent_edited(&thread, &artifact);
+                        }
+                        answer
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
+            if let Request::SheetData { artifact, asked, .. } = *asking {
+                let writes = !matches!(asked, silt_proto::edited::SheetRequest::Read { .. });
+                let answer = match self.run_thread(&token).await {
+                    Ok(thread) => {
+                        let answer = self.sheet_data(&thread, &artifact, asked).await;
+                        if writes && answer.is_ok() {
+                            self.agent_edited(&thread, &artifact);
+                        }
+                        answer
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
                 return;
             }
             let workspace = match self.scope_of(&token, &asking).await {
@@ -613,15 +763,182 @@ impl Core {
             Request::ArtifactGuide { .. } => Response::error("only an agent's run asks for its artifact guide, with its token"),
             Request::DesignSystems { clone } => Response::ok(self.design_systems(clone.as_deref())),
             Request::ProjectDesignSystems => Response::ok(self.project_design_systems()),
+            Request::DesignCatalog => Response::ok(self.design_catalog()),
+            Request::DesignSystem { source, name, clone, thread } => {
+                to_response(self.design_system(source, &name, clone.as_deref(), thread.as_deref()))
+            }
+            Request::DesignAsset { source, name, clone, thread, path } => {
+                to_response(self.design_asset(source, &name, clone.as_deref(), thread.as_deref(), &path))
+            }
+            Request::ThreadDesignSystem { thread } => to_response(self.thread_design(&thread)),
             Request::ArtifactSettings => Response::ok(crate::design::artifact_settings(&self.data_dir)),
             Request::SetArtifactSettings { settings } => {
                 to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))
             }
+            Request::PageData { thread, artifact, asked, as_level } => {
+                to_response(self.page_data(&thread, &artifact, asked, as_level).await)
+            }
+            Request::PublishArtifact { thread, artifact, html, base } => {
+                to_response(self.publish_artifact(&thread, &artifact, html, base).await)
+            }
+            Request::PageViewer { thread } => to_response(self.page_viewer(&thread)),
+            Request::ArtifactListing => return answer_later(reply, Ok(self.artifact_listing_merged())),
+            // The id becomes a directory's name, so it's checked first.
+            Request::ArtifactThumbnail { artifact, .. } if artifact.parse::<silt_types::ArtifactId>().is_err() => {
+                Response::error("not an artifact id")
+            }
+            Request::ArtifactThumbnail { thread, artifact } => {
+                let kept = self.kept_thumbnail(&thread, &artifact).await;
+                let source = self.thumbnail_source(&thread, &artifact).await;
+                let events = self.events.clone();
+                let dir = self.data_dir.join("thumbnails").join(&artifact);
+                return answer_later(
+                    reply,
+                    Ok(async move {
+                        if let Some(jpeg) = kept? {
+                            return Ok(serde_json::json!({ "media_type": "image/jpeg", "data": jpeg }));
+                        }
+                        let Some((page, style, version)) = source? else {
+                            return Err(CoreError::Invalid("only an HTML version has a thumbnail".into()));
+                        };
+                        let jpeg = tokio::task::spawn_blocking(move || crate::thumbnails::render(&page, style.as_deref(), &dir))
+                            .await
+                            .map_err(|error| CoreError::Invalid(error.to_string()))?
+                            .map_err(CoreError::Invalid)?
+                            .ok_or_else(|| CoreError::Invalid("no headless browser here to draw one".into()))?;
+                        use base64::Engine as _;
+                        let encoded = base64::engine::general_purpose::STANDARD.encode(&jpeg);
+                        let (kept, _) = tokio::sync::oneshot::channel();
+                        let keep = Request::KeepThumbnail { thread, artifact, version, jpeg: encoded.clone() };
+                        let _ = events.send(Event::Request(keep, kept));
+                        Ok(serde_json::json!({ "media_type": "image/jpeg", "data": encoded }))
+                    }),
+                );
+            }
+            Request::KeepThumbnail { thread, artifact, version, jpeg } => {
+                use base64::Engine as _;
+                match base64::engine::general_purpose::STANDARD.decode(jpeg) {
+                    Ok(bytes) => to_response(self.keep_thumbnail(&thread, &artifact, version, bytes).await.map(|()| "kept")),
+                    Err(_) => Response::error("not base64"),
+                }
+            }
+            Request::PinArtifact { thread, artifact, pinned } => {
+                let full = self.find_thread(&thread).map(|id| id.to_string());
+                return answer_later(
+                    reply,
+                    self.pin_artifact(&thread, &artifact, pinned).and(full).map(|full| self.share_pin(&full, &artifact, pinned)),
+                );
+            }
+            Request::ArchiveArtifact { thread, artifact, archived } => {
+                to_response(self.archive_artifact(&thread, &artifact, archived).await.map(|()| "saved"))
+            }
+            Request::PageAssets { thread, artifact, asked } => to_response(self.page_assets(&thread, &artifact, asked).await),
+            Request::DocData { thread, artifact, asked } => to_response(self.doc_data(&thread, &artifact, asked).await),
+            Request::SheetData { thread, artifact, asked } => to_response(self.sheet_data(&thread, &artifact, asked).await),
+            Request::RoomAgent { .. } => Response::error("only an agent's run speaks in a room, with its token"),
+            Request::RoomRoute { thread } => Response::ok(
+                self.find_thread(&thread)
+                    .ok()
+                    .and_then(|thread| self.remote_for(thread))
+                    .map(|remote| serde_json::json!({ "url": remote.config.url, "token": remote.config.token })),
+            ),
+            Request::RoomJoin { key, peer } => to_response(self.room_join(key, peer, false)),
+            Request::RoomSend { key, peer, sent } => Response::ok(self.room_send(&key, &peer, sent)),
+            Request::RoomLeave { key, peer } => Response::ok(self.room_leave(&key, &peer)),
+            Request::PageConnectors => Response::ok(crate::connectors::connectors(&self.data_dir)),
+            Request::SetPageConnectors { connectors } => {
+                to_response(crate::connectors::set_connectors(&self.data_dir, &connectors).map(|()| "saved"))
+            }
+            Request::ImportPageConnectors => to_response(self.import_page_connectors()),
+            Request::ConnectorTools { name } => return answer_later(reply, self.connector_tools(&name)),
+            Request::SetConnectorSecret { name, header, value } => to_response(
+                crate::connectors::set_connector_secret(&self.data_dir, &name, &header, value.as_deref()).map(|()| "saved"),
+            ),
+            Request::PageMcp { thread, artifact, asked } => return answer_later(reply, self.page_mcp(&thread, &artifact, asked)),
+            Request::PageFiles { thread, artifact, asked } => to_response(self.page_files(&thread, &artifact, asked)),
+            Request::PageAsset { thread, artifact, asset } => to_response(self.page_asset(&thread, &artifact, &asset).await),
+            Request::ArtifactFile { thread, id, version, path } => {
+                to_response(self.artifact_file(&thread, &id, version, &path).await)
+            }
+            Request::Sample { thread, artifact, ask, input, images, tools, model } => {
+                let asked = crate::sample::Question { input, images, tools, model };
+                return answer_later(reply, self.sample(&thread, artifact.as_deref(), ask, asked));
+            }
+            Request::ArtifactPdf { thread, artifact, html } => {
+                let printable = self
+                    .find_thread(&thread)
+                    .and_then(|thread| {
+                        self.edited_artifact(thread, &artifact, "doc")
+                            .or_else(|_| self.edited_artifact(thread, &artifact, "slides"))
+                    })
+                    .and_then(|id| {
+                        if html.len() > DOC_PDF_HTML_BYTES {
+                            return Err(CoreError::Invalid("the page is too large to print".into()));
+                        }
+                        Ok(self.data_dir.join("pdf").join(id.to_string()))
+                    });
+                return answer_later(
+                    reply,
+                    printable.map(|dir| async move {
+                        use base64::Engine as _;
+                        let printed = tokio::task::spawn_blocking(move || crate::thumbnails::pdf(&html, &dir))
+                            .await
+                            .map_err(|error| CoreError::Invalid(error.to_string()))?
+                            .map_err(CoreError::Invalid)?
+                            .ok_or_else(|| {
+                                CoreError::Invalid(
+                                    "this computer has no headless browser (Node with Playwright) to print a PDF".into(),
+                                )
+                            })?;
+                        Ok(silt_proto::view::ArtifactContent {
+                            media_type: "application/pdf".into(),
+                            data: base64::engine::general_purpose::STANDARD.encode(printed),
+                        })
+                    }),
+                );
+            }
+            Request::SaveEditedVersion { thread, artifact, note } => {
+                to_response(self.save_edited_version(&thread, &artifact, note).await)
+            }
+            Request::SampleToolCall { ask, name, input } => {
+                return answer_later(reply, self.sample_tool_call(&ask, name, input));
+            }
+            Request::SampleToolResult { thread, artifact, ask, call, result } => {
+                to_response(self.sample_tool_result(&thread, &artifact, &ask, call, result))
+            }
+            Request::StopSample { thread, artifact, ask } => to_response(self.stop_sample(&thread, &artifact, &ask)),
+            Request::ArtifactGrants { thread, artifact } => match self.find_thread(&thread) {
+                Ok(thread) => {
+                    let latest = self.version_view(thread, &artifact, None);
+                    Response::ok(crate::design::artifact_grants(&self.data_dir, &thread.to_string(), &artifact, latest.as_ref()))
+                }
+                Err(error) => Response::failure(&error),
+            },
+            Request::SetArtifactGrant { thread, artifact, capability, state, version } => match self.find_thread(&thread) {
+                Ok(thread) => {
+                    let declared = self.version_view(thread, &artifact, version);
+                    to_response(
+                        crate::design::set_artifact_grant(
+                            &self.data_dir,
+                            &thread.to_string(),
+                            &artifact,
+                            &capability,
+                            state.as_deref(),
+                            declared.as_ref(),
+                        )
+                        .map(|()| "saved"),
+                    )
+                }
+                Err(error) => Response::failure(&error),
+            },
             Request::SetProjectDesignSystem { repo, design_system } => {
                 to_response(self.set_project_design_system(&repo, design_system.as_deref()))
             }
             Request::ArtifactRead { .. } => Response::error("only an agent's run reads its artifacts back, with its token"),
             Request::ArtifactContent { thread, blob } => to_response(self.artifact_content(&thread, &blob).await),
+            Request::ArtifactVersion { thread, id, version } => {
+                to_response(self.artifact_version_of(&thread, &id, version).await)
+            }
             Request::Ping => Response::ok("pong"),
             Request::Compact => to_response(self.compact().await),
             Request::DaemonBuild => Response::ok(self.daemon_build()),
@@ -681,31 +998,29 @@ impl Core {
             },
             Request::Threads => Response::ok(self.thread_summaries()),
             Request::Show { thread } => to_response(self.find_thread(&thread).map(|thread| self.show(thread))),
-            Request::Diff { thread, turn, to_turn, base, files, path, hide_git } => {
+            Request::Diff { thread, turn, to_turn, base, files, path, hide_git, hide_others } => {
+                let hide = Hide { git: hide_git, others: hide_others };
                 let only = Only { files, path: path.as_deref() };
                 let turns = TurnRange { turn, to_turn };
-                to_response(
-                    self.find_thread(&thread).and_then(|thread| self.diff(thread, turns, base.as_deref(), only, hide_git)),
-                )
+                to_response(self.find_thread(&thread).and_then(|thread| self.diff(thread, turns, base.as_deref(), only, hide)))
             }
-            Request::DiffStats { thread, turn, to_turn, base, hide_git } => {
+            Request::DiffStats { thread, turn, to_turn, base, hide_git, hide_others } => {
+                let hide = Hide { git: hide_git, others: hide_others };
                 let turns = TurnRange { turn, to_turn };
-                to_response(
-                    self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turns, base.as_deref(), hide_git)),
-                )
+                to_response(self.find_thread(&thread).and_then(|thread| self.diff_stats(thread, turns, base.as_deref(), hide)))
             }
-            Request::ThreadSeen { thread, turn, to_turn, base, hide_git } => {
+            Request::ThreadSeen { thread, turn, to_turn, base, hide_git, hide_others } => {
+                let hide = Hide { git: hide_git, others: hide_others };
                 let turns = TurnRange { turn, to_turn };
-                to_response(
-                    self.find_thread(&thread).and_then(|thread| self.thread_seen(thread, turns, base.as_deref(), hide_git)),
-                )
+                to_response(self.find_thread(&thread).and_then(|thread| self.thread_seen(thread, turns, base.as_deref(), hide)))
             }
             Request::MarkThreadSeen { thread, mark } => to_response(self.mark_thread_seen(&thread, mark).await),
-            Request::DiffTurns { thread, turn, to_turn, base, files, path, hide_git } => {
+            Request::DiffTurns { thread, turn, to_turn, base, files, path, hide_git, hide_others } => {
+                let hide = Hide { git: hide_git, others: hide_others };
                 let only = Only { files, path: path.as_deref() };
                 let turns = TurnRange { turn, to_turn };
                 to_response(
-                    self.find_thread(&thread).and_then(|thread| self.diff_turns(thread, turns, base.as_deref(), only, hide_git)),
+                    self.find_thread(&thread).and_then(|thread| self.diff_turns(thread, turns, base.as_deref(), only, hide)),
                 )
             }
             Request::Search { query, limit, filters } => {
@@ -765,7 +1080,9 @@ impl Core {
                 to_response(self.mr_create(thread.as_deref(), &cwd, title, summary).await)
             }
             Request::MrList { thread } => to_response(self.mr_list(thread.as_deref())),
-            Request::MrShow { mr, hide_git } => to_response(self.mr_show(&mr, hide_git)),
+            Request::MrShow { mr, hide_git, hide_others } => {
+                to_response(self.mr_show(&mr, Hide { git: hide_git, others: hide_others }))
+            }
             Request::MrApprove { mr } => to_response(self.mr_approve(&mr).await),
             Request::MrDecline { mr, reason } => to_response(self.mr_decline(&mr, reason).await),
             Request::MrRequestChanges { mr, reason } => to_response(self.mr_request_changes(&mr, reason).await),
@@ -800,14 +1117,29 @@ impl Core {
             Request::FileAt { thread, query } => {
                 to_response(self.find_thread(&thread).and_then(|thread| self.file_for_link(thread, &query)))
             }
-            Request::InFlight { cwd, path } => match self.scope_allows_clone(&cwd) {
-                true => to_response(self.in_flight_anywhere(&cwd, &path).await),
+            Request::InFlight { cwd, path, thread } => match self.scope_allows_clone(&cwd) {
+                true => {
+                    let caller = thread.as_deref().map(|thread| self.find_thread(thread)).transpose();
+                    match caller {
+                        Ok(caller) => to_response(self.in_flight_anywhere(&cwd, &path, caller).await),
+                        Err(error) => to_response::<()>(Err(error)),
+                    }
+                }
                 false => Response::ok(Vec::<crate::protocol::InFlight>::new()),
+            },
+            Request::Agents { thread } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.agents(thread).await),
+                Err(error) => to_response::<()>(Err(error)),
+            },
+            Request::Message { from, to, text } => match self.find_thread(&from) {
+                Ok(from) => to_response(self.message(from, &to, &text).await),
+                Err(error) => to_response::<()>(Err(error)),
             },
             Request::Blame { cwd, path } => to_response(self.blame(&cwd, &path)),
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
-            Request::Comments { thread, base, hide_git, cwd } => {
-                to_response(self.list_comments(&thread, base.as_deref(), hide_git, &cwd).await)
+            Request::Comments { thread, base, hide_git, hide_others, cwd } => {
+                let hide = Hide { git: hide_git, others: hide_others };
+                to_response(self.list_comments(&thread, base.as_deref(), hide, &cwd).await)
             }
             Request::AnchorLines { thread, on, cwd } => to_response(self.anchor_lines(&thread, on, &cwd).await),
             Request::PlaceAnchors { thread, place, cwd } => to_response(self.place_anchors(&thread, place, &cwd).await),
@@ -835,6 +1167,7 @@ impl Core {
             Request::AcpStart { thread, clone, agent, options } => {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent, options).await)
             }
+            Request::DesignStart(start) => to_response(self.design_start(start).await),
             Request::Branches { clone } => to_response(self.branches(&clone)),
             Request::CloudStart { clone, task } => return answer_later(reply, self.cloud_start(&clone, &task)),
             Request::CloudLaunched { launch } => {
@@ -945,6 +1278,10 @@ impl Core {
             return;
         }
         self.tail_marked_sessions(checkout).await;
+        if self.awaits_tool_marks(checkout, noticed) {
+            self.settle_changes(checkout, paths, noticed);
+            return;
+        }
         self.change_noticed = Some(noticed);
         if let Err(error) = self.ingest_paths(checkout, paths).await {
             warn!(%error, %checkout, "could not record changes");
@@ -1002,6 +1339,25 @@ impl Core {
         self.running(thread).is_ok()
             || self.pending.iter().any(|pending| pending.thread == thread)
             || self.sessions.iter().any(|session| session.record.thread == thread && session.live)
+    }
+
+    /// [`Self::agent_at_work`], or a wrapper records the thread on its own,
+    /// which a process other than that wrapper sees only by its lock.
+    pub(crate) fn agent_at_work_anywhere(&self, thread: ThreadId) -> bool {
+        self.agent_at_work(thread) || crate::capture_lock::RecordingLock::held(&self.data_dir, thread)
+    }
+
+    /// The other checkouts at `checkout`'s path whose threads' agents work
+    /// there too, so an edit found through `checkout` is theirs to take in
+    /// as well (ADR 0089).
+    pub(crate) fn sharing(&self, checkout: CheckoutId) -> Vec<CheckoutId> {
+        let Some(held) = self.checkouts.get(&checkout) else {
+            return Vec::new();
+        };
+        self.rows_at(&held.record.path)
+            .filter(|id| *id != checkout)
+            .filter(|id| self.checkouts.get(id).is_some_and(|other| self.agent_at_work_anywhere(other.record.thread)))
+            .collect()
     }
 
     /// Records what changed in a clone left alone while no agent worked in
@@ -1240,6 +1596,7 @@ impl Core {
             self.persist(family_id, &ingested.deltas).await?;
             self.persist_entry(checkout_id, from).await?;
             self.persist_entry(checkout_id, to).await?;
+            self.touched(&author, to).await?;
             self.propagate(checkout_id, &ingested.deltas).await?;
             handled.extend([from.clone(), to.clone()]);
         }
@@ -1332,9 +1689,23 @@ impl Core {
         let ingested = checkout.bridge.ingest(family, &mut RepoBases(&checkout.repo), path, disk_file, &author, now_ms())?;
         self.persist(family_id, &ingested.deltas).await?;
         self.persist_entry(checkout_id, path).await?;
+        if !ingested.deltas.is_empty() {
+            self.touched(&author, path).await?;
+        }
         let again = self.perform(checkout_id, ingested.actions).await?;
         self.propagate(checkout_id, &ingested.deltas).await?;
         Ok(again)
+    }
+
+    /// Notes a file an agent of this thread edited, for its peers to hear of
+    /// (ADR 0090).
+    async fn touched(&self, author: &Author, path: &str) -> Result<(), CoreError> {
+        if let Author::Agent { agent, session, .. } = author
+            && !session.is_empty()
+        {
+            self.store.touch_file(agent, session, path, now_ms()).await?;
+        }
+        Ok(())
     }
 
     async fn disk_file(&self, checkout: CheckoutId, path: &str, raw: RawFile) -> Result<DiskFile, CoreError> {
@@ -2250,6 +2621,16 @@ impl Core {
 
     /// The actor for this daemon's own deltas in one thread. Threads of a
     /// family grow concurrently, and an actor's deltas must form one chain.
+    /// Notes that the agent running in `thread` wrote `artifact`, a doc or a
+    /// sheet, this turn.
+    fn agent_edited(&mut self, thread: &str, artifact: &str) {
+        if let Ok(thread) = self.find_thread(thread)
+            && let Some(run) = self.acp.get_mut(&thread)
+        {
+            run.edited.insert(artifact.to_owned());
+        }
+    }
+
     pub(crate) fn thread_actor(&self, thread: ThreadId) -> ActorId {
         self.actor.derive(thread.0)
     }
@@ -2299,7 +2680,14 @@ pub(crate) fn touched_inode(delta: &Delta) -> Option<InodeId> {
         | Op::Text { inode, .. }
         | Op::SetContent { inode, .. }
         | Op::SetExecutable { inode, .. } => Some(*inode),
-        Op::Conv(_) | Op::Git(_) | Op::Lease { .. } | Op::Fork { .. } | Op::Merge { .. } | Op::Mr(_) | Op::Comment(_) => None,
+        Op::Conv(_)
+        | Op::Git(_)
+        | Op::Lease { .. }
+        | Op::Fork { .. }
+        | Op::Merge { .. }
+        | Op::Mr(_)
+        | Op::Comment(_)
+        | Op::Page(_) => None,
     }
 }
 
@@ -2478,6 +2866,9 @@ pub(crate) fn redactor(data_dir: &Path) -> Redactor {
 
 /// Answers `reply` once `call`, a call to the server, is done, off the event
 /// loop: a slow server then holds up only this request.
+/// The most of a doc's page printed to a PDF, in bytes.
+const DOC_PDF_HTML_BYTES: usize = 8 << 20;
+
 fn answer_later<T, F>(reply: oneshot::Sender<Response>, call: Result<F, CoreError>)
 where
     T: serde::Serialize,

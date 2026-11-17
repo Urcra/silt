@@ -318,7 +318,7 @@ pub fn read_line(line: &str) -> Read {
         }
         "artifact" => {
             if let Ok(artifact) = serde_json::from_value::<silt_proto::view::ArtifactView>(record.clone()) {
-                read.entries.push(Entry::Artifact(artifact));
+                read.entries.push(Entry::Artifact(Box::new(artifact)));
             }
         }
         "usage" => read.entries.push(Entry::Usage {
@@ -518,6 +518,7 @@ mod tests {
     #[test]
     fn an_artifact_record_reads_back_as_the_artifact_and_searches_by_title() {
         let shown = silt_proto::view::ArtifactView {
+            contract: None,
             id: "0123456789ab".into(),
             version: 2,
             title: "Rescan benchmark".into(),
@@ -529,9 +530,14 @@ mod tests {
             caption: None,
             design_system: Some("nous".into()),
             style: Some("cd".repeat(32)),
+            note: Some("Darker axis".into()),
+            description: Some("How long a rescan takes".into()),
+            capabilities: Some([("db".to_owned(), serde_json::json!({}))].into()),
+            by: Some("ann".into()),
+            files: None,
         };
         let read = read_line(&artifact(&shown));
-        assert_eq!(read.entries, vec![Entry::Artifact(shown.clone())]);
+        assert_eq!(read.entries, vec![Entry::Artifact(Box::new(shown.clone()))]);
         assert_eq!(read.entries[0].searchable_text().as_deref(), Some("Rescan benchmark"));
         let entry = crate::tool::shown(read.entries[0].clone()).expect("shown");
         assert_eq!((entry.kind.as_str(), entry.artifact), ("artifact", Some(shown)));

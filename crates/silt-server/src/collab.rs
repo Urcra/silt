@@ -73,10 +73,58 @@ pub(crate) async fn admit(
     family: FamilyId,
     deltas: Vec<&Delta>,
 ) -> Result<(Vec<Delta>, Vec<ActorId>), ApiError> {
-    let ledger = Ledger::load(server.db(), user, &deltas).await?;
+    let mut ledger = Ledger::load(server.db(), user, &deltas).await?;
+    // What the push declares is read only from what will be admitted: a
+    // version under someone else's actor is dropped, so it can't loosen the
+    // rules the pusher's own page writes are judged by.
+    let own: Vec<&Delta> = deltas
+        .iter()
+        .copied()
+        .filter(|delta| ledger.actors.get(&delta.span.actor).copied().flatten().is_none_or(|owner| owner == user))
+        .collect();
+    let pages: HashSet<(ThreadId, silt_types::ArtifactId)> = own
+        .iter()
+        .filter_map(|delta| match &delta.op {
+            Op::Page(op) => Some((delta.thread, op.artifact())),
+            _ => None,
+        })
+        .collect();
+    if !pages.is_empty() {
+        let name = sqlx::query_scalar!("SELECT name FROM users WHERE id = ?", user).fetch_one(server.db()).await?;
+        ledger.me = silt_proto::page::person_id(&name);
+        let index = server.shared.index.lock().await;
+        for (thread, artifact) in pages {
+            // A version recorded in this same push declares them too.
+            let declared = pushed_capabilities(&own, thread, artifact)
+                .or_else(|| index.artifact_capabilities(thread, &artifact.to_string()));
+            ledger.pages.insert((thread, artifact), declared);
+        }
+    }
     let viewer = server.viewer(user).await?;
     let (admitted, claims) = admission(user, family, deltas, &ledger, &viewer)?;
     Ok((admitted.into_iter().cloned().collect(), claims))
+}
+
+/// The capabilities the latest version of `artifact` recorded in `deltas`
+/// declares, when the push records one.
+fn pushed_capabilities(
+    deltas: &[&Delta],
+    thread: ThreadId,
+    artifact: silt_types::ArtifactId,
+) -> Option<silt_proto::artifact::Capabilities> {
+    let id = artifact.to_string();
+    deltas
+        .iter()
+        .filter(|delta| delta.thread == thread)
+        .filter_map(|delta| match &delta.op {
+            Op::Conv(silt_log::ConvOp::Native { line, .. }) if line.contains("\"artifact\"") => {
+                serde_json::from_str::<serde_json::Value>(line).ok()
+            }
+            _ => None,
+        })
+        .filter(|record| record["t"] == "artifact" && record["id"] == id.as_str())
+        .max_by_key(|record| record["version"].as_u64().unwrap_or(0))
+        .and_then(|record| serde_json::from_value(record.get("capabilities")?.clone()).ok())
 }
 
 /// What the server knows of the actors and threads in a push.
@@ -85,6 +133,11 @@ struct Ledger {
     /// The user whose devices own each actor, when one does.
     actors: HashMap<ActorId, Option<UserId>>,
     threads: HashMap<ThreadId, Registered>,
+    /// What each artifact a push writes page data of declares (ADR 0072).
+    pages: HashMap<(ThreadId, silt_types::ArtifactId), Option<silt_proto::artifact::Capabilities>>,
+
+    /// The pushing person's id in page data.
+    me: String,
 }
 
 struct Registered {
@@ -140,10 +193,17 @@ fn admission<'d>(
             return Err(forbidden(format!("thread {} is not part of family {family}", delta.thread)));
         }
     }
-    if let Some(delta) = admitted.iter().find(|delta| matches!(delta.op, Op::Comment(_)) && !viewer.sees_thread(delta.thread)) {
+    if let Some(delta) =
+        admitted.iter().find(|delta| matches!(delta.op, Op::Comment(_) | Op::Page(_)) && !viewer.sees_thread(delta.thread))
+    {
         return Err(forbidden(format!("thread {} isn't one you can see", delta.thread)));
     }
-    for delta in admitted.iter().filter(|delta| !matches!(delta.op, Op::Comment(_))) {
+    for delta in &admitted {
+        if let Op::Page(op) = &delta.op {
+            page_allowed(user, delta.thread, op, ledger, viewer)?;
+        }
+    }
+    for delta in admitted.iter().filter(|delta| !matches!(delta.op, Op::Comment(_) | Op::Page(_))) {
         let Some(registered) = ledger.threads.get(&delta.thread) else {
             continue;
         };
@@ -165,6 +225,77 @@ fn admission<'d>(
     claims.sort();
     claims.dedup();
     Ok((admitted, claims))
+}
+
+/// Whether `user` may write `op` in `thread`, under the rules its
+/// artifact's latest version declares (ADR 0072): anyone who sees the
+/// thread comments, its owner and collaborators more.
+fn page_allowed(user: UserId, thread: ThreadId, op: &silt_log::PageOp, ledger: &Ledger, viewer: &Viewer) -> Result<(), ApiError> {
+    use silt_log::PageOp;
+    use silt_proto::page::{Level, Rules};
+    let level = match ledger.threads.get(&thread) {
+        None => Level::Owner,
+        Some(registered) if registered.owner == user => Level::Owner,
+        Some(registered) if registered.shared && viewer.sees_thread(thread) => Level::Collaborator,
+        Some(_) => Level::Comment,
+    };
+    let artifact = op.artifact();
+    let refused = |what: &str| forbidden(format!("you may not {what} artifact {artifact}'s page data in thread {thread}"));
+    // Archiving is the owner's, whatever the version declares (ADR 0075).
+    if let PageOp::Set { path, .. } = op
+        && path == "_meta/archived"
+    {
+        return if level == Level::Owner { Ok(()) } else { Err(refused("archive")) };
+    }
+    // A thumbnail is drawn by the machine of someone who may change the artifact.
+    if let PageOp::Set { path, .. } = op
+        && path == "_meta/thumbnail"
+    {
+        return if level >= Level::Collaborator { Ok(()) } else { Err(refused("draw a thumbnail of")) };
+    }
+    let declared = ledger.pages.get(&(thread, artifact)).cloned().flatten();
+    let Some(declared) = declared else {
+        return Err(refused("write"));
+    };
+    let edit_level = || match declared.get("edit").and_then(|edit| edit.get("level")).and_then(serde_json::Value::as_str) {
+        Some("collaborator") => Level::Collaborator,
+        _ => Level::Comment,
+    };
+    match op {
+        // A sheet's name and its columns' widths and formats are edits of the sheet (ADR 0083).
+        PageOp::Patched { path, .. } if path.starts_with("_sheets/") => {
+            if level < edit_level() {
+                return Err(refused("edit"));
+            }
+        }
+        PageOp::Deleted { path, .. } if path.starts_with("_assets/") => {
+            if !declared.contains_key("assets") || level < Level::Collaborator {
+                return Err(refused("delete the files of"));
+            }
+        }
+        PageOp::Set { path, .. } | PageOp::Patched { path, .. } | PageOp::Deleted { path, .. } => {
+            let rules = Rules::of(declared.get("db")).map_err(|_| refused("write"))?;
+            if !declared.contains_key("db") || !rules.may_write(path, &ledger.me, level) {
+                return Err(refused(&format!("write {path} of")));
+            }
+        }
+        PageOp::Asset { .. } => {
+            let config = declared.get("assets").ok_or_else(|| refused("add assets to"))?;
+            let needs = match config.get("upload").and_then(serde_json::Value::as_str) {
+                Some("comment") => Level::Comment,
+                _ => Level::Collaborator,
+            };
+            if level < needs {
+                return Err(refused("add assets to"));
+            }
+        }
+        PageOp::Text { .. } | PageOp::Lines { .. } | PageOp::Cell { .. } => {
+            if level < edit_level() {
+                return Err(refused("edit"));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Records `actors` as written by `user`'s devices.
@@ -210,6 +341,7 @@ mod tests {
                 .into_iter()
                 .map(|(thread, family, owner, shared)| (ThreadId(thread), Registered { family, owner, shared }))
                 .collect(),
+            ..Ledger::default()
         }
     }
 

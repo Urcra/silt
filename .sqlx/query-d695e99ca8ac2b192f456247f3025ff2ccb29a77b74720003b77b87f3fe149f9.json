@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!\", thread_id, actor, managed AS \"managed: bool\" FROM checkouts WHERE path = ? ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checkouts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "thread_id",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "checkouts",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "actor",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "checkouts",
+            "name": "actor"
+          }
+        }
+      },
+      {
+        "name": "managed: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checkouts",
+            "name": "managed"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d695e99ca8ac2b192f456247f3025ff2ccb29a77b74720003b77b87f3fe149f9"
+}

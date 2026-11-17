@@ -14,6 +14,7 @@ function thread(id: string, server: string | null, repo: string, local_only = fa
     created_ms: 0,
     messages: 0,
     edits: 0,
+    shared: false,
     location: 'here',
     forked_from: null,
     owner: '',

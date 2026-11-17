@@ -3,6 +3,7 @@ import { Layout } from './components/Layout'
 import * as routes from './components/Routes'
 import { basePath, hosted } from './served'
 import { phone } from './shell'
+import { designSearch } from './designSearch'
 
 const root = createRootRoute({ component: Layout })
 
@@ -63,6 +64,16 @@ export const router = createRouter({
       },
     }),
     createRoute({ getParentRoute: () => root, path: '/settings/$section', component: lazyRouteComponent(() => import('./components/Settings'), 'Settings') }),
+    // One design system's page (ADR 0088); the hosted app shows none yet.
+    createRoute({
+      getParentRoute: () => root,
+      path: '/settings/design-systems/system',
+      component: lazyRouteComponent(() => import('./components/DesignSystems'), 'DesignSystemPage'),
+      validateSearch: designSearch,
+      beforeLoad: () => {
+        if (hosted()) throw redirect({ to: '/settings/$section', params: { section: 'projects' }, replace: true })
+      },
+    }),
     moved('/projects', 'projects'),
     moved('/projects/add', 'add'),
     moved('/orgs', 'orgs'),
@@ -76,6 +87,22 @@ export const router = createRouter({
       validateSearch: (search: Record<string, unknown>): { q?: string } => (typeof search.q === 'string' ? { q: search.q } : {}),
     }),
     createRoute({ getParentRoute: () => root, path: '/t/$id', component: routes.ThreadRoute }),
+    createRoute({ getParentRoute: () => root, path: '/artifacts', component: lazyRouteComponent(() => import('./components/Gallery'), 'Gallery') }),
+    // A permalink to an artifact opens its thread with it open, at a version when one is named (ADR 0075).
+    createRoute({
+      getParentRoute: () => root,
+      path: '/t/$id/artifacts/$artifact',
+      beforeLoad: ({ params }) => {
+        throw redirect({ to: '/t/$id', params: { id: params.id }, hash: `artifact-${params.artifact}`, replace: true })
+      },
+    }),
+    createRoute({
+      getParentRoute: () => root,
+      path: '/t/$id/artifacts/$artifact/v/$n',
+      beforeLoad: ({ params }) => {
+        throw redirect({ to: '/t/$id', params: { id: params.id }, hash: `artifact-${params.artifact}-v${params.n}`, replace: true })
+      },
+    }),
     createRoute({
       getParentRoute: () => root,
       path: '/t/$id/review',

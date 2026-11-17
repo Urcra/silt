@@ -23,6 +23,7 @@ silt-agents = { path = "../silt-agents" }
 silt-daemon = { path = "../silt-daemon" }
 silt-design = { path = "../silt-design" }
 silt-git = { path = "../silt-git" }
+silt-log = { path = "../silt-log" }
 silt-llm = { path = "../silt-llm" }
 silt-local = { path = "../silt-local" }
 silt-mcp = { path = "../silt-mcp" }
@@ -30,6 +31,7 @@ silt-os = { path = "../silt-os" }
 silt-proto = { path = "../silt-proto" }
 silt-redact = { path = "../silt-redact" }
 silt-server = { path = "../silt-server" }
+silt-sheet = { path = "../silt-sheet" }
 silt-types = { path = "../silt-types" }
 silt-workspace = { path = "../silt-workspace" }
 serde_json = "1.0.154"

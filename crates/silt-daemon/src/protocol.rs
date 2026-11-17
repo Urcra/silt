@@ -120,6 +120,10 @@ pub enum Request {
         /// does (ADR 0069); not against a branch, which is git's already.
         #[serde(default)]
         hide_git: bool,
+        /// Leave out the edits of other agents working in the same clone
+        /// (ADR 0089).
+        #[serde(default)]
+        hide_others: bool,
     },
     /// [`Request::Diff`]'s files, each with its counts and size but not its
     /// lines.
@@ -132,6 +136,8 @@ pub enum Request {
         base: Option<String>,
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
     },
     /// For [`Request::Diff`]'s files the person marked seen, whether each is
     /// as they saw it, and the lines new since (ADR 0067).
@@ -145,6 +151,8 @@ pub enum Request {
         /// As [`Request::Diff`]'s.
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
     },
     /// Marks a file of the thread seen, or not, at a version the review read.
     MarkThreadSeen {
@@ -167,6 +175,8 @@ pub enum Request {
         /// As [`Request::Diff`]'s.
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
     },
     /// Searches the server when connected (with `filters`), else this
     /// machine's index.
@@ -260,6 +270,8 @@ pub enum Request {
         /// As [`Request::Diff`]'s.
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
     },
     MrApprove {
         mr: String,
@@ -344,6 +356,22 @@ pub enum Request {
     InFlight {
         cwd: PathBuf,
         path: String,
+        /// The asking agent's thread, left out; else the one checked out
+        /// at `cwd`, which in a clone several agents share may be another's.
+        #[serde(default)]
+        thread: Option<String>,
+    },
+    /// The other agents present in `thread`'s project, as its agent hears
+    /// of them (ADR 0090).
+    Agents {
+        thread: String,
+    },
+    /// A message from `from`'s agent to the agent of the thread `to` names,
+    /// handed to it after its next tool call or with its next prompt.
+    Message {
+        from: String,
+        to: String,
+        text: String,
     },
     /// Who wrote each line of `path`, as seen from `cwd` (ADR 0042).
     Blame {
@@ -367,6 +395,8 @@ pub enum Request {
         /// the lines (ADR 0069).
         #[serde(default)]
         hide_git: bool,
+        #[serde(default)]
+        hide_others: bool,
         cwd: PathBuf,
     },
     /// Anchors lines for a pending review comment, recording nothing
@@ -415,7 +445,7 @@ pub enum Request {
     /// What an agent's run shows the person (ADR 0068); only inside
     /// [`Request::Scoped`], for the thread its token was made for.
     PutArtifact {
-        artifact: NewArtifact,
+        artifact: Box<NewArtifact>,
     },
     /// What a run reads before making an artifact: the design system that
     /// applies, or the one named, and the others it may use (ADR 0071);
@@ -435,8 +465,250 @@ pub enum Request {
     SetArtifactSettings {
         settings: ArtifactSettings,
     },
+    /// A read or write of an artifact's page data (ADR 0072).
+    PageData {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::page::PageRequest,
+        /// Read as another person at this level, to check what the rules
+        /// hide from them; writes are refused with it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_level: Option<silt_proto::page::Level>,
+    },
+    /// A version an HTML artifact's page saved itself as (ADR 0072); refused
+    /// as a conflict when `base` isn't the latest version.
+    PublishArtifact {
+        thread: String,
+        artifact: String,
+        html: String,
+        #[serde(default)]
+        base: Option<u32>,
+    },
+    /// A page's question for this machine's agent (ADR 0072); its answer
+    /// streams as `sample` bus events named `ask`. With no `artifact`, the
+    /// person asks from elsewhere and their server checked the page.
+    Sample {
+        thread: String,
+        #[serde(default)]
+        artifact: Option<String>,
+        #[serde(default)]
+        ask: Option<String>,
+        input: serde_json::Value,
+        #[serde(default)]
+        images: Vec<silt_proto::artifact::SampleImage>,
+        #[serde(default)]
+        tools: Vec<silt_proto::artifact::SampleTool>,
+        #[serde(default)]
+        model: silt_proto::artifact::SampleModel,
+    },
+    /// A doc or a deck as a PDF, printed from `html`, the page the browser
+    /// drew of it, by this machine's headless browser; a deck's page says
+    /// its own size.
+    ArtifactPdf {
+        thread: String,
+        artifact: String,
+        html: String,
+    },
+    /// Keeps a doc, a sheet or a whiteboard as it stands as its next
+    /// version, from the person's Save version.
+    SaveEditedVersion {
+        thread: String,
+        artifact: String,
+        #[serde(default)]
+        note: Option<String>,
+    },
+    /// The agent answering a page's question named `ask` calls one of the
+    /// page's tools, from `silt sample-tools`; answered once the page runs it.
+    SampleToolCall {
+        ask: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// Stops the page's question named `ask` while it runs.
+    StopSample {
+        thread: String,
+        artifact: String,
+        ask: String,
+    },
+    /// The page's answer to a call of one of its tools.
+    SampleToolResult {
+        thread: String,
+        artifact: String,
+        ask: String,
+        call: u32,
+        result: SampleToolResult,
+    },
+    /// The files people added to an artifact's page (ADR 0074).
+    PageAssets {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::page::AssetRequest,
+    },
+    /// Where a page's room is relayed: the server the thread syncs with, so
+    /// the room spans every machine viewing it, or none to relay it here.
+    RoomRoute {
+        thread: String,
+    },
+    /// A view joins a page's room (ADR 0081); the answer is who hears what.
+    RoomJoin {
+        key: silt_proto::rooms::RoomKey,
+        peer: String,
+    },
+    RoomSend {
+        key: silt_proto::rooms::RoomKey,
+        peer: String,
+        sent: silt_proto::rooms::Sent,
+    },
+    RoomLeave {
+        key: silt_proto::rooms::RoomKey,
+        peer: String,
+    },
+    /// The thread's agent emits to a page's room and reads what was said.
+    RoomAgent {
+        thread: String,
+        artifact: String,
+        #[serde(default)]
+        emit: Option<(String, serde_json::Value)>,
+        /// The agent's presence, as a view's: what it's on, say.
+        #[serde(default)]
+        presence: Option<serde_json::Value>,
+    },
+    /// The MCP servers this machine lists for pages (ADR 0080).
+    PageConnectors,
+    SetPageConnectors {
+        connectors: Vec<crate::connectors::PageConnector>,
+    },
+    /// Adds the servers Claude Code lists, every tool off.
+    ImportPageConnectors,
+    /// A page connector's tools, started if it isn't running.
+    ConnectorTools {
+        name: String,
+    },
+    /// Keeps a header's value for an HTTP page connector in the keyring, or
+    /// forgets it.
+    SetConnectorSecret {
+        name: String,
+        header: String,
+        #[serde(default)]
+        value: Option<String>,
+    },
+    /// A page's call of a connector's tool, or its description (ADR 0080).
+    PageMcp {
+        thread: String,
+        artifact: String,
+        asked: crate::connectors::McpAsk,
+    },
+    /// A doc's text, or edits of it (ADR 0077).
+    DocData {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::edited::DocRequest,
+    },
+    /// A sheet's cells and values, or changes to it (ADR 0077).
+    SheetData {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::edited::SheetRequest,
+    },
+    /// The thread's files, for a page that declares `files` (ADR 0078).
+    PageFiles {
+        thread: String,
+        artifact: String,
+        asked: silt_proto::page::FilesRequest,
+    },
+    /// One added file's bytes, for the page's frame.
+    PageAsset {
+        thread: String,
+        artifact: String,
+        asset: String,
+    },
+    /// A file beside a version's page, for its frame (ADR 0074).
+    ArtifactFile {
+        thread: String,
+        id: String,
+        #[serde(default)]
+        version: Option<u32>,
+        path: String,
+    },
+    /// Every artifact in the threads here, for the Artifacts page (ADR 0075).
+    ArtifactListing,
+    /// An artifact's thumbnail as a JPEG, rendered the first time it's asked
+    /// for where a headless browser is installed.
+    ArtifactThumbnail {
+        thread: String,
+        artifact: String,
+    },
+    /// Keeps a thumbnail rendered off the event loop.
+    KeepThumbnail {
+        thread: String,
+        artifact: String,
+        version: u32,
+        jpeg: String,
+    },
+    PinArtifact {
+        thread: String,
+        artifact: String,
+        pinned: bool,
+    },
+    /// Hides an artifact for everyone, or shows it again; the owner's to do.
+    ArchiveArtifact {
+        thread: String,
+        artifact: String,
+        archived: bool,
+    },
+    /// Who views an artifact's page, as its `user` capability answers.
+    PageViewer {
+        thread: String,
+    },
+    /// What the person allowed or refused an artifact's page (ADR 0072).
+    ArtifactGrants {
+        thread: String,
+        artifact: String,
+    },
+    SetArtifactGrant {
+        thread: String,
+        artifact: String,
+        capability: String,
+        #[serde(default)]
+        state: Option<String>,
+        /// The version the viewer saw, whose declaration the grant is for;
+        /// the latest when none.
+        #[serde(default)]
+        version: Option<u32>,
+    },
     /// The design system picked for each project on this machine.
     ProjectDesignSystems,
+    /// Every design system here, grouped by project, with what uses each and
+    /// the ones threads are still making (ADR 0088).
+    DesignCatalog,
+    /// One design system's page: its rules, tokens with their values,
+    /// components, cover, assets and the CSS a frame gets. A thread names
+    /// the folder a system it's making is in.
+    DesignSystem {
+        source: DesignSource,
+        name: String,
+        #[serde(default)]
+        clone: Option<PathBuf>,
+        #[serde(default)]
+        thread: Option<String>,
+    },
+    /// One of a design system's assets, by its path under `assets/`.
+    DesignAsset {
+        source: DesignSource,
+        name: String,
+        #[serde(default)]
+        clone: Option<PathBuf>,
+        #[serde(default)]
+        thread: Option<String>,
+        path: String,
+    },
+    /// Starts a thread whose agent makes a design system, or changes one;
+    /// answers the thread.
+    DesignStart(DesignStart),
+    /// The design system a thread was started to make or change, if any.
+    ThreadDesignSystem {
+        thread: String,
+    },
     /// Picks a project's design system on this machine, or drops the pick.
     SetProjectDesignSystem {
         repo: String,
@@ -454,6 +726,14 @@ pub enum Request {
     ArtifactContent {
         thread: String,
         blob: String,
+    },
+    /// A version of one of the thread's artifacts, the latest when `version`
+    /// is none, for its frame (ADR 0074).
+    ArtifactVersion {
+        thread: String,
+        id: String,
+        #[serde(default)]
+        version: Option<u32>,
     },
     /// A request of an agent's history tools, answered only for the
     /// workspace its run's token was made for (ADR 0065).
@@ -798,7 +1078,7 @@ pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
 /// since it started, as installing Silt again does, it still runs the old
 /// build and serves the old web UI.
 /// What `silt_show` or `silt_artifact` asks to show.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewArtifact {
     pub title: String,
     /// `html`, `svg`, `markdown`, `mermaid` or `image`.
@@ -819,6 +1099,46 @@ pub struct NewArtifact {
     /// The design system to style an HTML version with, or `none`.
     #[serde(default)]
     pub design_system: Option<String>,
+    /// The runtime contract an HTML version's page is written for, or
+    /// `latest`; by default its last version's.
+    #[serde(default)]
+    pub contract: Option<String>,
+    /// Changes to the latest version's source, in place of `content` or
+    /// `path` (ADR 0073).
+    #[serde(default)]
+    pub edits: Vec<silt_proto::artifact::Edit>,
+    /// What this version changed.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// What the artifact is, for its card; a version without one keeps the
+    /// last.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The capabilities the page may use (ADR 0072): none keeps the last
+    /// version's, `{}` clears them, and an object replaces them all.
+    #[serde(default)]
+    pub capabilities: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Files beside an HTML version's page, by path (ADR 0074): each one
+    /// added or replaced, or removed by `null`; the rest of the last
+    /// version's are kept.
+    #[serde(default)]
+    pub files: std::collections::BTreeMap<String, Option<NewFile>>,
+    /// An RFC 6902 JSON Patch of the latest version of a type's content
+    /// (ADR 0076), in place of content, a path or edits.
+    #[serde(default)]
+    pub patch: Option<serde_json::Value>,
+}
+
+/// A file of a version, as text, as base64, or read from a file of the
+/// run's checkout.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewFile {
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub base64: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// The artifact a [`Request::PutArtifact`] kept.
@@ -832,6 +1152,10 @@ pub struct ArtifactPut {
     /// What its tokens couldn't use, for the agent to fix.
     #[serde(default)]
     pub dropped: Vec<String>,
+    /// The system the last version or a default named, which isn't on this
+    /// machine, so the version has none (ADR 0087).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing: Option<String>,
 }
 
 /// How artifacts' frames load libraries and fonts (ADR 0071).
@@ -872,7 +1196,6 @@ pub enum DesignSource {
     Project,
     /// The person's, under Silt's data dir.
     Personal,
-    Builtin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -888,6 +1211,217 @@ pub struct DesignSystemView {
     /// Its custom properties and type classes, by family.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub tokens: std::collections::BTreeMap<String, Vec<String>>,
+    /// Its components, given with its README (ADR 0086).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<DesignComponentView>,
+    /// Its folder and its assets' paths under `assets/`, given with its
+    /// README (ADR 0088).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assets: Vec<String>,
+}
+
+/// One of a design system's components: its example and the note it opens with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignComponentView {
+    pub name: String,
+    pub about: String,
+    pub html: String,
+    /// Its guidelines, `components/<name>.md` (ADR 0088).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guide: Option<String>,
+}
+
+/// Every design system on this machine, for Settings (ADR 0088).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignCatalog {
+    /// Each project's own, then the person's.
+    pub groups: Vec<DesignGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignGroup {
+    /// The project whose repository keeps them; none for the person's own.
+    pub project: Option<DesignProject>,
+    pub systems: Vec<DesignSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignProject {
+    pub repo: String,
+    pub name: String,
+    pub clone: String,
+}
+
+/// A design system as a row: enough to tell it apart and open it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignSummary {
+    pub name: String,
+    pub title: String,
+    pub source: DesignSource,
+    /// Its folder.
+    pub dir: String,
+    /// A few of its colours, in its first theme.
+    pub swatches: Vec<String>,
+    pub colors: u32,
+    pub type_styles: u32,
+    pub components: u32,
+    /// What picks it as a default: "repo's default", "picked for web on
+    /// this machine", "default for Work".
+    pub uses: Vec<String>,
+    /// The thread still making or changing it, when one is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<String>,
+    /// It's only in that thread's folder so far.
+    #[serde(default)]
+    pub unmerged: bool,
+}
+
+/// One design system's page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignDetail {
+    pub summary: DesignSummary,
+    pub readme: String,
+    /// Where it was made from, as its tokens' `meta.source` says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made_from: Option<String>,
+    pub themes: Vec<DesignTheme>,
+    /// Its tokens with their values per theme, colours first.
+    pub tokens: Vec<DesignToken>,
+    pub type_styles: Vec<DesignTypeStyle>,
+    /// The CSS its tokens and components compile to, as a frame gets it.
+    pub css: String,
+    pub components: Vec<DesignComponentView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
+    pub assets: Vec<DesignAssetView>,
+    /// Every file in its folder, by path.
+    pub files: Vec<String>,
+    /// What its files hold that Silt left out, and why.
+    pub dropped: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignTheme {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignToken {
+    pub family: String,
+    pub name: String,
+    /// Its value by theme id; one value holds in every theme under `*`.
+    pub values: std::collections::BTreeMap<String, String>,
+    pub usage: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignTypeStyle {
+    pub name: String,
+    pub group: String,
+    /// Its font stack, from its family.
+    pub family: String,
+    pub font_size: String,
+    pub line_height: Option<String>,
+    pub font_weight: Option<String>,
+    pub letter_spacing: Option<String>,
+    pub usage: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignAssetView {
+    pub path: String,
+    pub media_type: String,
+    pub size: u32,
+}
+
+/// One asset's bytes, in base64.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignAssetData {
+    pub media_type: String,
+    pub data: String,
+}
+
+/// What a design system is made from (ADR 0088).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
+pub enum DesignFrom {
+    /// A project's code.
+    Code,
+    /// A website, a brand guide or screenshots.
+    Website,
+    /// A description.
+    Description,
+}
+
+/// Where a new design system is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
+pub enum DesignKeep {
+    /// The project's repository, committed.
+    Repo,
+    /// The person's own, synced to their devices.
+    Personal,
+}
+
+/// Starts an agent making a design system, or changing one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignStart {
+    /// The system's name as people read it, such as "Harbor"; its folder's
+    /// name comes from it.
+    pub title: String,
+    pub agent: String,
+    pub keep: DesignKeep,
+    /// The project: the one built from, the one whose repository keeps it,
+    /// or both.
+    #[serde(default)]
+    pub clone: Option<PathBuf>,
+    #[serde(default)]
+    pub from: Option<DesignFrom>,
+    /// The website's address, for one made from a website.
+    #[serde(default)]
+    pub link: Option<String>,
+    /// What to make it from, for one made from a description, or anything
+    /// else the person adds.
+    #[serde(default)]
+    pub notes: Option<String>,
+    /// A brand guide, screenshots or anything else sent with the prompt.
+    #[serde(default)]
+    pub attachments: Vec<PromptAttachment>,
+    /// What to change in the system `name`, which exists; a new one when
+    /// unset.
+    #[serde(default)]
+    pub change: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// The design system a thread was started to make or change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ThreadDesign {
+    pub name: String,
+    pub title: String,
+    pub keep: DesignKeep,
+    pub changing: bool,
+    /// What's written so far; none until the folder has its tokens.
+    pub detail: Option<DesignDetail>,
 }
 
 /// What [`Request::ArtifactGuide`] answers.
@@ -898,6 +1432,10 @@ pub struct ArtifactGuide {
     /// Why it applies: asked for, the project's default, the workspace's.
     pub why: Option<String>,
     pub systems: Vec<DesignSystemView>,
+    /// A default that names a system this machine doesn't have, and why it
+    /// applied, so none does (ADR 0087).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1630,6 +2168,23 @@ pub enum BusEvent {
     /// An import from the web UI has gone through `done` of its `total`
     /// sessions.
     Importing { done: usize, total: usize },
+    /// The answer so far to a page's `sample` question.
+    Sample { ask: String, text: String },
+    /// The agent answering a page's question calls one of the tools the
+    /// page gave it, for the page to run and answer.
+    SampleTool {
+        ask: String,
+        call: u32,
+        name: String,
+        #[cfg_attr(test, ts(type = "unknown"))]
+        input: serde_json::Value,
+    },
+    /// What the agent said to a room, for the web server to deliver; never
+    /// sent to browsers.
+    Room {
+        #[cfg_attr(test, ts(type = "unknown"))]
+        deliveries: serde_json::Value,
+    },
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
 }
@@ -1656,10 +2211,22 @@ impl BusEvent {
             Self::Inbox => Some("inbox".to_owned()),
             Self::Mrs => Some("mrs".to_owned()),
             Self::Importing { .. } => Some("import".to_owned()),
+            Self::Sample { ask, .. } | Self::SampleTool { ask, .. } => Some(format!("sample:{ask}")),
+            Self::Room { .. } => Some("rooms".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
             Self::Agents | Self::Lagged => None,
         }
     }
+}
+
+/// How a page's tool answered: its value, or why it failed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SampleToolResult {
+    pub ok: bool,
+    #[serde(default)]
+    pub value: serde_json::Value,
+    #[serde(default)]
+    pub error: String,
 }
 
 /// What a browser sends on `/api/events`.
@@ -1750,15 +2317,35 @@ mod tests {
             NewLink::decl(&config),
             ThreadLink::decl(&config),
             FileEdit::decl(&config),
+            silt_proto::view::SharedEdits::decl(&config),
             FileTouch::decl(&config),
             HistoryEntry::decl(&config),
             ToolView::decl(&config),
             ToolOutcome::decl(&config),
             ImageView::decl(&config),
             silt_proto::view::ArtifactView::decl(&config),
+            silt_proto::artifact::ArtifactFile::decl(&config),
+            silt_proto::view::ArtifactListed::decl(&config),
+            crate::connectors::PageConnector::decl(&config),
+            crate::connectors::ConnectorTool::decl(&config),
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
             DesignSystemView::decl(&config),
+            DesignComponentView::decl(&config),
+            DesignCatalog::decl(&config),
+            DesignGroup::decl(&config),
+            DesignProject::decl(&config),
+            DesignSummary::decl(&config),
+            DesignDetail::decl(&config),
+            DesignTheme::decl(&config),
+            DesignToken::decl(&config),
+            DesignTypeStyle::decl(&config),
+            DesignAssetView::decl(&config),
+            DesignAssetData::decl(&config),
+            DesignFrom::decl(&config),
+            DesignKeep::decl(&config),
+            DesignStart::decl(&config),
+            ThreadDesign::decl(&config),
             silt_proto::view::ArtifactContent::decl(&config),
             silt_proto::view::LinkedArtifact::decl(&config),
             UsageView::decl(&config),

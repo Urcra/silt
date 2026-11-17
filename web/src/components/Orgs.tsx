@@ -112,10 +112,25 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
             </button>
           ))}
         </span>
+        <label htmlFor={`${org.name}-connectors`} className="flex flex-col">
+          <span>Page connectors</span>
+          <span className="text-2xs text-fg-2">The connectors pages may call, by name, comma-separated; empty allows any</span>
+        </label>
+        <input
+          id={`${org.name}-connectors`}
+          aria-label={`${org.name}'s page connectors`}
+          defaultValue={(policy.connectors ?? []).join(', ')}
+          onBlur={(event) => {
+            const named = event.target.value.split(',').map((name) => name.trim()).filter(Boolean)
+            set({ connectors: named.length > 0 ? named : null })
+          }}
+          placeholder="any"
+          className="h-8 self-start rounded-sm border border-line bg-surface-1 px-2 text-xs text-fg-1"
+        />
         {(
           [
             ['sandbox', "Agent's own sandbox", 'Agents that can’t sandbox are refused'],
-            ['isolated', 'Isolated history', "The sandbox also hides Silt's data and other workspaces"],
+            ['isolated', "Hide other workspaces' files", "The sandbox also keeps agents out of Silt's data and other workspaces' folders"],
             ['home_locked', 'Where threads sync', `Only to this server; never this machine only, never another`],
           ] as const
         ).map(([key, name, says]) => (

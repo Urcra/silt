@@ -18,6 +18,12 @@ publish = false
 inherits = "release"
 incremental = true
 
+# Full debug info for the workspace's own crates, and only line tables (for
+# backtraces) for dependencies, which are rarely stepped through: a fifth off
+# target/, and quicker links. .cargo/config.toml splits it out on Linux.
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 
