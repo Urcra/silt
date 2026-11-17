@@ -55,6 +55,13 @@ fn file_title(path: &str) -> String {
     std::path::Path::new(path).file_stem().map_or_else(|| "Image".to_owned(), |stem| stem.to_string_lossy().into_owned())
 }
 
+/// Runs a store query in this process, for a tool answered without a daemon.
+fn block_on<T>(
+    future: impl std::future::Future<Output = Result<T, silt_daemon::CoreError>>,
+) -> Result<T, silt_daemon::CoreError> {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(silt_daemon::CoreError::from)?.block_on(future)
+}
+
 fn text_arg(arguments: &Value, name: &str) -> Result<String, String> {
     arguments.get(name).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| format!("missing argument {name}"))
 }
@@ -75,6 +82,19 @@ impl DaemonTools {
     fn show(&self, artifact: NewArtifact) -> Result<ArtifactPut, String> {
         let token = self.token.clone().ok_or("only an agent the web UI runs can show the person something")?;
         ask_daemon(&Request::Scoped { token, asking: Box::new(Request::PutArtifact { artifact: Box::new(artifact) }) })
+    }
+
+    /// Asks the daemon about the agents in the project, or without one, the
+    /// store itself, as hooks capture without one (ADR 0018).
+    fn peers(
+        &self,
+        request: impl FnOnce() -> Request,
+        here: impl FnOnce(&std::path::Path) -> Result<String, silt_daemon::CoreError>,
+    ) -> Result<String, String> {
+        if !crate::commands::daemonless_capture() && silt_daemon::holds_lock(&paths::data_dir()) {
+            return self.ask(request());
+        }
+        here(&paths::data_dir()).map_err(|error| silt_daemon::protocol::error_chain(&error))
     }
 
     /// `path` as the agent meant it: relative to where it runs.
@@ -460,9 +480,19 @@ impl silt_mcp::Backend for DaemonTools {
                 }
                 Ok(out)
             }
+            "silt_agents" => self.peers(
+                || Request::Agents { thread: self.thread.clone() },
+                |data_dir| block_on(silt_daemon::peers::agents_here(data_dir, &self.thread)),
+            ),
+            "silt_message" => {
+                let (to, text) = (text_arg(arguments, "to")?, text_arg(arguments, "text")?);
+                let request = || Request::Message { from: self.thread.clone(), to: to.clone(), text: text.clone() };
+                self.peers(request, |data_dir| block_on(silt_daemon::peers::send(data_dir, &self.thread, &to, &text)))
+            }
             "silt_in_flight" => {
+                let path = text_arg(arguments, "path")?;
                 let found: Vec<InFlight> =
-                    self.ask(Request::InFlight { cwd: self.cwd.clone(), path: text_arg(arguments, "path")? })?;
+                    self.ask(Request::InFlight { cwd: self.cwd.clone(), path, thread: Some(self.thread.clone()) })?;
                 if found.is_empty() {
                     return Ok("No other thread is changing this path.".into());
                 }

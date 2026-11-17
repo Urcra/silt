@@ -328,7 +328,7 @@ fn run_agent_in(name: &str, cwd: PathBuf, isolated: bool, args: &[String]) -> Re
 }
 
 /// Whether to capture in this process even when a daemon runs.
-fn daemonless_capture() -> bool {
+pub(crate) fn daemonless_capture() -> bool {
     env::var_os("SILT_DAEMONLESS_CAPTURE").is_some_and(|value| value == "1")
 }
 
@@ -820,7 +820,7 @@ fn captured_here(event: &str, input: serde_json::Value) -> HookReply {
             if let (Some(thread), "Stop") = (&captured.thread, event) {
                 push_in_background(thread);
             }
-            if captured.thread.is_some() {
+            if captured.thread.is_some() && event != "SessionEnd" {
                 start_daemon_for_later_hooks();
             }
             captured.reply
@@ -1054,7 +1054,7 @@ pub fn search(query: &str, filters: SearchFilters) -> Result<(), Exn<CliError>> 
 
 pub fn in_flight(path: &str) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let found: Vec<InFlight> = call(&Request::InFlight { cwd: current_dir()?, path: path.into() })?;
+    let found: Vec<InFlight> = call(&Request::InFlight { cwd: current_dir()?, path: path.into(), thread: None })?;
     print!("{}", render::safe(&render::in_flight(&found)));
     Ok(())
 }

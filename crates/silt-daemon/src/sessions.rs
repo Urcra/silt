@@ -47,6 +47,9 @@ pub(crate) struct StagedLine {
     pub(crate) delta: Delta,
     pub(crate) rows: Vec<SearchRow>,
     pub(crate) marks: Vec<Mark>,
+    /// For an agent without hooks, the prompt the line carries, which its
+    /// peers hear it was asked (ADR 0087).
+    pub(crate) prompt: Option<String>,
 }
 
 /// Records staged from one session file, to store in one write.
@@ -466,6 +469,7 @@ impl Core {
             checkout_id: new.checkout_id,
         };
         self.store.add_session(&record, now_ms()).await?;
+        self.store.session_revived(&record.agent, &record.session_id, now_ms()).await?;
         let mut readers: HashMap<String, Box<dyn Reader>> = HashMap::new();
         let mut main_reader = new.agent.reader();
         for line in &new.restored {
@@ -777,6 +781,8 @@ impl Core {
             if let Some(session) = self.session_mut(id) {
                 session.live = false;
                 session.in_turn = false;
+                let agent = session.record.agent.clone();
+                self.store.session_ended(&agent, id, now_ms()).await?;
             }
         }
         Ok("ended")
@@ -1022,6 +1028,9 @@ impl Core {
                     return Err(error);
                 }
             };
+            if let Some(prompt) = &staged.prompt {
+                self.noted_prompt(session_id, prompt).await?;
+            }
             batch.push(staged.family, staged.delta, staged.rows, end);
             if !staged.marks.is_empty() {
                 self.store_batch(session_id, key, &mut batch, read_to(end)).await?;
@@ -1030,6 +1039,8 @@ impl Core {
         }
         // Lines that recorded nothing still count as read.
         let read = read_to(consumed);
+        let agent = self.session(session_id).expect("caller checked").record.agent.clone();
+        self.store.session_seen(&agent, session_id, now_ms()).await?;
         if !batch.deltas.is_empty() {
             self.store_batch(session_id, key, &mut batch, read).await?;
         } else if self.session(session_id).and_then(|session| session.offsets.get(key)) != Some(&read) {
@@ -1054,6 +1065,9 @@ impl Core {
         read: Option<SessionFileOffset>,
     ) -> Result<(), CoreError> {
         let staged = self.stage_line(session_id, key, line)?;
+        if let Some(prompt) = &staged.prompt {
+            self.noted_prompt(session_id, prompt).await?;
+        }
         self.store_lines(session_id, key, staged.family, &[staged.delta], &staged.rows, read).await?;
         self.apply_marks(session_id, staged.marks).await
     }
@@ -1079,9 +1093,11 @@ impl Core {
                 Some((entry.kind().to_owned(), text))
             })
             .collect();
+        let unhooked = agent.capture() != Capture::Hooks && key == "main";
+        let prompt = texts.iter().find(|(kind, _)| kind == "user").map(|(_, text)| text.clone()).filter(|_| unhooked);
         let (delta, rows) = self.stage_conv(family, thread, agent_author(&reference), op, texts)?;
-        let marks = if agent.capture() != Capture::Hooks && key == "main" { parsed.marks } else { Vec::new() };
-        Ok(StagedLine { family, delta, rows, marks })
+        let marks = if unhooked { parsed.marks } else { Vec::new() };
+        Ok(StagedLine { family, delta, rows, marks, prompt })
     }
 
     async fn store_batch(
@@ -1124,6 +1140,15 @@ impl Core {
         Ok(())
     }
 
+    /// What an agent without hooks was asked, read from its transcript.
+    async fn noted_prompt(&self, session_id: &str, prompt: &str) -> Result<(), CoreError> {
+        let (Some(session), Some(doing)) = (self.session(session_id), crate::peers::doing_of(prompt)) else {
+            return Ok(());
+        };
+        self.store.session_doing(&session.record.agent, session_id, &doing).await?;
+        Ok(())
+    }
+
     pub(crate) async fn apply_mark(&mut self, session_id: &str, mark: Mark) -> Result<(), CoreError> {
         let open = self.open_tool(session_id).map(str::to_owned);
         let session = self.session_mut(session_id).expect("caller checked");
@@ -1154,9 +1179,14 @@ impl Core {
         };
         // As a hook does when a tool or turn ends (ADR 0018): what changed
         // was made by it, however late a busy machine's watcher would tell.
-        let checkout = session.record.checkout_id;
+        let (checkout, agent) = (session.record.checkout_id, session.record.agent.clone());
         if matches!(mark, TurnMark::ToolFinished { .. } | TurnMark::Stopped) && self.checkouts.contains_key(&checkout) {
             self.rescan(checkout).await?;
+        }
+        match mark {
+            TurnMark::PromptSubmitted => self.store.session_idle(&agent, session_id, false).await?,
+            TurnMark::Stopped => self.store.session_idle(&agent, session_id, true).await?,
+            _ => {}
         }
         self.record_turn(session_id, mark).await
     }

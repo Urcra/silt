@@ -135,8 +135,16 @@ impl Core {
 
     /// Who else is changing `path` (relative to `cwd`): the server's view
     /// when connected, else what this machine knows.
-    pub(crate) async fn in_flight_anywhere(&self, cwd: &std::path::Path, path: &str) -> Result<Vec<InFlight>, CoreError> {
+    /// `caller`, the asking agent's thread, is left out; else the one checked
+    /// out at `cwd`.
+    pub(crate) async fn in_flight_anywhere(
+        &self,
+        cwd: &std::path::Path,
+        path: &str,
+        caller: Option<ThreadId>,
+    ) -> Result<Vec<InFlight>, CoreError> {
         let (identity, relative, here) = self.repo_path(cwd, path)?;
+        let here = caller.or(here);
         let Ok(remote) = self.server_for_project(&identity) else {
             return Ok(self.in_flight(&identity, &relative, here));
         };

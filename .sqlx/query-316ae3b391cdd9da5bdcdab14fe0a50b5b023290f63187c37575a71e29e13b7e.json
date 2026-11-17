@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO session_touches (agent, session_id, path, touched_ms)\n             SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM sessions WHERE agent = ?1 AND session_id = ?2)\n             ON CONFLICT (agent, session_id, path) DO UPDATE SET touched_ms = excluded.touched_ms",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "316ae3b391cdd9da5bdcdab14fe0a50b5b023290f63187c37575a71e29e13b7e"
+}

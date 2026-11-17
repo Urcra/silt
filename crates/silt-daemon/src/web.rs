@@ -1909,7 +1909,8 @@ async fn file_at(
 
 /// Other threads of the thread's repository that changed the path.
 async fn in_flight(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<PathQuery>) -> HttpResponse {
-    ask_in_clone(&web, &thread, |cwd| Request::InFlight { cwd, path: query.path }).await
+    let caller = Some(thread.clone());
+    ask_in_clone(&web, &thread, |cwd| Request::InFlight { cwd, path: query.path, thread: caller }).await
 }
 
 #[derive(Deserialize)]

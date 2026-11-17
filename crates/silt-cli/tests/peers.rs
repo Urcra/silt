@@ -3,6 +3,7 @@
 mod common;
 
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Output, Stdio};
 
@@ -112,4 +113,147 @@ fn two_agents_in_one_clone_are_both_recorded_with_a_daemon() {
 #[test]
 fn two_agents_in_one_clone_are_both_recorded_without_a_daemon() {
     two_agents_in_one_clone_are_both_recorded(false);
+}
+
+fn refs(owned: &[(String, String)]) -> Vec<(&str, &str)> {
+    owned.iter().map(|(key, value)| (key.as_str(), value.as_str())).collect()
+}
+
+/// What a hook the fake agent ran said back, from `FAKE_HOOK_LOG`.
+fn hook_said(log: &Path, event: &str) -> String {
+    let suffix = format!("-{event}");
+    let found = fs::read_dir(log)
+        .expect("hook log")
+        .flatten()
+        .find(|entry| entry.file_name().to_string_lossy().ends_with(&suffix))
+        .unwrap_or_else(|| panic!("no {event} hook ran"));
+    let said = fs::read_to_string(found.path()).expect("reads");
+    if said.trim().is_empty() {
+        return String::new();
+    }
+    let said: serde_json::Value = serde_json::from_str(&said).unwrap_or_else(|_| panic!("{event} said JSON: {said}"));
+    said["hookSpecificOutput"]["additionalContext"].as_str().unwrap_or_default().to_owned()
+}
+
+/// The short thread id that follows `before` in `text`.
+fn id_after(text: &str, before: &str) -> String {
+    let rest = text.split(before).nth(1).unwrap_or_else(|| panic!("{before:?} in {text}"));
+    rest.chars().take_while(char::is_ascii_hexdigit).collect()
+}
+
+/// Calls one of Silt's MCP tools as `thread`'s agent does.
+fn tool(machine: &Machine, thread: &str, envs: &[(&str, &str)], name: &str, arguments: serde_json::Value) -> String {
+    let mut mcp = machine
+        .command(&["mcp", "--thread", thread], envs)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("silt mcp runs");
+    {
+        let mut stdin = mcp.stdin.take().expect("stdin");
+        let call = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}});
+        writeln!(stdin, "{call}").expect("write");
+    }
+    let output = String::from_utf8_lossy(&mcp.wait_with_output().expect("mcp exits").stdout).into_owned();
+    let reply: serde_json::Value = serde_json::from_str(output.lines().next().unwrap_or_default()).expect("a JSON-RPC reply");
+    reply["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{reply}")).to_owned()
+}
+
+/// A starts and is held in its tool; B starts in the same clone, hears of
+/// A, and messages it; A hears of B after its tool call. Once A ends, B no
+/// longer lists it; an agent in its own checkout is told apart.
+fn agents_hear_of_each_other_and_message_each_other(daemon: bool) {
+    let world = world(daemon);
+    let laptop = &world.laptop;
+    let base: Vec<(&str, &str)> = if daemon { Vec::new() } else { vec![("SILT_DAEMONLESS_CAPTURE", "1")] };
+    let (logs_a, logs_b, logs_c) =
+        (world.root.path().join("hooks-a"), world.root.path().join("hooks-b"), world.root.path().join("hooks-c"));
+    for logs in [&logs_a, &logs_b, &logs_c] {
+        fs::create_dir_all(logs).expect("hook log dir");
+    }
+    let logged = |logs: &Path| -> Vec<(String, String)> {
+        let log = ("FAKE_HOOK_LOG".to_owned(), logs.to_string_lossy().into_owned());
+        base.iter().map(|(key, value)| ((*key).to_owned(), (*value).to_owned())).chain([log]).collect()
+    };
+    let (envs_a, envs_b, envs_c) = (logged(&logs_a), logged(&logs_b), logged(&logs_c));
+    let (marker_a, marker_b, marker_c) =
+        (world.root.path().join("in-tool-a"), world.root.path().join("in-tool-b"), world.root.path().join("in-tool-c"));
+
+    let a = in_tool(laptop, &["claude"], &marker_a, &refs(&envs_a));
+    assert!(
+        !logs_a.read_dir().expect("log").flatten().any(|entry| {
+            entry.file_name().to_string_lossy().ends_with("-SessionStart") && entry.metadata().is_ok_and(|meta| meta.len() > 0)
+        }),
+        "alone in the project, A hears nothing"
+    );
+    let b = in_tool(laptop, &["claude"], &marker_b, &refs(&envs_b));
+    let greeting = hook_said(&logs_b, "SessionStart");
+    assert!(greeting.contains("other agents are working in this project now"), "{greeting}");
+    assert!(greeting.contains("(claude, in your working tree): working now"), "{greeting}");
+    assert!(greeting.contains("Asked to: \"Please add a farewell line to main\""), "{greeting}");
+    let (thread_a, thread_b) = (id_after(&greeting, "\n- thread "), id_after(&greeting, "Your thread is "));
+    assert_ne!(thread_a, thread_b);
+
+    let listed = tool(laptop, &thread_b, &base, "silt_agents", serde_json::json!({}));
+    assert!(listed.contains(&format!("thread {thread_a} (claude, in your working tree)")), "{listed}");
+    let sent = tool(
+        laptop,
+        &thread_b,
+        &base,
+        "silt_message",
+        serde_json::json!({"to": thread_a, "text": "I'm adding a farewell to main.rs too"}),
+    );
+    assert!(sent.starts_with(&format!("Sent to thread {thread_a}")) && sent.contains("after its next tool call"), "{sent}");
+    let refused = tool(laptop, &thread_b, &base, "silt_message", serde_json::json!({"to": thread_b, "text": "me"}));
+    assert!(refused.contains("your own thread"), "{refused}");
+
+    let_go(&marker_a);
+    let a = finished(a);
+    assert!(String::from_utf8_lossy(&a.stderr).contains(&thread_a), "A's own thread");
+    let heard = hook_said(&logs_a, "PostToolUse");
+    assert!(
+        heard.contains(&format!(
+            "another agent started working in this project: thread {thread_b} (claude, in your working tree)"
+        )),
+        "{heard}"
+    );
+    assert!(heard.contains(&format!("a message from the agent in thread {thread_b}")), "{heard}");
+    assert!(heard.contains("not your user") && heard.contains("I'm adding a farewell to main.rs too"), "{heard}");
+    assert!(hook_said(&logs_a, "Stop").is_empty(), "handed over once");
+
+    let alone = tool(laptop, &thread_b, &base, "silt_agents", serde_json::json!({}));
+    assert_eq!(alone, "No other agent is working in this project now.", "A ended");
+
+    let c = in_tool(laptop, &["claude", "--isolated"], &marker_c, &refs(&envs_c));
+    let_go(&marker_b);
+    finished(b);
+    let arrived = hook_said(&logs_b, "PostToolUse");
+    assert!(arrived.contains("(claude, in its own checkout `.silt/checkouts/"), "{arrived}");
+    let_go(&marker_c);
+    finished(c);
+
+    if daemon {
+        let in_flight = |found: &String| found.contains(&thread_b) && !found.contains(&thread_a);
+        assert!(
+            eventually(|| in_flight(&tool(
+                laptop,
+                &thread_a,
+                &base,
+                "silt_in_flight",
+                serde_json::json!({"path": "src/main.rs"})
+            ))),
+            "A's in-flight lists B, not A"
+        );
+    }
+}
+
+#[test]
+fn agents_hear_of_each_other_and_message_each_other_with_a_daemon() {
+    agents_hear_of_each_other_and_message_each_other(true);
+}
+
+#[test]
+fn agents_hear_of_each_other_and_message_each_other_without_a_daemon() {
+    agents_hear_of_each_other_and_message_each_other(false);
 }

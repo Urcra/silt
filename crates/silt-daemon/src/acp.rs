@@ -834,6 +834,10 @@ impl Core {
         if let Some(notices) = self.take_notices(thread).await {
             prompt = format!("{prompt}\n\n{notices}");
         }
+        if let Some(messages) = self.take_messages(thread).await? {
+            prompt = format!("{prompt}\n\n{messages}");
+        }
+        self.note_doing(thread, text).await?;
         if self.acp.get(&thread).is_some_and(|run| run.planning && run.plan_mode().is_none()) {
             prompt = format!("{PLAN_FIRST}\n\n{prompt}");
         }

@@ -642,6 +642,18 @@ impl Core {
                 let _ = reply.send(to_response(answer));
                 return;
             }
+            if let Request::Agents { .. } | Request::Message { .. } = &*asking {
+                // An agent the web UI runs speaks for its own thread only.
+                let answer = match self.run_thread(&token).await.and_then(|thread| self.find_thread(&thread)) {
+                    Ok(thread) => match *asking {
+                        Request::Message { to, text, .. } => self.message(thread, &to, &text).await,
+                        _ => self.agents(thread).await,
+                    },
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(to_response(answer));
+                return;
+            }
             if let Request::PageAsset { artifact, asset, .. } = *asking {
                 let answer = match self.run_thread(&token).await {
                     Ok(thread) => self.page_asset(&thread, &artifact, &asset).await,
@@ -1068,9 +1080,23 @@ impl Core {
             Request::FileAt { thread, query } => {
                 to_response(self.find_thread(&thread).and_then(|thread| self.file_for_link(thread, &query)))
             }
-            Request::InFlight { cwd, path } => match self.scope_allows_clone(&cwd) {
-                true => to_response(self.in_flight_anywhere(&cwd, &path).await),
+            Request::InFlight { cwd, path, thread } => match self.scope_allows_clone(&cwd) {
+                true => {
+                    let caller = thread.as_deref().map(|thread| self.find_thread(thread)).transpose();
+                    match caller {
+                        Ok(caller) => to_response(self.in_flight_anywhere(&cwd, &path, caller).await),
+                        Err(error) => to_response::<()>(Err(error)),
+                    }
+                }
                 false => Response::ok(Vec::<crate::protocol::InFlight>::new()),
+            },
+            Request::Agents { thread } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.agents(thread).await),
+                Err(error) => to_response::<()>(Err(error)),
+            },
+            Request::Message { from, to, text } => match self.find_thread(&from) {
+                Ok(from) => to_response(self.message(from, &to, &text).await),
+                Err(error) => to_response::<()>(Err(error)),
             },
             Request::Blame { cwd, path } => to_response(self.blame(&cwd, &path)),
             Request::Comment { thread, on, text, cwd } => to_response(self.add_comment(&thread, on, text, &cwd).await),
@@ -1528,6 +1554,7 @@ impl Core {
             self.persist(family_id, &ingested.deltas).await?;
             self.persist_entry(checkout_id, from).await?;
             self.persist_entry(checkout_id, to).await?;
+            self.touched(&author, to).await?;
             self.propagate(checkout_id, &ingested.deltas).await?;
             handled.extend([from.clone(), to.clone()]);
         }
@@ -1620,9 +1647,23 @@ impl Core {
         let ingested = checkout.bridge.ingest(family, &mut RepoBases(&checkout.repo), path, disk_file, &author, now_ms())?;
         self.persist(family_id, &ingested.deltas).await?;
         self.persist_entry(checkout_id, path).await?;
+        if !ingested.deltas.is_empty() {
+            self.touched(&author, path).await?;
+        }
         let again = self.perform(checkout_id, ingested.actions).await?;
         self.propagate(checkout_id, &ingested.deltas).await?;
         Ok(again)
+    }
+
+    /// Notes a file an agent of this thread edited, for its peers to hear of
+    /// (ADR 0087).
+    async fn touched(&self, author: &Author, path: &str) -> Result<(), CoreError> {
+        if let Author::Agent { agent, session, .. } = author
+            && !session.is_empty()
+        {
+            self.store.touch_file(agent, session, path, now_ms()).await?;
+        }
+        Ok(())
     }
 
     async fn disk_file(&self, checkout: CheckoutId, path: &str, raw: RawFile) -> Result<DiskFile, CoreError> {

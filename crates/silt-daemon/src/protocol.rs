@@ -325,6 +325,22 @@ pub enum Request {
     InFlight {
         cwd: PathBuf,
         path: String,
+        /// The asking agent's thread, left out; else the one checked out
+        /// at `cwd`, which in a clone several agents share may be another's.
+        #[serde(default)]
+        thread: Option<String>,
+    },
+    /// The other agents present in `thread`'s project, as its agent hears
+    /// of them (ADR 0087).
+    Agents {
+        thread: String,
+    },
+    /// A message from `from`'s agent to the agent of the thread `to` names,
+    /// handed to it after its next tool call or with its next prompt.
+    Message {
+        from: String,
+        to: String,
+        text: String,
     },
     /// Who wrote each line of `path`, as seen from `cwd` (ADR 0042).
     Blame {
