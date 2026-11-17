@@ -161,7 +161,11 @@ commands: Array<AgentCommand>,
  * The calls whose commands still run in the background, which Stop
  * ends.
  */
-stoppable: Array<string>, };
+stoppable: Array<string>, 
+/**
+ * What Silt's sandbox lets it reach, when it runs in one (ADR 0093).
+ */
+sandbox: Reach | null, };
 
 export type QuestionAsked = { id: number, message: string, fields: Array<QuestionFieldAsked>, };
 
@@ -234,7 +238,56 @@ export type ChoiceAsked = {
  */
 value: string, label: string, description: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "lagged" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "approvals" } | { "event": "lagged" };
+
+export type DataClass = "location";
+
+export type Plugin = { 
+/**
+ * Its name, which its tools start with.
+ */
+name: string, description: string, kind: Kind, 
+/**
+ * The workspaces it's on in, by id.
+ */
+workspaces: Array<string>, 
+/**
+ * Its environments, such as `staging` and `production`, by name.
+ */
+environments: { [key in string]: Environment }, };
+
+export type Kind = { "type": "graphql" } | { "type": "command", argv: Array<string>, };
+
+export type Rule = "allow" | "ask";
+
+export type Environment = { 
+/**
+ * A GraphQL endpoint's URL, or the targets a command may name, such
+ * as `car-*.fleet.vpn`.
+ */
+target: string, reads: Rule, changes: Rule, 
+/**
+ * What a result may never carry to an agent.
+ */
+data: Array<DataClass>, 
+/**
+ * A credential of `silt credential` added to its requests.
+ */
+credential: string | null, };
+
+export type Outcome = { "status": "done", output: string, } | { "status": "refused", why: string, } | { "status": "failed", error: string, } | { "status": "unknown", why: string, } | { "status": "pending", approval: number, };
+
+export type ApprovalState = "pending" | "approved" | "rejected" | "expired";
+
+export type ApprovalView = { id: number, thread: string, plugin: string, tool: string, environment: string, target: string, 
+/**
+ * What runs, with what hides meaning made visible.
+ */
+shown: string, 
+/**
+ * The hash an answer must name, so it answers what was shown.
+ */
+hash: string, created_ms: number, state: ApprovalState, outcome: Outcome | null, };
 
 export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<string>, };
 
@@ -1317,7 +1370,77 @@ wide_history?: boolean,
  * The page connectors its artifacts' pages may call, by name; any
  * when unset (ADR 0080).
  */
-connectors?: Array<string> | null, };
+connectors?: Array<string> | null, 
+/**
+ * The hosts a sandbox reaches "through Silt only"; any public host
+ * when unset (ADR 0093).
+ */
+hosts?: Array<string> | null, 
+/**
+ * What the sandbox can connect to: the person's choice, or an org's
+ * most; full internet when unset (ADR 0093).
+ */
+network?: Network | null, 
+/**
+ * Which devices the sandbox gets: the person's choice, or an org's most.
+ */
+devices?: Devices | null, 
+/**
+ * The device nodes [`Devices::Named`] gives.
+ */
+device_nodes?: Array<string>, 
+/**
+ * Address ranges allowed past those always blocked, such as a VPN's.
+ */
+ranges?: Array<string>, 
+/**
+ * Ports on this machine the sandbox reaches as its own `localhost`.
+ */
+ports?: Array<number>, 
+/**
+ * Extra folders for the sandbox, each writable or not.
+ */
+paths?: { [key in string]: boolean }, gpu?: boolean, docker?: boolean, ssh_agent?: boolean, 
+/**
+ * What of the machine may never be handed to the sandbox.
+ */
+refuse?: Array<Extra>, 
+/**
+ * The agent's own sandbox may not run inside Silt's.
+ */
+no_nested?: boolean, };
+
+export type Network = "none" | "gateway" | "full" | "host";
+
+export type Devices = "none" | "named" | "all_usb";
+
+export type Extra = "ranges" | "ports" | "paths" | "gpu" | "docker" | "ssh_agent";
+
+export type Reach = { network: Network, 
+/**
+ * The hosts "through Silt only" reaches; any public host when empty.
+ */
+hosts: Array<string>, devices: Devices, 
+/**
+ * Device nodes, for [`Devices::Named`].
+ */
+device_nodes: Array<string>, 
+/**
+ * Address ranges allowed past those always blocked.
+ */
+ranges: Array<string>, 
+/**
+ * Ports on this machine the sandbox reaches as its own `localhost`.
+ */
+ports: Array<number>, 
+/**
+ * Extra folders, and whether each is writable.
+ */
+paths: { [key in string]: boolean }, gpu: boolean, docker: boolean, ssh_agent: boolean, 
+/**
+ * The agent's own sandbox may run inside Silt's.
+ */
+nested: boolean, };
 
 export type OrgPolicy = { org: string, server: string, policy: Policy, };
 

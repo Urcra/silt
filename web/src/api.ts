@@ -66,6 +66,8 @@ import type {
   ThreadSeenView,
   ThreadSummary,
   TurnInfo,
+  ApprovalView,
+  Plugin,
   VoiceStatus,
   Workspaces,
   WorkspacesView,
@@ -441,6 +443,12 @@ export const api = {
   /** Puts a project in a workspace, or with none back under the match rules. */
   assignProject: (repo: string, workspace: string | null) =>
     request<string>('POST', '/api/workspaces/assign', { repo, workspace }),
+  // Plugin calls waiting for the person, and this machine's plugins (ADR 0093).
+  approvals: (thread?: string) => request<ApprovalView[]>('GET', thread ? `/api/approvals?thread=${encodeURIComponent(thread)}` : '/api/approvals'),
+  /** Answers an approval, naming the hash of the request shown, so it answers only that. */
+  answerApproval: (id: number, approve: boolean, hash: string) => request<string>('POST', `/api/approvals/${id}`, { approve, hash }),
+  plugins: () => request<Plugin[]>('GET', '/api/plugins'),
+  putPlugin: (plugin: Plugin) => request<string>('PUT', `/api/plugins/${encodeURIComponent(plugin.name)}`, plugin),
   status: () => request<DaemonStatus>('GET', '/api/status'),
   prompt: (id: string, text: string, plan = false, attachments: PromptAttachment[] = []) =>
     request<string>('POST', `${thread(id)}/agent/prompt`, { text, plan, attachments }),

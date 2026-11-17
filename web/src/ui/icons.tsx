@@ -90,6 +90,7 @@ const PATHS = {
     </>
   ),
   lock: <path d="M3 7h10v7H3zM5 7V5a3 3 0 0 1 6 0v2" />,
+  shield: <path d="M8 1.75 13 3.5V7.5c0 3-2.1 5.4-5 6.75C5.1 12.9 3 10.5 3 7.5V3.5z" />,
   handoff: <path d="M3 8h10M9 4l4 4-4 4" />,
   link: <path d="M7 9a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-.6.6M9 7a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l.6-.6" />,
   comment: <path d="M3 3.5h10v7H8l-3 2.5v-2.5H3z" />,

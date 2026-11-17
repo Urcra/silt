@@ -46,6 +46,23 @@ pub fn socket_path_in(data: &Path) -> PathBuf {
     runtime.join(format!("silt-{:016x}.sock", fnv1a(data.as_os_str().as_encoded_bytes())))
 }
 
+/// Inside Silt's sandbox: the socket that answers for this run, and the
+/// run's token, which the sandbox's launch sets (ADR 0093).
+pub fn run_channel() -> Option<(PathBuf, String)> {
+    let socket = env::var_os("SILT_RUN_SOCKET").filter(|socket| !socket.is_empty())?;
+    let token = env::var("SILT_RUN_TOKEN").ok().filter(|token| !token.is_empty())?;
+    Some((PathBuf::from(socket), token))
+}
+
+/// The socket sandboxed agents reach the daemon through (ADR 0093): beside
+/// the daemon's, answering only what carries a run's token.
+#[cfg(unix)]
+pub fn agents_socket_in(data: &Path) -> PathBuf {
+    let socket = socket_path_in(data);
+    let name = socket.file_stem().map(|stem| stem.to_string_lossy().replace("daemon", "")).unwrap_or_default();
+    socket.with_file_name(format!("{}agents.sock", if name.is_empty() { String::new() } else { format!("{name}-") }))
+}
+
 /// The daemon's pipe, named after the data dir, so each data dir, and each
 /// test's, has its own.
 #[cfg(windows)]

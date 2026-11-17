@@ -292,6 +292,11 @@ fn run_agent_in(name: &str, cwd: PathBuf, isolated: bool, args: &[String]) -> Re
     let agent = find_agent(name)?;
     // Before the session starts, so a refused run leaves no thread behind.
     let held = workspace_rules(None, Some(&cwd), agent, args)?;
+    if held.reach.is_some() {
+        // A sandboxed agent's hooks reach the daemon only through its run's
+        // channel, so the daemon must be there (ADR 0093).
+        ensure_daemon()?;
+    }
     let session_id = (agent.session_ids() == SessionIds::Chosen).then(|| uuid::Uuid::new_v4().to_string());
     let (started, mut recording) = if daemonless_capture() {
         Recording::here(agent, &cwd, session_id.as_deref(), isolated, false)?
@@ -411,15 +416,56 @@ impl Run<'_> {
             env: held.env.clone(),
         };
         let launch = self.agent.launch(&plan).or_raise(|| CliError(format!("cannot prepare {}", self.agent.display_name())))?;
-        let mut command = Command::new(&launch.program);
-        command
-            .args(&launch.args)
-            .envs(held.env.iter().map(|(key, value)| (key, value)))
-            .envs(launch.envs.iter().map(|(key, value)| (key, value)))
-            .current_dir(self.cwd);
-        if held.locks.no_bypass {
-            command.env_remove("COPILOT_ALLOW_ALL");
-        }
+        let mut command = match &held.reach {
+            Some(reach) => {
+                let env: Vec<(String, String)> = env::vars()
+                    .chain(held.env.iter().cloned())
+                    .chain(
+                        launch
+                            .envs
+                            .iter()
+                            .map(|(key, value)| (key.to_string_lossy().into_owned(), value.to_string_lossy().into_owned())),
+                    )
+                    .filter(|(key, _)| !(held.locks.no_bypass && key == "COPILOT_ALLOW_ALL"))
+                    .collect();
+                let mut sandboxed = silt_daemon::sandbox::prepare(&silt_daemon::sandbox::Run {
+                    data_dir: &paths::data_dir(),
+                    agent: Some(self.agent),
+                    checkout: self.checkout,
+                    workspace: held.workspace.id.as_str(),
+                    scratch: &scratch,
+                    reach,
+                    token: &held.token,
+                    read_only: silt_daemon::sandbox::program_paths(&launch.program, &env),
+                    env,
+                })
+                .map_err(|error| fail(format!("cannot prepare the sandbox: {error}")))?;
+                for name in &sandboxed.missing {
+                    eprintln!("silt: the credential {name} has no secret to add; `silt credential list` says why");
+                }
+                let handle = recording.handle();
+                for outside in sandboxed.outside.drain(..) {
+                    // Served while the agent runs, and dropped with this process.
+                    outside.spawn(&handle).or_raise(|| CliError("cannot start the sandbox's gateway".into()))?;
+                }
+                let all = sandboxed.command(&launch.program, &launch.args);
+                let mut command = Command::new(&all[0]);
+                command.args(&all[1..]).env_clear().envs(sandboxed.env.iter().map(|(key, value)| (key, value)));
+                command
+            }
+            None => {
+                let mut command = Command::new(&launch.program);
+                command
+                    .args(&launch.args)
+                    .envs(held.env.iter().map(|(key, value)| (key, value)))
+                    .envs(launch.envs.iter().map(|(key, value)| (key, value)));
+                if held.locks.no_bypass {
+                    command.env_remove("COPILOT_ALLOW_ALL");
+                }
+                command
+            }
+        };
+        command.current_dir(self.cwd);
         recording.run(command).or_raise(|| CliError(format!("cannot run {}", launch.program.to_string_lossy())))
     }
 }
@@ -456,9 +502,12 @@ fn workspace_rules(
             .block_on(silt_daemon::workspaces::run_rules(&paths::data_dir(), thread, cwd, agent, args))
             .map_err(|error| fail(error.to_string()))?
     };
-    if rules.locks != silt_agents::Locks::default() || !rules.env.is_empty() {
+    if rules.locks != silt_agents::Locks::default() || !rules.env.is_empty() || rules.reach.is_some() {
         let mut held = Vec::new();
-        if rules.locks.sandbox {
+        let reach = rules.reach.as_ref().map(|reach| format!("sandboxed: {}", reach.summary()));
+        if let Some(reach) = &reach {
+            held.push(reach.as_str());
+        } else if rules.locks.sandbox {
             held.push("sandboxed");
         }
         if !rules.locks.deny.is_empty() {
@@ -797,6 +846,23 @@ fn hook_input(agent: Option<&str>, event: &str, mut input: serde_json::Value) {
 /// The running daemon's answer to the hook, unless no daemon runs, it
 /// didn't answer in time, or capture in process was asked for.
 fn forwarded(event: &str, input: &serde_json::Value) -> Option<HookReply> {
+    // In Silt's sandbox there's no store to capture into: only the run's
+    // channel to the daemon (ADR 0093).
+    if let Some((socket, token)) = paths::run_channel() {
+        let request =
+            Request::Scoped { token, asking: Box::new(Request::Hook { event: event.to_owned(), input: input.clone() }) };
+        return Some(match client::send(&socket, &request, Some(HOOK_TIMEOUT)) {
+            Ok(Response::Ok { data }) => serde_json::from_value(data).unwrap_or_default(),
+            Ok(Response::Error { message }) => {
+                eprintln!("silt: the {event} hook wasn't recorded: {message}");
+                HookReply::default()
+            }
+            Err(error) => {
+                eprintln!("silt: the {event} hook couldn't reach Silt from the sandbox: {error}");
+                HookReply::default()
+            }
+        });
+    }
     if daemonless_capture() || !silt_daemon::holds_lock(&paths::data_dir()) {
         return None;
     }

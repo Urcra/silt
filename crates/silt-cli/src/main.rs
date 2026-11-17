@@ -1,13 +1,17 @@
+mod access;
 mod admin;
 mod artifact_check;
 mod commands;
+mod credential;
 mod design;
 mod desktop;
 mod mcp;
 mod model;
+mod plugin;
 mod recording;
 mod reference;
 mod render;
+mod sandbox;
 mod workspace;
 
 use std::path::PathBuf;
@@ -187,6 +191,36 @@ enum Command {
     Workspace {
         #[command(subcommand)]
         command: workspace::WorkspaceCommand,
+    },
+    /// Silt's sandbox on this machine: whether it works, and how to fix what doesn't
+    Access {
+        #[command(subcommand)]
+        command: access::AccessCommand,
+    },
+    /// Credentials Silt's gateway adds for a workspace's sandboxed agents, which never see them
+    Credential {
+        #[command(subcommand)]
+        command: credential::CredentialCommand,
+    },
+    /// Plugins: what a workspace's sandboxed agents reach production and other systems through
+    Plugin {
+        #[command(subcommand)]
+        command: plugin::PluginCommand,
+    },
+    /// Plugin calls waiting for your approval
+    Approvals {
+        /// Answered and expired ones too
+        #[arg(long)]
+        all: bool,
+        /// Only this thread's
+        #[arg(long)]
+        thread: Option<String>,
+    },
+    /// Approve a plugin call, after reading exactly what it runs; or reject it
+    Approve {
+        id: u64,
+        #[arg(long)]
+        reject: bool,
     },
     /// Check chart palettes and text contrast, as artifacts' design guidance asks
     Design {
@@ -374,6 +408,26 @@ enum Command {
     /// Serve the tools a page gave its question to the agent answering it
     #[command(hide = true)]
     SampleTools { file: PathBuf },
+    /// Inside Silt's sandbox: relay ports to sockets outside, then run a program
+    #[command(hide = true)]
+    SandboxInit {
+        /// `PORT=SOCKET`: the sandbox's own 127.0.0.1:PORT reaches SOCKET outside
+        #[arg(long)]
+        relay: Vec<String>,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<std::ffi::OsString>,
+    },
+    /// Run a program in Silt's sandbox, as the plan Silt wrote says
+    #[command(hide = true)]
+    SandboxRun {
+        #[arg(long)]
+        plan: PathBuf,
+        /// Already in the sandbox's own network namespace
+        #[arg(long)]
+        in_network: bool,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<std::ffi::OsString>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -582,6 +636,18 @@ enum OrgCommand {
         /// The page connectors its projects' pages may call, comma-separated
         #[arg(long)]
         connectors: Option<String>,
+        /// The most network its sandboxes get: none, gateway, full or host
+        #[arg(long)]
+        network: Option<String>,
+        /// The most devices its sandboxes get: none, named or all_usb
+        #[arg(long)]
+        devices: Option<String>,
+        /// What members may never hand a sandbox, comma-separated: ranges, ports, paths, gpu, docker, ssh_agent
+        #[arg(long)]
+        refuse: Option<String>,
+        /// Agents' own sandboxes may not run inside Silt's
+        #[arg(long)]
+        no_nested: bool,
     },
 }
 
@@ -807,6 +873,11 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Run { agent, run } => commands::run_agent(&agent, run.isolated, &run.args),
         Command::Chat { agent, about, workspace, args } => commands::chat(&agent, about.as_deref(), workspace.as_deref(), &args),
         Command::Workspace { command } => workspace::run(command),
+        Command::Credential { command } => credential::run(command),
+        Command::Plugin { command } => plugin::run(command),
+        Command::Approvals { all, thread } => plugin::list(all, thread),
+        Command::Approve { id, reject } => plugin::answer(id, reject),
+        Command::Access { command } => access::run(command),
         Command::Design { command } => design::run(command),
         Command::Model { command } => model::run(command),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
@@ -874,7 +945,21 @@ fn run() -> Result<(), Exn<CliError>> {
             OrgCommand::Add { org, user, owner } => admin::org_change(OrgChange::AddMember { org, user, owner }),
             OrgCommand::Remove { org, user } => admin::org_change(OrgChange::RemoveMember { org, user }),
             OrgCommand::Default { org, visibility } => admin::org_change(OrgChange::DefaultVisibility { org, visibility }),
-            OrgCommand::Policy { org, agents, no_custom_agents, max_preset, sandbox, isolated, home_locked, connectors } => {
+            OrgCommand::Policy {
+                org,
+                agents,
+                no_custom_agents,
+                max_preset,
+                sandbox,
+                isolated,
+                home_locked,
+                connectors,
+                network,
+                devices,
+                refuse,
+                no_nested,
+            } => {
+                let reach = workspace::parse_reach(network.as_deref(), devices.as_deref(), refuse.as_deref())?;
                 let max_preset = match max_preset.as_deref().map(|name| silt_workspace::Preset::parse(name).ok_or(name)) {
                     Some(Err(name)) => return Err(commands::fail(format!("no preset {name}"))),
                     Some(Ok(preset)) => Some(preset),
@@ -891,9 +976,12 @@ fn run() -> Result<(), Exn<CliError>> {
                     home_locked,
                     connectors: connectors
                         .map(|list| list.split(',').map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned).collect()),
+                    network: reach.network,
+                    devices: reach.devices,
+                    refuse: reach.refuse,
+                    no_nested,
                     // A Local only workspace has no server, so no org's policy reaches it.
-                    local_only: false,
-                    wide_history: false,
+                    ..silt_workspace::Policy::default()
                 };
                 admin::org_change(OrgChange::Policy { org, policy })
             }
@@ -986,6 +1074,8 @@ fn run() -> Result<(), Exn<CliError>> {
         },
         Command::Mcp { thread, checkout, token, ui } => mcp::serve(&thread, checkout, token, ui),
         Command::SampleTools { file } => mcp::serve_page_tools(&file),
+        Command::SandboxRun { plan, in_network, command } => sandbox::run(&plan, in_network, &command),
+        Command::SandboxInit { relay, command } => sandbox::init(&relay, &command),
         Command::Reference => {
             print!("{}", reference::markdown(&<Cli as clap::CommandFactory>::command()));
             Ok(())

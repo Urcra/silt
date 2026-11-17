@@ -90,12 +90,14 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     let accept_events = events.clone();
     let (answered, mut answered_rx) = mpsc::unbounded_channel();
     listen(socket, accept_events, answered)?;
+    #[cfg(unix)]
+    listen_for_agents(&crate::paths::agents_socket_in(data_dir), events.clone())?;
     // Without a turn, so hooks capturing meanwhile don't wait on a long
     // load; what they store is taken in at the first turn.
     let mut core = match Core::load(store, actor, data_dir, events.clone()).await {
         Ok(core) => core,
         Err(error) => {
-            let _ = fs::remove_file(socket);
+            remove_sockets(socket, data_dir);
             return Err(error.into());
         }
     };
@@ -132,7 +134,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
                 if let Err(error) = core.store.checkpoint().await {
                     warn!(%error, "could not copy the WAL into the database");
                 }
-                let _ = fs::remove_file(socket);
+                remove_sockets(socket, data_dir);
                 let _ = reply.send(Response::ok("shutting down"));
                 let _ = tokio::time::timeout(SHUTDOWN_REPLY_WAIT, answered_rx.recv()).await;
                 hold_until_exit(lock);
@@ -172,7 +174,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             warn!(%error, "could not note what the store holds");
         }
     }
-    let _ = fs::remove_file(socket);
+    remove_sockets(socket, data_dir);
     hold_until_exit(lock);
     Ok(())
 }
@@ -180,6 +182,16 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
 /// Keeps the daemon's lock until the process exits. A free lock tells
 /// `silt daemon stop` the store is left alone, and the store's connections
 /// close on their own threads after `run` returns.
+/// Removes the daemon's sockets, so nothing finds one no daemon answers,
+/// and a copy of the data dir copies none.
+fn remove_sockets(socket: &Path, data_dir: &Path) {
+    let _ = fs::remove_file(socket);
+    #[cfg(unix)]
+    let _ = fs::remove_file(crate::paths::agents_socket_in(data_dir));
+    #[cfg(not(unix))]
+    let _ = data_dir;
+}
+
 fn hold_until_exit(lock: fs::File) {
     std::mem::forget(lock);
 }
@@ -200,6 +212,30 @@ fn listen(socket: &Path, events: mpsc::UnboundedSender<Event>, answered: mpsc::U
         while let Ok((stream, _)) = listener.accept().await {
             if stream.peer_cred().is_ok_and(|peer| peer.uid() == me) {
                 tokio::spawn(serve(stream, events.clone(), answered.clone()));
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Takes connections from sandboxed agents' runs (ADR 0093). Whatever
+/// reaches it may ask only what a run's token allows, so the person's
+/// authority never enters a sandbox.
+#[cfg(unix)]
+fn listen_for_agents(socket: &Path, events: mpsc::UnboundedSender<Event>) -> Result<(), RunError> {
+    use std::os::unix::fs::PermissionsExt as _;
+    if socket.exists() {
+        fs::remove_file(socket)?;
+    }
+    let listener = tokio::net::UnixListener::bind(socket)
+        .map_err(|source| RunError::Listen { path: socket.display().to_string(), source })?;
+    fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
+    let me = silt_os::uid();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            if stream.peer_cred().is_ok_and(|peer| peer.uid() == me) {
+                let (answered, _) = mpsc::unbounded_channel();
+                tokio::spawn(serve_as(stream, events.clone(), answered, Authority::Run));
             }
         }
     });
@@ -228,12 +264,30 @@ fn listen(socket: &Path, events: mpsc::UnboundedSender<Event>, answered: mpsc::U
     Ok(())
 }
 
+/// Whose requests a connection carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Authority {
+    /// The person's: anything.
+    Person,
+    /// A sandboxed run's: only requests that carry its token.
+    Run,
+}
+
 /// Serves one connection. `answered` hears when a shutdown request has been
 /// answered, since the daemon exits, and drops this task, right after.
 async fn serve(
     stream: impl AsyncRead + AsyncWrite + Send + 'static,
     events: mpsc::UnboundedSender<Event>,
     answered: mpsc::UnboundedSender<()>,
+) {
+    serve_as(stream, events, answered, Authority::Person).await;
+}
+
+async fn serve_as(
+    stream: impl AsyncRead + AsyncWrite + Send + 'static,
+    events: mpsc::UnboundedSender<Event>,
+    answered: mpsc::UnboundedSender<()>,
+    authority: Authority,
 ) {
     let (read, mut write) = tokio::io::split(stream);
     let mut lines = BufReader::new(read).lines();
@@ -244,6 +298,9 @@ async fn serve(
             // Asks only whether the daemon is there, so it is answered even
             // while the daemon loads or works through a long event.
             Ok(Request::Ping) => Response::ok("pong"),
+            Ok(request) if authority == Authority::Run && !matches!(request, Request::Scoped { .. }) => {
+                Response::error("a sandboxed agent's run may only ask with its run's token")
+            }
             Ok(request) => {
                 let (reply, response) = oneshot::channel();
                 if events.send(Event::Request(request, reply)).is_err() {

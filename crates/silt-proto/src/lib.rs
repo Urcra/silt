@@ -29,8 +29,8 @@ pub mod view;
 /// design system's components (ADR 0086). 17: its components' guidelines,
 /// cover and assets (ADR 0088). 18: edits by another agent in the same
 /// clone, or by one of several (`Author::Others`, `Author::Agents`,
-/// ADR 0089).
-pub const PROTOCOL: u32 = 18;
+/// ADR 0089). 19: what a workspace's sandboxed agents may reach (ADR 0093).
+pub const PROTOCOL: u32 = 19;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 

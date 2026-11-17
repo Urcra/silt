@@ -523,9 +523,10 @@ impl Core {
         chosen: bool,
         mode: Option<&str>,
         on_local_model: bool,
-    ) -> Result<Option<Preset>, CoreError> {
+    ) -> Result<(Option<Preset>, Option<silt_workspace::Reach>), CoreError> {
         let rules = self.rules(workspace);
         let policy = rules.effective();
+        let ours = policy.sandbox_required() && crate::sandbox::supported();
         let refused = |refusal: silt_workspace::Refusal| CoreError::Invalid(refusal.to_string());
         let custom = silt_acp::registry::custom(&self.data_dir).iter().any(|own| own.id == agent.id);
         let choice = if custom {
@@ -533,7 +534,9 @@ impl Core {
         } else {
             silt_workspace::AgentChoice::Known { key: silt_workspace::agent_key(&agent.id), name: agent.name.clone() }
         };
-        rules.check_agent(&choice, silt_agents::SandboxSupport::None).map_err(refused)?;
+        // Silt's own sandbox holds the agent to every sandbox rule.
+        let support = if ours { silt_agents::SandboxSupport::Isolate } else { silt_agents::SandboxSupport::None };
+        rules.check_agent(&choice, support).map_err(refused)?;
         rules.check_model(&choice, on_local_model).map_err(refused)?;
         let preset = match (preset, policy.max_preset) {
             (Some(preset), Some(cap)) if !chosen && !preset.within(cap) => Some(cap),
@@ -545,7 +548,7 @@ impl Core {
         if let Some(mode) = mode {
             rules.check_mode(mode, crate::acp::mode_meaning(&agent.id, mode, false)).map_err(refused)?;
         }
-        Ok(preset)
+        Ok((preset, ours.then(|| silt_workspace::Reach::of(&policy))))
     }
 
     /// The preset Silt answers a thread's agent with: its own, held to its
@@ -623,6 +626,9 @@ pub struct RunRules {
     pub env: Vec<(String, String)>,
     /// For its history tools, which read its workspace only.
     pub token: String,
+    /// What Silt's sandbox lets it reach, when it runs in one (ADR 0093).
+    #[serde(default)]
+    pub reach: Option<silt_workspace::Reach>,
     /// The arguments to run it with, when they differ from those given: a
     /// local model's flag goes in its environment instead (ADR 0092).
     #[serde(default)]
@@ -709,13 +715,17 @@ pub async fn run_rules(
     if silt_workspace::agent_key(agent.id()).as_str() == "claude" && silt_llm::local_model_in_args(args).is_some() {
         return Err(CoreError::Invalid("a local model runs through Silt's daemon; start it with `silt daemon start`".into()));
     }
-    let (locks, env) = check_run(data_dir, &all, &workspace, &rules, agent, args)?;
+    let (locks, env, reach) = check_run(data_dir, &all, &workspace, &rules, agent, args)?;
     let thread = record.as_ref().map_or(silt_types::ThreadId(0), |record| record.id);
     let project =
         record.as_ref().map(|record| record.repo.clone()).or_else(|| here.as_ref().and_then(|repo| repo.project().ok()));
     let token = mint_run_token(&store, thread, &workspace.id, project.as_deref()).await?;
-    Ok(RunRules { workspace, locks, env, token, args: None })
+    Ok(RunRules { workspace, locks, env, token, reach, args: None })
 }
+
+/// What a run is held to: the agent's own locks, the workspace's
+/// variables, and Silt's sandbox's reach when it runs in one.
+type Held = (silt_agents::Locks, Vec<(String, String)>, Option<silt_workspace::Reach>);
 
 /// Whether `agent` may run with `args` under `rules`, and if so the locks
 /// and variables it runs with.
@@ -726,19 +736,28 @@ fn check_run(
     rules: &Rules<'_>,
     agent: &dyn silt_agents::Agent,
     args: &[String],
-) -> Result<(silt_agents::Locks, Vec<(String, String)>), CoreError> {
+) -> Result<Held, CoreError> {
     let refused = |refusal: silt_workspace::Refusal| CoreError::Invalid(refusal.to_string());
     let policy = rules.effective();
     let choice =
         silt_workspace::AgentChoice::Known { key: silt_workspace::agent_key(agent.id()), name: agent.display_name().to_owned() };
-    rules.check_agent(&choice, agent.sandbox_support()).map_err(refused)?;
+    let ours = policy.sandbox_required() && crate::sandbox::supported();
+    // Silt's own sandbox holds the agent to every sandbox rule.
+    let support = if ours { silt_agents::SandboxSupport::Isolate } else { agent.sandbox_support() };
+    rules.check_agent(&choice, support).map_err(refused)?;
     rules.check_model(&choice, silt_llm::local_model_in_args(args).is_some()).map_err(refused)?;
     if let Some(flag) = agent.bypass_flag(args) {
         rules.check_flag(&flag, agent.display_name()).map_err(refused)?;
     }
-    let locks = locks_for(data_dir, all, workspace, &policy);
     let env = workspace.env.iter().map(|(name, value)| (name.clone(), value.clone())).collect();
-    Ok((locks, env))
+    if ours {
+        // Silt's sandbox is the wall, and keeps out what the denies named;
+        // the agent's own may run inside it as it pleases.
+        let locks =
+            silt_agents::Locks { no_bypass: locks_for(data_dir, all, workspace, &policy).no_bypass, ..Default::default() };
+        return Ok((locks, env, Some(silt_workspace::Reach::of(&policy))));
+    }
+    Ok((locks_for(data_dir, all, workspace, &policy), env, None))
 }
 
 impl Core {
@@ -771,7 +790,7 @@ impl Core {
             }
             (None, None) => return Err(CoreError::Invalid("name the thread or the folder the agent runs in".into())),
         };
-        let (locks, mut env) = check_run(&self.data_dir, &all, &workspace, &self.rules(&workspace), agent, args)?;
+        let (locks, mut env, reach) = check_run(&self.data_dir, &all, &workspace, &self.rules(&workspace), agent, args)?;
         let local =
             match silt_llm::local_model_in_args(args).filter(|_| silt_workspace::agent_key(agent.id()).as_str() == "claude") {
                 Some((model, rest)) => Some((self.models.installed(&model).await?, rest)),
@@ -785,7 +804,7 @@ impl Core {
             }
             None => None,
         };
-        Ok(RunRules { workspace, locks, env, token, args })
+        Ok(RunRules { workspace, locks, env, token, reach, args })
     }
 }
 

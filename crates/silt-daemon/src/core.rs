@@ -192,6 +192,8 @@ pub struct Core {
     /// Readers for indexing what other machines record.
     pub(crate) index_transcripts: silt_agents::Transcripts,
     pub(crate) next_token: u64,
+    /// Plugin calls waiting for, or answered by, the person (ADR 0093).
+    pub(crate) approvals: crate::plugins::Approvals,
     /// When the watcher noticed the changes being taken in, for crediting
     /// them to the tool that was running then.
     pub(crate) change_noticed: Option<Instant>,
@@ -537,6 +539,7 @@ impl Core {
             pending: Vec::new(),
             index_transcripts: silt_agents::Transcripts::default(),
             next_token: 0,
+            approvals: crate::plugins::Approvals::default(),
             change_noticed: None,
             deciding: None,
             marks_awaited: HashMap::new(),
@@ -627,6 +630,16 @@ impl Core {
             return;
         }
         if let Request::Scoped { token, asking } = request {
+            // A sandboxed run's hooks capture as anyone's do, once its token
+            // shows it's a run Silt started (ADR 0093).
+            if let Request::Hook { event, input } = *asking {
+                let answer = match self.run_thread(&token).await {
+                    Ok(_) => self.hook(&event, input).await,
+                    Err(error) => to_response::<()>(Err(error)),
+                };
+                let _ = reply.send(answer);
+                return;
+            }
             if let Request::PutArtifact { artifact } = *asking {
                 let _ = reply.send(to_response(self.put_artifact(&token, *artifact).await));
                 return;
@@ -734,6 +747,21 @@ impl Core {
                 let _ = reply.send(to_response(answer));
                 return;
             }
+            match *asking {
+                Request::PluginTools => {
+                    let _ = reply.send(to_response(self.plugin_tools(&token).await));
+                    return;
+                }
+                Request::PluginCall { tool, input } => {
+                    self.plugin_call(&token, &tool, input, reply).await;
+                    return;
+                }
+                Request::PluginWait { approval } => {
+                    self.plugin_wait(&token, approval, reply).await;
+                    return;
+                }
+                _ => {}
+            }
             let workspace = match self.scope_of(&token, &asking).await {
                 Ok(workspace) => workspace,
                 Err(error) => {
@@ -759,6 +787,16 @@ impl Core {
         let response = match request {
             Request::OnServer { .. } => Response::error("a request names one server at a time"),
             Request::Scoped { .. } => Response::error("a request carries one token"),
+            Request::PluginTools | Request::PluginCall { .. } | Request::PluginWait { .. } => {
+                Response::error("only an agent's run calls plugins, with its token")
+            }
+            Request::Plugins => Response::ok(crate::plugins::load(&self.data_dir)),
+            Request::PluginPut { plugin } => to_response(crate::plugins::put(&self.data_dir, *plugin).map(|()| "saved")),
+            Request::PluginRemove { name } => to_response(crate::plugins::remove(&self.data_dir, &name).map(|()| "removed")),
+            Request::Approvals { thread } => Response::ok(self.approvals_view(thread.as_deref())),
+            Request::ApprovalAnswer { id, approve, hash } => {
+                to_response(self.approval_answer(id, approve, &hash).map(|()| if approve { "approved" } else { "rejected" }))
+            }
             Request::PutArtifact { .. } => Response::error("only an agent's run shows the person something, with its token"),
             Request::ArtifactGuide { .. } => Response::error("only an agent's run asks for its artifact guide, with its token"),
             Request::DesignSystems { clone } => Response::ok(self.design_systems(clone.as_deref())),

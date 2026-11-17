@@ -72,7 +72,7 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
             sudo apt-get update -q
-            sudo apt-get install -y -q musl-tools
+            sudo apt-get install -y -q musl-tools meson ninja-build libcap-dev
           fi
           rustup show
           rustup target add ${{ matrix.target }}
@@ -97,8 +97,11 @@ jobs:
           strip "$bin"
           file "$bin" | grep -Eq 'static-pie linked|statically linked'
           "$bin" --version
-          mkdir dist
-          tar -czf dist/silt-${{ matrix.target }}.tar.gz -C "$(dirname "$bin")" silt
+          # Silt's sandbox needs bubblewrap and pasta, shipped beside it (ADR 0093).
+          mkdir dist package
+          cp "$bin" package/silt
+          scripts/build-sandbox-tools.sh package
+          tar -czf dist/silt-${{ matrix.target }}.tar.gz -C package .
 
       - name: Archive (Windows)
         if: runner.os == 'Windows'

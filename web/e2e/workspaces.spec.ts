@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
 import { stopAgent, teardown } from './fixture'
@@ -187,4 +188,45 @@ test("a workspace's defaults pick the agent's model, and the project picker move
   const form = page.getByRole('form', { name: 'new thread' })
   await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
   await expect(form.getByLabel('model')).toHaveValue('smart')
+})
+
+test("a workspace's sandbox reach and its plugins are set in its settings, and a plugin is on only where turned on (ADR 0093)", async ({ page }) => {
+  const file = join(fixture.dir, 'fleet-api.json')
+  const environment = { target: 'https://api.fleet.example/graphql', reads: 'allow', changes: 'ask', data: ['location'] }
+  writeFileSync(file, JSON.stringify({ name: 'fleet-api', kind: { type: 'graphql' }, environments: { production: environment } }))
+  ada(['plugin', 'add', file])
+  await page.goto(`${new URL(fixture.ada).origin}/settings/workspaces${new URL(fixture.ada).hash}`)
+  const settings = page.getByRole('region', { name: 'Workspaces' })
+  await settings.getByRole('tab', { name: /Personal/ }).click()
+
+  const plugins = settings.getByRole('region', { name: 'Plugins its agents can use' })
+  await expect(plugins).toContainText('fleet-api')
+  await expect(plugins).toContainText('production · location kept')
+  await plugins.getByLabel('fleet-api in Personal').click()
+  await expect(plugins.getByLabel('fleet-api in Personal')).toBeChecked()
+  await expect.poll(() => ada(['plugin', 'list'])).toContain('on in personal')
+  await settings.getByRole('tab', { name: /Work/ }).click()
+  await expect(plugins.getByLabel('fleet-api in Work')).not.toBeChecked()
+
+  const reach = settings.getByRole('region', { name: 'What its agents can reach' })
+  await expect(reach.getByRole('radio', { name: /Full internet/ })).toBeChecked()
+  await reach.getByRole('radio', { name: /No network/ }).check()
+  await reach.getByLabel('The GPU').check()
+  await settings.getByRole('button', { name: 'Save workspaces' }).click()
+  await expect(page.getByText('Workspaces saved')).toBeVisible()
+  await page.reload()
+  await settings.getByRole('tab', { name: /Work/ }).click()
+  await expect(reach.getByRole('radio', { name: /No network/ })).toBeChecked()
+  await expect(reach.getByLabel('The GPU')).toBeChecked()
+  await reach.scrollIntoViewIfNeeded()
+  await shoot(page, '7-sandbox-settings', 1600)
+
+  // A thread's header says what its agent's sandbox reaches, to read rather than change.
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: /work on the app/ }).first().click()
+  await page.getByRole('button', { name: 'Sandbox' }).click()
+  const shield = page.getByRole('dialog', { name: 'Sandbox' })
+  await expect(shield).toContainText('The next run is sandboxed')
+  await expect(shield).toContainText('None')
+  await expect(shield).toContainText('the GPU')
+  await shoot(page, '8-sandbox-shield')
 })

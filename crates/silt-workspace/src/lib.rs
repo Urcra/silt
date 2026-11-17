@@ -4,6 +4,8 @@
 
 mod policy;
 mod preset;
+mod reach;
+mod sandbox;
 mod workspace;
 
 pub use policy::{
@@ -11,6 +13,8 @@ pub use policy::{
     agent_key, check_move,
 };
 pub use preset::Preset;
+pub use reach::{Devices, Extra, Network, Reach};
+pub use sandbox::{ALWAYS_BLOCKED, Cidr, Mount, MountKind, Relay, RunPaths, SandboxPlan, plan, subtract};
 pub use workspace::{
     AgentDefaults, BadWorkspaceId, Defaults, InvalidWorkspaces, MatchRule, Resolved, ServerBinding, Why, Workspace, WorkspaceId,
     Workspaces, is_absolute,
