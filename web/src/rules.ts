@@ -7,6 +7,7 @@ import type { Policy, Preset, WorkspaceView, WorkspacesView } from './api'
 export const KNOWN_AGENTS: { key: string; ids: string[]; name: string }[] = [
   { key: 'claude', ids: ['claude-code', 'claude-acp'], name: 'Claude Code' },
   { key: 'codex', ids: ['codex', 'codex-acp'], name: 'Codex' },
+  { key: 'qudiks', ids: ['qudiks', 'qudiks-acp'], name: 'Qudiks' },
   { key: 'copilot', ids: ['copilot-cli', 'github-copilot-cli'], name: 'GitHub Copilot' },
   { key: 'gemini', ids: ['gemini-cli', 'gemini'], name: 'Gemini CLI' },
   { key: 'agy', ids: ['antigravity-cli', 'antigravity-acp'], name: 'Antigravity' },

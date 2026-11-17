@@ -41,6 +41,19 @@ fn finds_as_a_new_run(found: impl Fn(i64, &[String]) -> Option<Found>, id: &str,
 }
 
 #[test]
+fn qudiks_sessions_are_codex_rollouts_in_its_own_home() {
+    let agent = silt_agents::agent("qudiks").expect("qudiks");
+    let (home, (_dir, cwd)) = (tempfile::tempdir().expect("temp dir"), cwd());
+    let id = "019a0000-0000-7000-8000-000000000002";
+    let transcript = silt_agents::codex::restore_into(home.path(), &cwd, &cwd, &recorded(agent, &cwd, id)).expect("restores");
+    finds_as_a_new_run(|since, known| silt_agents::codex::discover_in(home.path(), &cwd, since, known), id, &transcript);
+    assert_eq!(
+        read_back(agent, &transcript),
+        [Entry::User { text: "Fix the lexer".into() }, Entry::Assistant { text: "Fixed.".into() }]
+    );
+}
+
+#[test]
 fn codex_sessions_are_restored_found_and_read_back() {
     let agent = silt_agents::agent("codex").expect("codex");
     let (home, (_dir, cwd)) = (tempfile::tempdir().expect("temp dir"), cwd());

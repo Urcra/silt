@@ -18,6 +18,7 @@ pub mod gemini;
 pub mod history;
 pub mod oneshot;
 pub mod opencode;
+pub mod qudiks;
 mod render;
 mod rewrite;
 pub mod sign_in;
@@ -416,10 +417,18 @@ pub(crate) fn home_from(home: &Path, env: &dyn Fn(&str) -> Option<String>, varia
 }
 
 /// The environment variables that say where agents keep their sessions.
-pub const HOME_VARIABLES: [&str; 5] = ["HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "COPILOT_HOME"];
+pub const HOME_VARIABLES: [&str; 6] =
+    ["HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "QUDIKS_HOME", "GEMINI_CLI_HOME", "COPILOT_HOME"];
 
-pub const AGENTS: [&dyn Agent; 6] =
-    [&claude::ClaudeCode, &codex::Codex, &gemini::Gemini, &antigravity::Antigravity, &opencode::OpenCode, &copilot::Copilot];
+pub const AGENTS: [&dyn Agent; 7] = [
+    &claude::ClaudeCode,
+    &codex::Codex,
+    &qudiks::Qudiks,
+    &gemini::Gemini,
+    &antigravity::Antigravity,
+    &opencode::OpenCode,
+    &copilot::Copilot,
+];
 
 /// The agent recorded as `name`, or run as the command `name`, including
 /// the sessions Silt records itself for agents the web UI starts.
@@ -516,25 +525,34 @@ pub fn set_workspace_homes(homes: Vec<(PathBuf, String, PathBuf)>) {
 /// `variable`'s home for an agent run in `cwd`: the one its folder's
 /// workspace sets, else this process's.
 pub(crate) fn agent_home_in(variable: &str, dir: &str, cwd: &Path) -> Option<PathBuf> {
+    workspace_home(variable, cwd).or_else(|| agent_home(variable, dir))
+}
+
+/// `variable`'s value in the workspace holding `cwd`, when it sets one.
+pub(crate) fn workspace_home(variable: &str, cwd: &Path) -> Option<PathBuf> {
     let homes = WORKSPACE_HOMES.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     homes
         .iter()
         .filter(|(folder, name, _)| name == variable && cwd.starts_with(folder))
         .max_by_key(|(folder, _, _)| folder.components().count())
         .map(|(_, _, home)| home.clone())
-        .or_else(|| agent_home(variable, dir))
 }
 
 /// Every home `variable` names: this process's, then each workspace's.
 pub(crate) fn agent_homes(variable: &str, dir: &str) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = agent_home(variable, dir).into_iter().collect();
-    let homes = WORKSPACE_HOMES.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-    for (_, name, home) in homes.iter() {
-        if name == variable && !found.contains(home) {
-            found.push(home.clone());
+    for home in workspace_homes(variable) {
+        if !found.contains(&home) {
+            found.push(home);
         }
     }
     found
+}
+
+/// Each workspace's value of `variable`.
+pub(crate) fn workspace_homes(variable: &str) -> Vec<PathBuf> {
+    let homes = WORKSPACE_HOMES.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+    homes.iter().filter(|(_, name, _)| name == variable).map(|(_, _, home)| home.clone()).collect()
 }
 
 pub(crate) fn home() -> Option<PathBuf> {
