@@ -797,8 +797,14 @@ impl Core {
             self.tail_session(id).await?;
         }
         for checkout in checkouts {
-            if self.checkouts.contains_key(&checkout) {
+            let Some(held) = self.checkouts.get(&checkout) else {
+                continue;
+            };
+            if !self.awaits_tool_marks(checkout, Instant::now()) {
                 self.rescan(checkout).await?;
+            } else if self.resident {
+                let path = held.record.path.clone();
+                self.settle_changes(checkout, vec![path], Instant::now());
             }
         }
         Ok(())
@@ -821,11 +827,23 @@ impl Core {
             checkouts.extend(self.session(id).map(|session| session.record.checkout_id));
         }
         for checkout in checkouts {
-            if self.checkouts.contains_key(&checkout) {
+            if self.checkouts.contains_key(&checkout) && !self.holds_for_marks(checkout) {
                 self.rescan(checkout).await?;
             }
         }
         Ok(())
+    }
+
+    /// Whether a step, which has no watcher to say when files changed,
+    /// holds the checkout's changes back for its agent's tool marks: for
+    /// the settling window from the first step that held them.
+    fn holds_for_marks(&mut self, checkout: CheckoutId) -> bool {
+        let since = *self.marks_awaited.entry(checkout).or_insert_with(Instant::now);
+        let held = self.awaits_tool_marks(checkout, since);
+        if !held {
+            self.marks_awaited.remove(&checkout);
+        }
+        held
     }
 
     /// Whether the thread's agent needs `record_step`: its session is still
@@ -1244,6 +1262,25 @@ impl Core {
     }
 
     pub(crate) fn author_for(&self, checkout: CheckoutId) -> Author {
+        self.author_noticed(checkout, self.change_noticed.unwrap_or_else(Instant::now))
+    }
+
+    /// Whether edits noticed at `noticed` should wait for the transcripts
+    /// again: an agent that marks its turns and tools only there runs on
+    /// the checkout, and so far no tool of its is known to have made them.
+    /// Its prompt and tool marks may still be on the way, and a busy
+    /// machine writes and reads them late, so they get the whole settling
+    /// window.
+    pub(crate) fn awaits_tool_marks(&self, checkout: CheckoutId, noticed: Instant) -> bool {
+        let transcript_agent = self.sessions.iter().any(|session| {
+            session.record.checkout_id == checkout && session.live && session.agent.capture() == Capture::Transcript
+        });
+        transcript_agent
+            && noticed.elapsed() < attribution::MARK_SETTLE
+            && matches!(self.author_noticed(checkout, noticed), Author::User | Author::Agent { tool_use_id: None, .. })
+    }
+
+    fn author_noticed(&self, checkout: CheckoutId, noticed: Instant) -> Author {
         let sessions: Vec<attribution::SessionState<'_>> = self
             .sessions
             .iter()
@@ -1261,7 +1298,6 @@ impl Core {
             .collect();
         // An agent that hasn't written its session yet, but is running.
         let pending = self.pending.iter().find(|pending| pending.checkout_id == checkout).map(|pending| pending.agent.id());
-        let noticed = self.change_noticed.unwrap_or_else(Instant::now);
         attribution::author(self.importing, &sessions, pending, noticed)
     }
 

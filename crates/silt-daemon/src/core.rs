@@ -193,6 +193,9 @@ pub struct Core {
     /// When the watcher noticed the changes being taken in, for crediting
     /// them to the tool that was running then.
     pub(crate) change_noticed: Option<Instant>,
+    /// When a step without a watcher first held a checkout's changes back
+    /// for its agent's tool marks.
+    pub(crate) marks_awaited: HashMap<CheckoutId, Instant>,
     /// Set while a new thread takes in its clone's uncommitted changes,
     /// which are part of where it starts, not edits made in it.
     pub(crate) importing: bool,
@@ -498,6 +501,7 @@ impl Core {
             index_transcripts: silt_agents::Transcripts::default(),
             next_token: 0,
             change_noticed: None,
+            marks_awaited: HashMap::new(),
             importing: false,
             recorded_at: None,
             index_queued: false,
@@ -1180,6 +1184,10 @@ impl Core {
             return;
         }
         self.tail_marked_sessions(checkout).await;
+        if self.awaits_tool_marks(checkout, noticed) {
+            self.settle_changes(checkout, paths, noticed);
+            return;
+        }
         self.change_noticed = Some(noticed);
         if let Err(error) = self.ingest_paths(checkout, paths).await {
             warn!(%error, %checkout, "could not record changes");
