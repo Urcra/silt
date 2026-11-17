@@ -1260,6 +1260,7 @@ impl Core {
             takes_files: run.accepts.embedded,
             commands: run.commands.iter().map(Into::into).collect(),
             stoppable: run.background.values().map(|task| task.call.clone()).collect(),
+            sandbox: run.sandbox.as_ref().map(|(reach, _, _)| reach.clone()),
         })
     }
 

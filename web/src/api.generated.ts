@@ -161,7 +161,11 @@ commands: Array<AgentCommand>,
  * The calls whose commands still run in the background, which Stop
  * ends.
  */
-stoppable: Array<string>, };
+stoppable: Array<string>, 
+/**
+ * What Silt's sandbox lets it reach, when it runs in one (ADR 0086).
+ */
+sandbox: Reach | null, };
 
 export type QuestionAsked = { id: number, message: string, fields: Array<QuestionFieldAsked>, };
 
@@ -1249,6 +1253,32 @@ export type Network = "none" | "gateway" | "full" | "host";
 export type Devices = "none" | "named" | "all_usb";
 
 export type Extra = "ranges" | "ports" | "paths" | "gpu" | "docker" | "ssh_agent";
+
+export type Reach = { network: Network, 
+/**
+ * The hosts "through Silt only" reaches; any public host when empty.
+ */
+hosts: Array<string>, devices: Devices, 
+/**
+ * Device nodes, for [`Devices::Named`].
+ */
+device_nodes: Array<string>, 
+/**
+ * Address ranges allowed past those always blocked.
+ */
+ranges: Array<string>, 
+/**
+ * Ports on this machine the sandbox reaches as its own `localhost`.
+ */
+ports: Array<number>, 
+/**
+ * Extra folders, and whether each is writable.
+ */
+paths: { [key in string]: boolean }, gpu: boolean, docker: boolean, ssh_agent: boolean, 
+/**
+ * The agent's own sandbox may run inside Silt's.
+ */
+nested: boolean, };
 
 export type OrgPolicy = { org: string, server: string, policy: Policy, };
 

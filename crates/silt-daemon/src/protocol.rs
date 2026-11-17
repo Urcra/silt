@@ -1480,6 +1480,9 @@ pub struct AgentStatus {
     /// ends.
     #[serde(default)]
     pub stoppable: Vec<String>,
+    /// What Silt's sandbox lets it reach, when it runs in one (ADR 0086).
+    #[serde(default)]
+    pub sandbox: Option<silt_workspace::Reach>,
 }
 
 /// A file sent with a prompt.
@@ -2000,6 +2003,7 @@ mod tests {
             silt_workspace::Network::decl(&config),
             silt_workspace::Devices::decl(&config),
             silt_workspace::Extra::decl(&config),
+            silt_workspace::Reach::decl(&config),
             silt_workspace::OrgPolicy::decl(&config),
             silt_workspace::Why::decl(&config),
             silt_workspace::WorkspaceId::decl(&config),

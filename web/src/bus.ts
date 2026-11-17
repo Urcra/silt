@@ -202,6 +202,9 @@ export function useBusInvalidation() {
       case 'agents':
         refetch(keys.agents)
         break
+      case 'approvals':
+        refetch(['approvals'])
+        break
       case 'lagged':
         if (Date.now() - laggedAt.current < LAGGED_MS) break
         laggedAt.current = Date.now()

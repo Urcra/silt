@@ -2,7 +2,7 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { AGENTS, api, short, type CommentView, type DiffStat, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
+import { AGENTS, api, short, type AgentStatus, type CommentView, type DiffStat, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
 import { isChat } from '../chats'
 import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
@@ -45,6 +45,7 @@ import {
   toast,
 } from '../ui'
 import { AgentDock, AgentTail, PermissionCard, PlanCard, SignInCard } from './Agent'
+import { Approvals, SandboxShield } from './Sandbox'
 import { CommentThread } from './CommentThread'
 import { CopyLink } from './CopyLink'
 import { DiffPanel } from './DiffPanel'
@@ -1248,9 +1249,12 @@ export function ThreadHeader({
   onGrouping,
   onConversation,
   onExpand,
+  agent,
 }: {
   thread: string
   summary: ThreadSummary | undefined
+  /** The agent the web UI runs in it, for what its sandbox reaches. */
+  agent?: AgentStatus | null
   detail: Detail
   onDetail: (detail: Detail) => void
   grouping: Grouping
@@ -1328,6 +1332,7 @@ export function ThreadHeader({
       </div>
       <Here people={people} />
       <span className="flex shrink-0 items-center gap-1">
+        <SandboxShield thread={thread} summary={summary} agent={agent} />
         <ForkActions thread={thread} forked={Boolean(summary?.forked_from)} />
         {summary && <ShareDialog thread={summary} />}
         <ThreadMore thread={thread} summary={summary} here={people.length} onDetails={onDetails} detail={detail} onDetail={onDetail} grouping={grouping} onGrouping={onGrouping} />
@@ -1971,6 +1976,7 @@ function ThreadBody({
         changes={totals}
         panelOpen={panel && desktop}
         waiting={agent?.state === 'awaiting_input' || agent?.state === 'awaiting_permission'}
+        agent={agent}
         detail={detail}
         onDetail={setDetail}
         grouping={grouping}
@@ -2019,6 +2025,7 @@ function ThreadBody({
           {agent?.permissions.map((asked, index) => (
             <PermissionCard key={asked.id} thread={thread} asked={asked} agent={agent.agent} first={index === 0} />
           ))}
+          <Approvals thread={thread} />
           {agent?.state === 'awaiting_input' && <PlanCard thread={thread} preset={preset} onPreset={setPreset} />}
           {agent && <AgentTail status={agent} thoughtShown={thoughtCarded} onCancel={() => void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))} />}
         </div>

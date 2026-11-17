@@ -8,6 +8,7 @@ import { serverName } from '../served'
 import { SETTINGS_HEADING } from '../settingsContext'
 import { Button, EmptyState, Input, Select, cx, toast } from '../ui'
 import { settingLabel } from './AgentSettings'
+import { ReachSettings, WorkspacePlugins } from './Sandbox'
 import { WorkspaceBadge } from './WorkspaceSwitcher'
 
 /** A workspace's id from its name, as `silt workspace new` makes it. */
@@ -270,6 +271,15 @@ export function WorkspacesSettings() {
         Given to every agent started in {workspace.name}, from a terminal or here. Its own <code className="font-mono">CLAUDE_CONFIG_DIR</code> or{' '}
         <code className="font-mono">COPILOT_HOME</code> keeps its sign-ins and the agents' own transcripts apart.
       </p>
+
+      <ReachSettings
+        key={workspace.id}
+        workspace={workspace.name}
+        policy={workspace.policy}
+        org={org ? { name: org.org, policy: org.policy } : null}
+        onChange={changePolicy}
+      />
+      {view.data.saved && <WorkspacePlugins workspace={workspace.id} name={workspace.name} />}
 
       <section aria-label="Rules" className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">

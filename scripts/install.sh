@@ -67,6 +67,18 @@ mkdir -p "$dir"
 cp "$work/silt" "$dir/.silt.new"
 chmod 755 "$dir/.silt.new"
 mv "$dir/.silt.new" "$dir/silt"
+# The sandbox's bubblewrap and pasta, which `silt` finds beside it (ADR 0086).
+for tool in silt-bwrap silt-pasta silt-pasta.avx2; do
+    [ -f "$work/$tool" ] || continue
+    cp "$work/$tool" "$dir/.$tool.new"
+    chmod 755 "$dir/.$tool.new"
+    mv "$dir/.$tool.new" "$dir/$tool"
+done
+if [ -d "$work/licenses" ]; then
+    docs=$(dirname "$dir")/share/doc/silt
+    mkdir -p "$docs"
+    cp "$work/licenses/"* "$docs/"
+fi
 echo "silt install: installed $("$dir/silt" --version) to $dir/silt"
 
 case ":$PATH:" in
