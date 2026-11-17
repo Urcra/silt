@@ -13,7 +13,7 @@ pub use policy::{
 };
 pub use preset::Preset;
 pub use reach::{Devices, Extra, Network, Reach};
-pub use sandbox::{ALWAYS_BLOCKED, Cidr, Mount, MountKind, RunPaths, SandboxPlan, plan, subtract};
+pub use sandbox::{ALWAYS_BLOCKED, Cidr, Mount, MountKind, Relay, RunPaths, SandboxPlan, plan, subtract};
 pub use workspace::{
     AgentDefaults, BadWorkspaceId, Defaults, InvalidWorkspaces, MatchRule, Resolved, ServerBinding, Why, Workspace, WorkspaceId,
     Workspaces, is_absolute,

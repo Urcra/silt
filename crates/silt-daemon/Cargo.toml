@@ -28,6 +28,7 @@ silt-crdt = { path = "../silt-crdt" }
 silt-sheet = { path = "../silt-sheet" }
 silt-design = { path = "../silt-design" }
 silt-vendor = { path = "../silt-vendor" }
+silt-gateway = { path = "../silt-gateway" }
 silt-git = { path = "../silt-git" }
 silt-log = { path = "../silt-log" }
 silt-mcp = { path = "../silt-mcp" }

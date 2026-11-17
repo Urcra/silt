@@ -1,6 +1,8 @@
+mod access;
 mod admin;
 mod artifact_check;
 mod commands;
+mod credential;
 mod design;
 mod desktop;
 mod mcp;
@@ -181,6 +183,16 @@ enum Command {
         #[command(subcommand)]
         command: workspace::WorkspaceCommand,
     },
+    /// Silt's sandbox on this machine: whether it works, and how to fix what doesn't
+    Access {
+        #[command(subcommand)]
+        command: access::AccessCommand,
+    },
+    /// Credentials Silt's gateway adds for a workspace's sandboxed agents, which never see them
+    Credential {
+        #[command(subcommand)]
+        command: credential::CredentialCommand,
+    },
     /// Check chart palettes and text contrast, as artifacts' design guidance asks
     Design {
         #[command(subcommand)]
@@ -352,6 +364,15 @@ enum Command {
     /// Serve the tools a page gave its question to the agent answering it
     #[command(hide = true)]
     SampleTools { file: PathBuf },
+    /// Inside Silt's sandbox: relay ports to sockets outside, then run a program
+    #[command(hide = true)]
+    SandboxInit {
+        /// `PORT=SOCKET`: the sandbox's own 127.0.0.1:PORT reaches SOCKET outside
+        #[arg(long)]
+        relay: Vec<String>,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<std::ffi::OsString>,
+    },
     /// Run a program in Silt's sandbox, as the plan Silt wrote says
     #[command(hide = true)]
     SandboxRun {
@@ -779,6 +800,8 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Run { agent, run } => commands::run_agent(&agent, run.isolated, &run.args),
         Command::Chat { agent, about, workspace, args } => commands::chat(&agent, about.as_deref(), workspace.as_deref(), &args),
         Command::Workspace { command } => workspace::run(command),
+        Command::Credential { command } => credential::run(command),
+        Command::Access { command } => access::run(command),
         Command::Design { command } => design::run(command),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
         Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),
@@ -968,6 +991,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Mcp { thread, checkout, token, ui } => mcp::serve(&thread, checkout, token, ui),
         Command::SampleTools { file } => mcp::serve_page_tools(&file),
         Command::SandboxRun { plan, in_network, command } => sandbox::run(&plan, in_network, &command),
+        Command::SandboxInit { relay, command } => sandbox::init(&relay, &command),
         Command::Reference => {
             print!("{}", reference::markdown(&<Cli as clap::CommandFactory>::command()));
             Ok(())

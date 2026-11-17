@@ -159,6 +159,8 @@ impl Extra {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Reach {
     pub network: Network,
+    /// The hosts "through Silt only" reaches; any public host when empty.
+    pub hosts: Vec<String>,
     pub devices: Devices,
     /// Device nodes, for [`Devices::Named`].
     pub device_nodes: Vec<String>,
@@ -183,6 +185,7 @@ impl Reach {
         let devices = policy.devices.unwrap_or_default();
         Self {
             network: policy.network.unwrap_or_default(),
+            hosts: policy.hosts.iter().flatten().cloned().collect(),
             devices,
             device_nodes: if devices == Devices::Named { policy.device_nodes.iter().cloned().collect() } else { Vec::new() },
             ranges: if allowed(Extra::Ranges) { policy.ranges.iter().cloned().collect() } else { Vec::new() },

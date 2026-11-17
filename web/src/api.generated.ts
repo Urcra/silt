@@ -1157,6 +1157,11 @@ home_locked?: boolean,
  */
 connectors?: Array<string> | null, 
 /**
+ * The hosts a sandbox reaches "through Silt only"; any public host
+ * when unset (ADR 0086).
+ */
+hosts?: Array<string> | null, 
+/**
  * What the sandbox can connect to: the person's choice, or an org's
  * most; full internet when unset (ADR 0086).
  */

@@ -13,6 +13,7 @@ mod comments;
 mod connectors;
 mod control;
 mod core;
+pub mod credentials;
 mod design;
 mod design_sync;
 mod disk;

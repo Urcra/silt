@@ -109,6 +109,10 @@ pub struct Policy {
     /// when unset (ADR 0080).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connectors: Option<BTreeSet<String>>,
+    /// The hosts a sandbox reaches "through Silt only"; any public host
+    /// when unset (ADR 0086).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosts: Option<BTreeSet<String>>,
     /// What the sandbox can connect to: the person's choice, or an org's
     /// most; full internet when unset (ADR 0086).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -170,6 +174,10 @@ impl Policy {
             isolated: self.isolated || other.isolated,
             home_locked: self.home_locked || other.home_locked,
             connectors: match (&self.connectors, &other.connectors) {
+                (Some(mine), Some(theirs)) => Some(mine.intersection(theirs).cloned().collect()),
+                (one, other) => one.clone().or_else(|| other.clone()),
+            },
+            hosts: match (&self.hosts, &other.hosts) {
                 (Some(mine), Some(theirs)) => Some(mine.intersection(theirs).cloned().collect()),
                 (one, other) => one.clone().or_else(|| other.clone()),
             },

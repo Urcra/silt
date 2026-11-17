@@ -72,6 +72,12 @@ impl Recording {
     }
 
     /// Runs `command` until it exits, stepping meanwhile.
+    /// The runtime the agent's run is driven on, for what serves it beside,
+    /// such as its sandbox's gateway.
+    pub(crate) fn handle(&self) -> tokio::runtime::Handle {
+        self.runtime.handle().clone()
+    }
+
     pub(crate) fn run(&mut self, command: Command) -> io::Result<std::process::ExitStatus> {
         self.runtime.block_on(run_until_exit(command, &mut self.local))
     }

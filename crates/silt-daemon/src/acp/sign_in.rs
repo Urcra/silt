@@ -323,10 +323,11 @@ impl Core {
         run.load = load;
         run.state = AgentState::Starting;
         run.queued.clear();
-        let sandbox = run.sandbox.clone().map(|(reach, run_token)| super::AcpSandbox {
+        let sandbox = run.sandbox.clone().map(|(reach, run_token, workspace)| super::AcpSandbox {
             reach,
             token: run_token,
             scratch: super::run_scratch(&self.data_dir, thread, token),
+            workspace,
         });
         spawn_agent(self.events.clone(), thread, token, run.info.clone(), self.data_dir.clone(), start, sandbox);
         self.agent_changed(thread).await;

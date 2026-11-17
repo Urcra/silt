@@ -45,6 +45,18 @@ pub struct Mount {
     /// The same path inside and out, so paths in hooks and transcripts mean
     /// the same on both sides.
     pub path: PathBuf,
+    /// What's shown at `path` instead of what's there, such as a trust
+    /// store with the gateway's authority added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PathBuf>,
+}
+
+/// A port on the sandbox's own `127.0.0.1` passed to a socket outside it,
+/// such as the gateway's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Relay {
+    pub port: u16,
+    pub socket: PathBuf,
 }
 
 /// Where a run's things are on this machine.
@@ -90,6 +102,9 @@ pub struct SandboxPlan {
     /// The agent's own sandbox may run inside.
     pub nested: bool,
     pub cwd: PathBuf,
+    /// Ports inside passed to sockets outside.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relays: Vec<Relay>,
 }
 
 /// The system's own folders, read-only.
@@ -163,7 +178,7 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
                 .find(|mount: &&Mount| path.starts_with(&mount.path))
                 .is_some_and(|mount| mount.kind == MountKind::ReadOnly);
         if !covered && !mounts.iter().any(|mount: &Mount| mount.path == path && mount.kind == kind) {
-            mounts.push(Mount { kind, path });
+            mounts.push(Mount { kind, path, source: None });
         }
     };
     for dir in SYSTEM {
@@ -261,6 +276,7 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
         ports: reach.ports.clone(),
         nested: reach.nested,
         cwd: paths.checkout.clone(),
+        relays: Vec::new(),
     }
 }
 
@@ -415,7 +431,8 @@ impl Cidr {
         Some(Self { v6, address: address & mask(bits, prefix), prefix })
     }
 
-    fn contains(self, other: Self) -> bool {
+    /// Whether `other` lies wholly inside it.
+    pub fn contains(self, other: Self) -> bool {
         self.v6 == other.v6 && self.prefix <= other.prefix && other.address & mask(self.bits(), self.prefix) == self.address
     }
 
@@ -446,6 +463,9 @@ fn mask(bits: u8, prefix: u8) -> u128 {
         return 0;
     }
     let all = if bits == 128 { u128::MAX } else { u128::from(u32::MAX) };
+    if prefix >= bits {
+        return all;
+    }
     all & !(all >> prefix)
 }
 
@@ -493,5 +513,8 @@ mod cidr_tests {
         assert!(subtract(&["10.0.0.0/8".into()], &["10.0.0.0/8".into()]).is_empty());
         assert_eq!(Cidr::parse("10.1.2.3/8").unwrap().to_string(), "10.0.0.0/8");
         assert_eq!(Cidr::parse("nonsense"), None);
+        assert_eq!(Cidr::parse("::1").unwrap().to_string(), "::1/128");
+        assert!(Cidr::parse("::1/128").unwrap().contains(Cidr::parse("::1").unwrap()));
+        assert_eq!(Cidr::parse("10.1.2.3").unwrap().to_string(), "10.1.2.3/32");
     }
 }

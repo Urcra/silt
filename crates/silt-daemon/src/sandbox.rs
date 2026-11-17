@@ -5,7 +5,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use silt_workspace::{Reach, RunPaths};
+use silt_workspace::{Mount, MountKind, Network, Reach, RunPaths};
 
 use crate::CoreError;
 
@@ -29,14 +29,52 @@ const CREDENTIAL_VARIABLES: [&str; 12] = [
 /// Prefixes of variables never passed into a sandbox.
 const CREDENTIAL_PREFIXES: [&str; 2] = ["AWS_", "AZURE_"];
 
+/// The port the gateway answers on inside a sandbox.
+pub const GATEWAY_PORT: u16 = 3128;
+
 /// What starting a program in the sandbox takes.
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sandboxed {
     /// The program and arguments that start the run's command in the
     /// sandbox; the command follows them.
     pub launcher: Vec<OsString>,
     /// The run's variables, as the sandbox gets them.
     pub env: Vec<(String, String)>,
+    /// What answers its relays outside, to start before it and stop after.
+    pub outside: Vec<Outside>,
+    /// Credentials the workspace names whose secret couldn't be had.
+    pub missing: Vec<String>,
+}
+
+/// What answers a sandbox's relay outside it.
+pub enum Outside {
+    Gateway {
+        listener: std::os::unix::net::UnixListener,
+        gateway: std::sync::Arc<silt_gateway::Gateway>,
+    },
+    /// A port on this machine the workspace hands its sandboxes.
+    Port {
+        listener: std::os::unix::net::UnixListener,
+        port: u16,
+    },
+}
+
+impl Outside {
+    /// Answers on the runtime of `handle` until the task is aborted.
+    pub fn spawn(self, handle: &tokio::runtime::Handle) -> std::io::Result<tokio::task::JoinHandle<()>> {
+        let _entered = handle.enter();
+        match self {
+            Self::Gateway { listener, gateway } => {
+                listener.set_nonblocking(true)?;
+                let listener = tokio::net::UnixListener::from_std(listener)?;
+                Ok(handle.spawn(gateway.serve(listener)))
+            }
+            Self::Port { listener, port } => {
+                listener.set_nonblocking(true)?;
+                let listener = tokio::net::UnixListener::from_std(listener)?;
+                Ok(handle.spawn(silt_gateway::forward_port(listener, port)))
+            }
+        }
+    }
 }
 
 impl Sandboxed {
@@ -55,6 +93,8 @@ pub struct Run<'a> {
     pub data_dir: &'a Path,
     pub agent: Option<&'a dyn silt_agents::Agent>,
     pub checkout: &'a Path,
+    /// The workspace whose credentials its gateway adds.
+    pub workspace: &'a str,
     /// Where the plan and the run's other files go; writable in the sandbox.
     pub scratch: &'a Path,
     pub reach: &'a Reach,
@@ -101,8 +141,47 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
         std::fs::create_dir_all(git_dir.join("hooks"))?;
     }
     std::fs::create_dir_all(run.checkout.join(".silt"))?;
-    let plan = silt_workspace::plan(&paths, run.reach);
+    let mut plan = silt_workspace::plan(&paths, run.reach);
     std::fs::create_dir_all(run.scratch)?;
+    let mut extra_env = Vec::new();
+    let mut outside = Vec::new();
+    let mut missing = Vec::new();
+    #[cfg(unix)]
+    {
+        let (credentials, placeholders, unresolved) = crate::credentials::resolve(run.data_dir, run.workspace);
+        missing.extend(unresolved);
+        let gateway = run.reach.network == Network::Gateway || (run.reach.network == Network::Full && !credentials.is_empty());
+        if gateway {
+            let socket = short_socket(run.scratch, "gateway.sock")?;
+            let ca = std::sync::Arc::new(silt_gateway::Ca::load_or_create(&run.data_dir.join("gateway"))?);
+            trust(&mut plan, &mut extra_env, run.scratch, ca.pem())?;
+            let rules = silt_gateway::Rules {
+                network: run.reach.network,
+                hosts: run.reach.hosts.clone(),
+                blocked: silt_workspace::subtract(&plan.blocked, &plan.allowed),
+                credentials,
+            };
+            let log = Some(run.scratch.join("gateway.jsonl"));
+            let gateway = std::sync::Arc::new(silt_gateway::Gateway::new(rules, ca, log));
+            outside.push(Outside::Gateway { listener: listen(&socket)?, gateway });
+            plan.relays.push(silt_workspace::Relay { port: GATEWAY_PORT, socket: socket.clone() });
+            plan.mounts.push(Mount { kind: MountKind::ReadWrite, path: socket, source: None });
+            let proxy = format!("http://127.0.0.1:{GATEWAY_PORT}");
+            for name in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+                extra_env.push((name.to_owned(), proxy.clone()));
+            }
+            for name in ["NO_PROXY", "no_proxy"] {
+                extra_env.push((name.to_owned(), "localhost,127.0.0.1,::1".to_owned()));
+            }
+            extra_env.extend(placeholders);
+        }
+        for port in &run.reach.ports {
+            let socket = short_socket(run.scratch, &format!("port-{port}.sock"))?;
+            outside.push(Outside::Port { listener: listen(&socket)?, port: *port });
+            plan.relays.push(silt_workspace::Relay { port: *port, socket: socket.clone() });
+            plan.mounts.push(Mount { kind: MountKind::ReadWrite, path: socket, source: None });
+        }
+    }
     let plan_path = run.scratch.join("sandbox.json");
     std::fs::write(&plan_path, serde_json::to_vec(&plan).map_err(|error| CoreError::Invalid(error.to_string()))?)?;
     let launcher =
@@ -113,7 +192,65 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
         env.push(("SILT_RUN_SOCKET".into(), socket.to_string_lossy().into_owned()));
     }
     env.push(("SILT_RUN_TOKEN".into(), run.token.to_owned()));
-    Ok(Sandboxed { launcher, env })
+    let added: Vec<&str> = extra_env.iter().map(|(name, _)| name.as_str()).collect();
+    env.retain(|(name, _)| !added.contains(&name.as_str()));
+    env.extend(extra_env);
+    Ok(Sandboxed { launcher, env, outside, missing })
+}
+
+/// Where the system keeps the certificates it trusts, by distribution.
+const TRUST_STORES: [&str; 4] =
+    ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem"];
+
+/// Makes the sandbox trust the gateway's authority: in the system's store,
+/// shown with it added, and in the variables tools read a store from.
+fn trust(
+    plan: &mut silt_workspace::SandboxPlan,
+    env: &mut Vec<(String, String)>,
+    scratch: &Path,
+    authority: &str,
+) -> std::io::Result<()> {
+    let own = scratch.join("silt-gateway-ca.pem");
+    std::fs::write(&own, authority)?;
+    let system = TRUST_STORES.iter().map(Path::new).find(|store| store.is_file());
+    let bundle = scratch.join("ca-bundle.pem");
+    let mut all = system.map(std::fs::read_to_string).transpose()?.unwrap_or_default();
+    all.push('\n');
+    all.push_str(authority);
+    std::fs::write(&bundle, all)?;
+    for store in TRUST_STORES.iter().map(Path::new).filter(|store| store.is_file()) {
+        plan.mounts.push(Mount { kind: MountKind::ReadOnly, path: store.to_owned(), source: Some(bundle.clone()) });
+    }
+    let bundle = bundle.to_string_lossy().into_owned();
+    for name in
+        ["SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "GIT_SSL_CAINFO", "AWS_CA_BUNDLE", "DENO_CERT", "PIP_CERT"]
+    {
+        env.push((name.to_owned(), bundle.clone()));
+    }
+    env.push(("NODE_EXTRA_CA_CERTS".to_owned(), own.to_string_lossy().into_owned()));
+    Ok(())
+}
+
+/// A socket path short enough for `sun_path`: in the run's folder, else in
+/// a private folder of this user's under the temporary directory.
+#[cfg(unix)]
+fn short_socket(scratch: &Path, name: &str) -> std::io::Result<PathBuf> {
+    let path = scratch.join(name);
+    if path.as_os_str().len() <= 100 {
+        return Ok(path);
+    }
+    let dir = std::env::temp_dir().join(format!("silt-{}", silt_os::uid()));
+    silt_os::create_private_dir(&dir)?;
+    let id = blake3::hash(path.as_os_str().as_encoded_bytes()).to_hex();
+    Ok(dir.join(format!("{}-{name}", &id[..16])))
+}
+
+#[cfg(unix)]
+fn listen(socket: &Path) -> std::io::Result<std::os::unix::net::UnixListener> {
+    let _ = std::fs::remove_file(socket);
+    let listener = std::os::unix::net::UnixListener::bind(socket)?;
+    std::fs::set_permissions(socket, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    Ok(listener)
 }
 
 /// Whether variable `name` goes into the sandbox.
@@ -195,6 +332,7 @@ mod tests {
             data_dir: data.path(),
             agent: Some(&silt_agents::claude::ClaudeCode),
             checkout: checkout.path(),
+            workspace: "default",
             scratch: &data.path().join("runs/x"),
             reach: &reach,
             token: "t0k",
@@ -220,6 +358,56 @@ mod tests {
         assert_eq!(plan.sees(&socket), Some(true));
         assert_eq!(plan.sees(&crate::paths::socket_path_in(data.path())), None, "never the person's socket");
         assert_eq!(plan.sees(&data.path().join("silt.sqlite")), None);
+    }
+
+    #[test]
+    fn through_silt_only_relays_to_a_gateway_the_sandbox_trusts() {
+        let data = tempfile::tempdir().unwrap();
+        let checkout = tempfile::tempdir().unwrap();
+        crate::credentials::save(
+            data.path(),
+            &[crate::credentials::StoredCredential {
+                name: "gh".into(),
+                workspace: "work".into(),
+                host: "api.github.com".into(),
+                path: "/".into(),
+                header: "authorization".into(),
+                scheme: "Bearer".into(),
+                source: crate::credentials::Source::Command { argv: vec!["echo".into(), "s3cret".into()] },
+                placeholder: Some("GH_TOKEN".into()),
+            }],
+        )
+        .unwrap();
+        let reach = Reach::of(&silt_workspace::Policy {
+            network: Some(Network::Gateway),
+            ports: [5432].into(),
+            ..silt_workspace::Policy::default()
+        });
+        let scratch = data.path().join("runs/y");
+        let run = Run {
+            data_dir: data.path(),
+            agent: None,
+            checkout: checkout.path(),
+            workspace: "work",
+            scratch: &scratch,
+            reach: &reach,
+            token: "t",
+            env: vec![("PATH".into(), "/usr/bin".into())],
+            read_only: Vec::new(),
+        };
+        let sandboxed = prepare(&run).unwrap();
+        assert_eq!(sandboxed.outside.len(), 2, "the gateway and the forwarded port");
+        let env = |name: &str| sandboxed.env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone());
+        assert_eq!(env("HTTPS_PROXY").as_deref(), Some("http://127.0.0.1:3128"));
+        assert_eq!(env("GH_TOKEN").as_deref(), Some("silt-placeholder"), "never the secret");
+        assert!(!sandboxed.env.iter().any(|(_, value)| value.contains("s3cret")));
+        let bundle = std::fs::read_to_string(scratch.join("ca-bundle.pem")).unwrap();
+        assert!(bundle.contains("BEGIN CERTIFICATE"));
+        let plan: silt_workspace::SandboxPlan =
+            serde_json::from_slice(&std::fs::read(scratch.join("sandbox.json")).unwrap()).unwrap();
+        assert_eq!(plan.relays.iter().map(|relay| relay.port).collect::<Vec<_>>(), vec![GATEWAY_PORT, 5432]);
+        assert!(!std::fs::read_to_string(scratch.join("sandbox.json")).unwrap().contains("s3cret"));
+        assert_eq!(plan.sees(&data.path().join("gateway/ca-key.pem")), None, "the authority's key stays out");
     }
 
     #[test]

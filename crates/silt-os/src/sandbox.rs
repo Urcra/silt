@@ -126,6 +126,11 @@ pub fn bwrap_args(plan: &SandboxPlan, ids: Ids, seccomp: &File, resolv: Option<&
     push(&["--proc".as_ref(), "/proc".as_ref(), "--dev".as_ref(), "/dev".as_ref()]);
     for mount in &plan.mounts {
         let path = mount.path.as_os_str();
+        if let Some(source) = &mount.source {
+            // Something else shown in its place, read-only.
+            push(&["--ro-bind".as_ref(), source.as_os_str(), path]);
+            continue;
+        }
         match mount.kind {
             MountKind::ReadOnly => push(&["--ro-bind-try".as_ref(), path, path]),
             MountKind::ReadWrite => push(&["--bind-try".as_ref(), path, path]),
@@ -334,7 +339,7 @@ mod tests {
             ..RunPaths::default()
         };
         let mut plan = plan(&paths, &Reach::of(&Policy { network: Some(Network::None), no_nested: true, ..Policy::default() }));
-        plan.mounts.push(Mount { kind: MountKind::Hide, path: "/nonexistent/secret".into() });
+        plan.mounts.push(Mount { kind: MountKind::Hide, path: "/nonexistent/secret".into(), source: None });
         let seccomp = File::open("/dev/null").unwrap();
         let args: Vec<String> = bwrap_args(&plan, Ids { uid: 1000, gid: 1000 }, &seccomp, None, &["claude".into()])
             .into_iter()

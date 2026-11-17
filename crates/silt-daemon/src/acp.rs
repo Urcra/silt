@@ -33,7 +33,7 @@ pub(crate) struct AcpRun {
     info: AgentInfo,
     /// What its sandbox reaches and the run's token, when it runs in Silt's
     /// sandbox, for starting it again the same way (ADR 0086).
-    sandbox: Option<(silt_workspace::Reach, String)>,
+    sandbox: Option<(silt_workspace::Reach, String, String)>,
     checkout_id: CheckoutId,
     checkout: PathBuf,
     handle: Option<AgentHandle>,
@@ -575,8 +575,13 @@ impl Core {
         start.env.extend(workspace.env.iter().map(|(name, value)| (name.clone(), value.clone())));
         let presents_plans =
             silt_acp::presents_plans(&info.id) || read_seen(&self.data_dir).get(&info.id).is_some_and(|seen| seen.presents_plans);
-        let kept = reach.clone().map(|reach| (reach, token.clone()));
-        let sandbox = reach.map(|reach| AcpSandbox { reach, token, scratch: run_scratch(&self.data_dir, thread, run) });
+        let kept = reach.clone().map(|reach| (reach, token.clone(), workspace.id.as_str().to_owned()));
+        let sandbox = reach.map(|reach| AcpSandbox {
+            reach,
+            token,
+            scratch: run_scratch(&self.data_dir, thread, run),
+            workspace: workspace.id.as_str().to_owned(),
+        });
         spawn_agent(self.events.clone(), thread, run, info.clone(), self.data_dir.clone(), start, sandbox);
         self.acp.insert(
             thread,
@@ -1863,7 +1868,23 @@ impl Core {
 /// `start` rewritten to run in Silt's sandbox: through `silt sandbox-run`,
 /// with the sandbox's variables, and Silt's MCP server reaching the daemon
 /// through the run's channel.
-fn sandboxed(start: &mut Start, info: &AgentInfo, data_dir: &Path, sandbox: &AcpSandbox) -> Result<(), CoreError> {
+/// Tasks that end with the value, such as a run's gateway with its agent.
+struct Aborting(Vec<tokio::task::JoinHandle<()>>);
+
+impl Drop for Aborting {
+    fn drop(&mut self) {
+        for task in &self.0 {
+            task.abort();
+        }
+    }
+}
+
+fn sandboxed(
+    start: &mut Start,
+    info: &AgentInfo,
+    data_dir: &Path,
+    sandbox: &AcpSandbox,
+) -> Result<Vec<tokio::task::JoinHandle<()>>, CoreError> {
     let key = silt_workspace::agent_key(&info.id);
     let agent = silt_agents::AGENTS.iter().copied().find(|agent| silt_workspace::agent_key(agent.id()) == key);
     let mut read_only = crate::sandbox::program_paths(std::ffi::OsStr::new(&start.program), &start.env);
@@ -1873,6 +1894,7 @@ fn sandboxed(start: &mut Start, info: &AgentInfo, data_dir: &Path, sandbox: &Acp
         data_dir,
         agent,
         checkout: &start.cwd,
+        workspace: &sandbox.workspace,
         scratch: &sandbox.scratch,
         reach: &sandbox.reach,
         token: &sandbox.token,
@@ -1886,7 +1908,15 @@ fn sandboxed(start: &mut Start, info: &AgentInfo, data_dir: &Path, sandbox: &Acp
         mcp.env.extend(prepared.env.iter().filter(|(name, _)| name.starts_with("SILT_RUN_")).cloned());
     }
     start.env = prepared.env;
-    Ok(())
+    if !prepared.missing.is_empty() {
+        tracing::warn!(missing = ?prepared.missing, "credentials the workspace names had no secret to add");
+    }
+    let handle = tokio::runtime::Handle::current();
+    let mut tasks = Vec::new();
+    for outside in prepared.outside {
+        tasks.push(outside.spawn(&handle)?);
+    }
+    Ok(tasks)
 }
 
 fn mcp_env(data_dir: &Path) -> Vec<(String, String)> {
@@ -2239,6 +2269,7 @@ pub(crate) struct AcpSandbox {
     reach: silt_workspace::Reach,
     token: String,
     scratch: PathBuf,
+    workspace: String,
 }
 
 pub(crate) fn spawn_agent(
@@ -2262,13 +2293,20 @@ pub(crate) fn spawn_agent(
         start.args = args;
         let workspace_env = std::mem::take(&mut start.env);
         start.env = registry::agent_environment(&info.id, &data_dir).into_iter().chain(env).chain(workspace_env).collect();
-        if let Some(sandbox) = sandbox
-            && let Err(error) = sandboxed(&mut start, &info, &data_dir, &sandbox)
-        {
-            let message = format!("couldn't start {} in Silt's sandbox: {error}", info.name);
-            let _ = events.send(Event::Acp { thread, run, event: AcpEvent::Started(Err(message)) });
-            return;
+        // What answers the sandbox's relays, such as its gateway, for as
+        // long as the agent runs.
+        let mut outside = Vec::new();
+        if let Some(sandbox) = sandbox {
+            match sandboxed(&mut start, &info, &data_dir, &sandbox) {
+                Ok(started) => outside = started,
+                Err(error) => {
+                    let message = format!("couldn't start {} in Silt's sandbox: {error}", info.name);
+                    let _ = events.send(Event::Acp { thread, run, event: AcpEvent::Started(Err(message)) });
+                    return;
+                }
+            }
         }
+        let _ended = Aborting(outside);
         let (sender, mut receiver) = mpsc::unbounded_channel();
         let handle = silt_acp::start(start.for_agent(&info.id), sender);
         let _ = events.send(Event::Acp { thread, run, event: AcpEvent::Started(Ok(handle)) });

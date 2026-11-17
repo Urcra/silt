@@ -88,6 +88,9 @@ pub enum WorkspaceCommand {
         /// What its sandboxes connect to: none, gateway, full (the default) or host
         #[arg(long)]
         network: Option<String>,
+        /// The hosts "through Silt only" reaches, comma-separated, such as `*.github.com`, or `any`
+        #[arg(long)]
+        hosts: Option<String>,
         /// Which devices its sandboxes get: none, named or all_usb
         #[arg(long)]
         devices: Option<String>,
@@ -249,6 +252,7 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
             home_locked,
             connectors,
             network,
+            hosts,
             devices,
             device_nodes,
             ranges,
@@ -271,6 +275,12 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
             }
             if refuse.is_some() {
                 policy.refuse = reach.refuse;
+            }
+            if let Some(hosts) = hosts {
+                policy.hosts = match hosts.trim() {
+                    "any" | "" => None,
+                    list => Some(entries(list).map(|host| host.to_ascii_lowercase()).collect()),
+                };
             }
             if let Some(nodes) = device_nodes {
                 policy.device_nodes = entries(&nodes).collect();

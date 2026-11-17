@@ -427,10 +427,11 @@ impl Run<'_> {
                     )
                     .filter(|(key, _)| !(held.locks.no_bypass && key == "COPILOT_ALLOW_ALL"))
                     .collect();
-                let sandboxed = silt_daemon::sandbox::prepare(&silt_daemon::sandbox::Run {
+                let mut sandboxed = silt_daemon::sandbox::prepare(&silt_daemon::sandbox::Run {
                     data_dir: &paths::data_dir(),
                     agent: Some(self.agent),
                     checkout: self.checkout,
+                    workspace: held.workspace.id.as_str(),
                     scratch: &scratch,
                     reach,
                     token: &held.token,
@@ -438,6 +439,14 @@ impl Run<'_> {
                     env,
                 })
                 .map_err(|error| fail(format!("cannot prepare the sandbox: {error}")))?;
+                for name in &sandboxed.missing {
+                    eprintln!("silt: the credential {name} has no secret to add; `silt credential list` says why");
+                }
+                let handle = recording.handle();
+                for outside in sandboxed.outside.drain(..) {
+                    // Served while the agent runs, and dropped with this process.
+                    outside.spawn(&handle).or_raise(|| CliError("cannot start the sandbox's gateway".into()))?;
+                }
                 let all = sandboxed.command(&launch.program, &launch.args);
                 let mut command = Command::new(&all[0]);
                 command.args(&all[1..]).env_clear().envs(sandboxed.env.iter().map(|(key, value)| (key, value)));
