@@ -101,6 +101,16 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
         "skipping permissions is refused under a cap"
     );
 
+    // A plugin on in Work: its runs' calls are kept with their thread (ADR 0086).
+    let plugin = root.path().join("fleet.json");
+    let definition = serde_json::json!({
+        "name": "fleet",
+        "kind": {"type": "command", "argv": ["echo", "ran on {target}"]},
+        "environments": {"lab": {"target": "car-*.fleet.test", "changes": "ask"}}
+    });
+    fs::write(&plugin, definition.to_string()).expect("writes the plugin");
+    assert!(laptop.silt(&["plugin", "add", &plugin.to_string_lossy()]).status.success());
+    assert!(laptop.silt(&["plugin", "enable", "fleet", "--workspace", "work"]).status.success());
     let ran = in_work(&["claude"]);
     let said = String::from_utf8_lossy(&ran.stderr).into_owned();
     assert!(ran.status.success(), "{said}");
@@ -150,4 +160,25 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     assert!(shown.contains("only an agent the web UI runs"), "{shown}");
     let forged = mcp_answer_with(&laptop, &["mcp", "--thread", work_id, "--token", "not-a-token", "--ui"], "silt_artifact", page);
     assert!(forged.contains("this run's token isn't known here"), "{forged}");
+
+    // The plugin on in Work waits for the person on a change, and its run hears how they answered (ADR 0086).
+    let arguments = serde_json::json!({"environment": "lab", "target": "car-1.fleet.test", "args": ["now"]});
+    let said = std::thread::scope(|scope| {
+        let call = scope.spawn(|| mcp_answer(&laptop, work_id, &token, "fleet_run", arguments.clone()));
+        let mut waiting = None;
+        for _ in 0..200 {
+            let listed = String::from_utf8_lossy(&laptop.silt(&["approvals"]).stdout).into_owned();
+            if let Some(line) = listed.lines().find(|line| line.contains("fleet fleet_run")) {
+                waiting = line.split_whitespace().next().map(str::to_owned);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let id = waiting.expect("the call waits for the person");
+        assert!(laptop.silt(&["approve", &id, "--reject"]).status.success());
+        call.join().expect("the call ends")
+    });
+    assert!(said.contains("Refused: the person rejected it"), "{said}");
+    let access = String::from_utf8_lossy(&laptop.silt(&["access", "show", work_id]).stdout).into_owned();
+    assert!(access.contains("fleet fleet_run in lab  refused"), "{access}");
 }

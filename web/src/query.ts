@@ -33,6 +33,8 @@ export const keys = {
   threadSeen: (id: string, spec: DiffSpec) => ['thread', id, 'seen', spec] as const,
   mrs: ['mrs'] as const,
   approvals: (thread: string) => ['approvals', thread] as const,
+  allApprovals: ['approvals'] as const,
+  access: (thread: string) => ['approvals', 'access', thread] as const,
   plugins: ['plugins'] as const,
   artifacts: ['artifacts'] as const,
   mr: (id: string) => ['mrs', id] as const,

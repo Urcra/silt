@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use exn::{Exn, ResultExt as _};
 use silt_daemon::paths;
-use silt_daemon::plugins::{self, ApprovalState, ApprovalView, Kind, Plugin};
+use silt_daemon::plugins::{self, AccessView, ApprovalState, ApprovalView, GrantScope, Kind, Outcome, Plugin};
 use silt_daemon::protocol::Request;
 
 use crate::CliError;
@@ -111,7 +111,7 @@ fn state(approval: &ApprovalView) -> &'static str {
 
 /// `silt approvals`: the calls waiting for the person, or all of them.
 pub fn list(all: bool, thread: Option<String>) -> Result<(), Exn<CliError>> {
-    let approvals: Vec<ApprovalView> = call(&Request::Approvals { thread })?;
+    let approvals: Vec<ApprovalView> = call(&Request::Approvals { thread, all })?;
     let shown: Vec<&ApprovalView> = approvals.iter().filter(|approval| all || approval.state == ApprovalState::Pending).collect();
     if shown.is_empty() {
         println!("{}", if all { "no approvals" } else { "nothing waits for you" });
@@ -133,8 +133,13 @@ pub fn list(all: bool, thread: Option<String>) -> Result<(), Exn<CliError>> {
 
 /// `silt approve`: shows Silt's own copy of the call and asks, on a
 /// terminal, whether to run it.
-pub fn answer(id: u64, reject: bool) -> Result<(), Exn<CliError>> {
-    let approvals: Vec<ApprovalView> = call(&Request::Approvals { thread: None })?;
+pub fn answer(id: u64, reject: bool, grant: Option<&str>, minutes: u32) -> Result<(), Exn<CliError>> {
+    let grant = match grant {
+        Some("run") => Some(GrantScope::Run),
+        Some(_) => Some(GrantScope::Thread { minutes }),
+        None => None,
+    };
+    let approvals: Vec<ApprovalView> = call(&Request::Approvals { thread: None, all: false })?;
     let approval = approvals.into_iter().find(|approval| approval.id == id).ok_or_else(|| fail(format!("no approval {id}")))?;
     if approval.state != ApprovalState::Pending {
         return Err(fail(format!("approval {id} is {} already", state(&approval))));
@@ -147,7 +152,19 @@ pub fn answer(id: u64, reject: bool) -> Result<(), Exn<CliError>> {
         if !std::io::stdin().is_terminal() {
             return Err(fail("approving asks on a terminal; run `silt approve` in one, or answer in the web UI"));
         }
-        print!("Run exactly this, once? [y/N] ");
+        if grant.is_some() && approval.once {
+            return Err(fail(format!(
+                "{}'s {} allows no grant: each call is approved on its own",
+                approval.plugin, approval.environment
+            )));
+        }
+        match grant {
+            Some(GrantScope::Run) => print!("Run exactly this, and let its run make calls like it without asking? [y/N] "),
+            Some(GrantScope::Thread { minutes }) => {
+                print!("Run exactly this, and let the thread make calls like it without asking for {minutes} minutes? [y/N] ");
+            }
+            None => print!("Run exactly this, once? [y/N] "),
+        }
         let _ = std::io::stdout().flush();
         let mut line = String::new();
         std::io::stdin().lock().read_line(&mut line).or_raise(|| CliError("cannot read the answer".into()))?;
@@ -156,7 +173,55 @@ pub fn answer(id: u64, reject: bool) -> Result<(), Exn<CliError>> {
             return Ok(());
         }
     }
-    let said: String = call(&Request::ApprovalAnswer { id, approve: !reject, hash: approval.hash })?;
+    let said: String =
+        call(&Request::ApprovalAnswer { id, approve: !reject, hash: approval.hash, grant: grant.filter(|_| !reject) })?;
     println!("{said}");
+    Ok(())
+}
+
+/// `silt revoke`: ends a grant.
+pub fn revoke(id: u64) -> Result<(), Exn<CliError>> {
+    let said: String = call(&Request::GrantRevoke { id })?;
+    println!("{said}");
+    Ok(())
+}
+
+/// `silt access show`: what reached a thread's sandboxes through Silt.
+pub fn access(thread: &str) -> Result<(), Exn<CliError>> {
+    let access: AccessView = call(&Request::Access { thread: thread.to_owned() })?;
+    if !access.grants.is_empty() {
+        println!("Grants");
+        for grant in &access.grants {
+            let what = if grant.change { "changes" } else { "reads" };
+            let scope = if grant.run_only { "its run" } else { "the thread" };
+            let state = if grant.active { "in force" } else { "ended" };
+            println!("  {}  {} {} {what}, for {scope}  {state}", grant.id, grant.plugin, grant.environment);
+        }
+    }
+    println!("Plugin calls");
+    if access.calls.is_empty() {
+        println!("  none");
+    }
+    for call in &access.calls {
+        let how = match (&call.outcome, call.asked) {
+            (Some(Outcome::Done { .. }), true) => "approved, ran",
+            (Some(Outcome::Done { .. }), false) if call.grant.is_some() => "ran under a grant",
+            (Some(Outcome::Done { .. }), false) => "ran without asking",
+            (Some(Outcome::Refused { .. }), _) => "refused",
+            (Some(Outcome::Failed { .. }), _) => "failed",
+            (Some(Outcome::Unknown { .. }), _) => "outcome unknown",
+            _ => call.state.as_str(),
+        };
+        println!("  {}  {} {} in {}  {how}", call.id, call.plugin, call.tool, call.environment);
+        if let Some(Outcome::Refused { why } | Outcome::Unknown { why }) = &call.outcome {
+            println!("      {why}");
+        }
+    }
+    if !access.refused.is_empty() {
+        println!("Refused by the gateway");
+        for refused in &access.refused {
+            println!("  {}:{}  {}", refused.host, refused.port, refused.why);
+        }
+    }
     Ok(())
 }

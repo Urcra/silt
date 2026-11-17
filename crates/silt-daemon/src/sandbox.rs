@@ -91,6 +91,8 @@ impl Sandboxed {
 #[derive(Clone)]
 pub struct Run<'a> {
     pub data_dir: &'a Path,
+    /// The thread it runs in, by id.
+    pub thread: &'a str,
     pub agent: Option<&'a dyn silt_agents::Agent>,
     pub checkout: &'a Path,
     /// The workspace whose credentials its gateway adds.
@@ -161,7 +163,10 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
                 blocked: silt_workspace::subtract(&plan.blocked, &plan.allowed),
                 credentials,
             };
-            let log = Some(run.scratch.join("gateway.jsonl"));
+            let log = Some(access_log(run.data_dir, run.thread));
+            if let Some(dir) = log.as_deref().and_then(Path::parent) {
+                std::fs::create_dir_all(dir)?;
+            }
             let gateway = std::sync::Arc::new(silt_gateway::Gateway::new(rules, ca, log));
             outside.push(Outside::Gateway { listener: listen(&socket)?, gateway });
             plan.relays.push(silt_workspace::Relay { port: GATEWAY_PORT, socket: socket.clone() });
@@ -196,6 +201,12 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     env.retain(|(name, _)| !added.contains(&name.as_str()));
     env.extend(extra_env);
     Ok(Sandboxed { launcher, env, outside, missing })
+}
+
+/// Where the gateway notes what a thread's sandboxes reached and what it
+/// refused: outside every run's own folder, so it outlives the run.
+pub fn access_log(data_dir: &Path, thread: &str) -> PathBuf {
+    data_dir.join("access").join(format!("{thread}.jsonl"))
 }
 
 /// Where the system keeps the certificates it trusts, by distribution.
@@ -330,6 +341,7 @@ mod tests {
         let reach = Reach::of(&silt_workspace::Policy::default());
         let run = Run {
             data_dir: data.path(),
+            thread: "t1",
             agent: Some(&silt_agents::claude::ClaudeCode),
             checkout: checkout.path(),
             workspace: "default",
@@ -386,6 +398,7 @@ mod tests {
         let scratch = data.path().join("runs/y");
         let run = Run {
             data_dir: data.path(),
+            thread: "t1",
             agent: None,
             checkout: checkout.path(),
             workspace: "work",

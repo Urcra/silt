@@ -1,4 +1,7 @@
-import type { Devices, Extra, Network, Policy, Reach } from './api'
+import { useQuery } from '@tanstack/react-query'
+import { api, type Devices, type Extra, type Network, type Policy, type Reach } from './api'
+import { keys } from './query'
+import { hosted } from './served'
 
 /** Silt's sandbox in the web UI (ADR 0086): its options as Settings shows them, and what a policy gives a run. */
 
@@ -45,4 +48,10 @@ export function reachOf(policy: Policy): Reach {
     ssh_agent: Boolean(policy.ssh_agent) && allowed('ssh_agent'),
     nested: !policy.no_nested,
   }
+}
+
+/** How many plugin calls wait for the person, for Needs you's empty state. */
+export function useApprovalsWaiting(): number {
+  const approvals = useQuery({ queryKey: keys.allApprovals, queryFn: () => api.approvals(), enabled: !hosted(), refetchInterval: 30_000 })
+  return (approvals.data ?? []).filter((approval) => approval.state === 'pending').length
 }

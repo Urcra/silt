@@ -581,6 +581,7 @@ impl Core {
             token,
             scratch: run_scratch(&self.data_dir, thread, run),
             workspace: workspace.id.as_str().to_owned(),
+            thread: thread.to_string(),
         });
         spawn_agent(self.events.clone(), thread, run, info.clone(), self.data_dir.clone(), start, sandbox);
         self.acp.insert(
@@ -1893,6 +1894,7 @@ fn sandboxed(
     read_only.extend([data_dir.join("agents"), data_dir.join("skills")]);
     let prepared = crate::sandbox::prepare(&crate::sandbox::Run {
         data_dir,
+        thread: &sandbox.thread,
         agent,
         checkout: &start.cwd,
         workspace: &sandbox.workspace,
@@ -2271,6 +2273,7 @@ pub(crate) struct AcpSandbox {
     token: String,
     scratch: PathBuf,
     workspace: String,
+    thread: String,
 }
 
 pub(crate) fn spawn_agent(

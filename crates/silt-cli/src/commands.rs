@@ -368,6 +368,21 @@ struct Run<'a> {
     held: &'a silt_daemon::workspaces::RunRules,
 }
 
+/// Binds the run's token to its thread, which may be new since the token
+/// was made, so what the run asks of plugins is kept with the thread.
+fn bind_run_token(token: &str, thread: &str) -> Result<(), Exn<CliError>> {
+    if !daemonless_capture() && is_running() {
+        return call::<String>(&Request::BindRunToken { token: token.to_owned(), thread: thread.to_owned() }).map(drop);
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .or_raise(|| CliError("cannot start the async runtime".into()))?;
+    runtime
+        .block_on(silt_daemon::workspaces::bind_run_token(&paths::data_dir(), token, thread))
+        .map_err(|error| fail(error.to_string()))
+}
+
 impl Run<'_> {
     /// Runs the agent with Silt's MCP server, hooks, and the repository's
     /// rules and skills it doesn't read by itself.
@@ -378,6 +393,12 @@ impl Run<'_> {
         recording: &mut Recording,
     ) -> Result<std::process::ExitStatus, Exn<CliError>> {
         let held = self.held;
+        // Only a run whose workspace has plugins calls them, which are kept
+        // with its thread.
+        let plugins = silt_daemon::plugins::load(&paths::data_dir());
+        if !held.token.is_empty() && !silt_daemon::plugins::tools(&plugins, held.workspace.id.as_str()).is_empty() {
+            bind_run_token(&held.token, self.thread)?;
+        }
         let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
         let scratch = paths::data_dir().join("runs").join(format!("{}-{}", short(self.thread), std::process::id()));
         fs::create_dir_all(&scratch).or_raise(|| CliError("cannot create a directory for the run".into()))?;
@@ -429,6 +450,7 @@ impl Run<'_> {
                     .collect();
                 let mut sandboxed = silt_daemon::sandbox::prepare(&silt_daemon::sandbox::Run {
                     data_dir: &paths::data_dir(),
+                    thread: self.thread,
                     agent: Some(self.agent),
                     checkout: self.checkout,
                     workspace: held.workspace.id.as_str(),

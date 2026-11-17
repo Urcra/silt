@@ -58,7 +58,9 @@ import type {
   ThreadSeenView,
   ThreadSummary,
   TurnInfo,
+  AccessView,
   ApprovalView,
+  GrantScope,
   Plugin,
   VoiceStatus,
   Workspaces,
@@ -390,7 +392,10 @@ export const api = {
   // Plugin calls waiting for the person, and this machine's plugins (ADR 0086).
   approvals: (thread?: string) => request<ApprovalView[]>('GET', thread ? `/api/approvals?thread=${encodeURIComponent(thread)}` : '/api/approvals'),
   /** Answers an approval, naming the hash of the request shown, so it answers only that. */
-  answerApproval: (id: number, approve: boolean, hash: string) => request<string>('POST', `/api/approvals/${id}`, { approve, hash }),
+  answerApproval: (id: number, approve: boolean, hash: string, grant: GrantScope | null = null) =>
+    request<string>('POST', `/api/approvals/${id}`, { approve, hash, grant }),
+  revokeGrant: (id: number) => request<string>('DELETE', `/api/grants/${id}`),
+  access: (thread: string) => request<AccessView>('GET', `/api/threads/${encodeURIComponent(thread)}/access`),
   plugins: () => request<Plugin[]>('GET', '/api/plugins'),
   putPlugin: (plugin: Plugin) => request<string>('PUT', `/api/plugins/${encodeURIComponent(plugin.name)}`, plugin),
   status: () => request<DaemonStatus>('GET', '/api/status'),

@@ -1,5 +1,6 @@
 mod blobs;
 mod chunks;
+mod plugin_calls;
 mod queue;
 
 use std::collections::{BTreeMap, HashMap};
@@ -13,6 +14,7 @@ use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 
 pub use blobs::BlobStore;
+pub use plugin_calls::{GrantRecord, PluginCallRecord};
 pub use queue::QueuedPrompt;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
@@ -849,6 +851,16 @@ impl Store {
         )
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    /// Binds a run's token, made before its new thread was, to the thread;
+    /// one bound already stays as it is.
+    pub async fn bind_run_token(&self, hash: &[u8], thread: ThreadId) -> Result<(), StoreError> {
+        let (thread, unbound) = (id_bytes(thread.0), id_bytes(0));
+        sqlx::query!("UPDATE run_tokens SET thread_id = ? WHERE hash = ? AND thread_id = ?", thread, hash, unbound)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 

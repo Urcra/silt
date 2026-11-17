@@ -213,7 +213,15 @@ enum Command {
         id: u64,
         #[arg(long)]
         reject: bool,
+        /// Also let calls like it run without asking: for the rest of this `run`, or the `thread`
+        #[arg(long, value_parser = ["run", "thread"])]
+        grant: Option<String>,
+        /// How long a thread's grant lasts, in minutes
+        #[arg(long, default_value_t = 60)]
+        minutes: u32,
     },
+    /// End a grant, so the calls it let through ask again
+    Revoke { grant: u64 },
     /// Check chart palettes and text contrast, as artifacts' design guidance asks
     Design {
         #[command(subcommand)]
@@ -824,7 +832,8 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Credential { command } => credential::run(command),
         Command::Plugin { command } => plugin::run(command),
         Command::Approvals { all, thread } => plugin::list(all, thread),
-        Command::Approve { id, reject } => plugin::answer(id, reject),
+        Command::Approve { id, reject, grant, minutes } => plugin::answer(id, reject, grant.as_deref(), minutes),
+        Command::Revoke { grant } => plugin::revoke(grant),
         Command::Access { command } => access::run(command),
         Command::Design { command } => design::run(command),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),

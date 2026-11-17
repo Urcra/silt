@@ -10,6 +10,8 @@ use crate::CliError;
 pub enum AccessCommand {
     /// Check that Silt's sandbox can run here, and say how to fix what can't
     Doctor,
+    /// What reached a thread's sandboxes through Silt: plugin calls, grants and what the gateway refused
+    Show { thread: String },
 }
 
 pub fn run(command: AccessCommand) -> Result<(), Exn<CliError>> {
@@ -18,6 +20,7 @@ pub fn run(command: AccessCommand) -> Result<(), Exn<CliError>> {
             doctor();
             Ok(())
         }
+        AccessCommand::Show { thread } => crate::plugin::access(&thread),
     }
 }
 

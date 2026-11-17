@@ -45,7 +45,7 @@ import {
   toast,
 } from '../ui'
 import { AgentDock, AgentTail, PermissionCard, PlanCard, SignInCard } from './Agent'
-import { Approvals, SandboxShield } from './Sandbox'
+import { AccessPanel, Approvals, SandboxShield } from './Sandbox'
 import { CommentThread } from './CommentThread'
 import { CopyLink } from './CopyLink'
 import { DiffPanel } from './DiffPanel'
@@ -1628,7 +1628,7 @@ function Here({ people }: { people: { user: string; device: string }[] }) {
   )
 }
 
-type InspectorTab = 'changes' | 'artifacts' | 'details' | 'lineage'
+type InspectorTab = 'changes' | 'artifacts' | 'details' | 'lineage' | 'access'
 
 function ThreadBody({
   thread,
@@ -1923,6 +1923,7 @@ function ThreadBody({
                   : []),
                 { id: 'details', label: 'Details' },
                 { id: 'lineage', label: 'Lineage' },
+                ...(hosted() ? [] : [{ id: 'access' as const, label: 'Access' }]),
               ]}
               value={tab}
               onChange={setTab}
@@ -1933,6 +1934,8 @@ function ThreadBody({
             <Suspense fallback={null}>
               <ArtifactList thread={thread} groups={groups} images={images} onOpen={(id) => openArtifact(id)} />
             </Suspense>
+          ) : tab === 'access' ? (
+            <AccessPanel thread={thread} agent={agent} />
           ) : tab === 'lineage' ? (
             <div className="flex flex-col gap-6 px-5 py-5">
               {summary && (

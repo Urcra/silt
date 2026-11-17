@@ -233,4 +233,10 @@ test("a workspace's sandbox reach and its plugins are set in its settings, and a
   await expect(shield).toContainText('None')
   await expect(shield).toContainText('the GPU')
   await shoot(page, '8-sandbox-shield')
+
+  // The Access tab lists what reached the thread through Silt, and the grants in force.
+  await page.keyboard.press('Escape')
+  await page.getByRole('tab', { name: 'Access' }).click()
+  await expect(page.getByRole('region', { name: 'granted' })).toContainText('Nothing beyond each call you approve')
+  await expect(page.getByRole('region', { name: 'plugin calls' })).toContainText('None yet')
 })

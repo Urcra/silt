@@ -328,6 +328,7 @@ impl Core {
             token: run_token,
             scratch: super::run_scratch(&self.data_dir, thread, token),
             workspace,
+            thread: thread.to_string(),
         });
         spawn_agent(self.events.clone(), thread, token, run.info.clone(), self.data_dir.clone(), start, sandbox);
         self.agent_changed(thread).await;

@@ -8,24 +8,19 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use silt_access::{Canonical, DataClass};
-use tokio::sync::{oneshot, watch};
 
 use crate::CoreError;
-use crate::core::{Core, now_ms, to_response};
-use crate::protocol::{BusEvent, Response};
+
+mod calls;
+
+pub use calls::{AccessView, ApprovalState, ApprovalView, Approvals, CallView, GrantScope, GrantView, NetworkRefusal};
 
 const FILE: &str = "plugins.json";
-
-/// How long a call waits for the person before the agent is told to wait
-/// on, and how long an approval stays open.
-const WAIT: Duration = Duration::from_secs(45);
-const OPEN_MS: i64 = 15 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -83,6 +78,9 @@ pub struct Environment {
     /// A credential of `silt credential` added to its requests.
     #[serde(default)]
     pub credential: Option<String>,
+    /// Each change is approved on its own: no grant covers it.
+    #[serde(default)]
+    pub once: bool,
 }
 
 pub fn load(data_dir: &Path) -> Vec<Plugin> {
@@ -200,13 +198,15 @@ enum Exec {
     Command { argv: Vec<String>, stdin: String },
 }
 
-/// A call worked out: what runs, whether it waits for the person, and what
-/// its result may not carry.
+/// A call worked out: Silt's copy of what it sends, and whether it waits
+/// for the person.
 struct Prepared {
     canonical: Canonical,
     ask: bool,
-    data: Vec<DataClass>,
-    exec: Exec,
+    /// Whether it may change something, rather than only read.
+    change: bool,
+    /// No grant may cover it.
+    once: bool,
 }
 
 fn text_field(input: &Value, name: &str) -> Result<String, String> {
@@ -214,7 +214,7 @@ fn text_field(input: &Value, name: &str) -> Result<String, String> {
 }
 
 /// Works out `tool`'s call with `input`, for an agent in `workspace`.
-fn prepare(data_dir: &Path, plugins: &[Plugin], workspace: &str, tool: &str, input: &Value) -> Result<Prepared, String> {
+fn prepare(plugins: &[Plugin], workspace: &str, tool: &str, input: &Value) -> Result<Prepared, String> {
     let (plugin, verb) = plugins
         .iter()
         .filter(|plugin| plugin.workspaces.iter().any(|on| on == workspace))
@@ -227,7 +227,7 @@ fn prepare(data_dir: &Path, plugins: &[Plugin], workspace: &str, tool: &str, inp
         .environments
         .get(&environment_name)
         .ok_or_else(|| format!("{} has no environment {environment_name}", plugin.name))?;
-    let data = environment.data.clone();
+    let data = &environment.data;
     match (&plugin.kind, verb) {
         (Kind::Graphql, "query" | "mutate") => {
             let query = text_field(input, "query")?;
@@ -242,7 +242,7 @@ fn prepare(data_dir: &Path, plugins: &[Plugin], workspace: &str, tool: &str, inp
             if verb == "mutate" && !classified.changes() {
                 return Err(format!("it changes nothing; send it with {}", tool_name(&plugin.name, "query")));
             }
-            for class in &data {
+            for class in data {
                 if let Some(finding) = silt_access::graphql_fields(*class, &classified.fields) {
                     return Err(format!(
                         "refused before it was sent: {}, and {} in {environment_name} is kept from agents; no approval lifts it",
@@ -251,27 +251,20 @@ fn prepare(data_dir: &Path, plugins: &[Plugin], workspace: &str, tool: &str, inp
                     ));
                 }
             }
-            let header = match &environment.credential {
-                Some(name) => {
-                    let credential = crate::credentials::resolve_named(data_dir, workspace, name)
-                        .ok_or_else(|| format!("its credential {name} has no secret to add here"))?;
-                    Some((credential.header, credential.value))
-                }
-                None => None,
-            };
             let body = json!({"query": query, "variables": variables});
-            let rule = if classified.changes() { environment.changes } else { environment.reads };
+            let change = classified.changes();
+            let rule = if change { environment.changes } else { environment.reads };
             Ok(Prepared {
                 canonical: Canonical {
                     plugin: plugin.name.clone(),
                     tool: tool.to_owned(),
                     environment: environment_name,
                     target: environment.target.clone(),
-                    input: body.clone(),
+                    input: body,
                 },
                 ask: rule == Rule::Ask,
-                data,
-                exec: Exec::Graphql { url: environment.target.clone(), body, header },
+                change,
+                once: environment.once,
             })
         }
         (Kind::Command { argv }, "run") => {
@@ -299,12 +292,63 @@ fn prepare(data_dir: &Path, plugins: &[Plugin], workspace: &str, tool: &str, inp
                     input: json!({"argv": full, "stdin": stdin}),
                 },
                 ask: environment.changes == Rule::Ask,
-                data,
-                exec: Exec::Command { argv: full, stdin },
+                change: true,
+                once: environment.once,
             })
         }
         _ => Err(format!("{} offers no {tool}", plugin.name)),
     }
+}
+
+/// What runs for `canonical`, worked out as it runs: its credential then,
+/// and the environment's data rules then. A plugin changed since so that
+/// it would send something else is refused rather than followed.
+fn exec_of(
+    data_dir: &Path,
+    plugins: &[Plugin],
+    workspace: &str,
+    canonical: &Canonical,
+) -> Result<(Exec, Vec<DataClass>), String> {
+    let plugin = plugins
+        .iter()
+        .find(|plugin| plugin.name == canonical.plugin && plugin.workspaces.iter().any(|on| on == workspace))
+        .ok_or_else(|| format!("{} isn't on in this workspace any more", canonical.plugin))?;
+    let environment = plugin
+        .environments
+        .get(&canonical.environment)
+        .ok_or_else(|| format!("{} has no environment {} any more", plugin.name, canonical.environment))?;
+    let changed = || format!("{}'s {} changed since this was asked; ask again", plugin.name, canonical.environment);
+    let exec = match &plugin.kind {
+        Kind::Graphql => {
+            if environment.target != canonical.target {
+                return Err(changed());
+            }
+            let header = match &environment.credential {
+                Some(name) => {
+                    let credential = crate::credentials::resolve_named(data_dir, workspace, name)
+                        .ok_or_else(|| format!("its credential {name} has no secret to add here"))?;
+                    Some((credential.header, credential.value))
+                }
+                None => None,
+            };
+            Exec::Graphql { url: environment.target.clone(), body: canonical.input.clone(), header }
+        }
+        Kind::Command { argv: template } => {
+            let argv: Vec<String> = canonical
+                .input
+                .get("argv")
+                .and_then(Value::as_array)
+                .map(|argv| argv.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                .unwrap_or_default();
+            let expected: Vec<String> = template.iter().map(|part| part.replace("{target}", &canonical.target)).collect();
+            if !argv.starts_with(&expected) {
+                return Err(changed());
+            }
+            let stdin = canonical.input.get("stdin").and_then(Value::as_str).unwrap_or_default().to_owned();
+            Exec::Command { argv, stdin }
+        }
+    };
+    Ok((exec, environment.data.clone()))
 }
 
 /// How a call ended.
@@ -427,191 +471,6 @@ fn refused_result(class: DataClass, what: &str) -> Outcome {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[serde(rename_all = "snake_case")]
-pub enum ApprovalState {
-    Pending,
-    Approved,
-    Rejected,
-    Expired,
-}
-
-/// A call waiting for, or answered by, the person.
-pub struct Approval {
-    id: u64,
-    thread: String,
-    canonical: Canonical,
-    hash: String,
-    created_ms: i64,
-    state: ApprovalState,
-    outcome: Arc<watch::Sender<Option<Outcome>>>,
-    exec: Option<(Exec, Vec<DataClass>)>,
-}
-
-/// An approval as the person sees it: Silt's own copy of the request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct ApprovalView {
-    pub id: u64,
-    pub thread: String,
-    pub plugin: String,
-    pub tool: String,
-    pub environment: String,
-    pub target: String,
-    /// What runs, with what hides meaning made visible.
-    pub shown: String,
-    /// The hash an answer must name, so it answers what was shown.
-    pub hash: String,
-    pub created_ms: i64,
-    pub state: ApprovalState,
-    pub outcome: Option<Outcome>,
-}
-
-#[derive(Default)]
-pub struct Approvals {
-    next: u64,
-    all: BTreeMap<u64, Approval>,
-}
-
-impl Core {
-    /// The workspace and thread a run's token was made for.
-    async fn run_of(&self, token: &str) -> Result<(String, String), CoreError> {
-        let hash = blake3::hash(token.as_bytes());
-        let (thread, workspace) = self
-            .store
-            .run_token(hash.as_bytes())
-            .await?
-            .ok_or_else(|| CoreError::Invalid("this run's token isn't known here".into()))?;
-        Ok((thread.to_string(), workspace))
-    }
-
-    pub(crate) async fn plugin_tools(&self, token: &str) -> Result<Vec<PluginTool>, CoreError> {
-        let (_, workspace) = self.run_of(token).await?;
-        Ok(tools(&load(&self.data_dir), &workspace))
-    }
-
-    /// Runs a plugin's tool for a run, or makes it an approval to wait on.
-    pub(crate) async fn plugin_call(&mut self, token: &str, tool: &str, input: Value, reply: oneshot::Sender<Response>) {
-        let (thread, workspace) = match self.run_of(token).await {
-            Ok(run) => run,
-            Err(error) => {
-                let _ = reply.send(to_response::<()>(Err(error)));
-                return;
-            }
-        };
-        let prepared = match prepare(&self.data_dir, &load(&self.data_dir), &workspace, tool, &input) {
-            Ok(prepared) => prepared,
-            Err(why) => {
-                let _ = reply.send(Response::ok(Outcome::Refused { why }));
-                return;
-            }
-        };
-        if !prepared.ask {
-            tokio::spawn(async move {
-                let outcome = execute(prepared.exec, prepared.data).await;
-                let _ = reply.send(Response::ok(outcome));
-            });
-            return;
-        }
-        self.approvals.next += 1;
-        let id = self.approvals.next;
-        let (outcome, _) = watch::channel(None);
-        let outcome = Arc::new(outcome);
-        let hash = prepared.canonical.hash();
-        self.approvals.all.insert(
-            id,
-            Approval {
-                id,
-                thread,
-                canonical: prepared.canonical,
-                hash,
-                created_ms: now_ms(),
-                state: ApprovalState::Pending,
-                outcome: outcome.clone(),
-                exec: Some((prepared.exec, prepared.data)),
-            },
-        );
-        self.announce(BusEvent::Approvals);
-        wait_on(outcome, id, reply);
-    }
-
-    /// Waits on an approval a run's earlier call made.
-    pub(crate) async fn plugin_wait(&mut self, token: &str, id: u64, reply: oneshot::Sender<Response>) {
-        let thread = match self.run_of(token).await {
-            Ok((thread, _)) => thread,
-            Err(error) => {
-                let _ = reply.send(to_response::<()>(Err(error)));
-                return;
-            }
-        };
-        match self.approvals.all.get(&id).filter(|approval| approval.thread == thread) {
-            Some(approval) => wait_on(approval.outcome.clone(), id, reply),
-            None => {
-                let _ = reply.send(Response::error(format!("this run has no approval {id}")));
-            }
-        }
-    }
-
-    /// The person's answer to approval `id`, naming the `hash` they saw.
-    pub(crate) fn approval_answer(&mut self, id: u64, approve: bool, hash: &str) -> Result<(), CoreError> {
-        let now = now_ms();
-        let approval = self.approvals.all.get_mut(&id).ok_or_else(|| CoreError::Invalid(format!("no approval {id}")))?;
-        if approval.state == ApprovalState::Pending && now - approval.created_ms > OPEN_MS {
-            approval.state = ApprovalState::Expired;
-            approval.outcome.send_replace(Some(Outcome::Refused { why: "its approval expired".into() }));
-        }
-        if approval.state != ApprovalState::Pending {
-            return Err(CoreError::Invalid(format!("approval {id} isn't waiting any more")));
-        }
-        if approval.hash != hash {
-            return Err(CoreError::Invalid("that isn't the request this approval holds; look again".into()));
-        }
-        if approve {
-            approval.state = ApprovalState::Approved;
-            if let Some((exec, data)) = approval.exec.take() {
-                let outcome = approval.outcome.clone();
-                tokio::spawn(async move {
-                    outcome.send_replace(Some(execute(exec, data).await));
-                });
-            }
-        } else {
-            approval.state = ApprovalState::Rejected;
-            approval.exec = None;
-            approval.outcome.send_replace(Some(Outcome::Refused { why: "the person rejected it".into() }));
-        }
-        self.announce(BusEvent::Approvals);
-        Ok(())
-    }
-
-    /// Approvals, newest first; a thread's alone when `thread` names it.
-    pub(crate) fn approvals_view(&self, thread: Option<&str>) -> Vec<ApprovalView> {
-        let now = now_ms();
-        self.approvals
-            .all
-            .values()
-            .rev()
-            .filter(|approval| thread.is_none_or(|thread| approval.thread.starts_with(thread)))
-            .map(|approval| {
-                let expired = approval.state == ApprovalState::Pending && now - approval.created_ms > OPEN_MS;
-                ApprovalView {
-                    id: approval.id,
-                    thread: approval.thread.clone(),
-                    plugin: approval.canonical.plugin.clone(),
-                    tool: approval.canonical.tool.clone(),
-                    environment: approval.canonical.environment.clone(),
-                    target: approval.canonical.target.clone(),
-                    shown: shown_input(&approval.canonical.input),
-                    hash: approval.hash.clone(),
-                    created_ms: approval.created_ms,
-                    state: if expired { ApprovalState::Expired } else { approval.state },
-                    outcome: approval.outcome.borrow().clone(),
-                }
-            })
-            .collect()
-    }
-}
-
 /// A request's input as the person reads it: a GraphQL document and its
 /// variables, or a command line and its input.
 fn shown_input(input: &Value) -> String {
@@ -658,20 +517,6 @@ fn label_matches(label: &str, part: &str) -> bool {
     (0..=tail.len()).any(|skip| tail.is_char_boundary(skip) && label_matches(rest, &tail[skip..]))
 }
 
-/// Answers `reply` with the approval's outcome once there is one, or after
-/// [`WAIT`] with its being pending.
-fn wait_on(outcome: Arc<watch::Sender<Option<Outcome>>>, id: u64, reply: oneshot::Sender<Response>) {
-    let mut seen = outcome.subscribe();
-    tokio::spawn(async move {
-        let done = tokio::time::timeout(WAIT, seen.wait_for(Option::is_some)).await;
-        let answer = match done {
-            Ok(Ok(outcome)) => outcome.clone().unwrap_or(Outcome::Pending { approval: id }),
-            _ => Outcome::Pending { approval: id },
-        };
-        let _ = reply.send(Response::ok(answer));
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,6 +535,7 @@ mod tests {
                     changes: Rule::Ask,
                     data: vec![DataClass::Location],
                     credential: None,
+                    once: false,
                 },
             )]),
         }
@@ -709,6 +555,7 @@ mod tests {
                     changes: Rule::Allow,
                     data: Vec::new(),
                     credential: None,
+                    once: false,
                 },
             )]),
         }
@@ -723,11 +570,9 @@ mod tests {
 
     #[test]
     fn reads_go_changes_ask_and_location_never_leaves() {
-        let dir = tempfile::tempdir().unwrap();
         let plugins = [fleet()];
-        let call = |tool: &str, query: &str| {
-            prepare(dir.path(), &plugins, "work", tool, &json!({"environment": "production", "query": query}))
-        };
+        let call =
+            |tool: &str, query: &str| prepare(&plugins, "work", tool, &json!({"environment": "production", "query": query}));
         let read = call("fleet_api_query", "{ vehicle(id: 1) { id otaEnabled } }").unwrap();
         assert!(!read.ask);
         let change = call("fleet_api_mutate", "mutation { setOta(car: 1, on: true) { id } }").unwrap();
@@ -737,21 +582,14 @@ mod tests {
         );
         let refused = call("fleet_api_query", "{ vehicle(id: 1) { id lastPosition { lat lon } } }").err().unwrap();
         assert!(refused.contains("refused before it was sent") && refused.contains("location"), "{refused}");
-        assert!(prepare(dir.path(), &plugins, "personal", "fleet_api_query", &json!({})).is_err(), "not on in personal");
+        assert!(prepare(&plugins, "personal", "fleet_api_query", &json!({})).is_err(), "not on in personal");
     }
 
     #[test]
     fn a_command_runs_only_at_its_targets() {
-        let dir = tempfile::tempdir().unwrap();
         let plugins = [ssh()];
         let run = |target: &str| {
-            prepare(
-                dir.path(),
-                &plugins,
-                "work",
-                "test_fleet_run",
-                &json!({"environment": "fleet", "target": target, "args": ["uptime"]}),
-            )
+            prepare(&plugins, "work", "test_fleet_run", &json!({"environment": "fleet", "target": target, "args": ["uptime"]}))
         };
         let ok = run("car-0142.fleet.vpn").unwrap();
         assert_eq!(ok.canonical.input["argv"], json!(["ssh", "-T", "car-0142.fleet.vpn", "--", "uptime"]));
@@ -760,6 +598,18 @@ mod tests {
         assert!(run("-oProxyCommand=sh").is_err(), "no option in a target's place");
         assert!(run("car-1.evil.vpn.fleet.vpn").is_err() && run("car-1.fleet.vpn.evil").is_err());
         assert!(target_matches("car-*.fleet.vpn", "CAR-7.fleet.vpn") && !target_matches("car-*.fleet.vpn", "car-a b.fleet.vpn"));
+    }
+
+    #[test]
+    fn what_runs_is_worked_out_again_from_silts_copy_and_refused_if_the_plugin_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut plugins = [ssh()];
+        let input = json!({"environment": "fleet", "target": "car-1.fleet.vpn", "args": ["uptime"]});
+        let prepared = prepare(&plugins, "work", "test_fleet_run", &input).unwrap();
+        assert!(exec_of(dir.path(), &plugins, "work", &prepared.canonical).is_ok());
+        assert!(exec_of(dir.path(), &plugins, "personal", &prepared.canonical).is_err(), "off there");
+        plugins[0].kind = Kind::Command { argv: vec!["ssh".into(), "{target}".into(), "sudo".into()] };
+        assert!(exec_of(dir.path(), &plugins, "work", &prepared.canonical).err().unwrap().contains("changed since"));
     }
 
     #[tokio::test]
@@ -772,65 +622,6 @@ mod tests {
         assert!(matches!(&outcome, Outcome::Refused { why } if why.contains("kept the result")), "{outcome:?}");
         let outcome = execute(Exec::Command { argv: vec!["cat".into()], stdin: "hello".into() }, vec![DataClass::Location]).await;
         assert_eq!(outcome, Outcome::Done { output: "exit 0\nhello".into() });
-    }
-
-    #[tokio::test]
-    async fn a_change_runs_once_after_the_person_approves_what_they_saw() {
-        use silt_store::{Store, ThreadRecord};
-        use silt_types::{ActorId, FamilyId, ThreadId};
-
-        let data = tempfile::tempdir().expect("temp dir");
-        let store = Store::open(data.path()).await.expect("opens");
-        let thread = ThreadId(7);
-        let record = ThreadRecord {
-            id: thread,
-            family: FamilyId(9),
-            repo_root: std::path::PathBuf::new(),
-            repo: String::new(),
-            created_ms: 1,
-            owner: String::new(),
-        };
-        store.create_thread(&record).await.expect("thread");
-        store.create_thread(&ThreadRecord { id: ThreadId(8), family: FamilyId(10), ..record }).await.expect("thread");
-        store.add_run_token(blake3::hash(b"work-run").as_bytes(), thread, "work", 1).await.expect("token");
-        store.add_run_token(blake3::hash(b"home-run").as_bytes(), ThreadId(8), "personal", 1).await.expect("token");
-        let mut plugin = ssh();
-        plugin.kind = Kind::Command { argv: vec!["echo".into(), "ran on {target}".into()] };
-        plugin.environments.get_mut("fleet").expect("fleet").changes = Rule::Ask;
-        put(data.path(), plugin).expect("saves");
-        let (events, _inbox) = tokio::sync::mpsc::unbounded_channel();
-        let mut core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
-        let input = json!({"environment": "fleet", "target": "car-1.fleet.vpn", "args": ["now"]});
-
-        assert!(core.plugin_tools("home-run").await.expect("tools").is_empty(), "off in personal");
-        let (reply, refused) = oneshot::channel();
-        core.plugin_call("home-run", "test_fleet_run", input.clone(), reply).await;
-        assert!(matches!(outcome(refused.await.expect("answers")), Outcome::Refused { .. }));
-
-        let (reply, waiting) = oneshot::channel();
-        core.plugin_call("work-run", "test_fleet_run", input, reply).await;
-        let pending = core.approvals_view(None);
-        assert_eq!(pending.len(), 1);
-        let approval = &pending[0];
-        assert_eq!(approval.state, ApprovalState::Pending);
-        assert_eq!(approval.shown, "echo 'ran on car-1.fleet.vpn' now");
-        assert!(core.approval_answer(approval.id, true, "not-what-was-shown").is_err());
-        core.approval_answer(approval.id, true, &approval.hash).expect("approves");
-        assert!(core.approval_answer(approval.id, true, &approval.hash).is_err(), "only once");
-        assert_eq!(
-            outcome(waiting.await.expect("answers")),
-            Outcome::Done { output: "exit 0\nran on car-1.fleet.vpn now\n".into() }
-        );
-        let (reply, again) = oneshot::channel();
-        core.plugin_wait("home-run", approval.id, reply).await;
-        assert!(matches!(again.await.expect("answers"), Response::Error { .. }), "another run's approval");
-    }
-
-    fn outcome(response: Response) -> Outcome {
-        match response {
-            Response::Ok { data } => serde_json::from_value(data).expect("an outcome"),
-            Response::Error { message } => panic!("{message}"),
-        }
     }
 
     #[test]

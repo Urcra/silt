@@ -273,7 +273,11 @@ data: Array<DataClass>,
 /**
  * A credential of `silt credential` added to its requests.
  */
-credential: string | null, };
+credential: string | null, 
+/**
+ * Each change is approved on its own: no grant covers it.
+ */
+once: boolean, };
 
 export type Outcome = { "status": "done", output: string, } | { "status": "refused", why: string, } | { "status": "failed", error: string, } | { "status": "unknown", why: string, } | { "status": "pending", approval: number, };
 
@@ -287,7 +291,49 @@ shown: string,
 /**
  * The hash an answer must name, so it answers what was shown.
  */
-hash: string, created_ms: number, state: ApprovalState, outcome: Outcome | null, };
+hash: string, created_ms: number, state: ApprovalState, outcome: Outcome | null, 
+/**
+ * It may change something, rather than only read.
+ */
+change: boolean, 
+/**
+ * Its environment allows no grant: each is approved on its own.
+ */
+once: boolean, };
+
+export type GrantScope = { "for": "run" } | { "for": "thread", minutes: number, };
+
+export type CallView = { id: number, plugin: string, tool: string, environment: string, target: string, shown: string, change: boolean, 
+/**
+ * It waited for the person.
+ */
+asked: boolean, 
+/**
+ * It ran without asking under this grant.
+ */
+grant: number | null, 
+/**
+ * `pending`, `running`, `rejected`, `expired` or `ended`.
+ */
+state: string, outcome: Outcome | null, created_ms: number, answered_ms: number | null, };
+
+export type GrantView = { id: number, plugin: string, environment: string, change: boolean, 
+/**
+ * For the run that asked only, rather than the thread.
+ */
+run_only: boolean, created_ms: number, until_ms: number | null, revoked_ms: number | null, 
+/**
+ * In force now.
+ */
+active: boolean, };
+
+export type AccessView = { calls: Array<CallView>, grants: Array<GrantView>, 
+/**
+ * What the gateway refused, newest first.
+ */
+refused: Array<NetworkRefusal>, };
+
+export type NetworkRefusal = { time_ms: number, host: string, port: number, why: string, };
 
 export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<string>, };
 
