@@ -9,11 +9,15 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+// An hour from now, but still today, which the reset reads as a time of day
+// rather than a weekday after 11 PM.
+const endOfToday = new Date().setHours(23, 59, 59, 0)
+
 const MAX: AgentUsage = {
   agent: 'Claude Code',
   plan: 'Max',
   limits: [
-    { name: '5-hour limit', used_percent: 32, resets_at_ms: Date.now() + 3_600_000 },
+    { name: '5-hour limit', used_percent: 32, resets_at_ms: Math.min(Date.now() + 3_600_000, endOfToday) },
     { name: 'Weekly · all models', used_percent: 6.4, resets_at_ms: null },
   ],
   page: 'https://claude.ai/settings/usage',

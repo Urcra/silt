@@ -5,6 +5,10 @@ import { defineConfig } from '@playwright/test'
 // (scripts/cloud-setup.sh). SILT_E2E_CHROMIUM picks another.
 const executablePath = process.env.SILT_E2E_CHROMIUM
 
+// The daemons the fixtures start run a build of this clone, which would fetch
+// `main` and show an update the screen references don't (ADR 0098).
+process.env.SILT_UPDATE_CHECK = 'never'
+
 export default defineConfig({
   testDir: './e2e',
   globalSetup: './e2e/global-setup.ts',

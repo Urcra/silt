@@ -11,6 +11,11 @@ on:
 permissions:
   contents: write
 
+# A release is the stable channel: it learns of newer releases rather than
+# following `main` (ADR 0098).
+env:
+  SILT_BUILD_CHANNEL: stable
+
 jobs:
   # The web UI is embedded in each binary and is the same for all of them,
   # so it's built once.
