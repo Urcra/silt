@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams, useRouterState } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
-import { api, short, type CommentView, type MrFile, type MrGuide, type MrSummary, type ShowLine } from '../api'
+import { api, hiddenLines, short, type CommentView, type MrFile, type MrGuide, type MrSummary, type ShowLine } from '../api'
 import { useTopic } from '../bus'
-import { useHideGit } from '../hideGit'
+import { useHideGit, useHideOthers } from '../hideGit'
 import { parseFiles } from '../diffParse'
 import { WIDE, useMedia } from '../media'
 import { useNow } from '../now'
@@ -14,7 +14,7 @@ import { Avatar, Button, Counts, Dot, type DotTone, EmptyState, Icon, Skeleton, 
 import { CommentThread } from './CommentThread'
 import { Conversation } from './Conversation'
 import { CopyLink } from './CopyLink'
-import { HideGitBox } from './DiffPanel'
+import { HideGitBox, HideOthersBox, useShared } from './DiffPanel'
 import { type Commenting, type DiffLayout, DiffView } from './DiffView'
 import { Markdown } from './Markdown'
 import { ListColumn, Page } from './Page'
@@ -452,7 +452,10 @@ export function MergeRequest({ id }: { id: string }) {
   useTopic('mrs')
   const now = useNow()
   const [hideGit, setHideGit] = useHideGit()
-  const details = useQuery({ queryKey: keys.mrShown(id, hideGit), queryFn: () => api.mergeRequest(id, hideGit) })
+  const [hideOthers, setHideOthers] = useHideOthers()
+  const hidden = { hideGit, hideOthers }
+  const details = useQuery({ queryKey: keys.mrShown(id, hidden), queryFn: () => api.mergeRequest(id, hidden) })
+  const shared = useShared(details.data?.mr.fork)
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const queries = useQueryClient()
   const [error, setError] = useState<string>()
@@ -465,10 +468,10 @@ export function MergeRequest({ id }: { id: string }) {
   const hash = useRouterState({ select: (state) => state.location.hash }).replace(/^#/, '')
   const picked = /^file-(.+)$/.exec(safeDecode(hash))?.[1]
   const fork = details.data?.mr.fork
-  // Placed as the diff numbers the lines, with git's rewrites or without.
+  // Placed as the diff numbers the lines, with git's rewrites and other agents' edits or without.
   const comments = useQuery({
-    queryKey: [...keys.comments(fork ?? ''), '', hideGit],
-    queryFn: () => api.comments(fork!, undefined, hideGit),
+    queryKey: [...keys.comments(fork ?? ''), '', hidden],
+    queryFn: () => api.comments(fork!, undefined, hidden),
     enabled: fork !== undefined,
     retry: false,
   })
@@ -537,7 +540,7 @@ export function MergeRequest({ id }: { id: string }) {
     agent: "the fork's agent",
     onChanged: reloadComments,
     onComment: async (at, text, send) => {
-      const made = await api.addComment(mr.fork, { on: 'lines', ...at, hide_git: hideGit }, text)
+      const made = await api.addComment(mr.fork, { on: 'lines', ...at, ...hiddenLines(hidden) }, text)
       await reloadComments()
       if (send) await toFork([made])
     },
@@ -636,8 +639,9 @@ export function MergeRequest({ id }: { id: string }) {
           ]}
         />
         {tab === 'changes' && (
-          <span className="ml-auto">
+          <span className="ml-auto flex flex-wrap items-center gap-2">
             <HideGitBox on={hideGit} onChange={setHideGit} />
+            {shared && <HideOthersBox on={hideOthers} onChange={setHideOthers} />}
           </span>
         )}
         {tab === 'changes' && (

@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import AxeBuilder from '@axe-core/playwright'
 import { type Page, expect, test } from '@playwright/test'
-import { stopAgent } from './fixture'
+import { stopAgent, teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -26,13 +26,8 @@ test.beforeAll(() => {
 })
 
 test.afterAll(() => {
-  for (const home of ['alice', 'bob', 'alice-laptop']) {
-    execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: join(live.work, home, 'silt') } })
-  }
-  const pid = Number(readFileSync(join(live.work, 'server.pid'), 'utf8'))
-  process.kill(pid)
-  // A daemon's agents can still be writing there for a moment after it stops.
-  rmSync(live.work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  const homes = ['alice', 'bob', 'alice-laptop'].map((home) => join(live.work, home, 'silt'))
+  teardown(SILT, live.work, homes, [join(live.work, 'server.pid')])
 })
 
 /** Opens All threads from the sidebar: `/` is a new thread (ADR 0044). */
@@ -317,6 +312,8 @@ test('the server-hosted app shows an agent waiting on the machine running it', a
 })
 
 test('the server-hosted app continues a thread on a chosen device', async ({ browser }) => {
+  // The agent starts, and the prompt goes, through the server's relay to the machine.
+  test.slow()
   const machine = await (await browser.newContext()).newPage()
   await startInNewThread(machine, 'Fake agent')
   await machine.getByLabel('draft').fill('first turn')
@@ -341,7 +338,7 @@ test('the server-hosted app continues a thread on a chosen device', async ({ bro
 
   await there.getByLabel('draft').fill('second turn')
   await there.getByLabel('draft').press('Enter')
-  await expect(machine.getByText(/^Done: [\s\S]*second turn$/)).toBeVisible()
+  await expect(machine.getByText(/^Done: [\s\S]*second turn$/)).toBeVisible({ timeout: 15_000 })
   await stopAgent(there)
   await expect(machine.getByPlaceholder('Ask for the next step; sending starts the agent')).toBeVisible()
   await machine.context().close()
@@ -1796,10 +1793,15 @@ test("two views of a whiteboard see each other's cursors, and a note moved by on
   const theirs = other.getByTestId('whiteboard')
   await expect(theirs.getByTestId('whiteboard-block')).toHaveCount(2)
 
+  // A cursor is presence, sent as the pointer moves and kept by nobody: it moves on until the other view shows it,
+  // as a person's would, so a moment's frame lost while that view joins doesn't leave it waiting for a move.
   const box = await board.boundingBox()
-  await page.mouse.move(box!.x + 300, box!.y + 300)
-  await page.mouse.move(box!.x + 320, box!.y + 310)
-  await expect(theirs.getByTestId('whiteboard-cursor')).toHaveCount(1)
+  let step = 0
+  await expect(async () => {
+    step += 1
+    await page.mouse.move(box!.x + 300 + (step % 2) * 20, box!.y + 300 + (step % 2) * 10)
+    await expect(theirs.getByTestId('whiteboard-cursor')).toHaveCount(1, { timeout: 1_000 })
+  }).toPass({ timeout: 15_000 })
 
   const note = board.locator('[data-item="goal"] rect')
   const at = await note.boundingBox()

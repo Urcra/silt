@@ -17,6 +17,7 @@ use silt_daemon::protocol::{
     SearchResult, Sent, SessionStarted, ShowLine, ThreadSummary,
 };
 use silt_git::conventions::{self as project, LinkOutcome, PrepareOutcome};
+use silt_log::Hide;
 use silt_types::CloudSessionId;
 
 use crate::CliError;
@@ -293,7 +294,7 @@ fn run_agent_in(name: &str, cwd: PathBuf, isolated: bool, args: &[String]) -> Re
     let held = workspace_rules(None, Some(&cwd), agent, args)?;
     if held.reach.is_some() {
         // A sandboxed agent's hooks reach the daemon only through its run's
-        // channel, so the daemon must be there (ADR 0086).
+        // channel, so the daemon must be there (ADR 0093).
         ensure_daemon()?;
     }
     let session_id = (agent.session_ids() == SessionIds::Chosen).then(|| uuid::Uuid::new_v4().to_string());
@@ -325,14 +326,14 @@ fn run_agent_in(name: &str, cwd: PathBuf, isolated: bool, args: &[String]) -> Re
         mount_checkout(mount, &started.checkout, &started.thread);
     }
     let run = Run { agent, thread: &started.thread, checkout: &started.checkout, cwd: &started.agent_cwd, held: &held };
-    let status = run.launch(Start::New { id: session_id }, args, &mut recording)?;
+    let status = run.launch(Start::New { id: session_id }, held.args.as_deref().unwrap_or(args), &mut recording)?;
     recording.end()?;
     eprintln!("silt: thread {} recorded; see `silt show {}`", short(&started.thread), short(&started.thread));
     exit_like(status)
 }
 
 /// Whether to capture in this process even when a daemon runs.
-fn daemonless_capture() -> bool {
+pub(crate) fn daemonless_capture() -> bool {
     env::var_os("SILT_DAEMONLESS_CAPTURE").is_some_and(|value| value == "1")
 }
 
@@ -467,7 +468,6 @@ impl Run<'_> {
                     token: &held.token,
                     read_only: silt_daemon::sandbox::program_paths(&launch.program, &env),
                     relayed,
-                    seatbelt: silt_daemon::sandbox::SEATBELT,
                     env,
                 })
                 .map_err(|error| fail(format!("cannot prepare the sandbox: {error}")))?;
@@ -509,6 +509,13 @@ fn workspace_rules(
     agent: &'static dyn Agent,
     args: &[String],
 ) -> Result<silt_daemon::workspaces::RunRules, Exn<CliError>> {
+    // A local model runs through the daemon's gateway (ADR 0092).
+    if silt_workspace::agent_key(agent.id()).as_str() == "claude"
+        && silt_llm::local_model_in_args(args).is_some()
+        && !daemonless_capture()
+    {
+        ensure_daemon()?;
+    }
     // A daemon running holds the store; opening it beside one slows its capture.
     let rules = if !daemonless_capture() && is_running() {
         call::<silt_daemon::workspaces::RunRules>(&Request::RunRules {
@@ -532,7 +539,7 @@ fn workspace_rules(
         if let Some(reach) = &reach {
             held.push(reach.as_str());
         } else if rules.locks.sandbox {
-            held.push("sandboxed");
+            held.push("in its own sandbox");
         }
         if !rules.locks.deny.is_empty() {
             held.push("history: this workspace only");
@@ -692,7 +699,7 @@ fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliErro
     let held = workspace_rules(Some(&resumed.thread), None, agent, args)?;
     let run = Run { agent, thread: &resumed.thread, checkout: &resumed.checkout, cwd: &resumed.agent_cwd, held: &held };
     let mut recording = Recording::by_daemon(&resumed.thread)?;
-    let status = run.launch(start, args, &mut recording)?;
+    let status = run.launch(start, held.args.as_deref().unwrap_or(args), &mut recording)?;
     recording.end()?;
     exit_like(status)
 }
@@ -871,7 +878,7 @@ fn hook_input(agent: Option<&str>, event: &str, mut input: serde_json::Value) {
 /// didn't answer in time, or capture in process was asked for.
 fn forwarded(event: &str, input: &serde_json::Value) -> Option<HookReply> {
     // In Silt's sandbox there's no store to capture into: only the run's
-    // channel to the daemon (ADR 0086).
+    // channel to the daemon (ADR 0093).
     if let Some((socket, token)) = paths::run_channel() {
         let request =
             Request::Scoped { token, asking: Box::new(Request::Hook { event: event.to_owned(), input: input.clone() }) };
@@ -917,7 +924,7 @@ fn captured_here(event: &str, input: serde_json::Value) -> HookReply {
             if let (Some(thread), "Stop") = (&captured.thread, event) {
                 push_in_background(thread);
             }
-            if captured.thread.is_some() {
+            if captured.thread.is_some() && event != "SessionEnd" {
                 start_daemon_for_later_hooks();
             }
             captured.reply
@@ -1009,9 +1016,9 @@ pub fn mr_list(thread: Option<String>) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-pub fn mr_show(mr: &str, hide_git: bool) -> Result<(), Exn<CliError>> {
+pub fn mr_show(mr: &str, hide: Hide) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let details: MrDetails = call(&Request::MrShow { mr: mr.into(), hide_git })?;
+    let details: MrDetails = call(&Request::MrShow { mr: mr.into(), hide_git: hide.git, hide_others: hide.others })?;
     print!("{}", render::safe(&render::merge_request(&details)));
     Ok(())
 }
@@ -1058,6 +1065,17 @@ pub fn thread_change(request: Request) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     let message: String = call(&request)?;
     println!("{message}");
+    Ok(())
+}
+
+/// Says what erasing `thread` removes, and with `yes` erases it (ADR 0092).
+pub fn thread_erase(thread: String, yes: bool) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let said: String = call(&Request::ThreadErase { thread: thread.clone(), confirm: yes })?;
+    println!("{said}");
+    if !yes {
+        println!("Run `silt thread erase {thread} --yes` to erase it.");
+    }
     Ok(())
 }
 
@@ -1132,10 +1150,12 @@ pub fn diff(
     turn: Option<usize>,
     to_turn: Option<usize>,
     base: Option<String>,
-    hide_git: bool,
+    hide: Hide,
 ) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let diff: String = call(&Request::Diff { thread: thread.into(), turn, to_turn, base, files: None, path: None, hide_git })?;
+    let Hide { git: hide_git, others: hide_others } = hide;
+    let request = Request::Diff { thread: thread.into(), turn, to_turn, base, files: None, path: None, hide_git, hide_others };
+    let diff: String = call(&request)?;
     print!("{}", render::safe(&diff));
     Ok(())
 }
@@ -1149,7 +1169,7 @@ pub fn search(query: &str, filters: SearchFilters) -> Result<(), Exn<CliError>> 
 
 pub fn in_flight(path: &str) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let found: Vec<InFlight> = call(&Request::InFlight { cwd: current_dir()?, path: path.into() })?;
+    let found: Vec<InFlight> = call(&Request::InFlight { cwd: current_dir()?, path: path.into(), thread: None })?;
     print!("{}", render::safe(&render::in_flight(&found)));
     Ok(())
 }
@@ -1240,11 +1260,13 @@ pub fn comment(
     file: Option<String>,
     lines: Option<(usize, usize)>,
     entry: Option<usize>,
-    (base, hide_git): (Option<String>, bool),
+    (base, hide): (Option<String>, Hide),
     text: &str,
 ) -> Result<(), Exn<CliError>> {
     let on = match (file, lines, entry) {
-        (Some(path), Some((start, end)), None) => CommentOn::Lines { path, start, end, base, hide_git },
+        (Some(path), Some((start, end)), None) => {
+            CommentOn::Lines { path, start, end, base, hide_git: hide.git, hide_others: hide.others }
+        }
         (None, None, Some(index)) => CommentOn::Entry { index },
         _ => return Err(fail("comment on either --file with --lines, or --entry")),
     };
@@ -1262,7 +1284,7 @@ pub fn reply(thread: &str, comment: &str, text: &str) -> Result<(), Exn<CliError
     Ok(())
 }
 
-pub fn comments(thread: &str, resolve: Option<&str>, base: Option<String>, hide_git: bool) -> Result<(), Exn<CliError>> {
+pub fn comments(thread: &str, resolve: Option<&str>, base: Option<String>, hide: Hide) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
     if let Some(comment) = resolve {
         let resolved: CommentView =
@@ -1270,7 +1292,9 @@ pub fn comments(thread: &str, resolve: Option<&str>, base: Option<String>, hide_
         println!("resolved {}", resolved.id);
         return Ok(());
     }
-    let comments: Vec<CommentView> = call(&Request::Comments { thread: thread.into(), base, hide_git, cwd: current_dir()? })?;
+    let Hide { git: hide_git, others: hide_others } = hide;
+    let request = Request::Comments { thread: thread.into(), base, hide_git, hide_others, cwd: current_dir()? };
+    let comments: Vec<CommentView> = call(&request)?;
     print!("{}", render::safe(&render::comments(&comments)));
     Ok(())
 }

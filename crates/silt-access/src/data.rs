@@ -1,4 +1,4 @@
-//! Data rules (ADR 0086): what a result may not carry to an agent, such as
+//! Data rules (ADR 0093): what a result may not carry to an agent, such as
 //! location. These detectors refuse rather than redact, and refuse what
 //! they can't read (binary, or long encoded runs), but they can miss what
 //! they don't recognise: only a rule naming the fields allowed, or a source

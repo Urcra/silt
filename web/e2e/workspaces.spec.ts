@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
-import { stopAgent } from './fixture'
+import { stopAgent, teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -21,12 +21,8 @@ test.beforeAll(() => {
 })
 
 test.afterAll(() => {
-  execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: join(fixture.dir, 'ada', 'silt') } })
-  for (const server of ['work', 'oss']) {
-    process.kill(Number(readFileSync(join(fixture.dir, `${server}.pid`), 'utf8')))
-  }
-  // A daemon, or a server just killed, can still be writing there for a moment.
-  rmSync(fixture.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  const servers = ['work', 'oss'].map((server) => join(fixture.dir, `${server}.pid`))
+  teardown(SILT, fixture.dir, [join(fixture.dir, 'ada', 'silt')], servers)
 })
 
 const host = (url: string) => new URL(url).host
@@ -194,7 +190,7 @@ test("a workspace's defaults pick the agent's model, and the project picker move
   await expect(form.getByLabel('model')).toHaveValue('smart')
 })
 
-test("a workspace's sandbox reach and its plugins are set in its settings, and a plugin is on only where turned on (ADR 0086)", async ({ page }) => {
+test("a workspace's sandbox reach and its plugins are set in its settings, and a plugin is on only where turned on (ADR 0093)", async ({ page }) => {
   const file = join(fixture.dir, 'fleet-api.json')
   const environment = { target: 'https://api.fleet.example/graphql', reads: 'allow', changes: 'ask', data: ['location'] }
   writeFileSync(file, JSON.stringify({ name: 'fleet-api', kind: { type: 'graphql' }, environments: { production: environment } }))
@@ -213,6 +209,15 @@ test("a workspace's sandbox reach and its plugins are set in its settings, and a
   await expect(plugins.getByLabel('fleet-api in Work')).not.toBeChecked()
 
   const reach = settings.getByRole('region', { name: 'What its agents can reach' })
+  const sandbox = reach.getByLabel("Run its agents in Silt's sandbox")
+  // Hiding other workspaces' files asks only for the agent's own sandbox, so what Silt's reaches waits for it.
+  await expect(sandbox).not.toBeChecked()
+  await expect(reach.getByRole('radio', { name: /No network/ })).toBeDisabled()
+  await expect(reach.getByLabel('The GPU')).toBeDisabled()
+  await sandbox.check()
+  const isolation = reach.getByRole('radiogroup', { name: 'Isolation' })
+  await expect(isolation.getByRole('radio', { name: /bubblewrap/ })).toBeChecked()
+  await expect(isolation.getByRole('radio', { name: /Virtual machine/ })).toBeDisabled()
   await expect(reach.getByRole('radio', { name: /Full internet/ })).toBeChecked()
   await reach.getByRole('radio', { name: /No network/ }).check()
   await reach.getByLabel('The GPU').check()
@@ -220,6 +225,7 @@ test("a workspace's sandbox reach and its plugins are set in its settings, and a
   await expect(page.getByText('Workspaces saved')).toBeVisible()
   await page.reload()
   await settings.getByRole('tab', { name: /Work/ }).click()
+  await expect(sandbox).toBeChecked()
   await expect(reach.getByRole('radio', { name: /No network/ })).toBeChecked()
   await expect(reach.getByLabel('The GPU')).toBeChecked()
   await reach.scrollIntoViewIfNeeded()

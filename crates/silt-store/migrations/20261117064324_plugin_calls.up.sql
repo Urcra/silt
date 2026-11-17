@@ -1,4 +1,4 @@
--- Each call a sandboxed run made to a plugin (ADR 0086): what Silt sent or
+-- Each call a sandboxed run made to a plugin (ADR 0093): what Silt sent or
 -- would send, as its canonical request, and how it ended. One that asked
 -- the person is an approval, answered by the request's hash.
 CREATE TABLE plugin_calls (

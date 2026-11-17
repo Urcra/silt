@@ -32,6 +32,7 @@ pub use entry::{Entry, Task, TaskKind, TaskStatus};
 pub use error::AgentError;
 pub use render::{Role, render_transcript, translated_text};
 pub use rewrite::{CheckedSession, RecordedSession, Rewrites, is_safe_id, is_side_file_name};
+pub use silt_workspace::SandboxSupport;
 pub use tail::{complete_lines, complete_lines_ending};
 
 use conventions::NativeConventions;
@@ -214,16 +215,6 @@ pub struct Locks {
     pub deny: Vec<PathBuf>,
 }
 
-/// Which of a workspace's sandbox rules Silt can hold an agent to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SandboxSupport {
-    None,
-    /// Its own sandbox, turned on per run.
-    Sandbox,
-    /// Its sandbox, and paths it denies reading.
-    Isolate,
-}
-
 /// The first of `args` that is one of `flags`, alone or as `--flag=value`,
 /// or one of `valued`'s flags with one of its values, as `--flag value` or
 /// `--flag=value`.
@@ -369,12 +360,12 @@ pub trait Agent: Send + Sync {
         SandboxSupport::None
     }
     /// Where it keeps its sessions and settings, which Silt's sandbox keeps
-    /// writable (ADR 0086). `env` reads the run's variables.
+    /// writable (ADR 0093). `env` reads the run's variables.
     fn homes(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         Vec::new()
     }
     /// The model APIs it calls with a key from a variable, which Silt's
-    /// gateway adds instead, so its sandbox never holds the key (ADR 0086).
+    /// gateway adds instead, so its sandbox never holds the key (ADR 0093).
     fn model_apis(&self) -> &'static [ModelApi] {
         &[]
     }

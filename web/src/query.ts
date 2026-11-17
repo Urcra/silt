@@ -1,5 +1,5 @@
 import { QueryClient } from '@tanstack/react-query'
-import type { DiffSpec } from './api'
+import type { DiffSpec, Hidden } from './api'
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -38,14 +38,21 @@ export const keys = {
   plugins: ['plugins'] as const,
   artifacts: ['artifacts'] as const,
   mr: (id: string) => ['mrs', id] as const,
-  mrShown: (id: string, hideGit: boolean) => ['mrs', id, hideGit] as const,
+  mrShown: (id: string, hidden: Hidden) => ['mrs', id, hidden] as const,
   inbox: (all: boolean) => ['inbox', all] as const,
   agents: ['agents'] as const,
   designSystems: ['design-systems'] as const,
+  designCatalog: ['design-systems', 'catalog'] as const,
+  designSystem: (where: object) => ['design-systems', 'system', where] as const,
+  designAsset: (where: object, path: string) => ['design-systems', 'asset', where, path] as const,
+  threadDesign: (id: string) => ['thread', id, 'design-system'] as const,
   artifactSettings: ['artifact-settings'] as const,
   cloneDesignSystems: (clone: string) => ['design-systems', 'clone', clone] as const,
   projectDesignSystems: ['design-systems', 'projects'] as const,
   voice: ['voice'] as const,
+  models: ['models'] as const,
+  modelSearch: (words: string) => ['models', 'search', words] as const,
+  modelFiles: (repo: string) => ['models', 'files', repo] as const,
   branches: (clone: string) => ['branches', clone] as const,
   projects: ['projects'] as const,
   found: ['projects', 'found'] as const,

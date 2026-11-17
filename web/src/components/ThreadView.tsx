@@ -7,7 +7,7 @@ import { isChat } from '../chats'
 import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
 import { readWhole } from '../diffParse'
-import { useHideGit } from '../hideGit'
+import { useHideGit, useHideOthers } from '../hideGit'
 import { appHref, filePath } from '../permalink'
 import { forgeOf, projectName } from '../projects'
 import { keys, message } from '../query'
@@ -47,6 +47,7 @@ import {
 import { AgentDock, AgentTail, PermissionCard, PlanCard, SignInCard } from './Agent'
 import { AccessPanel, Approvals, SandboxShield } from './Sandbox'
 import { CommentThread } from './CommentThread'
+import { EraseThread } from './EraseThread'
 import { CopyLink } from './CopyLink'
 import { DiffPanel } from './DiffPanel'
 import { DiffView } from './DiffView'
@@ -68,6 +69,7 @@ import { keepDraft, threadDraft, useDraft } from '../drafts'
 // The panel's viewer and list load only once there is an artifact to show.
 const ArtifactViewer = lazy(() => import('./Artifacts').then((module) => ({ default: module.ArtifactViewer })))
 const ArtifactList = lazy(() => import('./Artifacts').then((module) => ({ default: module.ArtifactList })))
+const ThreadDesignPanel = lazy(() => import('./DesignSystems').then((module) => ({ default: module.ThreadDesignPanel })))
 
 /** What a permalink's `#turn-N` or `#comment-<id>` points at on the thread page (ADR 0031). */
 type Anchor = { entry?: number; comment?: string }
@@ -571,7 +573,8 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
   const [open, setOpen] = useState(false)
   const [reverting, setReverting] = useState(false)
   const [hideGit] = useHideGit()
-  const of = { turn: turn.number, hideGit }
+  const [hideOthers] = useHideOthers()
+  const of = { turn: turn.number, hideGit, hideOthers }
   // Counted from the files' stats; the lines are read only once asked for, and file by file when too many.
   const stats = useQuery({
     queryKey: keys.diffStats(thread, of),
@@ -1059,6 +1062,7 @@ function ThreadMore({
               <div className="my-1 border-t border-line-subtle" />
             </>
           )}
+          <EraseThread thread={thread} summary={summary} onDone={close} />
           <p className="px-1 pb-0.5 text-2xs text-fg-2">
             {summary && isChat(summary.repo) ? 'Continue in a terminal, anywhere' : 'Continue in a terminal, in a clone of the repository'}
           </p>
@@ -1628,7 +1632,7 @@ function Here({ people }: { people: { user: string; device: string }[] }) {
   )
 }
 
-type InspectorTab = 'changes' | 'artifacts' | 'details' | 'lineage' | 'access'
+type InspectorTab = 'design' | 'changes' | 'artifacts' | 'details' | 'lineage' | 'access'
 
 function ThreadBody({
   thread,
@@ -1651,6 +1655,16 @@ function ThreadBody({
   const reloadComments = useCallback(() => queries.invalidateQueries({ queryKey: keys.comments(id) }), [queries, id])
   const summary = threads.data?.find((candidate) => candidate.id === thread)
   const [tab, setTab] = useState<InspectorTab>('changes')
+  // A thread started to make or change a design system shows it beside the conversation first (ADR 0088).
+  const design = useQuery({ queryKey: keys.threadDesign(thread), queryFn: () => api.threadDesign(thread), enabled: !hosted(), staleTime: 30_000 })
+  const designTitle = design.data?.title ?? null
+  const shownDesign = useRef(false)
+  useEffect(() => {
+    if (designTitle && !shownDesign.current) {
+      shownDesign.current = true
+      setTab('design')
+    }
+  }, [designTitle])
   // Beside the conversation on a desktop, open on Changes (ADR 0044) until closed.
   const [panel, setPanel] = useState(true)
   // The panel sits beside the conversation only on a desktop; a phone opens it as a sheet.
@@ -1910,6 +1924,7 @@ function ThreadBody({
             <Tabs
               label="inspector"
               tabs={[
+                ...(designTitle ? [{ id: 'design' as const, label: designTitle }] : []),
                 {
                   id: 'changes',
                   label: (
@@ -1930,7 +1945,11 @@ function ThreadBody({
             />
             {tab === 'changes' && <span ref={setDiffControls} className="ml-auto flex items-center gap-2" />}
           </div>
-          {tab === 'artifacts' ? (
+          {tab === 'design' ? (
+            <Suspense fallback={null}>
+              <ThreadDesignPanel thread={thread} working={busy} />
+            </Suspense>
+          ) : tab === 'artifacts' ? (
             <Suspense fallback={null}>
               <ArtifactList thread={thread} groups={groups} images={images} onOpen={(id) => openArtifact(id)} />
             </Suspense>

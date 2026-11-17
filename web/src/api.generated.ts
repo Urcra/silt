@@ -163,7 +163,7 @@ commands: Array<AgentCommand>,
  */
 stoppable: Array<string>, 
 /**
- * What Silt's sandbox lets it reach, when it runs in one (ADR 0086).
+ * What Silt's sandbox lets it reach, when it runs in one (ADR 0093).
  */
 sandbox: Reach | null, };
 
@@ -393,11 +393,15 @@ export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", pat
  * The lines are numbered as a diff with git's rewrites left out
  * shows them (ADR 0069).
  */
-hide_git?: boolean, } | { "on": "anchored", anchor: string, } | { "on": "doc", artifact: string, start: number, end: number, } | { "on": "cell", artifact: string, sheet: number, address: string, } | { "on": "element", artifact: string, anchor: string, };
+hide_git?: boolean, 
+/**
+ * And with other agents' edits left out (ADR 0089).
+ */
+hide_others?: boolean, } | { "on": "anchored", anchor: string, } | { "on": "doc", artifact: string, start: number, end: number, } | { "on": "cell", artifact: string, sheet: number, address: string, } | { "on": "element", artifact: string, anchor: string, };
 
 export type PendingAnchor = { anchor: string, };
 
-export type PlaceAnchors = { base: string | null, anchors: Array<string>, hide_git?: boolean, };
+export type PlaceAnchors = { base: string | null, anchors: Array<string>, hide_git?: boolean, hide_others?: boolean, };
 
 export type CommentView = { id: string, by: string, time_ms: number, text: string, resolved: boolean, 
 /**
@@ -610,6 +614,17 @@ url: string | null,
 artifact: LinkedArtifact | null, };
 
 export type FileEdit = { path: string, inserted: number, deleted: number, };
+
+export type SharedEdits = { 
+/**
+ * Made by another thread's agent; else by one of `agents`, this
+ * thread's own among them.
+ */
+others: boolean, 
+/**
+ * Each agent with its session's first 8 characters, as `claude 1a2b3c4d`.
+ */
+agents: Array<string>, };
 
 export type FileTouch = { thread: string, 
 /**
@@ -824,7 +839,7 @@ export type ConnectorTool = { name: string, description: string | null,
  */
 read_only: boolean, input_schema: unknown, };
 
-export type DesignSource = "project" | "personal" | "builtin";
+export type DesignSource = "project" | "personal";
 
 export type ArtifactSettings = { 
 /**
@@ -845,7 +860,139 @@ title: string, source: DesignSource, readme?: string | null,
 /**
  * Its custom properties and type classes, by family.
  */
-tokens?: { [key in string]: Array<string> }, };
+tokens?: { [key in string]: Array<string> }, 
+/**
+ * Its components, given with its README (ADR 0086).
+ */
+components?: Array<DesignComponentView>, 
+/**
+ * Its folder and its assets' paths under `assets/`, given with its
+ * README (ADR 0088).
+ */
+dir?: string | null, assets?: Array<string>, };
+
+export type DesignComponentView = { name: string, about: string, html: string, 
+/**
+ * Its guidelines, `components/<name>.md` (ADR 0088).
+ */
+guide?: string | null, };
+
+export type DesignCatalog = { 
+/**
+ * Each project's own, then the person's.
+ */
+groups: Array<DesignGroup>, };
+
+export type DesignGroup = { 
+/**
+ * The project whose repository keeps them; none for the person's own.
+ */
+project: DesignProject | null, systems: Array<DesignSummary>, };
+
+export type DesignProject = { repo: string, name: string, clone: string, };
+
+export type DesignSummary = { name: string, title: string, source: DesignSource, 
+/**
+ * Its folder.
+ */
+dir: string, 
+/**
+ * A few of its colours, in its first theme.
+ */
+swatches: Array<string>, colors: number, type_styles: number, components: number, 
+/**
+ * What picks it as a default: "repo's default", "picked for web on
+ * this machine", "default for Work".
+ */
+uses: Array<string>, 
+/**
+ * The thread still making or changing it, when one is.
+ */
+thread?: string | null, 
+/**
+ * It's only in that thread's folder so far.
+ */
+unmerged: boolean, };
+
+export type DesignDetail = { summary: DesignSummary, readme: string, 
+/**
+ * Where it was made from, as its tokens' `meta.source` says.
+ */
+made_from?: string | null, themes: Array<DesignTheme>, 
+/**
+ * Its tokens with their values per theme, colours first.
+ */
+tokens: Array<DesignToken>, type_styles: Array<DesignTypeStyle>, 
+/**
+ * The CSS its tokens and components compile to, as a frame gets it.
+ */
+css: string, components: Array<DesignComponentView>, cover?: string | null, assets: Array<DesignAssetView>, 
+/**
+ * Every file in its folder, by path.
+ */
+files: Array<string>, 
+/**
+ * What its files hold that Silt left out, and why.
+ */
+dropped: Array<string>, };
+
+export type DesignTheme = { id: string, name: string, };
+
+export type DesignToken = { family: string, name: string, 
+/**
+ * Its value by theme id; one value holds in every theme under `*`.
+ */
+values: { [key in string]: string }, usage: string, };
+
+export type DesignTypeStyle = { name: string, group: string, 
+/**
+ * Its font stack, from its family.
+ */
+family: string, font_size: string, line_height: string | null, font_weight: string | null, letter_spacing: string | null, usage: string, };
+
+export type DesignAssetView = { path: string, media_type: string, size: number, };
+
+export type DesignAssetData = { media_type: string, data: string, };
+
+export type DesignFrom = "code" | "website" | "description";
+
+export type DesignKeep = "repo" | "personal";
+
+export type DesignStart = { 
+/**
+ * The system's name as people read it, such as "Harbor"; its folder's
+ * name comes from it.
+ */
+title: string, agent: string, keep: DesignKeep, 
+/**
+ * The project: the one built from, the one whose repository keeps it,
+ * or both.
+ */
+clone: string | null, from: DesignFrom | null, 
+/**
+ * The website's address, for one made from a website.
+ */
+link: string | null, 
+/**
+ * What to make it from, for one made from a description, or anything
+ * else the person adds.
+ */
+notes: string | null, 
+/**
+ * A brand guide, screenshots or anything else sent with the prompt.
+ */
+attachments: Array<PromptAttachment>, 
+/**
+ * What to change in the system `name`, which exists; a new one when
+ * unset.
+ */
+change: string | null, name: string | null, };
+
+export type ThreadDesign = { name: string, title: string, keep: DesignKeep, changing: boolean, 
+/**
+ * What's written so far; none until the folder has its tokens.
+ */
+detail: DesignDetail | null, };
 
 export type ArtifactContent = { media_type: string, 
 /**
@@ -1118,7 +1265,11 @@ before_compaction: boolean,
  */
 artifact: string | null, };
 
-export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
+export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, 
+/**
+ * Set for edits that weren't this thread's agent's alone (ADR 0089).
+ */
+shared?: SharedEdits, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
 
 export type Snooze = { 
 /**
@@ -1195,7 +1346,11 @@ export type WorkspacesView = { default: WorkspaceId,
  * Whether the person made any; until then there's the one Default,
  * syncing with the default server.
  */
-saved: boolean, workspaces: Array<WorkspaceView>, };
+saved: boolean, workspaces: Array<WorkspaceView>, 
+/**
+ * What can make Silt's sandbox, and whether it can on this machine.
+ */
+backends: Array<BackendView>, };
 
 export type WorkspaceView = { workspace: Workspace, 
 /**
@@ -1211,6 +1366,12 @@ waiting_for_policy: boolean,
  * Its own rules and its org's, together.
  */
 effective: Policy, projects: Array<WorkspaceProject>, };
+
+export type BackendView = { backend: Backend, 
+/**
+ * Why it can't make one here, if it can't.
+ */
+unavailable: string | null, };
 
 export type WorkspaceProject = { repo: string, why: Why, };
 
@@ -1262,9 +1423,19 @@ custom_agents?: boolean | null,
  */
 max_preset?: Preset | null, 
 /**
- * The agent runs only with its own sandbox on.
+ * The agent runs only with its own sandbox on, which Silt's sandbox
+ * also answers.
  */
 sandbox?: boolean, 
+/**
+ * Agents run in Silt's own sandbox, and don't start where it can't be
+ * made (ADR 0093). The reach rules below apply only with it.
+ */
+silt_sandbox?: boolean, 
+/**
+ * What makes Silt's sandbox; bubblewrap when unset.
+ */
+backend?: Backend | null, 
 /**
  * "Hide other workspaces' files": the sandbox also keeps the agent out
  * of Silt's data and other workspaces' folders; implies `sandbox`.
@@ -1277,18 +1448,29 @@ isolated?: boolean,
  */
 home_locked?: boolean, 
 /**
+ * Nothing Silt holds of its threads leaves this machine, and only
+ * local models answer (ADR 0092): no server, `local`, and Claude Code
+ * on a local model only.
+ */
+local_only?: boolean, 
+/**
+ * In a Local only workspace, agents' history tools read the whole
+ * workspace rather than their own project.
+ */
+wide_history?: boolean, 
+/**
  * The page connectors its artifacts' pages may call, by name; any
  * when unset (ADR 0080).
  */
 connectors?: Array<string> | null, 
 /**
  * The hosts a sandbox reaches "through Silt only"; any public host
- * when unset (ADR 0086).
+ * when unset (ADR 0093).
  */
 hosts?: Array<string> | null, 
 /**
  * What the sandbox can connect to: the person's choice, or an org's
- * most; full internet when unset (ADR 0086).
+ * most; full internet when unset (ADR 0093).
  */
 network?: Network | null, 
 /**
@@ -1322,11 +1504,17 @@ no_nested?: boolean, };
 
 export type Network = "none" | "gateway" | "full" | "host";
 
+export type Backend = "bubblewrap" | "seatbelt";
+
 export type Devices = "none" | "relayed" | "named" | "all_usb";
 
 export type Extra = "ranges" | "ports" | "paths" | "gpu" | "docker" | "ssh_agent";
 
-export type Reach = { network: Network, 
+export type Reach = { 
+/**
+ * What makes the sandbox.
+ */
+backend: Backend, network: Network, 
 /**
  * The hosts "through Silt only" reaches; any public host when empty.
  */
@@ -1374,6 +1562,11 @@ export type ThreadSummary = { id: string, repo: string, title: string | null,
  * The command of the agent that recorded its latest session.
  */
 agent: string | null, created_ms: number, messages: number, edits: number, 
+/**
+ * Whether it records edits by other agents that worked in the same
+ * clone, which a diff can leave out (ADR 0089).
+ */
+shared: boolean, 
 /**
  * `here` when checked out on this machine, `remote` when only known
  * from the server, `moved` when another device took it over.
@@ -1479,3 +1672,81 @@ model: boolean, download: VoiceDownload | null,
  * Why the last download failed.
  */
 failed: string | null, };
+
+export type LocalModels = { 
+/**
+ * The `llama-server` models run with, if one was found.
+ */
+server: string | null, devices: Array<ModelDevice>, 
+/**
+ * Bytes a model may use here: the devices', else the machine's memory.
+ */
+room: number, models: Array<LocalModel>, 
+/**
+ * A model's download, or llama.cpp's (`llama.cpp`), while it runs.
+ */
+pull: ModelPull | null, 
+/**
+ * Why the last download failed.
+ */
+failed: ModelFailure | null, };
+
+export type ModelDevice = { name: string, description: string, total: number, free: number, };
+
+export type LocalModel = { id: string, name: string, 
+/**
+ * Where it came from: `owner/repo:file` or a file here.
+ */
+source: string, size: number, context: number, fit: ModelFit, 
+/**
+ * The file `llama-server` loads.
+ */
+path: string, };
+
+export type FoundModel = { 
+/**
+ * `owner/name`.
+ */
+repo: string, 
+/**
+ * Downloads in the last month.
+ */
+downloads: number, updated: string | null, };
+
+export type ModelFiles = { repo: string, architecture: string | null, 
+/**
+ * The most context the model was trained for.
+ */
+context_length: number | null, 
+/**
+ * Smallest first.
+ */
+quantizations: Array<ModelQuantization>, };
+
+export type ModelQuantization = { 
+/**
+ * What a pull takes: `owner/repo:file.gguf`.
+ */
+source: string, 
+/**
+ * Its kind, such as `Q4_K_M`.
+ */
+label: string, size: number, 
+/**
+ * Files it's split across.
+ */
+parts: number, fit: ModelFit, 
+/**
+ * The context it would start with here.
+ */
+context: number, };
+
+export type ModelFit = "fits" | "tight" | "too_big";
+
+export type ModelPull = { id: string, done: number, 
+/**
+ * Zero until the files' sizes are known.
+ */
+total: number, };
+
+export type ModelFailure = { id: string, reason: string, };

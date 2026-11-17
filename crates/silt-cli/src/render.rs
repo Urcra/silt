@@ -61,8 +61,13 @@ pub fn show(lines: &[ShowLine]) -> String {
                 other => writeln!(out, "[{other}] {}", clip(text, 160)),
             },
             ShowLine::ToolCall { name, input, .. } => writeln!(out, "  ⚙ {name} {}", clip(input, 140)),
-            ShowLine::Edits { tool_use_id, files } => {
-                let who = if tool_use_id.is_some() { "    ✎" } else { "  ✎ outside tool calls:" };
+            ShowLine::Edits { tool_use_id, files, shared } => {
+                let who = match shared {
+                    Some(shared) if shared.others => format!("  ✎ by another agent ({}):", shared.agents.join(", ")),
+                    Some(shared) => format!("  ✎ by one of these agents ({}):", shared.agents.join(", ")),
+                    None if tool_use_id.is_some() => "    ✎".to_owned(),
+                    None => "  ✎ outside tool calls:".to_owned(),
+                };
                 let files: Vec<String> =
                     files.iter().map(|file| format!("{} +{} -{}", file.path, file.inserted, file.deleted)).collect();
                 writeln!(out, "{who} {}", files.join(", "))

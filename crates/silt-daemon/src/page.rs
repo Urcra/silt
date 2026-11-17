@@ -309,7 +309,7 @@ impl Core {
     /// The thread a run's token was made for.
     pub(crate) async fn run_thread(&self, token: &str) -> Result<String, CoreError> {
         let hash = blake3::hash(token.as_bytes());
-        let (thread, _) = self
+        let silt_store::RunToken { thread, .. } = self
             .store
             .run_token(hash.as_bytes())
             .await?
@@ -327,7 +327,7 @@ impl Core {
         as_level: Option<Level>,
     ) -> Result<serde_json::Value, CoreError> {
         let hash = blake3::hash(token.as_bytes());
-        let (thread, _) = self
+        let silt_store::RunToken { thread, .. } = self
             .store
             .run_token(hash.as_bytes())
             .await?

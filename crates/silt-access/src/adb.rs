@@ -1,4 +1,4 @@
-//! adb for one device (ADR 0086): the sandbox's adb reaches this machine's
+//! adb for one device (ADR 0093): the sandbox's adb reaches this machine's
 //! adb server through a filter that lets through only what names the one
 //! device relayed to it, so the agent never sees or drives another.
 

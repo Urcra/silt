@@ -1,4 +1,4 @@
-//! The gateway a sandboxed agent's traffic leaves through (ADR 0086). It
+//! The gateway a sandboxed agent's traffic leaves through (ADR 0093). It
 //! answers as an HTTP proxy on a socket the sandbox reaches: it refuses what
 //! the run's rules don't allow, passes the rest through unread, and reads
 //! only requests to hosts it holds a credential for, to add it on the way
@@ -22,8 +22,6 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::io::AsyncWriteExt as _;
 use tokio::net::TcpStream;
-#[cfg(unix)]
-use tokio::net::UnixListener;
 
 pub use ca::Ca;
 pub use graphql::GraphqlRule;
@@ -50,30 +48,13 @@ impl Gateway {
         Self { rules, ca, upstream: Arc::new(upstream_config(Some(root))), log: None }
     }
 
-    /// Answers connections on `listener` until it's dropped.
-    #[cfg(unix)]
-    pub async fn serve(self: Arc<Self>, listener: UnixListener) {
-        while let Ok((stream, _)) = listener.accept().await {
-            tokio::spawn(self.clone().connection(stream));
-        }
-    }
-
-    /// The same on a port of this machine's loopback, where the sandbox has
-    /// no network of its own to relay the gateway into, as on macOS: each
-    /// request then carries the run's proxy password.
-    pub async fn serve_tcp(self: Arc<Self>, listener: tokio::net::TcpListener) {
-        while let Ok((stream, _)) = listener.accept().await {
-            tokio::spawn(self.clone().connection(stream));
-        }
-    }
-
-    async fn connection<S>(self: Arc<Self>, stream: S)
+    /// Answers the requests on one connection from the sandbox.
+    pub async fn answer<S>(self: Arc<Self>, stream: S)
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        let gateway = self;
         let service = service_fn(move |request| {
-            let gateway = gateway.clone();
+            let gateway = self.clone();
             async move { Ok::<_, Infallible>(gateway.route(request).await) }
         });
         let _ = hyper::server::conn::http1::Builder::new()
@@ -101,23 +82,23 @@ impl Gateway {
         let host = authority.host().trim_start_matches('[').trim_end_matches(']').to_owned();
         let tls = request.method() == Method::CONNECT;
         let port = authority.port_u16().unwrap_or(if tls { 443 } else { 80 });
-        let address = match self.check(&host, port).await {
-            Ok(address) => address,
+        let addresses = match self.check(&host, port).await {
+            Ok(addresses) => addresses,
             Err(reason) => {
                 self.note(&host, port, Some(&reason), false);
                 return refuse(StatusCode::FORBIDDEN, &format!("Silt's gateway refused {host}: {reason}"));
             }
         };
         if !tls {
-            return self.forward(request, &host, port, address, false).await;
+            return self.forward(request, &host, port, &addresses, false).await;
         }
         let gateway = self.clone();
         tokio::spawn(async move {
             let Ok(upgraded) = hyper::upgrade::on(request).await else { return };
             let client = TokioIo::new(upgraded);
             if gateway.rules.terminates(&host) {
-                gateway.read_through(client, host, port, address).await;
-            } else if let Ok(mut server) = TcpStream::connect(address).await {
+                gateway.read_through(client, host, port, addresses).await;
+            } else if let Ok(mut server) = TcpStream::connect(&*addresses).await {
                 let mut client = client;
                 let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
                 let _ = server.shutdown().await;
@@ -126,21 +107,21 @@ impl Gateway {
         Response::new(empty())
     }
 
-    /// Where `host` may be reached, or why not.
-    async fn check(&self, host: &str, port: u16) -> Result<SocketAddr, String> {
+    /// Where `host` may be reached, to try in turn, or why not.
+    async fn check(&self, host: &str, port: u16) -> Result<Arc<[SocketAddr]>, String> {
         self.rules.host_allowed(host)?;
         let found = tokio::net::lookup_host((host, port)).await.map_err(|error| format!("{host} couldn't be found: {error}"))?;
-        let mut first = None;
-        for address in found {
-            if !self.rules.address_allowed(address.ip()) {
-                return Err(format!(
-                    "{host} is {}, which sandboxes never reach: this machine, its networks and cloud metadata stay out",
-                    address.ip()
-                ));
-            }
-            first.get_or_insert(address);
+        let addresses: Vec<SocketAddr> = found.collect();
+        if let Some(address) = addresses.iter().find(|address| !self.rules.address_allowed(address.ip())) {
+            return Err(format!(
+                "{host} is {}, which sandboxes never reach: this machine, its networks and cloud metadata stay out",
+                address.ip()
+            ));
         }
-        first.ok_or_else(|| format!("{host} has no address"))
+        if addresses.is_empty() {
+            return Err(format!("{host} has no address"));
+        }
+        Ok(addresses.into())
     }
 
     /// Reads the client's requests over TLS, as `host`, to add credentials.
@@ -149,7 +130,7 @@ impl Gateway {
         client: TokioIo<hyper::upgrade::Upgraded>,
         host: String,
         port: u16,
-        address: SocketAddr,
+        addresses: Arc<[SocketAddr]>,
     ) {
         let Ok(leaf) = self.ca.leaf(&host) else { return };
         let mut config = match rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
@@ -164,7 +145,8 @@ impl Gateway {
         let service = service_fn(move |request| {
             let gateway = gateway.clone();
             let host = host.clone();
-            async move { Ok::<_, Infallible>(gateway.forward(request, &host, port, address, true).await) }
+            let addresses = addresses.clone();
+            async move { Ok::<_, Infallible>(gateway.forward(request, &host, port, &addresses, true).await) }
         });
         let _ = hyper::server::conn::http1::Builder::new().serve_connection(TokioIo::new(tls), service).await;
     }
@@ -175,7 +157,7 @@ impl Gateway {
         mut request: Request<Incoming>,
         host: &str,
         port: u16,
-        address: SocketAddr,
+        addresses: &[SocketAddr],
         tls: bool,
     ) -> Response<Body> {
         let path = request.uri().path().to_owned();
@@ -215,7 +197,7 @@ impl Gateway {
             None => request.map(|body| body.boxed()),
         };
         self.note(host, port, None, added);
-        let response = match self.send(request, host, address, tls).await {
+        let response = match self.send(request, host, addresses, tls).await {
             Ok(response) => response,
             Err(error) => return refuse(StatusCode::BAD_GATEWAY, &format!("Silt's gateway couldn't reach {host}: {error}")),
         };
@@ -240,10 +222,10 @@ impl Gateway {
         &self,
         request: Request<Body>,
         host: &str,
-        address: SocketAddr,
+        addresses: &[SocketAddr],
         tls: bool,
     ) -> Result<Response<Incoming>, String> {
-        let tcp = TcpStream::connect(address).await.map_err(|error| error.to_string())?;
+        let tcp = TcpStream::connect(addresses).await.map_err(|error| error.to_string())?;
         if tls {
             let name = rustls::pki_types::ServerName::try_from(host.to_owned()).map_err(|error| error.to_string())?;
             let stream = tokio_rustls::TlsConnector::from(self.upstream.clone())
@@ -267,16 +249,14 @@ impl Gateway {
     }
 }
 
-/// Passes each connection on `listener` to `port` on this machine: a port
+/// Passes one connection from the sandbox to `port` on this machine: a port
 /// a workspace hands its sandboxes, such as a dev database's.
-#[cfg(unix)]
-pub async fn forward_port(listener: UnixListener, port: u16) {
-    while let Ok((mut client, _)) = listener.accept().await {
-        tokio::spawn(async move {
-            if let Ok(mut server) = TcpStream::connect(("127.0.0.1", port)).await {
-                let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
-            }
-        });
+pub async fn forward_port<S>(mut client: S, port: u16)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    if let Ok(mut server) = TcpStream::connect(("127.0.0.1", port)).await {
+        let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
     }
 }
 

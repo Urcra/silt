@@ -1,5 +1,5 @@
 //! A GraphQL API's schema, from its introspection, for data rules that see
-//! past field names (ADR 0086): `vehicle { pos { a b } }` carries location
+//! past field names (ADR 0093): `vehicle { pos { a b } }` carries location
 //! when `pos` is a `GeoPoint`, whatever its fields are called. A request is
 //! walked with the schema, aliases, fragments and all, and each selected
 //! field's type checked.

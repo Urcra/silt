@@ -22,9 +22,14 @@ pub struct Filters<'repo> {
 }
 
 impl<'repo> Filters<'repo> {
-    pub(crate) fn new(repo: &'repo gix::Repository, root: &Path, use_git_cli: bool) -> Result<Self, GitError> {
-        let (pipeline, index) = repo.filter_pipeline(None).map_err(GitError::gix)?;
-        Ok(Self { pipeline, index, root: root.to_owned(), objects: repo.common_dir().join("objects"), use_git_cli })
+    pub(crate) fn new(
+        pipeline: gix::filter::Pipeline<'repo>,
+        index: gix::worktree::IndexPersistedOrInMemory,
+        root: &Path,
+        common_dir: &Path,
+        use_git_cli: bool,
+    ) -> Self {
+        Self { pipeline, index, root: root.to_owned(), objects: common_dir.join("objects"), use_git_cli }
     }
 
     /// Runs git with the objects it writes going to a throwaway directory:

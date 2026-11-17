@@ -1,4 +1,4 @@
-//! A run's plugin calls (ADR 0086), kept in the store: those that ran,
+//! A run's plugin calls (ADR 0093), kept in the store: those that ran,
 //! those refused, and those that wait for the person as approvals. An
 //! approval is answered by the hash of the request it shows, and only that
 //! request runs, once; a grant the person gives with it lets the same kind
@@ -207,7 +207,7 @@ impl Core {
     /// hash.
     async fn run_of(&self, token: &str) -> Result<(ThreadId, String, Vec<u8>), CoreError> {
         let hash = blake3::hash(token.as_bytes()).as_bytes().to_vec();
-        let (thread, workspace) =
+        let silt_store::RunToken { thread, workspace, .. } =
             self.store.run_token(&hash).await?.ok_or_else(|| CoreError::Invalid("this run's token isn't known here".into()))?;
         // Its calls and grants are kept with its thread, so a run that has
         // none can't make any.
@@ -648,9 +648,9 @@ mod tests {
         };
         store.create_thread(&record).await.expect("thread");
         store.create_thread(&ThreadRecord { id: ThreadId(8), family: FamilyId(10), ..record }).await.expect("thread");
-        store.add_run_token(blake3::hash(b"work-run").as_bytes(), ThreadId(7), "work", 1).await.expect("token");
-        store.add_run_token(blake3::hash(b"work-again").as_bytes(), ThreadId(7), "work", 1).await.expect("token");
-        store.add_run_token(blake3::hash(b"other-thread").as_bytes(), ThreadId(8), "personal", 1).await.expect("token");
+        store.add_run_token(blake3::hash(b"work-run").as_bytes(), ThreadId(7), "work", None, 1).await.expect("token");
+        store.add_run_token(blake3::hash(b"work-again").as_bytes(), ThreadId(7), "work", None, 1).await.expect("token");
+        store.add_run_token(blake3::hash(b"other-thread").as_bytes(), ThreadId(8), "personal", None, 1).await.expect("token");
         let (events, _inbox) = tokio::sync::mpsc::unbounded_channel();
         Core::load(store, ActorId(1), data, events).await.expect("loads")
     }

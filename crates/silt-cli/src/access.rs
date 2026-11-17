@@ -1,5 +1,5 @@
 //! `silt access doctor`: whether Silt's sandbox and its gateway work on this
-//! machine, and how to fix what doesn't (ADR 0086).
+//! machine, and how to fix what doesn't (ADR 0093).
 
 use clap::Subcommand;
 use exn::Exn;
@@ -85,7 +85,9 @@ fn doctor() {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn doctor() {
-    println!("Silt's own sandbox runs on Linux and macOS; here, a workspace that requires one uses the agent's own sandbox.");
+    println!(
+        "Silt's own sandbox runs on Linux and macOS; here, agents don't start in a workspace that runs them in it, and the agent's own sandbox is what a workspace can require."
+    );
     credentials();
 }
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sessions SET idle = ? WHERE agent = ? AND session_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "349c91ad5e606a2f0e955c2fc1c526b9450f97c609522c52f1573896d383e461"
+}

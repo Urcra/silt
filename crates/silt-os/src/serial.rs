@@ -1,4 +1,4 @@
-//! Serial ports relayed to a sandbox (ADR 0086): the port, opened raw at
+//! Serial ports relayed to a sandbox (ADR 0093): the port, opened raw at
 //! its speed, and a pseudo-terminal the sandbox gets in its place, with
 //! bytes passed between them. The terminal's own end is held open too, so
 //! the relay outlives each program that opens and closes it.

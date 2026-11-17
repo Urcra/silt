@@ -47,14 +47,14 @@ pub fn socket_path_in(data: &Path) -> PathBuf {
 }
 
 /// Inside Silt's sandbox: the socket that answers for this run, and the
-/// run's token, which the sandbox's launch sets (ADR 0086).
+/// run's token, which the sandbox's launch sets (ADR 0093).
 pub fn run_channel() -> Option<(PathBuf, String)> {
     let socket = env::var_os("SILT_RUN_SOCKET").filter(|socket| !socket.is_empty())?;
     let token = env::var("SILT_RUN_TOKEN").ok().filter(|token| !token.is_empty())?;
     Some((PathBuf::from(socket), token))
 }
 
-/// The socket sandboxed agents reach the daemon through (ADR 0086): beside
+/// The socket sandboxed agents reach the daemon through (ADR 0093): beside
 /// the daemon's, answering only what carries a run's token.
 #[cfg(unix)]
 pub fn agents_socket_in(data: &Path) -> PathBuf {

@@ -6,7 +6,9 @@
 //! and the tool result, and mentions every `FAKE_EXPECT` word (dashes for
 //! spaces), then adds `FAKE_SAY` and the line `FAKE_LINE`. With
 //! `FAKE_IN_TOOL` it touches that file during the edit and waits for
-//! `<it>.go`. `FAKE_TRANSLATED` skips the tool result check, for a session
+//! `<it>.go`. It starts with `SessionStart` and ends with `SessionEnd`, and
+//! with `FAKE_HOOK_LOG` writes each hook's output to
+//! `<it>/<session>-<event>`. `FAKE_TRANSLATED` skips the tool result check, for a session
 //! translated from another agent.
 //!
 //! `FAKE_SCRIPT` picks another session for the single-machine tests:
@@ -35,7 +37,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use silt_fake_agent::{Failed, Step, append, exit, expect_words, io, records, write};
+use silt_fake_agent::{Failed, Step, append, exit, expect_words, feed_hook, io, records, write};
 
 struct Run {
     session: String,
@@ -57,6 +59,14 @@ fn run() -> Step {
     let mut args = env::args().skip(1);
     let (mut session, mut resume, mut settings) = (String::new(), false, None);
     let log_dir = env::var_os("FAKE_LOG_DIR").map(PathBuf::from);
+    if let Some(logs) = &log_dir {
+        let model_env: serde_json::Map<String, serde_json::Value> = env::vars()
+            .filter(|(name, _)| name.starts_with("ANTHROPIC_") || name.starts_with("CLAUDE_CODE_"))
+            .map(|(name, value)| (name, value.into()))
+            .collect();
+        let said = serde_json::json!({"args": env::args().skip(1).collect::<Vec<_>>(), "env": model_env});
+        write(&logs.join("claude-run"), said.to_string().as_bytes())?;
+    }
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--session-id" => session = args.next().unwrap_or_default(),
@@ -116,6 +126,7 @@ fn run() -> Step {
 
 fn first(run: &Run) -> Step {
     fs::create_dir_all(&run.dir).map_err(io)?;
+    run.session_hook("SessionStart", json!({"source": "startup"}))?;
     run.say(&json!({"type": "ai-title", "aiTitle": "Add a farewell", "sessionId": "x"}))?;
     run.say(&json!({
         "type": "user",
@@ -123,7 +134,9 @@ fn first(run: &Run) -> Step {
         "sessionId": run.session,
         "message": {"role": "user", "content": "Please add a farewell line to main"},
     }))?;
-    run.hook("UserPromptSubmit", &run.edit("UserPromptSubmit", "toolu_1"), None)?;
+    let mut prompt = run.edit("UserPromptSubmit", "toolu_1");
+    prompt["prompt"] = json!("Please add a farewell line to main");
+    run.hook("UserPromptSubmit", &prompt, None)?;
     run.say(&tool_use("toolu_1"))?;
     run.hook("PreToolUse", &run.edit("PreToolUse", "toolu_1"), None)?;
     in_tool()?;
@@ -145,7 +158,8 @@ fn first(run: &Run) -> Step {
             {"type": "text", "text": "Done: farewell added. I used ghp_abcdefghijklmnopqrstuvwxyz0123 to fetch it."},
         ]},
     }))?;
-    run.hook("Stop", &run.edit("Stop", "toolu_1"), None)
+    run.hook("Stop", &run.edit("Stop", "toolu_1"), None)?;
+    run.session_hook("SessionEnd", json!({"reason": "prompt_input_exit"}))
 }
 
 fn resumed(run: &Run, config: &Path) -> Step {
@@ -232,16 +246,28 @@ impl Run {
                 command
             }
         };
-        if let Some(output) = output {
+        let logged = env::var_os("FAKE_HOOK_LOG").map(|dir| PathBuf::from(dir).join(format!("{}-{event}", self.session)));
+        if let Some(output) = output.or(logged.as_deref()) {
             command.stdout(fs::File::create(output).map_err(io)?);
         }
         let mut child = command.stdin(Stdio::piped()).spawn().map_err(|error| Failed(1, format!("{program}: {error}")))?;
-        child.stdin.take().expect("piped").write_all(input.to_string().as_bytes()).map_err(io)?;
+        feed_hook(&mut child, input.to_string().as_bytes())?;
         let status = child.wait().map_err(io)?;
         match status.code() {
             Some(0) => Ok(()),
             code => Err(Failed(code.and_then(|code| u8::try_from(code).ok()).unwrap_or(1), String::new())),
         }
+    }
+
+    /// A session's start or end hook, which settings from before Silt asked
+    /// for them may lack.
+    fn session_hook(&self, event: &str, mut input: Value) -> Step {
+        if self.settings.as_ref().is_some_and(|settings| settings["hooks"][event].is_null()) {
+            return Ok(());
+        }
+        input["session_id"] = json!(self.session);
+        input["hook_event_name"] = json!(event);
+        self.hook(event, &input, None)
     }
 
     /// A hook's input about `tool` (`""` and `null` between tools).

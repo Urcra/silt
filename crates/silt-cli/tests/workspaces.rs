@@ -101,7 +101,7 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
         "skipping permissions is refused under a cap"
     );
 
-    // A plugin on in Work: its runs' calls are kept with their thread (ADR 0086).
+    // A plugin on in Work: its runs' calls are kept with their thread (ADR 0093).
     let plugin = root.path().join("fleet.json");
     let definition = serde_json::json!({
         "name": "fleet",
@@ -117,18 +117,27 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     let settings = fs::read_to_string(laptop.agents.join("logs/claude-settings")).expect("Claude got settings");
     let settings: serde_json::Value = serde_json::from_str(&settings).expect("json");
     assert_eq!(settings["permissions"]["disableBypassPermissionsMode"], "disable", "{settings}");
-    if said.contains("sandboxed: ") {
-        // Silt's own sandbox is the wall (ADR 0086); the agent's own isn't forced on inside it.
+    assert!(!said.contains("sandboxed: "), "hiding other workspaces asks only for the agent's own sandbox: {said}");
+    assert_eq!(settings["sandbox"]["enabled"], true, "{settings}");
+    assert_eq!(settings["sandbox"]["failIfUnavailable"], true, "{settings}");
+    let denied = settings["sandbox"]["filesystem"]["denyRead"].to_string();
+    let silt_home = laptop.silt_home.to_string_lossy().replace('\\', "/");
+    assert!(denied.contains(&silt_home), "Silt's data is out of the sandbox's reach: {denied}");
+    assert!(settings["hooks"]["Stop"].is_array(), "the hooks are still there: {settings}");
+
+    laptop.silt(&["workspace", "policy", "Work", "--silt-sandbox", "on"]);
+    let ran = in_work(&["claude"]);
+    let said = String::from_utf8_lossy(&ran.stderr).into_owned();
+    if ran.status.success() {
+        // Silt's own sandbox is the wall (ADR 0093); the agent's own isn't forced on inside it.
         assert!(said.contains("sandboxed: no network"), "{said}");
+        let settings = fs::read_to_string(laptop.agents.join("logs/claude-settings")).expect("Claude got settings");
+        let settings: serde_json::Value = serde_json::from_str(&settings).expect("json");
         assert!(settings["sandbox"].is_null(), "{settings}");
     } else {
-        assert_eq!(settings["sandbox"]["enabled"], true, "{settings}");
-        assert_eq!(settings["sandbox"]["failIfUnavailable"], true, "{settings}");
-        let denied = settings["sandbox"]["filesystem"]["denyRead"].to_string();
-        let silt_home = laptop.silt_home.to_string_lossy().replace('\\', "/");
-        assert!(denied.contains(&silt_home), "Silt's data is out of the sandbox's reach: {denied}");
+        assert!(said.contains("Work runs its agents in Silt's sandbox, which this machine can't make (your rules): "), "{said}");
     }
-    assert!(settings["hooks"]["Stop"].is_array(), "the hooks are still there: {settings}");
+    laptop.silt(&["workspace", "policy", "Work", "--silt-sandbox", "off"]);
 
     let work_thread = thread_in(&laptop, "work");
     let personal = thread_in(&laptop, "default");
@@ -161,7 +170,7 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     let forged = mcp_answer_with(&laptop, &["mcp", "--thread", work_id, "--token", "not-a-token", "--ui"], "silt_artifact", page);
     assert!(forged.contains("this run's token isn't known here"), "{forged}");
 
-    // The plugin on in Work waits for the person on a change, and its run hears how they answered (ADR 0086).
+    // The plugin on in Work waits for the person on a change, and its run hears how they answered (ADR 0093).
     let arguments = serde_json::json!({"environment": "lab", "target": "car-1.fleet.test", "args": ["now"]});
     let said = std::thread::scope(|scope| {
         let call = scope.spawn(|| mcp_answer(&laptop, work_id, &token, "fleet_run", arguments.clone()));
@@ -179,6 +188,8 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
         call.join().expect("the call ends")
     });
     assert!(said.contains("Refused: the person rejected it"), "{said}");
-    let access = String::from_utf8_lossy(&laptop.silt(&["access", "show", work_id]).stdout).into_owned();
+    // Kept with the run's own thread.
+    let run_thread = args.iter().skip_while(|arg| *arg != "--thread").nth(1).cloned().expect("the run's thread");
+    let access = String::from_utf8_lossy(&laptop.silt(&["access", "show", &run_thread]).stdout).into_owned();
     assert!(access.contains("fleet fleet_run in lab  refused"), "{access}");
 }

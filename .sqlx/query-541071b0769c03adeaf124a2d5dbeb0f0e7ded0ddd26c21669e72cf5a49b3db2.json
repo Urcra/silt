@@ -1,0 +1,158 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.agent, s.session_id, s.thread_id, t.repo, t.repo_root, c.path, c.managed AS \"managed: bool\",\n                      s.created_ms, s.seen_ms, s.ended_ms, s.idle AS \"idle: bool\", s.doing\n               FROM sessions s JOIN threads t ON t.id = s.thread_id JOIN checkouts c ON c.id = s.checkout_id\n               WHERE t.deleted_ms IS NULL ORDER BY s.created_ms",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "agent"
+          }
+        }
+      },
+      {
+        "name": "session_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "thread_id",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "repo",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "repo"
+          }
+        }
+      },
+      {
+        "name": "repo_root",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "repo_root"
+          }
+        }
+      },
+      {
+        "name": "path",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "checkouts",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "managed: bool",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "checkouts",
+            "name": "managed"
+          }
+        }
+      },
+      {
+        "name": "created_ms",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "created_ms"
+          }
+        }
+      },
+      {
+        "name": "seen_ms",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "seen_ms"
+          }
+        }
+      },
+      {
+        "name": "ended_ms",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "ended_ms"
+          }
+        }
+      },
+      {
+        "name": "idle: bool",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "idle"
+          }
+        }
+      },
+      {
+        "name": "doing",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "doing"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "541071b0769c03adeaf124a2d5dbeb0f0e7ded0ddd26c21669e72cf5a49b3db2"
+}

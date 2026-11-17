@@ -1,4 +1,4 @@
-//! What an agent's sandbox may reach beyond its own files (ADR 0086): its
+//! What an agent's sandbox may reach beyond its own files (ADR 0093): its
 //! network, devices, and what of the machine the person hands it.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -53,6 +53,46 @@ impl Network {
 impl fmt::Display for Network {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
+    }
+}
+
+/// What makes Silt's sandbox. OCI containers and VMs follow (ADR 0093).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum Backend {
+    /// A process sandbox, on Linux.
+    Bubblewrap,
+    /// macOS's own sandbox, through `sandbox-exec`.
+    Seatbelt,
+}
+
+/// The one this system has: Seatbelt on macOS, bubblewrap elsewhere.
+impl Default for Backend {
+    fn default() -> Self {
+        if cfg!(target_os = "macos") { Self::Seatbelt } else { Self::Bubblewrap }
+    }
+}
+
+impl Backend {
+    pub const ALL: [Self; 2] = [Self::Bubblewrap, Self::Seatbelt];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bubblewrap => "bubblewrap",
+            Self::Seatbelt => "seatbelt",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|backend| backend.as_str() == name)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bubblewrap => "bubblewrap",
+            Self::Seatbelt => "Seatbelt",
+        }
     }
 }
 
@@ -164,6 +204,8 @@ impl Extra {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Reach {
+    /// What makes the sandbox.
+    pub backend: Backend,
     pub network: Network,
     /// The hosts "through Silt only" reaches; any public host when empty.
     pub hosts: Vec<String>,
@@ -191,6 +233,7 @@ impl Reach {
         let allowed = |extra: Extra| !policy.refuse.contains(&extra);
         let devices = policy.devices.unwrap_or_default();
         Self {
+            backend: policy.backend.unwrap_or_default(),
             network: policy.network.unwrap_or_default(),
             hosts: policy.hosts.iter().flatten().cloned().collect(),
             devices,

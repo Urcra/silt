@@ -10,10 +10,11 @@ mod seatbelt;
 mod workspace;
 
 pub use policy::{
-    AgentChoice, AgentKey, Broken, KNOWN_AGENTS, ModeMeaning, OrgPolicy, Policy, Refusal, Rules, Source, agent_key, check_move,
+    AgentChoice, AgentKey, Broken, KNOWN_AGENTS, ModeMeaning, OrgPolicy, Policy, Refusal, Rules, SandboxSupport, Source,
+    agent_key, check_move,
 };
 pub use preset::Preset;
-pub use reach::{Devices, Extra, Network, Reach};
+pub use reach::{Backend, Devices, Extra, Network, Reach};
 pub use sandbox::{ALWAYS_BLOCKED, Cidr, Mount, MountKind, Relay, RunPaths, SandboxPlan, plan, subtract};
 pub use seatbelt::{SeatbeltPaths, profile as seatbelt_profile};
 pub use workspace::{

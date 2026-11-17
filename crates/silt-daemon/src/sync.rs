@@ -16,9 +16,12 @@ use crate::remote::{Remote, RemoteError};
 
 const LISTING_INTERVAL: Duration = Duration::from_secs(3);
 const PULL_WAIT: Duration = Duration::from_secs(20);
-/// How long a family waits before pulling a delta again that couldn't
-/// apply yet.
-const PULL_RETRY: Duration = Duration::from_secs(30);
+/// How long a family first waits before pulling a delta again that
+/// couldn't apply yet, or whose taking in failed: often a moment's trouble,
+/// such as a busy store. Each time again in a row doubles it, up to
+/// `PULL_RETRY_MAX`.
+const PULL_RETRY: Duration = Duration::from_secs(1);
+const PULL_RETRY_MAX: Duration = Duration::from_secs(30);
 
 fn log_of<'a>(families: &'a HashMap<FamilyId, Family>, raw: &'a HashMap<FamilyId, Vec<Delta>>, family: FamilyId) -> &'a [Delta] {
     match families.get(&family) {
@@ -83,7 +86,7 @@ impl Core {
                     let _ = events.send(send_push(&remote, &store, &uploaded, batch).await.into());
                 });
             }
-            if self.pull_paused.get(&family).is_some_and(|until| Instant::now() < *until) {
+            if self.pull_paused.get(&family).is_some_and(|(until, _)| Instant::now() < *until) {
                 continue;
             }
             let sync = self.syncs.get_mut(&family).expect("inserted above");
@@ -206,7 +209,10 @@ impl Core {
                         let (seq, last) =
                             index.checked_sub(1).map_or(after, |previous| (positions[previous].0, Some(positions[previous].1)));
                         self.syncs.entry(family).or_default().rewind_pull(seq, last);
-                        self.pull_paused.insert(family, Instant::now() + PULL_RETRY);
+                        let wait = self.pull_paused.get(&family).map_or(PULL_RETRY, |(_, wait)| (*wait * 2).min(PULL_RETRY_MAX));
+                        self.pull_paused.insert(family, (Instant::now() + wait, wait));
+                    } else {
+                        self.pull_paused.remove(&family);
                     }
                 }
                 Effect::Diverged(id) => {

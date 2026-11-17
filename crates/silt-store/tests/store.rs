@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use silt_crdt::{InodeKind, Parent};
 use silt_log::{Author, Content, Family, Op};
 use silt_store::{
-    AgentRunRecord, BlobStore, DiskFile, SearchHit, SearchRow, SessionFileOffset, SessionRead, SessionRecord, Snapshot, Store,
-    ThreadRecord,
+    AgentMessageKind, AgentRunRecord, BlobStore, DiskFile, SearchHit, SearchRow, SessionFileOffset, SessionRead, SessionRecord,
+    Snapshot, Store, ThreadRecord, ThreadSeenRecord,
 };
 use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Frontier, Lamport, ThreadId};
 
@@ -293,6 +293,26 @@ async fn notices_are_handed_over_once_in_order_and_go_with_their_thread() {
 }
 
 #[tokio::test]
+async fn a_removed_thread_leaves_no_seen_marks_or_git_states() {
+    let (_dir, store) = store_with_thread().await;
+    let checkout = store.add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1).await.expect("checkout");
+    store.put_checkout_git_state(checkout.id, THREAD, "state", "head").await.expect("keeps the git state");
+    let mark = ThreadSeenRecord {
+        thread: THREAD,
+        path: "patients.csv".into(),
+        hash: "h".into(),
+        version: None,
+        seen: true,
+        at_ms: 1,
+        pending: true,
+    };
+    store.put_thread_seen_mark(&mark).await.expect("keeps the mark");
+    store.remove_thread(THREAD).await.expect("removes");
+    assert!(store.thread_seen_marks().await.expect("reads").is_empty(), "file names are personal data too");
+    assert_eq!(store.checkout_git_state(checkout.id, THREAD).await.expect("reads"), None);
+}
+
+#[tokio::test]
 async fn checkouts_and_disk_state() {
     let (_dir, store) = store_with_thread().await;
     let checkout = store.add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1).await.expect("checkout");
@@ -358,6 +378,37 @@ async fn a_thread_goes_with_the_sessions_of_a_checkout_rebound_to_it() {
 }
 
 #[tokio::test]
+async fn a_clone_has_a_checkout_for_each_thread_working_there() {
+    let (_dir, store) = store_with_thread().await;
+    const OTHER: ThreadId = ThreadId(13);
+    store
+        .create_thread(&ThreadRecord {
+            id: OTHER,
+            family: FAMILY,
+            repo_root: PathBuf::from("/repo"),
+            repo: "github.com/u/repo".into(),
+            created_ms: 2,
+            owner: String::new(),
+        })
+        .await
+        .expect("thread");
+    let repo = PathBuf::from("/repo");
+    let first = store.add_checkout(THREAD, &repo, ActorId(5), false, 1).await.expect("checkout");
+    let second = store.add_checkout(OTHER, &repo, ActorId(6), false, 2).await.expect("a second thread's checkout");
+    store.add_checkout(OTHER, &PathBuf::from("/elsewhere"), ActorId(7), false, 3).await.expect("checkout");
+    assert!(store.add_checkout(OTHER, &repo, ActorId(8), false, 4).await.is_err(), "one per thread");
+    assert_eq!(store.checkouts_at(&repo).await.expect("checkouts"), [first.clone(), second.clone()]);
+
+    let session =
+        |id: &str, thread, checkout_id| SessionRecord { agent: "claude-code".into(), session_id: id.into(), thread, checkout_id };
+    store.add_session(&session("a", THREAD, first.id), 1).await.expect("session");
+    store.add_session(&session("b", OTHER, second.id), 1).await.expect("session");
+    store.remove_thread(OTHER).await.expect("removes");
+    assert_eq!(store.checkouts_at(&repo).await.expect("checkouts"), std::slice::from_ref(&first));
+    assert_eq!(store.sessions().await.expect("sessions"), [session("a", THREAD, first.id)]);
+}
+
+#[tokio::test]
 async fn full_text_search_finds_prefixes_and_ignores_query_syntax() {
     let (_dir, store) = store_with_thread().await;
     let delta = DeltaId::new(ActorId(1), Lamport(4));
@@ -404,4 +455,66 @@ async fn sync_state_round_trips() {
     };
     store.set_sync_state(FAMILY, &state).await.expect("set");
     assert_eq!(store.sync_state(FAMILY).await.expect("get"), state);
+}
+
+#[tokio::test]
+async fn an_agents_presence_and_messages_are_kept_once() {
+    let (_dir, store) = store_with_thread().await;
+    const OTHER: ThreadId = ThreadId(14);
+    store
+        .create_thread(&ThreadRecord {
+            id: OTHER,
+            family: FAMILY,
+            repo_root: PathBuf::from("/repo"),
+            repo: "github.com/u/repo".into(),
+            created_ms: 2,
+            owner: String::new(),
+        })
+        .await
+        .expect("thread");
+    let checkout = store.add_checkout(THREAD, &PathBuf::from("/repo"), ActorId(5), false, 1).await.expect("checkout");
+    let session =
+        SessionRecord { agent: "claude-code".into(), session_id: "s1".into(), thread: THREAD, checkout_id: checkout.id };
+    store.add_session(&session, 3).await.expect("session");
+
+    store.session_seen("claude-code", "s1", 10).await.expect("seen");
+    store.session_doing("claude-code", "s1", "add a farewell").await.expect("doing");
+    store.session_idle("claude-code", "s1", true).await.expect("idle");
+    let activity = store.session_activity().await.expect("activity");
+    assert_eq!(activity.len(), 1);
+    let found = &activity[0];
+    assert_eq!(
+        (found.thread, found.checkout.as_path(), found.repo.as_str()),
+        (THREAD, PathBuf::from("/repo").as_path(), "github.com/u/repo")
+    );
+    assert_eq!(
+        (found.seen_ms, found.ended_ms, found.idle, found.doing.as_deref()),
+        (Some(10), None, true, Some("add a farewell"))
+    );
+
+    store.session_ended("claude-code", "s1", 20).await.expect("ended");
+    store.session_seen("claude-code", "s1", 30).await.expect("seen");
+    let ended = &store.session_activity().await.expect("activity")[0];
+    assert_eq!((ended.seen_ms, ended.ended_ms), (Some(10), Some(20)), "a hook heard late doesn't revive it");
+    store.session_revived("claude-code", "s1", 40).await.expect("revived");
+    let revived = &store.session_activity().await.expect("activity")[0];
+    assert_eq!((revived.seen_ms, revived.ended_ms, revived.idle), (Some(40), None, false));
+
+    for (path, at) in [("a.rs", 1), ("b.rs", 2), ("a.rs", 3)] {
+        store.touch_file("claude-code", "s1", path, at).await.expect("touched");
+    }
+    store.touch_file("claude-code", "nobody", "c.rs", 4).await.expect("a session not here is left out");
+    assert_eq!(store.recent_touches("claude-code", "s1", 8).await.expect("touches"), ["a.rs", "b.rs"]);
+    assert_eq!(store.recent_touches("claude-code", "s1", 1).await.expect("touches"), ["a.rs"]);
+
+    store.add_agent_message(THREAD, OTHER, AgentMessageKind::Arrival, "started", 5).await.expect("message");
+    store.add_agent_message(THREAD, OTHER, AgentMessageKind::Message, "hello", 6).await.expect("message");
+    store.add_agent_message(OTHER, THREAD, AgentMessageKind::Message, "hi back", 7).await.expect("message");
+    let taken = store.take_agent_messages(THREAD).await.expect("taken");
+    let kinds: Vec<_> = taken.iter().map(|message| (message.from, message.kind, message.body.as_str())).collect();
+    assert_eq!(kinds, [(OTHER, AgentMessageKind::Arrival, "started"), (OTHER, AgentMessageKind::Message, "hello")]);
+    assert!(store.take_agent_messages(THREAD).await.expect("taken").is_empty(), "handed over once");
+
+    store.remove_thread(THREAD).await.expect("removes");
+    assert!(store.take_agent_messages(OTHER).await.expect("taken").is_empty(), "messages from a removed thread go with it");
 }

@@ -1,4 +1,4 @@
-//! Devices relayed to a sandbox (ADR 0086): Silt holds each on this machine
+//! Devices relayed to a sandbox (ADR 0093): Silt holds each on this machine
 //! and hands the thread's sandbox a session of it, which outlives the
 //! agent. A serial port reaches the sandbox as a pseudo-terminal at the
 //! port's own path; adb reaches this machine's adb server through a filter
@@ -116,6 +116,11 @@ impl Core {
             .remove(&(thread, device.to_owned()))
             .map(drop)
             .ok_or_else(|| CoreError::Invalid(format!("{device} isn't relayed to this thread")))
+    }
+
+    /// Lets go of every device relayed to the thread.
+    pub(crate) fn release_devices(&mut self, thread: ThreadId) {
+        self.relays.held.retain(|(held, _), _| *held != thread);
     }
 
     pub(crate) fn devices_view(&self, thread: ThreadId) -> Vec<RelayView> {

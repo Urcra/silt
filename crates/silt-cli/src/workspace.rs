@@ -28,6 +28,9 @@ pub enum WorkspaceCommand {
         /// Keep its threads on this machine
         #[arg(long)]
         local: bool,
+        /// Keep its threads on this machine, with only local models answering
+        #[arg(long, conflicts_with = "server")]
+        local_only: bool,
         /// Put projects whose remote matches in it, such as `github.com/acme/*`; repeatable
         #[arg(long = "remote")]
         remotes: Vec<String>,
@@ -76,12 +79,24 @@ pub enum WorkspaceCommand {
         /// Agents run only with their own sandbox on: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
         sandbox: Option<bool>,
+        /// Agents run in Silt's own sandbox, and don't start on a machine that can't make one: on or off
+        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        silt_sandbox: Option<bool>,
+        /// What makes Silt's sandbox once it's on: bubblewrap, the only one so far
+        #[arg(long, value_parser = parse_backend)]
+        backend: Option<silt_workspace::Backend>,
         /// The sandbox also keeps agents out of Silt's data and other workspaces' folders: on or off
         #[arg(long = "hide-other-workspaces", alias = "isolated", value_parser = crate::admin::parse_on_off)]
         isolated: Option<bool>,
         /// Projects keep the workspace's server: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
         home_locked: Option<bool>,
+        /// Nothing Silt holds of its threads leaves this machine, and only local models answer: on or off
+        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        local_only: Option<bool>,
+        /// In a Local only workspace, agents' history tools read every project in it, not only their own: on or off
+        #[arg(long, value_parser = crate::admin::parse_on_off)]
+        wide_history: Option<bool>,
         /// The page connectors its pages may call, comma-separated, or `any`
         #[arg(long)]
         connectors: Option<String>,
@@ -198,13 +213,14 @@ fn folder(text: &str) -> Result<MatchRule, Exn<CliError>> {
 
 fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<CliError>> {
     match change {
-        WorkspaceCommand::New { name, server, org, local, remotes, folders, default } => {
+        WorkspaceCommand::New { name, server, org, local, local_only, remotes, folders, default } => {
             let id = WorkspaceId::from_name(&name).map_err(|error| fail(error.to_string()))?;
             if all.get(&id).is_some() {
                 return Err(fail(format!("there's a workspace {id} already")));
             }
             let mut workspace = Workspace::new(id.clone(), name.trim());
-            workspace.server = match (server, local) {
+            workspace.policy.local_only = local_only;
+            workspace.server = match (server, local || local_only) {
                 (Some(url), _) => Some(ServerBinding { url: url.trim_end_matches('/').to_owned(), org }),
                 (None, true) => None,
                 // Like the default workspace, unless told to stay here.
@@ -248,9 +264,13 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
             custom_agents,
             max_preset,
             sandbox,
+            silt_sandbox,
+            backend,
             isolated,
             home_locked,
             connectors,
+            local_only,
+            wide_history,
             network,
             hosts,
             devices,
@@ -334,8 +354,27 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
             if let Some(sandbox) = sandbox {
                 policy.sandbox = sandbox;
             }
+            if let Some(silt_sandbox) = silt_sandbox {
+                policy.silt_sandbox = silt_sandbox;
+            }
+            if backend.is_some() {
+                policy.backend = backend;
+            }
             if let Some(isolated) = isolated {
                 policy.isolated = isolated;
+            }
+            if let Some(local_only) = local_only {
+                if local_only && workspace.server.is_some() {
+                    return Err(fail(format!(
+                        "{} syncs with a server; a Local only workspace has none: make one with `silt workspace new <name> --local-only`",
+                        workspace.name
+                    )));
+                }
+                workspace.policy.local_only = local_only;
+            }
+            let policy = &mut workspace.policy;
+            if let Some(wide) = wide_history {
+                policy.wide_history = wide;
             }
             if let Some(locked) = home_locked {
                 policy.home_locked = locked;
@@ -398,6 +437,10 @@ fn expand_home(path: &str) -> String {
         (Some(rest), Some(home)) => home.join(rest).to_string_lossy().into_owned(),
         _ => path.to_owned(),
     }
+}
+
+pub(crate) fn parse_backend(name: &str) -> Result<silt_workspace::Backend, String> {
+    silt_workspace::Backend::parse(name).ok_or_else(|| format!("no backend {name:?}: bubblewrap is the only one so far"))
 }
 
 /// The reach rules a command names: the network, the devices, and what may
@@ -469,15 +512,20 @@ fn policy_text(policy: &silt_workspace::Policy) -> String {
     if policy.isolated {
         parts.push("other workspaces' files hidden".into());
     } else if policy.sandbox {
-        parts.push("sandboxed".into());
+        parts.push("agent's sandbox required".into());
     }
     if policy.home_locked {
         parts.push("home locked".into());
     }
-    if policy.sandbox || policy.isolated {
-        parts.push(silt_workspace::Reach::of(policy).summary());
-    } else if let Some(network) = policy.network {
-        parts.push(format!("sandboxes: {}", network.label().to_lowercase()));
+    if policy.local_only {
+        parts.push(if policy.wide_history { "local only, history across it" } else { "local only, history by project" }.into());
+    }
+    if policy.silt_sandbox {
+        parts.push(format!(
+            "in Silt's sandbox ({}): {}",
+            policy.backend.unwrap_or_default().label(),
+            silt_workspace::Reach::of(policy).summary()
+        ));
     }
     if !policy.refuse.is_empty() {
         let refused: Vec<&str> = policy.refuse.iter().map(|extra| extra.label()).collect();
@@ -571,14 +619,17 @@ fn which(view: &WorkspacesView) -> Result<(), Exn<CliError>> {
         "  permissions  {}",
         policy.max_preset.map_or("any, up to Full access".to_owned(), |cap| format!("at most {}", cap.label()))
     );
+    let backend = policy.backend.unwrap_or_default().label();
     println!(
         "  sandbox      {}",
-        if policy.isolated {
-            "required, hiding other workspaces' files"
-        } else if policy.sandbox {
-            "required"
-        } else {
-            "not required"
+        match (policy.silt_sandbox, policy.isolated, policy.sandbox) {
+            (true, true, _) => {
+                format!("Silt's ({backend}), hiding other workspaces' files: {}", silt_workspace::Reach::of(policy).summary())
+            }
+            (true, false, _) => format!("Silt's ({backend}): {}", silt_workspace::Reach::of(policy).summary()),
+            (false, true, _) => "the agent's own, hiding other workspaces' files".to_owned(),
+            (false, false, true) => "the agent's own".to_owned(),
+            (false, false, false) => "not required".to_owned(),
         }
     );
     if let Some(org) = &shown.org_policy {

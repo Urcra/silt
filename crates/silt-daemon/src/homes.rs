@@ -41,6 +41,10 @@ impl Core {
     /// family given none. `None` for this machine only, or for a home
     /// signed out of.
     pub(crate) fn remote_of(&self, family: FamilyId) -> Option<&Remote> {
+        // Whatever home it had before, a Local only workspace's family stays here (ADR 0092).
+        if self.workspaces.is_some() && self.family_workspace(family).policy.local_only {
+            return None;
+        }
         match self.homes.get(&family) {
             Some(Home::Server(url)) => self.remotes.iter().find(|remote| remote.config.url == *url),
             Some(Home::Local) => None,
@@ -116,7 +120,7 @@ impl Core {
     /// first server signed in to later.
     pub(crate) fn new_home(&self, repo: &str) -> Option<Home> {
         let (workspace, _) = self.project_workspace(repo, None);
-        let locked = self.effective_policy(&workspace).home_locked;
+        let locked = self.effective_policy(&workspace).keeps_home();
         self.project_homes.get(repo).filter(|_| !locked).cloned().or_else(|| self.workspace_home(&workspace))
     }
 

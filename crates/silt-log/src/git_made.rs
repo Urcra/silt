@@ -13,7 +13,7 @@ use crate::delta::{Author, Delta, GitOp, Op};
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GitMade {
     /// Each span's last lamport, by its actor and first lamport.
-    spans: BTreeMap<(ActorId, Lamport), Lamport>,
+    pub(crate) spans: BTreeMap<(ActorId, Lamport), Lamport>,
 }
 
 impl GitMade {
@@ -72,7 +72,7 @@ impl GitMade {
     }
 }
 
-fn is_file_edit(op: &Op) -> bool {
+pub(crate) fn is_file_edit(op: &Op) -> bool {
     matches!(
         op,
         Op::Create { .. }

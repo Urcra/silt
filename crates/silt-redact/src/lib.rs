@@ -333,13 +333,27 @@ mod tests {
     #[test]
     fn many_secrets_cost_one_pass() {
         let secrets: Vec<String> = (0..5_000).map(|n| format!("secret-value-{n:05}")).collect();
-        let redactor = Redactor::new(secrets);
+        let many = Redactor::new(secrets);
+        let one = Redactor::new(vec!["secret-value-04321".to_owned()]);
         let text = "plain words and secret-value-04321 and \"secret-value-00007\" ".repeat(2_000);
-        let started = std::time::Instant::now();
-        let (replaced, found) = redactor.replace_found(&text);
+        let (replaced, found) = many.replace_found(&text);
         assert_eq!(found, ["secret-value-00007", "secret-value-04321"]);
         assert!(!replaced.contains("secret-value-0"));
-        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+        // Against one secret over the same text rather than a clock, which a
+        // busy machine slows: a pass a secret would take thousands of times
+        // as long.
+        let fastest = |redactor: &Redactor| {
+            (0..5)
+                .map(|_| {
+                    let started = std::time::Instant::now();
+                    redactor.replace_found(&text);
+                    started.elapsed()
+                })
+                .min()
+                .expect("timed")
+        };
+        let (many_took, one_took) = (fastest(&many), fastest(&one));
+        assert!(many_took < one_took * 50, "{many_took:?} with 5,000 secrets, {one_took:?} with one");
     }
 
     #[test]

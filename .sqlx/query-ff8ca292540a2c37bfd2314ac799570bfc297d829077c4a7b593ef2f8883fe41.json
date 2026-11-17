@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM family_workspaces WHERE family_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "ff8ca292540a2c37bfd2314ac799570bfc297d829077c4a7b593ef2f8883fe41"
+}

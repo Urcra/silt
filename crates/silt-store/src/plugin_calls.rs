@@ -1,4 +1,4 @@
-//! Plugin calls and the grants that let some run without asking (ADR 0086).
+//! Plugin calls and the grants that let some run without asking (ADR 0093).
 
 use silt_types::ThreadId;
 
@@ -224,6 +224,16 @@ impl Store {
         .fetch_optional(&self.pool)
         .await?;
         row.map(|row| grant_from_row!(row)).transpose()
+    }
+
+    /// Forgets a thread's plugin calls and grants, as it's erased.
+    pub async fn remove_plugin_calls(&self, thread: ThreadId) -> Result<(), StoreError> {
+        let thread = id_bytes(thread.0);
+        let mut tx = self.write_transaction().await?;
+        sqlx::query!("DELETE FROM plugin_calls WHERE thread_id = ?", thread).execute(&mut *tx).await?;
+        sqlx::query!("DELETE FROM plugin_grants WHERE thread_id = ?", thread).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Ends grant `id`, answering the thread it was for, or none when it

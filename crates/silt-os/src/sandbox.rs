@@ -1,4 +1,4 @@
-//! Silt's sandbox on Linux (ADR 0086): bubblewrap for what a run sees and
+//! Silt's sandbox on Linux (ADR 0093): bubblewrap for what a run sees and
 //! which processes it can touch, pasta for full internet, routes it can't
 //! change for what full internet never reaches, and a seccomp filter for
 //! the few calls no agent needs.

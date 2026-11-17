@@ -1,4 +1,4 @@
-//! A plugin that is an MCP server (ADR 0086): Silt starts it on this
+//! A plugin that is an MCP server (ADR 0093): Silt starts it on this
 //! machine, outside every sandbox, with the environment's credential, and
 //! offers its tools to the workspace's agents. A tool its server marks
 //! read-only is a read; any other is a change. Each call starts the server

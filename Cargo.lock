@@ -1808,9 +1808,9 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "flate2"
-version = "1.1.10"
+version = "1.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
+checksum = "626d4928326b646e70f65ed36fc7cf9f206bdb68a0019ee7c6b4709da4e084c4"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -5622,6 +5622,7 @@ dependencies = [
  "silt-os",
  "silt-proto",
  "silt-types",
+ "silt-workspace",
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
@@ -5666,18 +5667,24 @@ dependencies = [
 name = "silt-cli"
 version = "0.0.1"
 dependencies = [
+ "axum",
  "base64 0.23.1",
  "clap",
  "exn",
+ "flate2",
  "futures-util",
  "rpassword",
  "rustix",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "silt-agents",
  "silt-daemon",
  "silt-design",
  "silt-git",
+ "silt-llm",
+ "silt-local",
+ "silt-log",
  "silt-mcp",
  "silt-os",
  "silt-proto",
@@ -5686,6 +5693,7 @@ dependencies = [
  "silt-sheet",
  "silt-types",
  "silt-workspace",
+ "tar",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -5735,6 +5743,8 @@ dependencies = [
  "silt-design",
  "silt-gateway",
  "silt-git",
+ "silt-llm",
+ "silt-local",
  "silt-log",
  "silt-mcp",
  "silt-os",
@@ -5772,7 +5782,9 @@ name = "silt-fake-agent"
 version = "0.0.1"
 dependencies = [
  "agent-client-protocol",
+ "axum",
  "base64 0.23.1",
+ "futures-util",
  "rusqlite",
  "serde",
  "serde_json",
@@ -5816,6 +5828,38 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+]
+
+[[package]]
+name = "silt-llm"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "flate2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "silt-os",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "zip",
+]
+
+[[package]]
+name = "silt-local"
+version = "0.0.1"
+dependencies = [
+ "agent-client-protocol",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -6508,6 +6552,17 @@ checksum = "8e1d1b10ced5ca923a1fcb8d03e96b8d3268065d724548c0211415ff6ac6bac4"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
 ]
 
 [[package]]
@@ -7737,6 +7792,16 @@ dependencies = [
  "rusticata-macros",
  "thiserror 2.0.21",
  "time",
+]
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix",
 ]
 
 [[package]]

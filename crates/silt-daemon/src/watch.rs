@@ -18,14 +18,22 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 type OnChange = Box<dyn Fn(Vec<PathBuf>) + Send>;
 
 /// The checkouts watched, each by its root, for the handler to route the
-/// paths it hears about.
-type Routes = Arc<Mutex<Vec<(PathBuf, OnChange)>>>;
+/// paths it hears about. Checkouts of several threads may share a root
+/// (ADR 0089), so each route has its own number.
+type Routes = Arc<Mutex<Vec<Route>>>;
+
+struct Route {
+    id: u64,
+    root: PathBuf,
+    on_change: OnChange,
+}
 
 /// One watch for all of the daemon's checkouts. A debouncer each kept a
 /// thread waking ten times a second for every checkout, which was most of
 /// what an idle daemon spent.
 pub struct Watchers {
     routes: Routes,
+    next: std::sync::atomic::AtomicU64,
     native: Mutex<Option<Debouncer<RecommendedWatcher, NoCache>>>,
     polled: Mutex<Option<Debouncer<PollWatcher, NoCache>>>,
 }
@@ -33,21 +41,32 @@ pub struct Watchers {
 /// One checkout being watched, until this is dropped.
 pub struct Watched {
     watchers: Arc<Watchers>,
+    id: u64,
     root: PathBuf,
     polled: bool,
 }
 
 impl Watchers {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self { routes: Arc::default(), native: Mutex::default(), polled: Mutex::default() })
+        Arc::new(Self { routes: Arc::default(), next: Default::default(), native: Mutex::default(), polled: Mutex::default() })
     }
 
     /// Starts watching `root`; `on_change` gets batches of absolute paths,
     /// or the root itself when events were lost and everything must be
     /// rescanned.
     pub fn watch(self: &Arc<Self>, root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> notify::Result<Watched> {
-        lock(&self.routes).push((root.to_owned(), Box::new(on_change)));
+        let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let already = {
+            let mut routes = lock(&self.routes);
+            let already = routes.iter().any(|route| route.root == root);
+            routes.push(Route { id, root: root.to_owned(), on_change: Box::new(on_change) });
+            already
+        };
         let polled = needs_polling(root);
+        let watched = Watched { watchers: Arc::clone(self), id, root: root.to_owned(), polled };
+        if already {
+            return Ok(watched);
+        }
         let config = notify::Config::default().with_follow_symlinks(false);
         let result = if polled {
             let config = config.with_poll_interval(POLL_INTERVAL).with_compare_contents(true);
@@ -59,7 +78,6 @@ impl Watchers {
             started(&mut lock(&self.native), || new_debouncer_opt(DEBOUNCE, TICK, handler(&self.routes), NoCache, config))
                 .and_then(|debouncer| debouncer.watch(root, RecursiveMode::Recursive))
         };
-        let watched = Watched { watchers: Arc::clone(self), root: root.to_owned(), polled };
         // Dropped on failure, which takes the route back out.
         result.map(|()| watched)
     }
@@ -67,12 +85,19 @@ impl Watchers {
 
 impl Drop for Watched {
     fn drop(&mut self) {
+        let shared = {
+            let mut routes = lock(&self.watchers.routes);
+            routes.retain(|route| route.id != self.id);
+            routes.iter().any(|route| route.root == self.root)
+        };
+        if shared {
+            return;
+        }
         let _ = if self.polled {
             lock(&self.watchers.polled).as_mut().map(|debouncer| debouncer.unwatch(&self.root))
         } else {
             lock(&self.watchers.native).as_mut().map(|debouncer| debouncer.unwatch(&self.root))
         };
-        lock(&self.watchers.routes).retain(|(root, _)| *root != self.root);
     }
 }
 
@@ -95,16 +120,16 @@ fn handler(routes: &Routes) -> impl FnMut(DebounceEventResult) + Send + 'static 
     let routes = Arc::clone(routes);
     move |result| {
         let routes = lock(&routes);
-        let roots: Vec<&Path> = routes.iter().map(|(root, _)| root.as_path()).collect();
+        let roots: Vec<&Path> = routes.iter().map(|route| route.root.as_path()).collect();
         for (index, paths) in route(&roots, result.as_deref().ok()) {
-            (routes[index].1)(paths);
+            (routes[index].on_change)(paths);
         }
     }
 }
 
 /// The paths that may have changed, by the index of the root they're under,
-/// the deepest when roots nest. Lost events, or none at all (`None`), rescan
-/// every root.
+/// the deepest when roots nest, and to every root of that path. Lost
+/// events, or none at all (`None`), rescan every root.
 fn route(roots: &[&Path], events: Option<&[DebouncedEvent]>) -> Vec<(usize, Vec<PathBuf>)> {
     let everything = || roots.iter().enumerate().map(|(index, root)| (index, vec![root.to_path_buf()])).collect();
     let Some(events) = events else {
@@ -115,9 +140,8 @@ fn route(roots: &[&Path], events: Option<&[DebouncedEvent]>) -> Vec<(usize, Vec<
     }
     let mut routed: Vec<Vec<PathBuf>> = vec![Vec::new(); roots.len()];
     for path in events.iter().filter(|event| may_change(&event.kind)).flat_map(|event| &event.paths) {
-        let owner =
-            roots.iter().enumerate().filter(|(_, root)| path.starts_with(root)).max_by_key(|(_, root)| root.as_os_str().len());
-        if let Some((index, _)) = owner {
+        let deepest = roots.iter().filter(|root| path.starts_with(root)).max_by_key(|root| root.as_os_str().len());
+        for (index, _) in roots.iter().enumerate().filter(|(_, root)| Some(*root) == deepest) {
             routed[index].push(path.clone());
         }
     }
@@ -189,6 +213,14 @@ mod tests {
     }
 
     #[test]
+    fn a_path_goes_to_every_checkout_sharing_its_root() {
+        let roots = [Path::new("/repo"), Path::new("/repo"), Path::new("/repo/.silt/checkouts/a")];
+        let events = [event(EventKind::Modify(ModifyKind::Any), "/repo/src/main.rs")];
+        let main = vec![PathBuf::from("/repo/src/main.rs")];
+        assert_eq!(route(&roots, Some(&events)), [(0, main.clone()), (1, main)]);
+    }
+
+    #[test]
     fn lost_events_rescan_every_checkout() {
         let roots = [Path::new("/repo"), Path::new("/other")];
         let everything = [(0, vec![PathBuf::from("/repo")]), (1, vec![PathBuf::from("/other")])];
@@ -226,5 +258,19 @@ mod tests {
         drop(watched_other);
         std::fs::write(other.path().join("b.txt"), "b").expect("write");
         assert!(other_receiver.recv_timeout(DEBOUNCE * 5).is_err(), "a checkout no longer watched hears nothing");
+
+        let (beside, beside_receiver) = std::sync::mpsc::channel();
+        let watched_beside = watchers
+            .watch(dir.path(), move |paths| {
+                let _ = beside.send(paths);
+            })
+            .expect("watches the same root again");
+        std::fs::write(dir.path().join("a.txt"), "c").expect("write");
+        assert!(receiver.recv_timeout(Duration::from_secs(5)).is_ok(), "the first checkout hears it");
+        assert!(beside_receiver.recv_timeout(Duration::from_secs(5)).is_ok(), "and so does the one beside it");
+        drop(watched_beside);
+        while receiver.try_recv().is_ok() {}
+        std::fs::write(dir.path().join("a.txt"), "d").expect("write");
+        assert!(receiver.recv_timeout(Duration::from_secs(5)).is_ok(), "the root stays watched for the first");
     }
 }

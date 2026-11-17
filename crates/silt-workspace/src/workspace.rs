@@ -245,6 +245,8 @@ pub enum InvalidWorkspaces {
     EmptyRule(WorkspaceId),
     #[error("{workspace}'s folder {folder:?} isn't absolute")]
     RelativeFolder { workspace: WorkspaceId, folder: String },
+    #[error("{0} is local only, so it has no server")]
+    LocalOnlyServer(WorkspaceId),
     #[error("{workspace}'s folder {folder:?} has a wildcard; a folder rule takes one folder and covers everything under it")]
     WildcardFolder { workspace: WorkspaceId, folder: String },
 }
@@ -284,6 +286,9 @@ impl Workspaces {
         for (index, workspace) in self.workspaces.iter().enumerate() {
             if self.workspaces[..index].iter().any(|other| other.id == workspace.id) {
                 return Err(InvalidWorkspaces::Duplicate(workspace.id.clone()));
+            }
+            if workspace.policy.local_only && workspace.server.is_some() {
+                return Err(InvalidWorkspaces::LocalOnlyServer(workspace.id.clone()));
             }
             for rule in &workspace.rules {
                 match rule {

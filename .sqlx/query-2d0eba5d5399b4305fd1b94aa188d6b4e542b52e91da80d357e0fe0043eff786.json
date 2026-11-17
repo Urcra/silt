@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM family_homes WHERE family_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "2d0eba5d5399b4305fd1b94aa188d6b4e542b52e91da80d357e0fe0043eff786"
+}

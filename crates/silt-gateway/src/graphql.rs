@@ -1,5 +1,5 @@
 //! GraphQL a sandbox sends straight to an API through the gateway (ADR
-//! 0086), for an environment a plugin lets agents reach directly, such as
+//! 0093), for an environment a plugin lets agents reach directly, such as
 //! staging: reads go, a change is refused unless its rule allows it, and
 //! what a data rule keeps from agents is refused both ways. What can't be
 //! read, a persisted query's hash, an upload, a subscription's socket, is

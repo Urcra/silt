@@ -350,7 +350,7 @@ impl Core {
             if !staged.marks.is_empty() || deltas.len() >= BATCH {
                 self.persist_with(staged.family, &std::mem::take(&mut deltas), &std::mem::take(&mut rows), None).await?;
                 for mark in staged.marks {
-                    self.apply_mark(session_id, mark).await?;
+                    self.apply_mark(session_id, mark, Instant::now()).await?;
                 }
             }
         }

@@ -147,7 +147,10 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             Event::Importing { run, reply } => core.import_next(run, reply).await,
             Event::Snapshotted { session_id, result } => core.snapshotted(&session_id, result).await,
             Event::Drain { session_id } => core.drain(&session_id).await,
-            Event::Compact => core.compact_if_worth_it().await,
+            Event::Compact => {
+                core.finish_erasures().await;
+                core.compact_if_worth_it().await;
+            }
             Event::IndexPending => {
                 if let Err(error) = core.index_pending().await {
                     warn!(%error, "could not write the search rows of pulled deltas; they're written at the next start");
@@ -215,7 +218,7 @@ fn listen(socket: &Path, events: mpsc::UnboundedSender<Event>, answered: mpsc::U
     Ok(())
 }
 
-/// Takes connections from sandboxed agents' runs (ADR 0086). Whatever
+/// Takes connections from sandboxed agents' runs (ADR 0093). Whatever
 /// reaches it may ask only what a run's token allows, so the person's
 /// authority never enters a sandbox.
 #[cfg(unix)]

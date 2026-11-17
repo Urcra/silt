@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use silt_log::{Author, ConvOp, FileView, Op};
-use silt_types::{DeltaId, ThreadId};
+use silt_types::{DeltaId, FamilyId, ThreadId};
 
 use crate::core::{Core, CoreError};
 use crate::disk;
@@ -42,7 +42,7 @@ impl Core {
             let current = change.old_path.as_deref().map(|path| disk::read(root, path)).transpose()?.flatten();
             if let Some(new_path) = &change.new_path {
                 let view = change.inode.and_then(|inode| self.families[&family_id].file_at(inode, &then));
-                let bytes = self.worktree_bytes(root, new_path, view).await?;
+                let bytes = self.worktree_bytes(family_id, root, new_path, view).await?;
                 let executable = current.as_ref().is_some_and(|file| file.executable);
                 disk::replace(root, new_path, &bytes, executable, |_| true)?;
                 touched.push(new_path.clone());
@@ -56,13 +56,20 @@ impl Core {
     }
 
     /// A file's content as the checkout at `root` holds it on disk.
-    async fn worktree_bytes(&self, root: &Path, path: &str, view: Option<FileView>) -> Result<Vec<u8>, CoreError> {
+    async fn worktree_bytes(
+        &self,
+        family_id: FamilyId,
+        root: &Path,
+        path: &str,
+        view: Option<FileView>,
+    ) -> Result<Vec<u8>, CoreError> {
+        // Any checkout at `root` reads git the same way, whichever thread's.
         let checkout = self.checkouts.values().find(|checkout| checkout.record.path == root).expect("checked out above");
         let repo = &checkout.repo;
         Ok(match view {
             Some(FileView::Text(text)) => repo.filters()?.to_worktree(path, text.as_bytes())?,
             Some(FileView::GitText(oid)) => repo.filters()?.to_worktree(path, &repo.blob(oid)?)?,
-            Some(FileView::Blob(hash)) => self.blob(checkout.family, hash).await?,
+            Some(FileView::Blob(hash)) => self.blob(family_id, hash).await?,
             None => Vec::new(),
         })
     }

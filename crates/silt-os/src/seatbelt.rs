@@ -1,4 +1,4 @@
-//! macOS's sandbox (ADR 0086): a Seatbelt profile applied by
+//! macOS's sandbox (ADR 0093): a Seatbelt profile applied by
 //! `sandbox-exec`, from the same plan bubblewrap builds a root from on
 //! Linux. The profile itself is written by `silt-workspace`.
 

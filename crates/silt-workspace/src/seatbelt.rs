@@ -1,4 +1,4 @@
-//! macOS's sandbox (ADR 0086): a Seatbelt profile from the same plan
+//! macOS's sandbox (ADR 0093): a Seatbelt profile from the same plan
 //! bubblewrap builds a root from. Seatbelt can't give the run a root of its
 //! own, so the profile denies reading the home folder and Silt's data, then
 //! allows back what the plan mounts; later rules win, as later mounts do.

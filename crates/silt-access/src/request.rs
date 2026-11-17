@@ -1,4 +1,4 @@
-//! The canonical form of a plugin call an approval is bound to (ADR 0086):
+//! The canonical form of a plugin call an approval is bound to (ADR 0093):
 //! the person approves its hash, and only the copy with that hash runs.
 
 use serde::{Deserialize, Serialize};

@@ -1,9 +1,24 @@
 import { useQuery } from '@tanstack/react-query'
-import { api, type Devices, type Extra, type Network, type Policy, type Reach } from './api'
+import { api, type Backend, type Devices, type Extra, type Network, type Policy, type Reach } from './api'
 import { keys } from './query'
 import { hosted } from './served'
 
-/** Silt's sandbox in the web UI (ADR 0086): its options as Settings shows them, and what a policy gives a run. */
+/** Silt's sandbox in the web UI (ADR 0093): its options as Settings shows them, and what a policy gives a run. */
+
+export const BACKENDS: { value: Backend; label: string; detail: string }[] = [
+  { value: 'bubblewrap', label: 'bubblewrap', detail: "A process sandbox on Linux: starts at once, and shares this machine's kernel." },
+  {
+    value: 'seatbelt',
+    label: 'Seatbelt',
+    detail: "macOS's own sandbox, through sandbox-exec: starts at once; full internet goes through Silt's gateway, as HTTP(S) only.",
+  },
+]
+
+/** The backends ADR 0093 plans, listed so the choice reads as one before they can be picked. */
+export const PLANNED_BACKENDS: { label: string; detail: string }[] = [
+  { label: 'Container (OCI)', detail: 'crun or youki, for a toolchain of its own that every machine gets alike.' },
+  { label: 'Virtual machine', detail: 'libkrun or gVisor, a kernel of its own, for untrusted content.' },
+]
 
 export const NETWORKS: { value: Network; label: string; detail: string }[] = [
   { value: 'none', label: 'No network', detail: 'Nothing leaves the sandbox. For work on untrusted content.' },
@@ -41,6 +56,7 @@ export function reachOf(policy: Policy): Reach {
   const allowed = (extra: Extra) => !(policy.refuse ?? []).includes(extra)
   const devices = policy.devices ?? 'none'
   return {
+    backend: policy.backend ?? 'bubblewrap',
     network: policy.network ?? 'full',
     hosts: policy.hosts ?? [],
     devices,

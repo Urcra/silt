@@ -1,4 +1,4 @@
-//! `silt sandbox-run`: starts a program in Silt's sandbox (ADR 0086), as the
+//! `silt sandbox-run`: starts a program in Silt's sandbox (ADR 0093), as the
 //! plan the CLI or the daemon wrote for the run says.
 
 use std::ffi::OsString;

@@ -1,4 +1,4 @@
-//! Starting an agent in Silt's sandbox (ADR 0086), the same for the
+//! Starting an agent in Silt's sandbox (ADR 0093), the same for the
 //! terminal's agents and the web UI's: the run's paths, the variables it
 //! gets, and the plan `silt sandbox-run` reads.
 
@@ -6,8 +6,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
-use silt_workspace::Network;
-use silt_workspace::{Mount, MountKind, Reach, RunPaths};
+use silt_workspace::{Mount, MountKind, Network};
+use silt_workspace::{Reach, RunPaths};
 
 use crate::CoreError;
 
@@ -47,12 +47,14 @@ pub struct Sandboxed {
     pub missing: Vec<String>,
 }
 
-/// What answers a sandbox's relay outside it.
+/// What answers a sandbox's relay outside it. There are none where the
+/// sandbox doesn't run, as relays are Unix sockets.
 pub enum Outside {
     #[cfg(unix)]
     Gateway { listener: std::os::unix::net::UnixListener, gateway: std::sync::Arc<silt_gateway::Gateway> },
     /// The gateway on this machine's loopback, for a sandbox with no
-    /// network of its own.
+    /// network of its own to relay it into, as Seatbelt's.
+    #[cfg(unix)]
     GatewayTcp { listener: std::net::TcpListener, gateway: std::sync::Arc<silt_gateway::Gateway> },
     /// A port on this machine the workspace hands its sandboxes.
     #[cfg(unix)]
@@ -66,23 +68,40 @@ impl Outside {
         match self {
             #[cfg(unix)]
             Self::Gateway { listener, gateway } => {
-                listener.set_nonblocking(true)?;
-                let listener = tokio::net::UnixListener::from_std(listener)?;
-                Ok(handle.spawn(gateway.serve(listener)))
+                let listener = accepting(listener)?;
+                Ok(handle.spawn(async move {
+                    while let Ok((stream, _)) = listener.accept().await {
+                        tokio::spawn(gateway.clone().answer(stream));
+                    }
+                }))
             }
+            #[cfg(unix)]
             Self::GatewayTcp { listener, gateway } => {
                 listener.set_nonblocking(true)?;
                 let listener = tokio::net::TcpListener::from_std(listener)?;
-                Ok(handle.spawn(gateway.serve_tcp(listener)))
+                Ok(handle.spawn(async move {
+                    while let Ok((stream, _)) = listener.accept().await {
+                        tokio::spawn(gateway.clone().answer(stream));
+                    }
+                }))
             }
             #[cfg(unix)]
             Self::Port { listener, port } => {
-                listener.set_nonblocking(true)?;
-                let listener = tokio::net::UnixListener::from_std(listener)?;
-                Ok(handle.spawn(silt_gateway::forward_port(listener, port)))
+                let listener = accepting(listener)?;
+                Ok(handle.spawn(async move {
+                    while let Ok((stream, _)) = listener.accept().await {
+                        tokio::spawn(silt_gateway::forward_port(stream, port));
+                    }
+                }))
             }
         }
     }
+}
+
+#[cfg(unix)]
+fn accepting(listener: std::os::unix::net::UnixListener) -> std::io::Result<tokio::net::UnixListener> {
+    listener.set_nonblocking(true)?;
+    tokio::net::UnixListener::from_std(listener)
 }
 
 impl Sandboxed {
@@ -116,10 +135,15 @@ pub struct Run<'a> {
     pub read_only: Vec<PathBuf>,
     /// The devices Silt relays to the thread's sandbox.
     pub relayed: Vec<Relayed>,
+}
+
+impl Run<'_> {
     /// It runs under macOS's Seatbelt rather than bubblewrap: no network
     /// namespace to relay into, so the gateway listens on this machine's
     /// loopback and full internet goes through it.
-    pub seatbelt: bool,
+    fn seatbelt(&self) -> bool {
+        self.reach.backend == silt_workspace::Backend::Seatbelt
+    }
 }
 
 /// Writes the run's plan and works out how to start it sandboxed.
@@ -141,7 +165,6 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
         read_only: run.read_only.clone(),
         data_dir: Some(run.data_dir.to_owned()),
         scratch: run.scratch.to_owned(),
-        // Windows has no Silt sandbox, nor the run's socket.
         #[cfg(unix)]
         run_socket: Some(crate::paths::agents_socket_in(run.data_dir)),
         #[cfg(not(unix))]
@@ -163,119 +186,13 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     std::fs::create_dir_all(run.checkout.join(".silt"))?;
     let mut plan = silt_workspace::plan(&paths, run.reach);
     std::fs::create_dir_all(run.scratch)?;
-    let mut extra_env = Vec::new();
-    #[cfg_attr(not(unix), expect(unused_mut, reason = "Windows starts nothing outside a sandbox it doesn't have"))]
-    let mut outside = Vec::new();
-    #[cfg_attr(not(unix), expect(unused_mut, reason = "Windows starts nothing outside a sandbox it doesn't have"))]
-    let mut missing = Vec::new();
-    let mut serials = Vec::new();
-    for relayed in &run.relayed {
-        match relayed {
-            // The terminal the port's session runs on, at the port's own path.
-            Relayed::Serial { device, pts } if run.seatbelt => {
-                // Nothing can be shown at the port's path without a root of
-                // its own: the run is told where its terminal is.
-                plan.mounts.push(Mount { kind: MountKind::Device, path: pts.clone(), source: None });
-                serials.push(format!("{}={}", device.display(), pts.display()));
-            }
-            Relayed::Serial { device, pts } => {
-                plan.mounts.push(Mount { kind: MountKind::Device, path: device.clone(), source: Some(pts.clone()) });
-                serials.push(format!("{}={}", device.display(), device.display()));
-            }
-            Relayed::Adb { serial, socket } => {
-                if run.seatbelt {
-                    extra_env.push(("ADB_SERVER_SOCKET".to_owned(), format!("localfilesystem:{}", socket.display())));
-                } else {
-                    plan.relays.push(silt_workspace::Relay { port: ADB_PORT, socket: socket.clone() });
-                }
-                plan.mounts.push(Mount { kind: MountKind::ReadWrite, path: socket.clone(), source: None });
-                plan.sockets.push(socket.clone());
-                extra_env.push(("ANDROID_SERIAL".to_owned(), serial.clone()));
-            }
-        }
-    }
-    if !serials.is_empty() {
-        extra_env.push(("SILT_SERIAL_PORTS".to_owned(), serials.join(";")));
-    }
-    if run.seatbelt {
+    let Relays { outside, env: mut extra_env, missing } = relays(run, &mut plan)?;
+    extra_env.extend(devices(run, &mut plan));
+    if run.seatbelt() {
         // Its own temporary folder, as the machine's `/tmp` can't be swapped.
         let tmp = run.scratch.join("tmp");
         std::fs::create_dir_all(&tmp)?;
         extra_env.push(("TMPDIR".to_owned(), tmp.to_string_lossy().into_owned()));
-    }
-    #[cfg(unix)]
-    {
-        let (mut credentials, mut placeholders, unresolved) = crate::credentials::resolve(run.data_dir, run.workspace);
-        missing.extend(unresolved);
-        // The agent's own model key goes on at the gateway too, so the
-        // sandbox holds a placeholder rather than the key.
-        let (model_credentials, model_placeholders) = model_keys(run.agent, &lookup);
-        let through_gateway = matches!(run.reach.network, Network::Gateway | Network::Full);
-        if through_gateway {
-            credentials.extend(model_credentials);
-            placeholders.extend(model_placeholders);
-        }
-        let graphql = crate::plugins::direct_graphql(run.data_dir, run.workspace);
-        // Seatbelt can't refuse address ranges itself: full internet there
-        // goes through the gateway, which does.
-        let gateway = run.reach.network == Network::Gateway
-            || (run.reach.network == Network::Full && (run.seatbelt || !credentials.is_empty() || !graphql.is_empty()));
-        if gateway {
-            let ca = std::sync::Arc::new(silt_gateway::Ca::load_or_create(&run.data_dir.join("gateway"))?);
-            trust(&mut plan, &mut extra_env, run.scratch, ca.pem())?;
-            let mut hosts = run.reach.hosts.clone();
-            // A list of hosts still lets the agent reach its own model.
-            if !hosts.is_empty()
-                && let Some(agent) = run.agent
-            {
-                hosts.extend(agent.model_hosts().iter().map(|host| (*host).to_owned()));
-            }
-            let proxy_token = run.seatbelt.then(|| format!("{:032x}", uuid::Uuid::new_v4().as_u128()));
-            let rules = silt_gateway::Rules {
-                network: run.reach.network,
-                hosts,
-                blocked: silt_workspace::subtract(&plan.blocked, &plan.allowed),
-                credentials,
-                graphql,
-                proxy_token: proxy_token.clone(),
-            };
-            let log = Some(access_log(run.data_dir, run.thread));
-            if let Some(dir) = log.as_deref().and_then(Path::parent) {
-                std::fs::create_dir_all(dir)?;
-            }
-            let gateway = std::sync::Arc::new(silt_gateway::Gateway::new(rules, ca, log));
-            let proxy = match proxy_token {
-                Some(token) => {
-                    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-                    let port = listener.local_addr()?.port();
-                    outside.push(Outside::GatewayTcp { listener, gateway });
-                    plan.gateway_port = Some(port);
-                    format!("http://silt:{token}@127.0.0.1:{port}")
-                }
-                None => {
-                    let socket = short_socket(run.scratch, "gateway.sock")?;
-                    outside.push(Outside::Gateway { listener: listen(&socket)?, gateway });
-                    plan.relays.push(silt_workspace::Relay { port: GATEWAY_PORT, socket: socket.clone() });
-                    plan.mounts.push(Mount { kind: MountKind::ReadWrite, path: socket, source: None });
-                    format!("http://127.0.0.1:{GATEWAY_PORT}")
-                }
-            };
-            for name in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-                extra_env.push((name.to_owned(), proxy.clone()));
-            }
-            for name in ["NO_PROXY", "no_proxy"] {
-                extra_env.push((name.to_owned(), "localhost,127.0.0.1,::1".to_owned()));
-            }
-            extra_env.extend(placeholders);
-        }
-        // Under Seatbelt the sandbox reaches those ports on this machine's
-        // loopback itself, as its profile allows.
-        for port in run.reach.ports.iter().filter(|_| !run.seatbelt) {
-            let socket = short_socket(run.scratch, &format!("port-{port}.sock"))?;
-            outside.push(Outside::Port { listener: listen(&socket)?, port: *port });
-            plan.relays.push(silt_workspace::Relay { port: *port, socket: socket.clone() });
-            plan.mounts.push(Mount { kind: MountKind::ReadWrite, path: socket, source: None });
-        }
     }
     let plan_path = run.scratch.join("sandbox.json");
     std::fs::write(&plan_path, serde_json::to_vec(&plan).map_err(|error| CoreError::Invalid(error.to_string()))?)?;
@@ -291,6 +208,137 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     env.retain(|(name, _)| !added.contains(&name.as_str()));
     env.extend(extra_env);
     Ok(Sandboxed { launcher, env, outside, missing })
+}
+
+/// What the devices relayed to the run add to its plan, and the variables
+/// that say where they are.
+fn devices(run: &Run<'_>, plan: &mut silt_workspace::SandboxPlan) -> Vec<(String, String)> {
+    use silt_workspace::{Mount, MountKind};
+
+    let mut env = Vec::new();
+    let mut serials = Vec::new();
+    for relayed in &run.relayed {
+        match relayed {
+            // Nothing can be shown at the port's path without a root of its
+            // own: the run is told where its terminal is.
+            Relayed::Serial { device, pts } if run.seatbelt() => {
+                plan.mounts.push(Mount { kind: MountKind::Device, path: pts.clone(), source: None });
+                serials.push(format!("{}={}", device.display(), pts.display()));
+            }
+            // The terminal the port's session runs on, at the port's own path.
+            Relayed::Serial { device, pts } => {
+                plan.mounts.push(Mount { kind: MountKind::Device, path: device.clone(), source: Some(pts.clone()) });
+                serials.push(format!("{}={}", device.display(), device.display()));
+            }
+            Relayed::Adb { serial, socket } => {
+                if run.seatbelt() {
+                    env.push(("ADB_SERVER_SOCKET".to_owned(), format!("localfilesystem:{}", socket.display())));
+                } else {
+                    plan.relays.push(silt_workspace::Relay { port: ADB_PORT, socket: socket.clone() });
+                }
+                plan.mounts.push(Mount { kind: MountKind::ReadWrite, path: socket.clone(), source: None });
+                plan.sockets.push(socket.clone());
+                env.push(("ANDROID_SERIAL".to_owned(), serial.clone()));
+            }
+        }
+    }
+    if !serials.is_empty() {
+        env.push(("SILT_SERIAL_PORTS".to_owned(), serials.join(";")));
+    }
+    env
+}
+
+/// What a run's relays out of the sandbox add to it.
+#[derive(Default)]
+struct Relays {
+    outside: Vec<Outside>,
+    env: Vec<(String, String)>,
+    /// Credentials the workspace names whose secret couldn't be had.
+    missing: Vec<String>,
+}
+
+/// The relays the run's rules give it: to the gateway, and to the ports its
+/// workspace hands it.
+#[cfg(unix)]
+fn relays(run: &Run<'_>, plan: &mut silt_workspace::SandboxPlan) -> Result<Relays, CoreError> {
+    let mut relays = Relays::default();
+    let (mut credentials, mut placeholders, unresolved) = crate::credentials::resolve(run.data_dir, run.workspace);
+    relays.missing = unresolved;
+    // The agent's own model key goes on at the gateway too, so the sandbox
+    // holds a placeholder rather than the key.
+    if matches!(run.reach.network, Network::Gateway | Network::Full) {
+        let (model_credentials, model_placeholders) =
+            model_keys(run.agent, &|name| run.env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone()));
+        credentials.extend(model_credentials);
+        placeholders.extend(model_placeholders);
+    }
+    let graphql = crate::plugins::direct_graphql(run.data_dir, run.workspace);
+    // Seatbelt can't refuse address ranges itself: full internet there
+    // goes through the gateway, which does.
+    let gateway = run.reach.network == Network::Gateway
+        || (run.reach.network == Network::Full && (run.seatbelt() || !credentials.is_empty() || !graphql.is_empty()));
+    if gateway {
+        let ca = std::sync::Arc::new(silt_gateway::Ca::load_or_create(&run.data_dir.join("gateway"))?);
+        trust(plan, &mut relays.env, run.scratch, ca.pem())?;
+        let mut hosts = run.reach.hosts.clone();
+        // A list of hosts still lets the agent reach its own model.
+        if !hosts.is_empty()
+            && let Some(agent) = run.agent
+        {
+            hosts.extend(agent.model_hosts().iter().map(|host| (*host).to_owned()));
+        }
+        let proxy_token = run.seatbelt().then(|| format!("{:032x}", uuid::Uuid::new_v4().as_u128()));
+        let rules = silt_gateway::Rules {
+            network: run.reach.network,
+            hosts,
+            blocked: silt_workspace::subtract(&plan.blocked, &plan.allowed),
+            credentials,
+            graphql,
+            proxy_token: proxy_token.clone(),
+        };
+        let log = access_log(run.data_dir, run.thread);
+        if let Some(dir) = log.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let gateway = std::sync::Arc::new(silt_gateway::Gateway::new(rules, ca, Some(log)));
+        let proxy = match proxy_token {
+            Some(token) => {
+                let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+                let port = listener.local_addr()?.port();
+                relays.outside.push(Outside::GatewayTcp { listener, gateway });
+                plan.gateway_port = Some(port);
+                format!("http://silt:{token}@127.0.0.1:{port}")
+            }
+            None => {
+                let socket = short_socket(run.scratch, "gateway.sock")?;
+                relays.outside.push(Outside::Gateway { listener: listen(&socket)?, gateway });
+                plan.relays.push(silt_workspace::Relay { port: GATEWAY_PORT, socket: socket.clone() });
+                plan.mounts.push(Mount { kind: MountKind::ReadWrite, path: socket, source: None });
+                format!("http://127.0.0.1:{GATEWAY_PORT}")
+            }
+        };
+        for name in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            relays.env.push((name.to_owned(), proxy.clone()));
+        }
+        for name in ["NO_PROXY", "no_proxy"] {
+            relays.env.push((name.to_owned(), "localhost,127.0.0.1,::1".to_owned()));
+        }
+        relays.env.extend(placeholders);
+    }
+    // Under Seatbelt the sandbox reaches those ports on this machine's
+    // loopback itself, as its profile allows.
+    for port in run.reach.ports.iter().filter(|_| !run.seatbelt()) {
+        let socket = short_socket(run.scratch, &format!("port-{port}.sock"))?;
+        relays.outside.push(Outside::Port { listener: listen(&socket)?, port: *port });
+        plan.relays.push(silt_workspace::Relay { port: *port, socket: socket.clone() });
+        plan.mounts.push(Mount { kind: MountKind::ReadWrite, path: socket, source: None });
+    }
+    Ok(relays)
+}
+
+#[cfg(not(unix))]
+fn relays(_run: &Run<'_>, _plan: &mut silt_workspace::SandboxPlan) -> Result<Relays, CoreError> {
+    Ok(Relays::default())
 }
 
 /// The gateway's credentials for the model keys `agent` reads that the run
@@ -445,31 +493,43 @@ pub fn program_paths(program: &std::ffi::OsStr, env: &[(String, String)]) -> Vec
     paths
 }
 
-/// Whether Silt's sandbox can run agents on this machine: on Linux, with
-/// bubblewrap able to make one, and on macOS, with Seatbelt. Elsewhere, or without it, a workspace that
-/// requires a sandbox gets the agent's own, as before (ADR 0065).
-pub fn supported() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        static WORKS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *WORKS.get_or_init(|| {
-            silt_os::sandbox::tools(silt_workspace::Network::None).is_ok_and(|tools| silt_os::sandbox::check(&tools).is_ok())
-        })
-    }
-    #[cfg(target_os = "macos")]
-    {
-        static WORKS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *WORKS.get_or_init(|| silt_os::seatbelt::check().is_ok())
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        false
+/// Why `backend` can't make Silt's sandbox on this machine, if it can't.
+pub fn unavailable(backend: silt_workspace::Backend) -> Option<&'static str> {
+    match backend {
+        silt_workspace::Backend::Bubblewrap => bubblewrap_unavailable(),
+        silt_workspace::Backend::Seatbelt => seatbelt_unavailable(),
     }
 }
 
-/// Whether this machine's sandbox is Seatbelt, macOS's, rather than
-/// bubblewrap.
-pub const SEATBELT: bool = cfg!(target_os = "macos");
+fn seatbelt_unavailable() -> Option<&'static str> {
+    #[cfg(target_os = "macos")]
+    {
+        static WHY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        WHY.get_or_init(|| silt_os::seatbelt::check().err()).as_deref()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Some("Seatbelt runs on macOS only")
+    }
+}
+
+fn bubblewrap_unavailable() -> Option<&'static str> {
+    #[cfg(target_os = "linux")]
+    {
+        static WHY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        WHY.get_or_init(|| {
+            silt_os::sandbox::tools(silt_workspace::Network::None)
+                .and_then(|tools| silt_os::sandbox::check(&tools))
+                .err()
+                .map(|error| error.to_string())
+        })
+        .as_deref()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Some("bubblewrap runs on Linux only")
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -491,7 +551,6 @@ mod tests {
             reach: &reach,
             token: "t0k",
             relayed: Vec::new(),
-            seatbelt: false,
             env: vec![
                 ("PATH".into(), "/usr/bin:/bin".into()),
                 ("ANTHROPIC_API_KEY".into(), "sk".into()),
@@ -527,7 +586,11 @@ mod tests {
     fn under_seatbelt_the_gateway_is_on_the_loopback_behind_a_password() {
         let data = tempfile::tempdir().unwrap();
         let checkout = tempfile::tempdir().unwrap();
-        let reach = Reach::of(&silt_workspace::Policy { ports: [5432].into(), ..silt_workspace::Policy::default() });
+        let reach = Reach::of(&silt_workspace::Policy {
+            ports: [5432].into(),
+            backend: Some(silt_workspace::Backend::Seatbelt),
+            ..silt_workspace::Policy::default()
+        });
         let scratch = data.path().join("runs/m");
         let run = Run {
             data_dir: data.path(),
@@ -544,7 +607,6 @@ mod tests {
                 Relayed::Serial { device: "/dev/cu.usbserial-1".into(), pts: "/dev/ttys012".into() },
                 Relayed::Adb { serial: "R58M".into(), socket: scratch.join("adb.sock") },
             ],
-            seatbelt: true,
         };
         let sandboxed = prepare(&run).unwrap();
         assert!(
@@ -608,7 +670,6 @@ mod tests {
                 Relayed::Serial { device: "/dev/ttyUSB0".into(), pts: "/dev/pts/9".into() },
                 Relayed::Adb { serial: "R58M".into(), socket: scratch.join("adb.sock") },
             ],
-            seatbelt: false,
         };
         let sandboxed = prepare(&run).unwrap();
         assert_eq!(sandboxed.outside.len(), 2, "the gateway and the forwarded port");
@@ -620,7 +681,7 @@ mod tests {
         assert!(bundle.contains("BEGIN CERTIFICATE"));
         let plan: silt_workspace::SandboxPlan =
             serde_json::from_slice(&std::fs::read(scratch.join("sandbox.json")).unwrap()).unwrap();
-        assert_eq!(plan.relays.iter().map(|relay| relay.port).collect::<Vec<_>>(), vec![ADB_PORT, GATEWAY_PORT, 5432]);
+        assert_eq!(plan.relays.iter().map(|relay| relay.port).collect::<Vec<_>>(), vec![GATEWAY_PORT, 5432, ADB_PORT]);
         let serial = plan.mounts.iter().find(|mount| mount.path == Path::new("/dev/ttyUSB0")).expect("the port is there");
         assert_eq!((serial.kind, serial.source.as_deref()), (MountKind::Device, Some(Path::new("/dev/pts/9"))));
         assert_eq!(env("ANDROID_SERIAL").as_deref(), Some("R58M"));

@@ -1,2 +1,12 @@
 [alias]
 xtask = "run --quiet -p xtask --"
+
+# Debug info stays in .dwo files beside the objects rather than being copied
+# into each of the hundred-odd test binaries: links are faster and target/
+# a third smaller. gdb, lldb and backtraces read it there. Linux only, as
+# Windows' MSVC has no such mode and macOS does this already.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-Csplit-debuginfo=unpacked"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-Csplit-debuginfo=unpacked"]

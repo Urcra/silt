@@ -1,4 +1,4 @@
-//! Plugins (ADR 0086): what a sandboxed agent reaches production and other
+//! Plugins (ADR 0093): what a sandboxed agent reaches production and other
 //! systems through. Each machine keeps its plugins in `plugins.json`, each
 //! turned on in some of its workspaces; their calls run here, outside every
 //! sandbox, with credentials the agent never holds. A call its rules say

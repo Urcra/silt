@@ -1,5 +1,5 @@
 //! Credentials the gateway adds for a workspace's sandboxed agents (ADR
-//! 0086), kept per machine: which host and path each is for and where its
+//! 0093), kept per machine: which host and path each is for and where its
 //! secret comes from, in `credentials.json`; the secret itself in the
 //! system's keyring, or from a command run on this machine as it's needed.
 
