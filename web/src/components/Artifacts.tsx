@@ -25,7 +25,7 @@ import {
   quoted,
 } from '../artifacts'
 import type { Opened } from '../artifactActions'
-import { deckOf, deckOffline } from '../typed'
+import { canvasOf, canvasOffline, deckOf, deckOffline } from '../typed'
 import { keys, message } from '../query'
 import { useNow } from '../now'
 import { usePermalink } from '../usePermalink'
@@ -297,6 +297,11 @@ export function ArtifactViewer({
         download(deckOffline(deck, `${artifact.title} · v${artifact.version}`, styleText, files), 'text/html', fileName(artifact, 'html'))
         return
       }
+      const canvas = artifact.kind === 'canvas' ? canvasOf(textOf(content.data)) : null
+      if (canvas) {
+        download(canvasOffline(canvas, `${artifact.title} · v${artifact.version}`, styleText, files), 'text/html', fileName(artifact, 'html'))
+        return
+      }
       const rendered = await renderedMarkup(artifact, content.data)
       // Past what one HTML file carries well, the copy is the page with its files beside it, zipped.
       const carried = Object.values(files).reduce((sum, file) => sum + (file.data.length * 3) / 4, 0)
@@ -314,6 +319,9 @@ export function ArtifactViewer({
     }
   }
   const zoomTo = (step: number) => ZOOMS[ZOOMS.indexOf(zoom) + step]
+  const offline: MenuItem[] = offlineCopy(artifact)
+    ? [{ label: 'Download as one HTML file', icon: 'download', hint: 'opens anywhere', onSelect: () => void exportHtml(), divided: true }]
+    : []
   const shareItems: MenuItem[] = [
     { label: 'Read-only link…', icon: 'lock', hint: 'no account needed', onSelect: () => setSharing(true) },
     {
@@ -324,8 +332,8 @@ export function ArtifactViewer({
     },
     { label: listed?.pinned ? 'Unpin from Artifacts' : 'Pin to Artifacts', icon: 'check', onSelect: () => void keep('pin'), divided: true },
     { label: listed?.archived ? 'Unarchive' : 'Archive', icon: 'folder', hint: "the thread's owner's", onSelect: () => void keep('archive') },
-    { label: 'Download as one HTML file', icon: 'download', hint: 'opens anywhere', onSelect: () => void exportHtml(), divided: true },
-    { label: 'Download the file', icon: 'file', onSelect: downloadFile },
+    ...offline,
+    { label: 'Download the file', icon: 'file', onSelect: downloadFile, divided: !offlineCopy(artifact) },
   ]
   const viewItems: MenuItem[] = [
     { label: 'Preview', icon: source ? 'eye' : 'check', onSelect: () => setSource(false) },
@@ -829,6 +837,11 @@ async function inlineFilesOf(thread: string, artifact: ArtifactView): Promise<In
     files[path] = { media_type: file.media_type, data: read.data }
   }
   return files
+}
+
+/** Whether a version has an offline copy: the kinds drawn from JSON that haven't one would show nothing. */
+function offlineCopy(artifact: ArtifactView): boolean {
+  return !['data', 'sheet', 'whiteboard'].includes(artifact.kind)
 }
 
 /** Past this many bytes of files, an offline copy is a zip rather than one HTML file. */

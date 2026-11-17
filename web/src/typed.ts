@@ -1,7 +1,7 @@
 // The pure parts of the artifact types' viewers (ADR 0076): parsing, the
 // documents slides and boards render as, layout, and tables and CSV.
 
-import { sandboxedDocument, withFilesInlined, type FrameTheme, type InlineFiles } from './artifacts'
+import { ARTIFACT_CSP, sandboxedDocument, withFilesInlined, type FrameTheme, type InlineFiles } from './artifacts'
 
 export type Deck = {
   aspect?: '16:9' | '4:3'
@@ -228,6 +228,14 @@ export function partDocument(
   step?: number,
   grow?: boolean,
 ): string {
+  return sandboxedDocument(partPage(html, shared, width, height, theme, step, grow), {
+    style,
+    theme,
+    parent: window.location.origin,
+  })
+}
+
+function partPage(html: string, shared: string | undefined, width: number, height: number, theme: FrameTheme, step?: number, grow?: boolean): string {
   const imports = (shared ?? '').match(/@import\s[^;]+;/g) ?? []
   const rest = imports.reduce((left, rule) => left.replace(rule, ''), shared ?? '')
   const ground = `color-scheme:${theme};background:var(--bg,Canvas);color:var(--fg,CanvasText)`
@@ -239,11 +247,7 @@ export function partDocument(
   const tell = grow
     ? `<script>new ResizeObserver(function(){parent.postMessage({silt:'grown',height:document.documentElement.scrollHeight},'*')}).observe(document.documentElement)</script>`
     : ''
-  return sandboxedDocument(`<!doctype html><html><head><style>${css.replace(/<\//g, '<\\/')}</style></head><body>${html}${tell}</body></html>`, {
-    style,
-    theme,
-    parent: window.location.origin,
-  })
+  return `<!doctype html><html><head><style>${css.replace(/<\//g, '<\\/')}</style></head><body>${html}${tell}</body></html>`
 }
 
 /**
@@ -314,7 +318,8 @@ export function deckOffline(deck: Deck, title: string, style: string | null, fil
   return [
     '<!doctype html>',
     '<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
-    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">`,
+    // The slides' frame is written into the page, so it's held to the page's policy as well as its own.
+    `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`,
     `<title>${escapeText(title)}</title>`,
     '<style>html,body{margin:0;height:100%;background:#16161a;color:#e8e8ea;font:14px/1.4 system-ui,sans-serif}',
     '#stage{position:absolute;inset:0 0 52px 0;display:flex;align-items:center;justify-content:center;overflow:hidden}',
@@ -325,6 +330,63 @@ export function deckOffline(deck: Deck, title: string, style: string | null, fil
     `<body><main id="stage"><iframe id="deck" sandbox="allow-scripts" title="${escapeText(title)}" srcdoc="${quoted}"></iframe></main>`,
     '<nav aria-label="slides"><button id="prev" aria-label="Previous">‹</button><span id="at" aria-live="polite"></span><button id="next" aria-label="Next">›</button></nav>',
     `<script>${controls.replace(/<\//g, '<\\/')}</script></body></html>`,
+  ].join('')
+}
+
+/** How wide a canvas's note is when it doesn't say. */
+export const NOTE_WIDTH = 240
+
+/**
+ * A canvas as one HTML file that opens anywhere: each page's boards, captions and notes where the viewer puts them,
+ * scaled to fit the window's width, the pages one after another. Each board is its own sealed frame, as in the viewer,
+ * and one that grows takes the height its content says.
+ */
+export function canvasOffline(canvas: Canvas, title: string, style: string | null, files: InlineFiles = {}): string {
+  const pages = pagesOf(canvas)
+  const sections = (pages.length > 0 ? pages : ['']).map((page) => {
+    const boards = layout(canvas.boards.filter((board) => onPage(board, page, pages))).map((board) => {
+      const frame = sandboxedDocument(withFilesInlined(partPage(board.html, canvas.style, board.width, board.height, 'light', undefined, board.grow), files), {
+        probe: false,
+        style,
+      })
+      const label = `${board.width}×${board.height}${board.caption ? ` · ${board.caption}` : ''}`
+      return (
+        `<figure style="left:${board.x}px;top:${board.y}px;width:${board.width}px">` +
+        `<figcaption style="font-size:min(calc(14px / var(--k, 1)), ${board.width / 10}px)"><b>${escapeText(board.name)}</b> <span>${escapeText(label)}</span></figcaption>` +
+        `<iframe sandbox="allow-scripts" title="${escapeText(board.name)}" data-least="${board.height}" style="width:${board.width}px;height:${board.height}px" srcdoc="${escapeText(frame)}"></iframe></figure>`
+      )
+    })
+    const notes = (canvas.notes ?? [])
+      .filter((note) => onPage(note, page, pages))
+      .map((note) => `<p class="note" style="left:${note.x}px;top:${note.y}px;width:${note.w ?? NOTE_WIDTH}px">${escapeText(note.text)}</p>`)
+    const heading = pages.length > 1 ? `<h2>${escapeText(page)}</h2>` : ''
+    return `<section>${heading}<div class="stage"><div class="plane">${boards.join('')}${notes.join('')}</div></div></section>`
+  })
+  // Sizes come from the laid-out boards and notes, so a board that grows, or a note's text, makes room for itself.
+  const script =
+    "function fit(){var s=document.querySelectorAll('.plane');for(var i=0;i<s.length;i++){var p=s[i],x0=0,y0=0,x1=1,y1=1;" +
+    'for(var j=0;j<p.children.length;j++){var c=p.children[j];x0=Math.min(x0,c.offsetLeft);y0=Math.min(y0,c.offsetTop);' +
+    'x1=Math.max(x1,c.offsetLeft+c.offsetWidth);y1=Math.max(y1,c.offsetTop+c.offsetHeight)}' +
+    "var k=Math.min(1,p.parentNode.clientWidth/(x1-x0));p.style.transform='scale('+k+') translate('+(-x0)+'px,'+(-y0)+'px)';" +
+    "p.style.setProperty('--k',k);p.parentNode.style.height=Math.ceil((y1-y0)*k)+'px'}}" +
+    "addEventListener('message',function(e){var d=e.data;if(!d||d.silt!=='grown'||typeof d.height!=='number')return;" +
+    "var f=document.querySelectorAll('iframe');for(var i=0;i<f.length;i++)if(f[i].contentWindow===e.source){" +
+    "f[i].style.height=Math.max(Number(f[i].getAttribute('data-least')),Math.min(Math.round(d.height),8192))+'px';fit()}});" +
+    "addEventListener('resize',fit);fit();"
+  return [
+    '<!doctype html>',
+    '<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">',
+    // The boards' frames are written into the page, so they're held to its policy as well as their own.
+    `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`,
+    `<title>${escapeText(title)}</title>`,
+    '<style>html,body{margin:0;background:#f1efeb;color:#3d3a2a;font:14px/1.4 system-ui,sans-serif}',
+    'h1{font-size:18px;font-weight:600;margin:0;padding:20px 24px 0}h2{font-size:15px;font-weight:600;margin:0;padding:0 24px}',
+    'section{padding:16px 24px 32px}.stage{position:relative;margin-top:40px}.plane{position:absolute;top:0;left:0;transform-origin:0 0}',
+    'figure{position:absolute;margin:0}figcaption{position:absolute;bottom:100%;left:0;margin-bottom:.5em;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}',
+    'figcaption b{font-weight:500}figcaption span{color:#7a7262}',
+    'iframe{display:block;border:0;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.12),0 4px 16px rgba(0,0,0,.08)}',
+    '.note{position:absolute;margin:0;padding:12px;border-radius:2px;white-space:pre-wrap;font-size:16px;background:#fff3b0;color:#3d3a2a;box-shadow:0 1px 3px rgba(0,0,0,.15)}</style></head>',
+    `<body><h1>${escapeText(title)}</h1>${sections.join('')}<script>${script}</script></body></html>`,
   ].join('')
 }
 
