@@ -1,5 +1,6 @@
 //! The gateway as a proxy: it adds a credential only where its rules say,
 //! passes the rest through unread, and refuses what sandboxes never reach.
+#![cfg(unix)]
 
 use std::sync::Arc;
 
@@ -116,6 +117,7 @@ async fn a_credential_is_added_on_the_way_out_and_only_where_it_belongs() {
             value: "Bearer s3cret".into(),
         }],
         graphql: Vec::new(),
+        proxy_token: None,
     };
     let (dir, ca) = gateway(rules, root).await;
     assert_eq!(through_tunnel(dir.path(), &ca, port, "/repos/acme/api").await, "Bearer s3cret");
@@ -131,6 +133,7 @@ async fn what_sandboxes_never_reach_is_refused_with_the_reason() {
         blocked: silt_workspace::subtract(&silt_workspace::ALWAYS_BLOCKED.map(str::to_owned), &[]),
         credentials: Vec::new(),
         graphql: Vec::new(),
+        proxy_token: None,
     };
     let (dir, _ca) = gateway(rules, root).await;
     let mut stream = UnixStream::connect(dir.path().join("gateway.sock")).await.unwrap();
@@ -157,6 +160,7 @@ async fn graphql_straight_to_an_api_reads_but_changes_and_location_are_refused()
             schema: None,
             plugin: "fleet-api".into(),
         }],
+        proxy_token: None,
     };
     let (dir, ca) = gateway(rules, root).await;
     let post = |body: &str| {
@@ -176,4 +180,41 @@ async fn graphql_straight_to_an_api_reads_but_changes_and_location_are_refused()
     let (status, said) = sent(dir.path(), &ca, port, post(leaking)).await;
     assert_eq!(status, 403, "an answer carrying location is kept: {said}");
     assert!(said.contains("the answer was kept"), "{said}");
+}
+
+#[tokio::test]
+async fn on_a_shared_port_only_the_runs_own_requests_are_answered() {
+    let (_, root) = echo_server().await;
+    let rules = Rules {
+        network: Network::Full,
+        hosts: Vec::new(),
+        blocked: Vec::new(),
+        credentials: Vec::new(),
+        graphql: Vec::new(),
+        proxy_token: Some("t0k".into()),
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let ca = Arc::new(Ca::load_or_create(&dir.path().join("ca")).unwrap());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(Arc::new(Gateway::trusting(rules, ca, root)).serve_tcp(listener));
+    let ask_tcp = |head: String| async move {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream.write_all(head.as_bytes()).await.unwrap();
+        let mut answer = vec![0u8; 4096];
+        let read = stream.read(&mut answer).await.unwrap();
+        String::from_utf8_lossy(&answer[..read]).into_owned()
+    };
+    let said = ask_tcp("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n".into()).await;
+    assert!(said.starts_with("HTTP/1.1 407"), "{said}");
+    let wrong = silt_gateway::proxy_authorization("guess");
+    let said =
+        ask_tcp(format!("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: {wrong}\r\n\r\n"))
+            .await;
+    assert!(said.starts_with("HTTP/1.1 407"), "{said}");
+    let right = silt_gateway::proxy_authorization("t0k");
+    let said =
+        ask_tcp(format!("GET http://169.254.169.254/ HTTP/1.1\r\nHost: 169.254.169.254\r\nProxy-Authorization: {right}\r\n\r\n"))
+            .await;
+    assert!(said.starts_with("HTTP/1.1 403"), "past the password, its rules: {said}");
 }

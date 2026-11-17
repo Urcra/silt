@@ -343,9 +343,23 @@ export type AccessView = { calls: Array<CallView>, grants: Array<GrantView>,
 /**
  * What the gateway refused, newest first.
  */
-refused: Array<NetworkRefusal>, };
+refused: Array<NetworkRefusal>, 
+/**
+ * The devices Silt holds for the thread's sandboxes.
+ */
+devices: Array<RelayView>, };
 
 export type NetworkRefusal = { time_ms: number, host: string, port: number, why: string, };
+
+export type RelayView = { 
+/**
+ * `/dev/ttyUSB0`, or `adb:SERIAL`.
+ */
+device: string, 
+/**
+ * `serial` or `adb`.
+ */
+kind: string, since_ms: number, };
 
 export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<string>, };
 
@@ -1308,7 +1322,7 @@ no_nested?: boolean, };
 
 export type Network = "none" | "gateway" | "full" | "host";
 
-export type Devices = "none" | "named" | "all_usb";
+export type Devices = "none" | "relayed" | "named" | "all_usb";
 
 export type Extra = "ranges" | "ports" | "paths" | "gpu" | "docker" | "ssh_agent";
 
@@ -1318,7 +1332,8 @@ export type Reach = { network: Network,
  */
 hosts: Array<string>, devices: Devices, 
 /**
- * Device nodes, for [`Devices::Named`].
+ * The devices, for [`Devices::Relayed`] and [`Devices::Named`]: device
+ * nodes, and for a relay `adb:SERIAL` too.
  */
 device_nodes: Array<string>, 
 /**

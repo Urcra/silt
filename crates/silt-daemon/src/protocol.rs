@@ -688,6 +688,17 @@ pub enum Request {
         token: String,
         thread: String,
     },
+    /// Holds `devices` for the thread's sandboxes, or hands back those it
+    /// holds already (ADR 0086).
+    RelayDevices {
+        thread: String,
+        devices: Vec<String>,
+    },
+    /// Lets go of a device relayed to the thread, ending its session.
+    ReleaseDevice {
+        thread: String,
+        device: String,
+    },
     /// Ends a grant: calls it covered ask again.
     GrantRevoke {
         id: u64,
@@ -1936,6 +1947,7 @@ mod tests {
             crate::plugins::GrantView::decl(&config),
             crate::plugins::AccessView::decl(&config),
             crate::plugins::NetworkRefusal::decl(&config),
+            crate::plugins::RelayView::decl(&config),
             BusSubscription::decl(&config),
             CloneInfo::decl(&config),
             CloudLaunch::decl(&config),

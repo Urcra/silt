@@ -396,6 +396,8 @@ export const api = {
     request<string>('POST', `/api/approvals/${id}`, { approve, hash, grant }),
   revokeGrant: (id: number) => request<string>('DELETE', `/api/grants/${id}`),
   access: (thread: string) => request<AccessView>('GET', `/api/threads/${encodeURIComponent(thread)}/access`),
+  releaseDevice: (thread: string, device: string) =>
+    request<string>('POST', `/api/threads/${encodeURIComponent(thread)}/devices/release`, { device }),
   plugins: () => request<Plugin[]>('GET', '/api/plugins'),
   putPlugin: (plugin: Plugin) => request<string>('PUT', `/api/plugins/${encodeURIComponent(plugin.name)}`, plugin),
   status: () => request<DaemonStatus>('GET', '/api/status'),

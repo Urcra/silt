@@ -192,6 +192,9 @@ pub struct Core {
     pub(crate) next_token: u64,
     /// Plugin calls waiting for, or answered by, the person (ADR 0086).
     pub(crate) approvals: crate::plugins::Approvals,
+    /// Devices held for threads' sandboxes (ADR 0086).
+    #[cfg(unix)]
+    pub(crate) relays: crate::devices::Relays,
     /// When the watcher noticed the changes being taken in, for crediting
     /// them to the tool that was running then.
     pub(crate) change_noticed: Option<Instant>,
@@ -501,6 +504,8 @@ impl Core {
             index_transcripts: silt_agents::Transcripts::default(),
             next_token: 0,
             approvals: crate::plugins::Approvals::default(),
+            #[cfg(unix)]
+            relays: crate::devices::Relays::default(),
             change_noticed: None,
             importing: false,
             recorded_at: None,
@@ -751,6 +756,29 @@ impl Core {
                     Err(error) => Err(error),
                 };
                 to_response(bound.map(|()| "bound"))
+            }
+            Request::RelayDevices { thread, devices } => {
+                #[cfg(unix)]
+                let relayed = match self.find_thread(&thread) {
+                    Ok(thread) => self.relay_devices(thread, &devices).await,
+                    Err(error) => Err(error),
+                };
+                #[cfg(not(unix))]
+                let relayed: Result<Vec<crate::sandbox::Relayed>, CoreError> = {
+                    let _ = (thread, devices);
+                    Err(CoreError::Invalid("Silt relays devices on Linux and macOS".into()))
+                };
+                to_response(relayed)
+            }
+            Request::ReleaseDevice { thread, device } => {
+                #[cfg(unix)]
+                let released = self.find_thread(&thread).and_then(|thread| self.release_device(thread, &device));
+                #[cfg(not(unix))]
+                let released: Result<(), CoreError> = {
+                    let _ = (thread, device);
+                    Err(CoreError::Invalid("Silt relays devices on Linux and macOS".into()))
+                };
+                to_response(released.map(|()| "released"))
             }
             Request::GrantRevoke { id } => to_response(self.grant_revoke(id).await.map(|()| "revoked")),
             Request::Access { thread } => to_response(self.access_view(&thread).await),

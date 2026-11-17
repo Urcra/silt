@@ -21,7 +21,9 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::io::AsyncWriteExt as _;
-use tokio::net::{TcpStream, UnixListener};
+use tokio::net::TcpStream;
+#[cfg(unix)]
+use tokio::net::UnixListener;
 
 pub use ca::Ca;
 pub use graphql::GraphqlRule;
@@ -49,24 +51,50 @@ impl Gateway {
     }
 
     /// Answers connections on `listener` until it's dropped.
+    #[cfg(unix)]
     pub async fn serve(self: Arc<Self>, listener: UnixListener) {
         while let Ok((stream, _)) = listener.accept().await {
-            let gateway = self.clone();
-            tokio::spawn(async move {
-                let service = service_fn(move |request| {
-                    let gateway = gateway.clone();
-                    async move { Ok::<_, Infallible>(gateway.route(request).await) }
-                });
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .preserve_header_case(true)
-                    .serve_connection(TokioIo::new(stream), service)
-                    .with_upgrades()
-                    .await;
-            });
+            tokio::spawn(self.clone().connection(stream));
         }
     }
 
+    /// The same on a port of this machine's loopback, where the sandbox has
+    /// no network of its own to relay the gateway into, as on macOS: each
+    /// request then carries the run's proxy password.
+    pub async fn serve_tcp(self: Arc<Self>, listener: tokio::net::TcpListener) {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(self.clone().connection(stream));
+        }
+    }
+
+    async fn connection<S>(self: Arc<Self>, stream: S)
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let gateway = self;
+        let service = service_fn(move |request| {
+            let gateway = gateway.clone();
+            async move { Ok::<_, Infallible>(gateway.route(request).await) }
+        });
+        let _ = hyper::server::conn::http1::Builder::new()
+            .preserve_header_case(true)
+            .serve_connection(TokioIo::new(stream), service)
+            .with_upgrades()
+            .await;
+    }
+
     async fn route(self: Arc<Self>, request: Request<Incoming>) -> Response<Body> {
+        if let Some(token) = &self.rules.proxy_token {
+            let given = request.headers().get(hyper::header::PROXY_AUTHORIZATION).and_then(|value| value.to_str().ok());
+            if given != Some(proxy_authorization(token).as_str()) {
+                let mut response =
+                    refuse(StatusCode::PROXY_AUTHENTICATION_REQUIRED, "Silt's gateway answers its own sandboxes only");
+                response
+                    .headers_mut()
+                    .insert(hyper::header::PROXY_AUTHENTICATE, HeaderValue::from_static("Basic realm=\"silt\""));
+                return response;
+            }
+        }
         let Some(authority) = request.uri().authority().cloned() else {
             return refuse(StatusCode::BAD_REQUEST, "the gateway only takes requests for a host, as a proxy does");
         };
@@ -241,6 +269,7 @@ impl Gateway {
 
 /// Passes each connection on `listener` to `port` on this machine: a port
 /// a workspace hands its sandboxes, such as a dev database's.
+#[cfg(unix)]
 pub async fn forward_port(listener: UnixListener, port: u16) {
     while let Ok((mut client, _)) = listener.accept().await {
         tokio::spawn(async move {
@@ -297,6 +326,13 @@ fn upstream_config(root: Option<rustls::pki_types::CertificateDer<'static>>) -> 
     let mut config = builder.with_root_certificates(roots).with_no_client_auth();
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
     config
+}
+
+/// The `Proxy-Authorization` a request carries with `token` as its proxy
+/// URL's password, `http://silt:TOKEN@127.0.0.1:PORT`.
+pub fn proxy_authorization(token: &str) -> String {
+    use base64::Engine as _;
+    format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("silt:{token}")))
 }
 
 /// The most of a GraphQL request, and of its answer, the gateway reads.

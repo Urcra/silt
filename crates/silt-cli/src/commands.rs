@@ -449,6 +449,13 @@ impl Run<'_> {
                     )
                     .filter(|(key, _)| !(held.locks.no_bypass && key == "COPILOT_ALLOW_ALL"))
                     .collect();
+                // The daemon holds the devices, so their sessions outlive this run.
+                let relayed: Vec<silt_daemon::sandbox::Relayed> = if reach.devices == silt_workspace::Devices::Relayed {
+                    ensure_daemon()?;
+                    call(&Request::RelayDevices { thread: self.thread.to_owned(), devices: reach.device_nodes.clone() })?
+                } else {
+                    Vec::new()
+                };
                 let mut sandboxed = silt_daemon::sandbox::prepare(&silt_daemon::sandbox::Run {
                     data_dir: &paths::data_dir(),
                     thread: self.thread,
@@ -459,6 +466,8 @@ impl Run<'_> {
                     reach,
                     token: &held.token,
                     read_only: silt_daemon::sandbox::program_paths(&launch.program, &env),
+                    relayed,
+                    seatbelt: silt_daemon::sandbox::SEATBELT,
                     env,
                 })
                 .map_err(|error| fail(format!("cannot prepare the sandbox: {error}")))?;

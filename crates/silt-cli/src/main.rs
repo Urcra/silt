@@ -595,7 +595,7 @@ enum OrgCommand {
         /// The most network its sandboxes get: none, gateway, full or host
         #[arg(long)]
         network: Option<String>,
-        /// The most devices its sandboxes get: none, named or all_usb
+        /// The most devices its sandboxes get: none, relayed, named or all_usb
         #[arg(long)]
         devices: Option<String>,
         /// What members may never hand a sandbox, comma-separated: ranges, ports, paths, gpu, docker, ssh_agent

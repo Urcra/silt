@@ -19,7 +19,7 @@ use crate::CoreError;
 mod calls;
 mod mcp;
 
-pub use calls::{AccessView, ApprovalState, ApprovalView, Approvals, CallView, GrantScope, GrantView, NetworkRefusal};
+pub use calls::{AccessView, ApprovalState, ApprovalView, Approvals, CallView, GrantScope, GrantView, NetworkRefusal, RelayView};
 
 const FILE: &str = "plugins.json";
 

@@ -318,6 +318,12 @@ impl Core {
         start.sign_in_first = method;
         self.next_token += 1;
         let token = self.next_token;
+        let reach = self.acp.get(&thread).and_then(|run| run.sandbox.as_ref().map(|(reach, _, _)| reach.clone()));
+        // The same sessions as before: the relays outlive the agent.
+        let relayed = match &reach {
+            Some(reach) => self.relayed_for(thread, reach).await.unwrap_or_default(),
+            None => Vec::new(),
+        };
         let run = self.acp.get_mut(&thread).expect("caller checked");
         run.run = token;
         run.load = load;
@@ -329,6 +335,7 @@ impl Core {
             scratch: super::run_scratch(&self.data_dir, thread, token),
             workspace,
             thread: thread.to_string(),
+            relayed,
         });
         spawn_agent(self.events.clone(), thread, token, run.info.clone(), self.data_dir.clone(), start, sandbox);
         self.agent_changed(thread).await;

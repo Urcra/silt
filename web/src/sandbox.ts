@@ -14,12 +14,17 @@ export const NETWORKS: { value: Network; label: string; detail: string }[] = [
 
 export const DEVICES: { value: Devices; label: string; detail: string }[] = [
   { value: 'none', label: 'None', detail: 'No devices.' },
+  {
+    value: 'relayed',
+    label: 'Relayed by Silt',
+    detail: 'Silt holds each device on this machine and hands the agent a session of it, which outlives the agent: a serial port as a terminal, adb for that one device.',
+  },
   { value: 'named', label: 'Named devices', detail: 'The device nodes themselves, inside the sandbox.' },
   { value: 'all_usb', label: 'All USB', detail: 'Every USB device, for tools that talk to them directly (libusb).' },
 ]
 
 export const NETWORK_ORDER: Network[] = ['none', 'gateway', 'full', 'host']
-export const DEVICE_ORDER: Devices[] = ['none', 'named', 'all_usb']
+export const DEVICE_ORDER: Devices[] = ['none', 'relayed', 'named', 'all_usb']
 
 /** What turning it on hands the agent, as `silt-workspace`'s `Extra::hands_over` says it. */
 export const HANDS_OVER: Record<Extra, string> = {
@@ -39,7 +44,7 @@ export function reachOf(policy: Policy): Reach {
     network: policy.network ?? 'full',
     hosts: policy.hosts ?? [],
     devices,
-    device_nodes: devices === 'named' ? (policy.device_nodes ?? []) : [],
+    device_nodes: devices === 'named' || devices === 'relayed' ? (policy.device_nodes ?? []) : [],
     ranges: allowed('ranges') ? (policy.ranges ?? []) : [],
     ports: allowed('ports') ? (policy.ports ?? []) : [],
     paths: allowed('paths') ? (policy.paths ?? {}) : {},

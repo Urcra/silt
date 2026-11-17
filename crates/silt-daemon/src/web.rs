@@ -225,6 +225,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/approvals/{id}", post(approval_answer))
         .route("/api/grants/{id}", delete(grant_revoke))
         .route("/api/threads/{id}/access", get(access))
+        .route("/api/threads/{id}/devices/release", post(release_device))
         .route("/api/plugins", get(plugins))
         .route("/api/plugins/{name}", put(plugin_put).delete(plugin_remove))
         .route("/api/mrs", get(merge_requests))
@@ -1764,6 +1765,15 @@ async fn approval_answer(State(web): State<Web>, Path(id): Path<u64>, Json(body)
 
 async fn grant_revoke(State(web): State<Web>, Path(id): Path<u64>) -> HttpResponse {
     ask(&web, Request::GrantRevoke { id }).await
+}
+
+#[derive(Deserialize)]
+struct ReleaseBody {
+    device: String,
+}
+
+async fn release_device(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<ReleaseBody>) -> HttpResponse {
+    ask(&web, Request::ReleaseDevice { thread, device: body.device }).await
 }
 
 async fn access(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {

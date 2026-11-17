@@ -576,12 +576,17 @@ impl Core {
         let presents_plans =
             silt_acp::presents_plans(&info.id) || read_seen(&self.data_dir).get(&info.id).is_some_and(|seen| seen.presents_plans);
         let kept = reach.clone().map(|reach| (reach, token.clone(), workspace.id.as_str().to_owned()));
+        let relayed = match &reach {
+            Some(reach) => self.relayed_for(thread, reach).await?,
+            None => Vec::new(),
+        };
         let sandbox = reach.map(|reach| AcpSandbox {
             reach,
             token,
             scratch: run_scratch(&self.data_dir, thread, run),
             workspace: workspace.id.as_str().to_owned(),
             thread: thread.to_string(),
+            relayed,
         });
         spawn_agent(self.events.clone(), thread, run, info.clone(), self.data_dir.clone(), start, sandbox);
         self.acp.insert(
@@ -1903,6 +1908,8 @@ fn sandboxed(
         token: &sandbox.token,
         env: std::mem::take(&mut start.env),
         read_only,
+        relayed: sandbox.relayed.clone(),
+        seatbelt: crate::sandbox::SEATBELT,
     })?;
     let all = prepared.command(&start.program, &start.args);
     start.program = all[0].to_string_lossy().into_owned();
@@ -2267,6 +2274,29 @@ fn run_scratch(data_dir: &Path, thread: ThreadId, run: u64) -> PathBuf {
     data_dir.join("runs").join(format!("acp-{}-{run}", thread.short()))
 }
 
+impl Core {
+    /// The devices a sandbox reaching `reach` gets relayed in `thread`:
+    /// those it was relayed already, so their sessions carry on.
+    pub(crate) async fn relayed_for(
+        &mut self,
+        thread: ThreadId,
+        reach: &silt_workspace::Reach,
+    ) -> Result<Vec<crate::sandbox::Relayed>, CoreError> {
+        if reach.devices != silt_workspace::Devices::Relayed {
+            return Ok(Vec::new());
+        }
+        #[cfg(unix)]
+        {
+            self.relay_devices(thread, &reach.device_nodes).await
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = thread;
+            Err(CoreError::Invalid("Silt relays devices on Linux and macOS".into()))
+        }
+    }
+}
+
 /// Silt's sandbox for an ACP agent's run (ADR 0086).
 pub(crate) struct AcpSandbox {
     reach: silt_workspace::Reach,
@@ -2274,6 +2304,8 @@ pub(crate) struct AcpSandbox {
     scratch: PathBuf,
     workspace: String,
     thread: String,
+    /// The devices Silt relays to its sandbox.
+    relayed: Vec<crate::sandbox::Relayed>,
 }
 
 pub(crate) fn spawn_agent(

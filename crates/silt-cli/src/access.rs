@@ -12,6 +12,8 @@ pub enum AccessCommand {
     Doctor,
     /// What reached a thread's sandboxes through Silt: plugin calls, grants and what the gateway refused
     Show { thread: String },
+    /// Let go of a device relayed to a thread's sandboxes, ending its session
+    Release { thread: String, device: String },
 }
 
 pub fn run(command: AccessCommand) -> Result<(), Exn<CliError>> {
@@ -21,6 +23,11 @@ pub fn run(command: AccessCommand) -> Result<(), Exn<CliError>> {
             Ok(())
         }
         AccessCommand::Show { thread } => crate::plugin::access(&thread),
+        AccessCommand::Release { thread, device } => {
+            let said: String = crate::commands::call(&silt_daemon::protocol::Request::ReleaseDevice { thread, device })?;
+            println!("{said}");
+            Ok(())
+        }
     }
 }
 
@@ -62,9 +69,23 @@ fn doctor() {
     credentials();
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn doctor() {
-    println!("Silt's own sandbox runs on Linux for now; here, a workspace that requires one uses the agent's own sandbox.");
+    match silt_os::seatbelt::check() {
+        Ok(()) => println!("✓ Seatbelt (sandbox-exec) applies a profile here"),
+        Err(error) => println!(
+            "✗ Seatbelt can't apply a profile here: {error}. Inside another sandbox, an agent's own included, it can't nest; run Silt outside it"
+        ),
+    }
+    println!(
+        "! On macOS full internet goes through Silt's gateway, as HTTP(S) only, and agents' own sandboxes can't run inside Silt's"
+    );
+    credentials();
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn doctor() {
+    println!("Silt's own sandbox runs on Linux and macOS; here, a workspace that requires one uses the agent's own sandbox.");
     credentials();
 }
 

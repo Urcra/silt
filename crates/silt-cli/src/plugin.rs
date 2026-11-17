@@ -240,6 +240,12 @@ pub fn access(thread: &str) -> Result<(), Exn<CliError>> {
             println!("      {why}");
         }
     }
+    if !access.devices.is_empty() {
+        println!("Devices relayed");
+        for device in &access.devices {
+            println!("  {}  {}", device.device, device.kind);
+        }
+    }
     if !access.refused.is_empty() {
         println!("Refused by the gateway");
         for refused in &access.refused {

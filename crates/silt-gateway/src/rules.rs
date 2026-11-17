@@ -39,6 +39,9 @@ pub struct Rules {
     pub credentials: Vec<Credential>,
     /// GraphQL endpoints whose requests it reads.
     pub graphql: Vec<crate::GraphqlRule>,
+    /// What each request must carry as its proxy's password, where others
+    /// on this machine could reach the gateway too, as on macOS.
+    pub proxy_token: Option<String>,
 }
 
 impl Rules {
@@ -102,6 +105,7 @@ mod tests {
                 value: "Bearer s3cret".into(),
             }],
             graphql: Vec::new(),
+            proxy_token: None,
         }
     }
 

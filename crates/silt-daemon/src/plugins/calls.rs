@@ -118,6 +118,20 @@ pub struct AccessView {
     pub grants: Vec<GrantView>,
     /// What the gateway refused, newest first.
     pub refused: Vec<NetworkRefusal>,
+    /// The devices Silt holds for the thread's sandboxes.
+    pub devices: Vec<RelayView>,
+}
+
+/// A device relayed to the thread's sandboxes, its session kept across
+/// the agent's restarts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct RelayView {
+    /// `/dev/ttyUSB0`, or `adb:SERIAL`.
+    pub device: String,
+    /// `serial` or `adb`.
+    pub kind: String,
+    pub since_ms: i64,
 }
 
 /// A connection the gateway refused.
@@ -547,7 +561,11 @@ impl Core {
             })
             .collect();
         let refused = network_refusals(&crate::sandbox::access_log(&self.data_dir, &thread.to_string()));
-        Ok(AccessView { calls, grants, refused })
+        #[cfg(unix)]
+        let devices = self.devices_view(thread);
+        #[cfg(not(unix))]
+        let devices = Vec::new();
+        Ok(AccessView { calls, grants, refused, devices })
     }
 }
 

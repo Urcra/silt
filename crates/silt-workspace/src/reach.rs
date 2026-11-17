@@ -63,6 +63,10 @@ impl fmt::Display for Network {
 pub enum Devices {
     #[default]
     None,
+    /// The named devices, held by Silt and handed to the sandbox as a
+    /// session that outlives the agent: a serial port as a terminal, an
+    /// adb device through a filter that reaches it alone.
+    Relayed,
     /// The named devices' nodes.
     Named,
     /// Every USB device, for tools that talk to them directly (libusb).
@@ -70,11 +74,12 @@ pub enum Devices {
 }
 
 impl Devices {
-    pub const ALL: [Self; 3] = [Self::None, Self::Named, Self::AllUsb];
+    pub const ALL: [Self; 4] = [Self::None, Self::Relayed, Self::Named, Self::AllUsb];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
+            Self::Relayed => "relayed",
             Self::Named => "named",
             Self::AllUsb => "all_usb",
         }
@@ -87,6 +92,7 @@ impl Devices {
     pub fn label(self) -> &'static str {
         match self {
             Self::None => "None",
+            Self::Relayed => "Relayed by Silt",
             Self::Named => "Named devices",
             Self::AllUsb => "All USB",
         }
@@ -162,7 +168,8 @@ pub struct Reach {
     /// The hosts "through Silt only" reaches; any public host when empty.
     pub hosts: Vec<String>,
     pub devices: Devices,
-    /// Device nodes, for [`Devices::Named`].
+    /// The devices, for [`Devices::Relayed`] and [`Devices::Named`]: device
+    /// nodes, and for a relay `adb:SERIAL` too.
     pub device_nodes: Vec<String>,
     /// Address ranges allowed past those always blocked.
     pub ranges: Vec<String>,
@@ -187,7 +194,11 @@ impl Reach {
             network: policy.network.unwrap_or_default(),
             hosts: policy.hosts.iter().flatten().cloned().collect(),
             devices,
-            device_nodes: if devices == Devices::Named { policy.device_nodes.iter().cloned().collect() } else { Vec::new() },
+            device_nodes: if matches!(devices, Devices::Named | Devices::Relayed) {
+                policy.device_nodes.iter().cloned().collect()
+            } else {
+                Vec::new()
+            },
             ranges: if allowed(Extra::Ranges) { policy.ranges.iter().cloned().collect() } else { Vec::new() },
             ports: if allowed(Extra::Ports) { policy.ports.iter().copied().collect() } else { Vec::new() },
             paths: if allowed(Extra::Paths) { policy.paths.clone() } else { BTreeMap::new() },
@@ -206,8 +217,9 @@ impl Reach {
         }
         match self.devices {
             Devices::None => {}
-            Devices::Named if self.device_nodes.is_empty() => {}
+            Devices::Named | Devices::Relayed if self.device_nodes.is_empty() => {}
             Devices::Named => parts.push(format!("devices: {}", self.device_nodes.join(", "))),
+            Devices::Relayed => parts.push(format!("relayed: {}", self.device_nodes.join(", "))),
             Devices::AllUsb => parts.push("all USB devices".into()),
         }
         for (on, what) in [(self.gpu, "the GPU"), (self.docker, "Docker"), (self.ssh_agent, "ssh-agent")] {

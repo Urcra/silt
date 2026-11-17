@@ -26,6 +26,7 @@ function networkLine(reach: Reach): string {
 function devicesLine(reach: Reach): string {
   if (reach.devices === 'all_usb') return 'All USB'
   if (reach.devices === 'named' && reach.device_nodes.length) return reach.device_nodes.join(', ')
+  if (reach.devices === 'relayed' && reach.device_nodes.length) return `${reach.device_nodes.join(', ')} (relayed)`
   return 'None'
 }
 
@@ -336,6 +337,9 @@ export function ReachSettings({
             {policy.devices === 'named' && (
               <ListInput label="Device nodes" placeholder="/dev/ttyUSB0, /dev/bus/usb/001/004" value={policy.device_nodes ?? []} onChange={(device_nodes) => onChange({ device_nodes })} />
             )}
+            {policy.devices === 'relayed' && (
+              <ListInput label="Devices to relay" placeholder="/dev/ttyUSB0@115200, adb:R58M30ABCD" value={policy.device_nodes ?? []} onChange={(device_nodes) => onChange({ device_nodes })} />
+            )}
           </div>
         </div>
         <div className={ROW}>
@@ -486,6 +490,13 @@ export function AccessPanel({ thread, agent }: { thread: string; agent: AgentSta
       (failure: unknown) => setError(message(failure)),
     )
   }
+  const release = (device: string) => {
+    setError(undefined)
+    api.releaseDevice(thread, device).then(
+      () => void queries.invalidateQueries({ queryKey: keys.allApprovals }),
+      (failure: unknown) => setError(message(failure)),
+    )
+  }
   const reach = agent && agent.state !== 'stopped' ? agent.sandbox : null
   const grants = (access.data?.grants ?? []).filter((grant) => grant.active)
   return (
@@ -533,6 +544,26 @@ export function AccessPanel({ thread, agent }: { thread: string; agent: AgentSta
         ))}
         <p className="text-2xs text-fg-2">Grants stay with this thread. A fork starts with none.</p>
       </section>
+      {(access.data?.devices.length ?? 0) > 0 && (
+        <section aria-label="devices and sessions" className="flex flex-col gap-2">
+          <Heading>Devices and sessions</Heading>
+          {access.data?.devices.map((device) => (
+            <div key={device.device} className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-ok" />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate font-mono text-xs">{device.device}</span>
+                <span className="font-mono text-2xs text-fg-2">
+                  {device.kind === 'adb' ? 'adb, for this device only' : 'serial session'} · held since {clock(device.since_ms)}
+                </span>
+              </span>
+              <Button variant="ghost" onClick={() => release(device.device)} aria-label={`release ${device.device}`}>
+                Release
+              </Button>
+            </div>
+          ))}
+          <p className="text-2xs text-fg-2">Silt keeps each session while the agent restarts; releasing ends it.</p>
+        </section>
+      )}
       <section aria-label="plugin calls" className="flex flex-col gap-2">
         <Heading>Plugin calls</Heading>
         {access.data?.calls.length === 0 && <p className="text-xs text-fg-2">None yet.</p>}
