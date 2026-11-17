@@ -66,7 +66,10 @@ export function UsagePanel({ usage, now }: { usage: AgentUsage; now: number }) {
               aria-valuenow={percent}
               className="h-1 overflow-hidden rounded-full bg-surface-3"
             >
-              <div className={cx('h-full rounded-full bg-current', tone(limit.used_percent))} style={{ width: `${Math.min(100, limit.used_percent)}%` }} />
+              <div
+                className={cx('h-full rounded-full bg-current', tone(limit.used_percent))}
+                style={{ width: `${Math.min(100, limit.used_percent)}%` }}
+              />
             </div>
           </div>
         )

@@ -58,7 +58,10 @@ async function open(page: Page, path: string) {
  */
 function shotOptions(page: Page) {
   return {
-    mask: [page.locator('[data-volatile]'), page.getByText(/\/tmp\/silt-|\/silt-live-|127\.0\.0\.1:\d+|forked from [0-9a-f]+/).filter({ visible: true })],
+    mask: [
+      page.locator('[data-volatile]'),
+      page.getByText(/\/tmp\/silt-|\/silt-live-|127\.0\.0\.1:\d+|forked from [0-9a-f]+/).filter({ visible: true }),
+    ],
     animations: 'disabled' as const,
     caret: 'hide' as const,
     maxDiffPixelRatio: 0.001,
@@ -176,7 +179,14 @@ test('reconciling a diverged thread', async ({ page }) => {
   await page.route('**/api/status', async (route) => {
     const response = await route.fetch()
     const status = (await response.json()) as Record<string, unknown>
-    const threads = (await (await route.fetch({ url: route.request().url().replace(/status$/, 'threads') })).json()) as { id: string }[]
+    const threads = (await (
+      await route.fetch({
+        url: route
+          .request()
+          .url()
+          .replace(/status$/, 'threads'),
+      })
+    ).json()) as { id: string }[]
     const full = (short: string) => threads.find((thread) => thread.id.endsWith(short))?.id ?? short
     status.recoveries = [{ thread: full(world.thread), recovery: full(world.fork), time_ms: Date.now() - 3_600_000 }]
     await route.fulfill({ response, json: status })
@@ -233,7 +243,8 @@ test('design systems (ADR 0088)', async ({ page }) => {
 test('a new design system (ADR 0088)', async ({ page }) => {
   await open(page, '/settings/design-systems')
   await shoot(page, 'new-design-system', async (shown) => {
-    if (!(await shown.getByRole('dialog', { name: 'New design system' }).isVisible())) await shown.getByRole('button', { name: 'New design system' }).first().click()
+    if (!(await shown.getByRole('dialog', { name: 'New design system' }).isVisible()))
+      await shown.getByRole('button', { name: 'New design system' }).first().click()
     await shown.getByRole('textbox', { name: 'Name' }).fill('Harbor')
     await expect(shown.getByRole('button', { name: 'Start building' })).toBeVisible()
   })
@@ -253,7 +264,9 @@ test("a design system's tokens (ADR 0088)", async ({ page }) => {
   await open(page, '/settings/design-systems/system?source=personal&name=harbor')
   await shoot(page, 'design-system-tokens', async (shown) => {
     await shown.getByRole('tab', { name: 'Tokens' }).click()
-    await expect(shown.frameLocator('iframe[title="type scale"]').getByText('Sphinx of black quartz, judge my vow').first()).toBeVisible()
+    await expect(
+      shown.frameLocator('iframe[title="type scale"]').getByText('Sphinx of black quartz, judge my vow').first(),
+    ).toBeVisible()
     await shown.waitForTimeout(300)
   })
 })
@@ -319,9 +332,30 @@ test('the first open, with no projects yet', async ({ page }) => {
   await page.route('**/api/found', (route) =>
     route.fulfill({
       json: [
-        { path: '/home/alice/src/api', repo: 'github.com/acme/api', git: true, added: false, sessions: [{ agent: 'Claude Code', count: 12 }], last_ms: Date.now() - 7_200_000 },
-        { path: '/home/alice/src/site', repo: 'github.com/acme/site', git: true, added: false, sessions: [{ agent: 'Codex', count: 3 }], last_ms: Date.now() - 86_400_000 * 3 },
-        { path: '/home/alice/notes', repo: '', git: false, added: false, sessions: [{ agent: 'Claude Code', count: 2 }], last_ms: Date.now() - 86_400_000 * 9 },
+        {
+          path: '/home/alice/src/api',
+          repo: 'github.com/acme/api',
+          git: true,
+          added: false,
+          sessions: [{ agent: 'Claude Code', count: 12 }],
+          last_ms: Date.now() - 7_200_000,
+        },
+        {
+          path: '/home/alice/src/site',
+          repo: 'github.com/acme/site',
+          git: true,
+          added: false,
+          sessions: [{ agent: 'Codex', count: 3 }],
+          last_ms: Date.now() - 86_400_000 * 3,
+        },
+        {
+          path: '/home/alice/notes',
+          repo: '',
+          git: false,
+          added: false,
+          sessions: [{ agent: 'Claude Code', count: 2 }],
+          last_ms: Date.now() - 86_400_000 * 9,
+        },
       ],
     }),
   )

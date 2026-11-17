@@ -36,7 +36,14 @@ export function modeForPreset(preset: Preset, modes: AgentChoiceItem[] | null | 
 /** An agent's own switch for asking nothing, such as Copilot's Allow All, which the daemon sets from the preset (ADR 0049). */
 export function presetDriven(setting: AgentSetting): boolean {
   const ids = new Set(setting.choices.map((choice) => choice.id.toLowerCase()))
-  return setting.category === 'permissions' && [['on', 'off'], ['true', 'false'], ['enabled', 'disabled']].some(([on, off]) => ids.has(on!) && ids.has(off!))
+  return (
+    setting.category === 'permissions' &&
+    [
+      ['on', 'off'],
+      ['true', 'false'],
+      ['enabled', 'disabled'],
+    ].some(([on, off]) => ids.has(on!) && ids.has(off!))
+  )
 }
 
 /**
@@ -49,7 +56,9 @@ export function startSettings(settings: AgentSetting[], modes: AgentChoiceItem[]
 
 /** What a setting starts with: the person's choice, else the workspace's default while the agent still lists it, else as it last ran. */
 export function startingValue(setting: AgentSetting, chosen: string | undefined, preferred: string | undefined): string {
-  return chosen ?? (preferred !== undefined && setting.choices.some((choice) => choice.id === preferred) ? preferred : setting.current)
+  return (
+    chosen ?? (preferred !== undefined && setting.choices.some((choice) => choice.id === preferred) ? preferred : setting.current)
+  )
 }
 
 /** How a state reads after the agent's name (ADR 0022). */

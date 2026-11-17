@@ -36,7 +36,8 @@ export function FilesByStats({
   return (
     <div data-testid="diff-by-file" className="flex flex-col gap-2">
       <p role="note" className="text-xs text-fg-2">
-        {stats.length.toLocaleString()} files, {bytes(total)} of changes: too much to read at once, so each file is read as it's opened.
+        {stats.length.toLocaleString()} files, {bytes(total)} of changes: too much to read at once, so each file is read as it's
+        opened.
       </p>
       <ul className="flex flex-col gap-1">
         {stats.slice(0, listed).map((stat) => (
@@ -49,7 +50,10 @@ export function FilesByStats({
                 onClick={() => toggle(stat.path)}
                 className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-fg-1 max-md:min-h-11"
               >
-                <Icon name="chevronDown" className={cx('h-3 w-3 shrink-0 transition-transform', !open.has(stat.path) && '-rotate-90')} />
+                <Icon
+                  name="chevronDown"
+                  className={cx('h-3 w-3 shrink-0 transition-transform', !open.has(stat.path) && '-rotate-90')}
+                />
                 <span className="min-w-0 truncate text-fg-1" title={stat.path}>
                   {stat.path}
                   {stat.old_path && <span className="ml-2 text-fg-2">renamed from {stat.old_path}</span>}
@@ -57,7 +61,11 @@ export function FilesByStats({
               </button>
               <span className="whitespace-nowrap">{bytes(stat.size)}</span>
               <Counts added={stat.added} removed={stat.removed} binary={stat.binary} />
-              <a aria-label="view file" className="font-sans text-accent-fg hover:text-fg-1" href={appHref(filePath(thread, stat.path))}>
+              <a
+                aria-label="view file"
+                className="font-sans text-accent-fg hover:text-fg-1"
+                href={appHref(filePath(thread, stat.path))}
+              >
                 View file
               </a>
             </div>

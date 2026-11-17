@@ -4,7 +4,11 @@ import { Markdown } from './Markdown'
 
 /** Lines that are the agent's tool work, folded together as on a thread's page. */
 function isWork(line: ShowLine): boolean {
-  return line.line === 'tool_call' || line.line === 'edits' || (line.line === 'entry' && line.kind !== 'user' && line.kind !== 'assistant')
+  return (
+    line.line === 'tool_call' ||
+    line.line === 'edits' ||
+    (line.line === 'entry' && line.kind !== 'user' && line.kind !== 'assistant')
+  )
 }
 
 type Edits = Extract<ShowLine, { line: 'edits' }>
@@ -15,7 +19,8 @@ function madeBy(shared: NonNullable<Edits['shared']>): string {
   return `${shared.others ? 'by another agent' : 'by one of these agents'}${agents}`
 }
 
-const names = (lines: Edits[]) => [...new Set(lines.flatMap((line) => line.files.map((file) => file.path.split('/').pop())))].join(', ')
+const names = (lines: Edits[]) =>
+  [...new Set(lines.flatMap((line) => line.files.map((file) => file.path.split('/').pop())))].join(', ')
 
 function Work({ lines }: { lines: ShowLine[] }) {
   const tools = lines.filter((line) => line.line === 'tool_call')
@@ -79,11 +84,20 @@ export function Conversation({ lines }: { lines: ShowLine[] }) {
         const line = piece
         switch (line.line) {
           case 'entry':
-            if (line.kind === 'user') return <p key={index} className="mt-3 font-medium whitespace-pre-wrap">› {line.text}</p>
+            if (line.kind === 'user')
+              return (
+                <p key={index} className="mt-3 font-medium whitespace-pre-wrap">
+                  › {line.text}
+                </p>
+              )
             return <Markdown key={index} text={line.text} />
           case 'compaction':
             return (
-              <div key={index} role="separator" className="my-1 rounded-md border border-dashed border-line-strong bg-surface-1 px-3 py-1.5 text-xs">
+              <div
+                key={index}
+                role="separator"
+                className="my-1 rounded-md border border-dashed border-line-strong bg-surface-1 px-3 py-1.5 text-xs"
+              >
                 Context compacted here.
               </div>
             )

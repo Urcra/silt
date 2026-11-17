@@ -43,20 +43,33 @@ function DocComments({
 }) {
   if (comments.length === 0) return null
   return (
-    <section aria-label="comments on the doc" data-testid="doc-comments" className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-6 pb-6">
+    <section
+      aria-label="comments on the doc"
+      data-testid="doc-comments"
+      className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-6 pb-6"
+    >
       <h3 className="font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase">Comments</h3>
       {comments.map((comment) => {
         const at = comment.location.at === 'doc' ? comment.location : null
         return (
           <div key={comment.id} className={cx('flex flex-col gap-1', comment.resolved && 'opacity-60')}>
             {at && (
-              <button type="button" className="self-start border-l-2 border-accent pl-2 text-left text-xs text-fg-2 hover:text-fg-1" onClick={() => onShow(at.start, at.end)}>
+              <button
+                type="button"
+                className="self-start border-l-2 border-accent pl-2 text-left text-xs text-fg-2 hover:text-fg-1"
+                onClick={() => onShow(at.start, at.end)}
+              >
                 {at.outdated ? 'The text it was on was deleted' : `“${at.excerpt}”`}
               </button>
             )}
             <CommentThread thread={thread} comment={comment} onChanged={onChanged} />
             {!comment.resolved && (
-              <Button variant="ghost" size="sm" className="self-start" onClick={() => void api.resolveComment(thread, comment.id).then(onChanged)}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="self-start"
+                onClick={() => void api.resolveComment(thread, comment.id).then(onChanged)}
+              >
                 Resolve
               </Button>
             )}
@@ -79,7 +92,11 @@ function saveFile(bytes: BlobPart, type: string, name: string) {
 
 /** The doc's text against one of its versions, line by line. */
 function DocCompare({ thread, version, text }: { thread: string; version: ArtifactView; text: string }) {
-  const kept = useQuery({ queryKey: keys.artifact(thread, version.blob), queryFn: () => api.artifact(thread, version.blob), staleTime: Infinity })
+  const kept = useQuery({
+    queryKey: keys.artifact(thread, version.blob),
+    queryFn: () => api.artifact(thread, version.blob),
+    staleTime: Infinity,
+  })
   if (kept.error) return <p className="px-6 py-4 text-sm text-danger">{message(kept.error)}</p>
   if (!kept.data) return null
   const lines = lineDiff(textOf(kept.data), text)
@@ -93,7 +110,11 @@ function DocCompare({ thread, version, text }: { thread: string; version: Artifa
         {lines.map((line, at) => (
           <div
             key={at}
-            className={cx(line.kind === 'added' && 'bg-ok-tint text-fg-1', line.kind === 'removed' && 'bg-danger-tint text-fg-2 line-through', line.kind === 'same' && 'text-fg-2')}
+            className={cx(
+              line.kind === 'added' && 'bg-ok-tint text-fg-1',
+              line.kind === 'removed' && 'bg-danger-tint text-fg-2 line-through',
+              line.kind === 'same' && 'text-fg-2',
+            )}
           >
             <span aria-hidden="true" className="inline-block w-4 select-none">
               {line.kind === 'added' ? '+' : line.kind === 'removed' ? '−' : ' '}
@@ -107,7 +128,17 @@ function DocCompare({ thread, version, text }: { thread: string; version: Artifa
   )
 }
 
-export function DocEditor({ thread, artifact, title, versions }: { thread: string; artifact: string; title: string; versions: ArtifactView[] }) {
+export function DocEditor({
+  thread,
+  artifact,
+  title,
+  versions,
+}: {
+  thread: string
+  artifact: string
+  title: string
+  versions: ArtifactView[]
+}) {
   useTopic(`thread:${thread}`)
   const queries = useQueryClient()
   const key = ['doc', thread, artifact]
@@ -117,7 +148,9 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
   const [saving, setSaving] = useState<string | null>(null)
   const [draft, setDraft] = useState<string | null>(null)
   const comments = useQuery({ queryKey: keys.comments(thread), queryFn: () => api.comments(thread) })
-  const commentsHere = (comments.data ?? []).filter((comment) => comment.location.at === 'doc' && comment.location.artifact === artifact)
+  const commentsHere = (comments.data ?? []).filter(
+    (comment) => comment.location.at === 'doc' && comment.location.artifact === artifact,
+  )
   const editor = useRef<HTMLTextAreaElement>(null)
   // The characters selected in the editor, which a new comment is on.
   const [chosen, setChosen] = useState<{ start: number; end: number } | null>(null)
@@ -297,7 +330,11 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
       // The printed page's margins are the page's own, as a deck's slides have none.
       const printable = (await page()).replace('</head>', '<style>@page{margin:18mm 16mm}</style></head>')
       const printed = await api.artifactPdf(thread, artifact, printable)
-      saveFile(Uint8Array.from(atob(printed.data), (char) => char.charCodeAt(0)), 'application/pdf', `${named}.pdf`)
+      saveFile(
+        Uint8Array.from(atob(printed.data), (char) => char.charCodeAt(0)),
+        'application/pdf',
+        `${named}.pdf`,
+      )
     } catch (failure) {
       toast(message(failure), 'danger')
     }
@@ -306,20 +343,44 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="doc-editor">
       <div className="flex shrink-0 items-center gap-1 border-b border-line-subtle px-2 py-1">
-        <Button size="sm" variant={view === 'read' ? 'secondary' : 'ghost'} aria-pressed={view === 'read'} onClick={() => setView('read')}>
+        <Button
+          size="sm"
+          variant={view === 'read' ? 'secondary' : 'ghost'}
+          aria-pressed={view === 'read'}
+          onClick={() => setView('read')}
+        >
           Read
         </Button>
-        <Button size="sm" variant={view === 'rich' ? 'secondary' : 'ghost'} aria-pressed={view === 'rich'} onClick={() => setView('rich')}>
+        <Button
+          size="sm"
+          variant={view === 'rich' ? 'secondary' : 'ghost'}
+          aria-pressed={view === 'rich'}
+          onClick={() => setView('rich')}
+        >
           Rich text
         </Button>
-        <Button size="sm" variant={view === 'write' ? 'secondary' : 'ghost'} aria-pressed={view === 'write'} onClick={() => setView('write')}>
+        <Button
+          size="sm"
+          variant={view === 'write' ? 'secondary' : 'ghost'}
+          aria-pressed={view === 'write'}
+          onClick={() => setView('write')}
+        >
           Edit
         </Button>
         {versions.length > 0 && (
           <Menu
             label="Compare with a version"
             align="left"
-            trigger={<span className={cx('rounded-sm px-2 py-1 text-xs', view === 'compare' ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}>Compare</span>}
+            trigger={
+              <span
+                className={cx(
+                  'rounded-sm px-2 py-1 text-xs',
+                  view === 'compare' ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1',
+                )}
+              >
+                Compare
+              </span>
+            }
             items={[...versions].reverse().map((version) => ({
               label: `v${version.version}${version.note ? ` · ${version.note}` : ''}`,
               onSelect: () => {
@@ -345,7 +406,14 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
           ]}
         />
         {view === 'write' && (
-          <Button size="sm" variant="ghost" icon="comment" disabled={!chosen} title={chosen ? undefined : 'Select some text first'} onClick={() => setComposing(true)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="comment"
+            disabled={!chosen}
+            title={chosen ? undefined : 'Select some text first'}
+            onClick={() => setComposing(true)}
+          >
             Comment
           </Button>
         )}
@@ -359,7 +427,14 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
             void saveVersion()
           }}
         >
-          <Input aria-label="what this version is" value={saving} onChange={(event) => setSaving(event.target.value)} placeholder="What this version is (optional)" autoFocus className="min-w-0 flex-1" />
+          <Input
+            aria-label="what this version is"
+            value={saving}
+            onChange={(event) => setSaving(event.target.value)}
+            placeholder="What this version is (optional)"
+            autoFocus
+            className="min-w-0 flex-1"
+          />
           <Button type="submit" size="sm" variant="primary">
             Save
           </Button>
@@ -373,7 +448,14 @@ export function DocEditor({ thread, artifact, title, versions }: { thread: strin
             void comment()
           }}
         >
-          <Textarea aria-label="comment on the selected text" rows={2} value={commenting} onChange={(event) => setCommenting(event.target.value)} placeholder="What about this text?" autoFocus />
+          <Textarea
+            aria-label="comment on the selected text"
+            rows={2}
+            value={commenting}
+            onChange={(event) => setCommenting(event.target.value)}
+            placeholder="What about this text?"
+            autoFocus
+          />
           <div className="flex justify-end gap-1.5">
             <Button type="button" size="sm" variant="ghost" onClick={() => setComposing(false)}>
               Cancel
@@ -474,7 +556,10 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
     const at = `${columnName(editing.column)}${editing.row + 1}`
     setEditing(null)
     // By the row and column the person typed in, so one put in above meanwhile doesn't move it.
-    const ids = view && view.rows[editing.row] && view.columns[editing.column] ? { [at]: [view.rows[editing.row], view.columns[editing.column]] } : {}
+    const ids =
+      view && view.rows[editing.row] && view.columns[editing.column]
+        ? { [at]: [view.rows[editing.row], view.columns[editing.column]] }
+        : {}
     await change({ op: 'set', cells: { [at]: editing.raw }, ids })
   }
   // The sheet shown, its values as they show, a cell that a spreadsheet app would run quoted first.
@@ -540,7 +625,9 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
         <select
           aria-label="number format of the selected column"
           value={view.formats?.[selected.column] ?? ''}
-          onChange={(event) => void change({ op: 'format', formats: { [columnName(selected.column)]: event.target.value || null } })}
+          onChange={(event) =>
+            void change({ op: 'format', formats: { [columnName(selected.column)]: event.target.value || null } })
+          }
           className="h-7 rounded-sm border border-line bg-surface-1 px-1 text-xs text-fg-1"
         >
           {NUMBER_FORMATS.map(([format, label]) => (
@@ -553,7 +640,10 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
           aria-label="number format of the selected cell"
           value={view.cell_formats?.[`${columnName(selected.column)}${selected.row + 1}`] ?? ''}
           onChange={(event) =>
-            void change({ op: 'format', cells: { [`${columnName(selected.column)}${selected.row + 1}`]: event.target.value || null } })
+            void change({
+              op: 'format',
+              cells: { [`${columnName(selected.column)}${selected.row + 1}`]: event.target.value || null },
+            })
           }
           className="h-7 rounded-sm border border-line bg-surface-1 px-1 text-xs text-fg-1"
         >
@@ -578,7 +668,13 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
         <IconButton icon="download" label="Download as .xlsx" onClick={() => void xlsx()} />
       </div>
       {/* Focusable, so the grid scrolls by keyboard too. */}
-      <div className="min-h-0 flex-1 overflow-auto" ref={scroller} onScroll={windowed ? measure : undefined} tabIndex={0} aria-label={`${title}'s cells`}>
+      <div
+        className="min-h-0 flex-1 overflow-auto"
+        ref={scroller}
+        onScroll={windowed ? measure : undefined}
+        tabIndex={0}
+        aria-label={`${title}'s cells`}
+      >
         <table className="border-separate border-spacing-0 font-mono text-xs" role="grid" aria-label={title}>
           <thead className="sticky top-0 z-10 bg-surface-1">
             <tr>
@@ -588,7 +684,10 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
                   key={id}
                   scope="col"
                   style={sized(column)}
-                  className={cx('relative border-r border-b border-line px-2 py-1 font-medium text-fg-2', !widthOf(column) && 'min-w-24')}
+                  className={cx(
+                    'relative border-r border-b border-line px-2 py-1 font-medium text-fg-2',
+                    !widthOf(column) && 'min-w-24',
+                  )}
                 >
                   {columnName(column)}
                   <span
@@ -602,12 +701,17 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
                       setSizing({ column, width: Math.round(start), from: event.clientX, start: Math.round(start) })
                     }}
                     onPointerMove={(event) => {
-                      if (sizing?.column === column) setSizing({ ...sizing, width: Math.min(800, Math.max(24, Math.round(sizing.start + event.clientX - sizing.from))) })
+                      if (sizing?.column === column)
+                        setSizing({
+                          ...sizing,
+                          width: Math.min(800, Math.max(24, Math.round(sizing.start + event.clientX - sizing.from))),
+                        })
                     }}
                     onPointerUp={() => {
                       if (sizing?.column !== column) return
                       setSizing(null)
-                      if (sizing.width !== sizing.start) void change({ op: 'format', widths: { [columnName(column)]: sizing.width } })
+                      if (sizing.width !== sizing.start)
+                        void change({ op: 'format', widths: { [columnName(column)]: sizing.width } })
                     }}
                   />
                 </th>
@@ -618,7 +722,10 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
             {first > 0 && <tr aria-hidden style={{ height: first * ROW }} />}
             {drawn.map(([id, row]) => (
               <tr key={id}>
-                <th scope="row" className="sticky left-0 border-r border-b border-line bg-surface-1 px-2 text-right font-medium text-fg-2">
+                <th
+                  scope="row"
+                  className="sticky left-0 border-r border-b border-line bg-surface-1 px-2 text-right font-medium text-fg-2"
+                >
                   {row + 1}
                 </th>
                 {view.columns.map((columnId, column) => {
@@ -629,7 +736,10 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
                     <td
                       key={columnId}
                       style={sized(column)}
-                      className={cx('relative h-7 border-r border-b border-line-subtle p-0', active && 'outline-2 -outline-offset-2 outline-accent')}
+                      className={cx(
+                        'relative h-7 border-r border-b border-line-subtle p-0',
+                        active && 'outline-2 -outline-offset-2 outline-accent',
+                      )}
                       onClick={() => setSelected({ row, column })}
                       onDoubleClick={() => setEditing({ row, column, raw: view.raw[row]?.[column] ?? '' })}
                     >
@@ -647,7 +757,13 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
                           className="h-full w-full bg-bg px-2 text-fg-1 outline-none"
                         />
                       ) : (
-                        <span className={cx('block truncate px-2', /^-?[\d.,]+%?$/.test(value) ? 'text-right tabular-nums' : '', value.startsWith('#') ? 'text-danger' : 'text-fg-1')}>
+                        <span
+                          className={cx(
+                            'block truncate px-2',
+                            /^-?[\d.,]+%?$/.test(value) ? 'text-right tabular-nums' : '',
+                            value.startsWith('#') ? 'text-danger' : 'text-fg-1',
+                          )}
+                        >
                           {value}
                           {commented && (
                             <span
@@ -667,12 +783,21 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
         </table>
       </div>
       {(commenting !== null || selectedComments.length > 0) && (
-        <section aria-label={`comments on ${selectedAddress}`} data-testid="cell-comments" className="flex max-h-48 shrink-0 flex-col gap-2 overflow-auto border-t border-line-subtle px-3 py-2">
+        <section
+          aria-label={`comments on ${selectedAddress}`}
+          data-testid="cell-comments"
+          className="flex max-h-48 shrink-0 flex-col gap-2 overflow-auto border-t border-line-subtle px-3 py-2"
+        >
           {selectedComments.map((comment) => (
             <div key={comment.id} className={cx('flex flex-col gap-1', comment.resolved && 'opacity-60')}>
               <CommentThread thread={thread} comment={comment} onChanged={refreshComments} />
               {!comment.resolved && (
-                <Button variant="ghost" size="sm" className="self-start" onClick={() => void api.resolveComment(thread, comment.id).then(refreshComments)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="self-start"
+                  onClick={() => void api.resolveComment(thread, comment.id).then(refreshComments)}
+                >
                   Resolve
                 </Button>
               )}
@@ -686,7 +811,13 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
                 void addComment(selectedAddress)
               }}
             >
-              <Input autoFocus aria-label={`a comment on ${selectedAddress}`} value={commenting} onChange={(event) => setCommenting(event.target.value)} placeholder={`Comment on ${selectedAddress}`} />
+              <Input
+                autoFocus
+                aria-label={`a comment on ${selectedAddress}`}
+                value={commenting}
+                onChange={(event) => setCommenting(event.target.value)}
+                placeholder={`Comment on ${selectedAddress}`}
+              />
               <Button size="sm" type="submit" disabled={!commenting.trim()}>
                 Add
               </Button>
@@ -696,40 +827,40 @@ export function SheetGrid({ thread, artifact, title }: { thread: string; artifac
       )}
       <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-line-subtle px-2 py-1">
         <div className="flex items-center gap-1" role="tablist" aria-label="sheets">
-        {Array.from({ length: view.sheets ?? 1 }, (_, at) =>
-          tab === at && renaming !== null ? (
-            <input
-              key={at}
-              autoFocus
-              aria-label="the sheet's name"
-              value={renaming}
-              maxLength={64}
-              onChange={(event) => setRenaming(event.target.value)}
-              onBlur={() => void rename()}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') void rename()
-                if (event.key === 'Escape') setRenaming(null)
-              }}
-              className="w-32 rounded bg-bg px-2 py-0.5 text-xs text-fg-1 outline-1 outline-accent"
-            />
-          ) : (
-            <button
-              key={at}
-              role="tab"
-              aria-selected={tab === at}
-              title={tab === at ? 'Double-click to rename' : undefined}
-              onClick={() => {
-                setTab(at)
-                setSelected({ row: 0, column: 0 })
-                setEditing(null)
-              }}
-              onDoubleClick={() => tab === at && setRenaming(view.names?.[at] ?? `Sheet ${at + 1}`)}
-              className={cx('rounded px-2 py-0.5 text-xs', tab === at ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}
-            >
-              {view.names?.[at] ?? `Sheet ${at + 1}`}
-            </button>
-          ),
-        )}
+          {Array.from({ length: view.sheets ?? 1 }, (_, at) =>
+            tab === at && renaming !== null ? (
+              <input
+                key={at}
+                autoFocus
+                aria-label="the sheet's name"
+                value={renaming}
+                maxLength={64}
+                onChange={(event) => setRenaming(event.target.value)}
+                onBlur={() => void rename()}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void rename()
+                  if (event.key === 'Escape') setRenaming(null)
+                }}
+                className="w-32 rounded bg-bg px-2 py-0.5 text-xs text-fg-1 outline-1 outline-accent"
+              />
+            ) : (
+              <button
+                key={at}
+                role="tab"
+                aria-selected={tab === at}
+                title={tab === at ? 'Double-click to rename' : undefined}
+                onClick={() => {
+                  setTab(at)
+                  setSelected({ row: 0, column: 0 })
+                  setEditing(null)
+                }}
+                onDoubleClick={() => tab === at && setRenaming(view.names?.[at] ?? `Sheet ${at + 1}`)}
+                className={cx('rounded px-2 py-0.5 text-xs', tab === at ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}
+              >
+                {view.names?.[at] ?? `Sheet ${at + 1}`}
+              </button>
+            ),
+          )}
         </div>
         {(view.sheets ?? 1) < 16 && (
           <Button

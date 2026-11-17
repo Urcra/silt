@@ -72,7 +72,9 @@ export function ArtifactCommentsButton({
       }
     >
       <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto" data-testid="artifact-comments">
-        {mine.length === 0 && <p className="text-xs text-fg-2">Select something in the artifact to quote it, then say what to change.</p>}
+        {mine.length === 0 && (
+          <p className="text-xs text-fg-2">Select something in the artifact to quote it, then say what to change.</p>
+        )}
         {mine.map((comment) => (
           <div key={comment.id} className="flex flex-col gap-0.5">
             {comment.location.at === 'element' && (
@@ -98,12 +100,23 @@ export function ArtifactCommentsButton({
           </button>
         </blockquote>
       )}
-      <Textarea aria-label="comment on the artifact" rows={3} value={text} onChange={(event) => setText(event.target.value)} placeholder={`On v${shown.artifact.version}: what should change?`} />
+      <Textarea
+        aria-label="comment on the artifact"
+        rows={3}
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        placeholder={`On v${shown.artifact.version}: what should change?`}
+      />
       <div className="flex items-center justify-end gap-1.5">
         <Button variant="ghost" size="sm" disabled={busy || !text.trim()} onClick={() => void submit(false)}>
           Comment
         </Button>
-        <Button variant="primary" size="sm" disabled={busy || (!text.trim() && waiting.length === 0)} onClick={() => void submit(true)}>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={busy || (!text.trim() && waiting.length === 0)}
+          onClick={() => void submit(true)}
+        >
           Send to the agent{waiting.length > 0 ? ` (${waiting.length + (text.trim() ? 1 : 0)})` : ''}
         </Button>
       </div>
@@ -112,7 +125,15 @@ export function ArtifactCommentsButton({
 }
 
 /** On a phone, the box under an open artifact: what to change, sent to the agent at once. */
-export function AskForChange({ thread, group, shown, comments, quote, onClearQuote, onChanged }: Parameters<typeof ArtifactCommentsButton>[0]) {
+export function AskForChange({
+  thread,
+  group,
+  shown,
+  comments,
+  quote,
+  onClearQuote,
+  onChanged,
+}: Parameters<typeof ArtifactCommentsButton>[0]) {
   const { add, send } = useArtifactComments(thread, group, shown, comments, onChanged)
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
@@ -137,7 +158,12 @@ export function AskForChange({ thread, group, shown, comments, quote, onClearQuo
       {quote && <p className="line-clamp-2 border-l-2 border-accent pl-2 text-xs text-fg-2">{quote}</p>}
       <label className={cx('flex min-h-11 items-center gap-2 rounded-lg border border-line-strong bg-elevated pr-1.5 pl-3')}>
         <span className="sr-only">Ask the agent for a change to this artifact</span>
-        <input value={text} onChange={(event) => setText(event.target.value)} placeholder="Ask for a change to this" className="min-w-0 flex-1 bg-transparent outline-none" />
+        <input
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder="Ask for a change to this"
+          className="min-w-0 flex-1 bg-transparent outline-none"
+        />
         <Button type="submit" variant="primary" size="sm" icon="arrowUp" aria-label="Send" disabled={busy || !text.trim()} />
       </label>
     </form>

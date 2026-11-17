@@ -31,7 +31,12 @@ export const COMPONENTS: Components = {
     // A short chip, a path or a name, stays whole on its line; a long one wraps with each piece boxed.
     const short = textOf(children).length <= 40
     return (
-      <code className={cx('rounded-sm border border-line-subtle bg-surface-1 px-1 font-mono text-[0.92em]', short ? 'whitespace-nowrap' : '[box-decoration-break:clone]')}>
+      <code
+        className={cx(
+          'rounded-sm border border-line-subtle bg-surface-1 px-1 font-mono text-[0.92em]',
+          short ? 'whitespace-nowrap' : '[box-decoration-break:clone]',
+        )}
+      >
         {children}
       </code>
     )
@@ -39,7 +44,11 @@ export const COMPONENTS: Components = {
   a({ href, children }) {
     const outside = href !== undefined && /^https?:/.test(href)
     return (
-      <a href={href} className="text-accent-fg underline decoration-line-strong underline-offset-2 hover:text-fg-1" {...(outside ? { target: '_blank', rel: 'noreferrer noopener' } : {})}>
+      <a
+        href={href}
+        className="text-accent-fg underline decoration-line-strong underline-offset-2 hover:text-fg-1"
+        {...(outside ? { target: '_blank', rel: 'noreferrer noopener' } : {})}
+      >
         {children}
       </a>
     )

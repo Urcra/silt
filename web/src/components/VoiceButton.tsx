@@ -25,7 +25,11 @@ export function VoiceButton({ dictation }: { dictation: Dictation }) {
     <button
       type="button"
       aria-label={live ? 'Stop dictating' : 'Dictate'}
-      title={live ? 'Stop, and keep the words (Esc throws them away)' : `Dictate, or hold ${DICTATION_KEYS.join('+')} to talk; your voice stays on this machine`}
+      title={
+        live
+          ? 'Stop, and keep the words (Esc throws them away)'
+          : `Dictate, or hold ${DICTATION_KEYS.join('+')} to talk; your voice stays on this machine`
+      }
       disabled={busy}
       onClick={() => void press()}
       className={cx(
@@ -54,7 +58,8 @@ export function VoiceOffer({ dictation, side }: { dictation: Dictation; side: 'l
       )}
     >
       <p className="mb-1 text-sm font-medium text-fg-1">Download the speech model?</p>
-      Dictation needs a {MODEL_MEGABYTES} MB speech model, downloaded once. It runs on this machine, and your voice never leaves it.
+      Dictation needs a {MODEL_MEGABYTES} MB speech model, downloaded once. It runs on this machine, and your voice never leaves
+      it.
       <div className="mt-2.5 flex justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={dictation.dismissOffer}>
           Not now
@@ -103,7 +108,10 @@ function Waveform({ levels, quiet }: { levels: number[]; quiet: boolean }) {
         <i
           key={index}
           className={cx('block w-0.5 shrink-0 rounded-full', quiet ? 'bg-line-strong' : 'bg-accent')}
-          style={{ height: `${Math.max(2, Math.round(loudness * 22))}px`, opacity: quiet ? 1 : 0.45 + 0.55 * (index / Math.max(levels.length, 1)) }}
+          style={{
+            height: `${Math.max(2, Math.round(loudness * 22))}px`,
+            opacity: quiet ? 1 : 0.45 + 0.55 * (index / Math.max(levels.length, 1)),
+          }}
         />
       ))}
     </span>

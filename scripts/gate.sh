@@ -82,6 +82,7 @@ step "formatting"
 cargo fmt --all -- --check
 if $has_voice; then (cd crates/silt-voice && cargo fmt -- --check); fi
 if $has_desktop; then (cd crates/silt-desktop && cargo fmt -- --check); fi
+if $has_web; then pnpm -C web fmt:check; fi
 
 if $has_web; then
     step "web lint"

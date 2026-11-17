@@ -26,7 +26,6 @@ interface Item {
   run: () => void
 }
 
-
 /** ⌘K: start work from what's typed, go to a thread or something said, or do an action. */
 export function Palette() {
   const [open, setOpen] = useState(false)
@@ -87,7 +86,14 @@ function PaletteList({ close }: { close: () => void }) {
             text: typed,
             label: (
               <>
-                New thread{project && <> in <span className="font-mono">{project}</span></>}: “{typed}”
+                New thread
+                {project && (
+                  <>
+                    {' '}
+                    in <span className="font-mono">{project}</span>
+                  </>
+                )}
+                : “{typed}”
               </>
             ),
             run: () => {
@@ -116,8 +122,7 @@ function PaletteList({ close }: { close: () => void }) {
                   text: typed,
                   label: 'Queue it in this thread',
                   hint: current?.agent_state === 'working' ? 'turn running' : undefined,
-                  run: () =>
-                    void api.enqueue(here, typed).then(() => toast('Queued for the agent', 'ok'), failed),
+                  run: () => void api.enqueue(here, typed).then(() => toast('Queued for the agent', 'ok'), failed),
                 },
               ]
             : []),

@@ -65,12 +65,15 @@ export function ArtifactList({
   const now = useNow()
   // Artifacts the thread's owner archived stay in the history but leave this list (ADR 0075).
   const listing = useQuery({ queryKey: keys.artifacts, queryFn: api.artifacts, staleTime: 15_000 })
-  const archived = new Set((listing.data ?? []).filter((row) => row.thread === thread && row.archived).map((row) => row.artifact.id))
+  const archived = new Set(
+    (listing.data ?? []).filter((row) => row.thread === thread && row.archived).map((row) => row.artifact.id),
+  )
   groups = groups.filter((group) => !archived.has(group.id))
   if (groups.length === 0 && images.length === 0)
     return (
       <p className="px-5 py-6 text-sm text-fg-2">
-        Nothing yet. When an agent you run here makes a page, a chart or a document for you, it shows here, and images it shows you are kept here too.
+        Nothing yet. When an agent you run here makes a page, a chart or a document for you, it shows here, and images it shows
+        you are kept here too.
       </p>
     )
   return (
@@ -93,7 +96,8 @@ export function ArtifactList({
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="truncate font-medium">{last.artifact.title}</span>
                   <span className="text-xs text-fg-2">
-                    {kindLabel(last.artifact.kind)} · {group.versions.length === 1 ? '1 version' : `${group.versions.length} versions`}
+                    {kindLabel(last.artifact.kind)} ·{' '}
+                    {group.versions.length === 1 ? '1 version' : `${group.versions.length} versions`}
                   </span>
                   <span className="font-mono text-2xs text-fg-3">{ago(last.entry.time_ms, now)}</span>
                 </span>
@@ -119,7 +123,8 @@ export function ArtifactList({
 
 const ZOOMS = [50, 75, 100, 125, 150, 200]
 const PRESSED = 'aria-pressed:bg-surface-2 aria-pressed:text-fg-1'
-const ICON_TRIGGER = 'inline-flex items-center justify-center rounded-sm p-1 text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11'
+const ICON_TRIGGER =
+  'inline-flex items-center justify-center rounded-sm p-1 text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11'
 
 /**
  * An open artifact (ADR 0068, ADR 0070): one header row holds its title, version and view, and its page fills the rest
@@ -164,7 +169,12 @@ export function ArtifactViewer({
   const revealing = useRef<((anchor: string) => void) | null>(null)
   const [sharing, setSharing] = useState(false)
   // What a page asks the person to agree to, such as saving a file, until they answer.
-  const [asking, setAsking] = useState<{ title: string; detail: string; action: string; answer: (agreed: boolean) => void } | null>(null)
+  const [asking, setAsking] = useState<{
+    title: string
+    detail: string
+    action: string
+    answer: (agreed: boolean) => void
+  } | null>(null)
   // Whether the page listens to the person or speaks to them now, and what stops it (ADR 0079).
   const [voice, setVoice] = useState<{ now: 'listening' | 'speaking'; stop: () => void } | null>(null)
   const composer = useRef<(() => void) | null>(null)
@@ -200,7 +210,9 @@ export function ArtifactViewer({
     addComment: async (text, quote, anchor) => {
       const { shown, onCommentsChanged } = current.current
       if (!shown) throw new Error('no version is shown')
-      const on = anchor ? ({ on: 'element', artifact: shown.artifact.id, anchor } as const) : ({ on: 'entry', index: shown.entry.index } as const)
+      const on = anchor
+        ? ({ on: 'element', artifact: shown.artifact.id, anchor } as const)
+        : ({ on: 'entry', index: shown.entry.index } as const)
       const made = await api.addComment(thread, on, quoted(text, quote))
       await onCommentsChanged()
       return made.id
@@ -294,12 +306,20 @@ export function ArtifactViewer({
       // A deck's copy is a page of its own: its slides in one frame, with the viewer's controls (ADR 0076).
       const deck = artifact.kind === 'slides' ? deckOf(textOf(content.data)) : null
       if (deck) {
-        download(deckOffline(deck, `${artifact.title} · v${artifact.version}`, styleText, files), 'text/html', fileName(artifact, 'html'))
+        download(
+          deckOffline(deck, `${artifact.title} · v${artifact.version}`, styleText, files),
+          'text/html',
+          fileName(artifact, 'html'),
+        )
         return
       }
       const canvas = artifact.kind === 'canvas' ? canvasOf(textOf(content.data)) : null
       if (canvas) {
-        download(canvasOffline(canvas, `${artifact.title} · v${artifact.version}`, styleText, files), 'text/html', fileName(artifact, 'html'))
+        download(
+          canvasOffline(canvas, `${artifact.title} · v${artifact.version}`, styleText, files),
+          'text/html',
+          fileName(artifact, 'html'),
+        )
         return
       }
       const rendered = await renderedMarkup(artifact, content.data)
@@ -309,7 +329,10 @@ export function ArtifactViewer({
         const { zipOf } = await import('../zip')
         const decoded = (data: string) => Uint8Array.from(atob(data), (char) => char.charCodeAt(0))
         const page = new TextEncoder().encode(offlineHtml(artifact, content.data, rendered, styleText, {}))
-        const zip = zipOf([{ path: 'index.html', bytes: page }, ...Object.entries(files).map(([path, file]) => ({ path, bytes: decoded(file.data) }))])
+        const zip = zipOf([
+          { path: 'index.html', bytes: page },
+          ...Object.entries(files).map(([path, file]) => ({ path, bytes: decoded(file.data) })),
+        ])
         download(zip, 'application/zip', fileName(artifact, 'zip'))
         return
       }
@@ -320,7 +343,15 @@ export function ArtifactViewer({
   }
   const zoomTo = (step: number) => ZOOMS[ZOOMS.indexOf(zoom) + step]
   const offline: MenuItem[] = offlineCopy(artifact)
-    ? [{ label: 'Download as one HTML file', icon: 'download', hint: 'opens anywhere', onSelect: () => void exportHtml(), divided: true }]
+    ? [
+        {
+          label: 'Download as one HTML file',
+          icon: 'download',
+          hint: 'opens anywhere',
+          onSelect: () => void exportHtml(),
+          divided: true,
+        },
+      ]
     : []
   const shareItems: MenuItem[] = [
     { label: 'Read-only link…', icon: 'lock', hint: 'no account needed', onSelect: () => setSharing(true) },
@@ -330,14 +361,26 @@ export function ArtifactViewer({
       hint: 'for people in the thread',
       onSelect: () => link(artifactPath(thread, artifact.id, artifact.version === latestVersion ? null : artifact.version)),
     },
-    { label: listed?.pinned ? 'Unpin from Artifacts' : 'Pin to Artifacts', icon: 'check', onSelect: () => void keep('pin'), divided: true },
-    { label: listed?.archived ? 'Unarchive' : 'Archive', icon: 'folder', hint: "the thread's owner's", onSelect: () => void keep('archive') },
+    {
+      label: listed?.pinned ? 'Unpin from Artifacts' : 'Pin to Artifacts',
+      icon: 'check',
+      onSelect: () => void keep('pin'),
+      divided: true,
+    },
+    {
+      label: listed?.archived ? 'Unarchive' : 'Archive',
+      icon: 'folder',
+      hint: "the thread's owner's",
+      onSelect: () => void keep('archive'),
+    },
     ...offline,
     { label: 'Download the file', icon: 'file', onSelect: downloadFile, divided: !offlineCopy(artifact) },
   ]
   const viewItems: MenuItem[] = [
     { label: 'Preview', icon: source ? 'eye' : 'check', onSelect: () => setSource(false) },
-    ...(textual ? [{ label: 'Source', icon: source ? 'check' : 'code', onSelect: () => setSource(true) } satisfies MenuItem] : []),
+    ...(textual
+      ? [{ label: 'Source', icon: source ? 'check' : 'code', onSelect: () => setSource(true) } satisfies MenuItem]
+      : []),
   ]
   const zoomItem = (label: string, step: number): MenuItem => {
     const level = zoomTo(step)
@@ -354,7 +397,9 @@ export function ArtifactViewer({
     ...pageItems.map((item, at) => (at === 0 ? { ...item, divided: true } : item)),
     ...shareItems.map((item, at) => ({ ...item, hint: undefined, divided: at === 0 || item.divided })),
   ]
-  const more = (items: MenuItem[]) => <Menu label="More" trigger={<Icon name="more" className="h-4 w-4" />} triggerClassName={ICON_TRIGGER} items={items} />
+  const more = (items: MenuItem[]) => (
+    <Menu label="More" trigger={<Icon name="more" className="h-4 w-4" />} triggerClassName={ICON_TRIGGER} items={items} />
+  )
   return (
     <div className="@container/artifact flex h-full min-h-0 flex-col" data-testid="artifact-viewer">
       <div className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-0.5 border-b border-line-subtle bg-bg pr-2 pl-1.5">
@@ -402,7 +447,11 @@ export function ArtifactViewer({
             triggerClassName="inline-flex items-center gap-1 rounded-sm border border-line px-1.5 py-0.5 font-mono text-xs text-fg-2 hover:border-line-strong hover:text-fg-1 max-md:min-h-11"
             items={[...group.versions].reverse().map((version) => ({
               label: `v${version.artifact.version}${version.artifact.version === latestVersion ? ' · latest' : ''}`,
-              hint: [version.artifact.by ? `saved by the page for ${version.artifact.by}` : null, version.artifact.note, ago(version.entry.time_ms, now)]
+              hint: [
+                version.artifact.by ? `saved by the page for ${version.artifact.by}` : null,
+                version.artifact.note,
+                ago(version.entry.time_ms, now),
+              ]
                 .filter(Boolean)
                 .join(' · '),
               icon: version.artifact.version === artifact.version ? 'check' : undefined,
@@ -412,17 +461,31 @@ export function ArtifactViewer({
         </span>
         <span className="min-w-2 flex-1" />
         {voice && (
-          <span role="status" className="mr-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border border-accent/40 bg-accent-tint py-0.5 pr-0.5 pl-2 text-xs text-fg-1" data-testid="page-voice">
+          <span
+            role="status"
+            className="mr-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border border-accent/40 bg-accent-tint py-0.5 pr-0.5 pl-2 text-xs text-fg-1"
+            data-testid="page-voice"
+          >
             <span aria-hidden="true" className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
             {voice.now === 'listening' ? 'The page is listening' : 'The page is speaking'}
-            <button type="button" onClick={voice.stop} className="rounded-full px-2 py-0.5 font-medium text-accent-fg hover:bg-surface-2 max-md:min-h-11">
+            <button
+              type="button"
+              onClick={voice.stop}
+              className="rounded-full px-2 py-0.5 font-medium text-accent-fg hover:bg-surface-2 max-md:min-h-11"
+            >
               Stop
             </button>
           </span>
         )}
-        <span role="group" aria-label="View" className="mr-1 inline-flex shrink-0 gap-px rounded-sm bg-surface-1 p-0.5 @max-md/artifact:hidden">
+        <span
+          role="group"
+          aria-label="View"
+          className="mr-1 inline-flex shrink-0 gap-px rounded-sm bg-surface-1 p-0.5 @max-md/artifact:hidden"
+        >
           <IconButton icon="eye" label="Preview" aria-pressed={!source} onClick={() => setSource(false)} className={PRESSED} />
-          {textual && <IconButton icon="code" label="Source" aria-pressed={source} onClick={() => setSource(true)} className={PRESSED} />}
+          {textual && (
+            <IconButton icon="code" label="Source" aria-pressed={source} onClick={() => setSource(true)} className={PRESSED} />
+          )}
         </span>
         <span className="inline-flex shrink-0 items-center gap-0.5 @max-xl/artifact:hidden">
           <IconButton icon="reload" label="Reload" onClick={() => setReloads(reloads + 1)} />
@@ -435,7 +498,11 @@ export function ArtifactViewer({
               </>
             }
             triggerClassName="inline-flex items-center gap-1 rounded-sm px-1.5 py-1 text-xs text-fg-1 hover:bg-surface-2 max-md:min-h-11"
-            items={ZOOMS.map((level) => ({ label: `${level}%`, icon: level === zoom ? 'check' : undefined, onSelect: () => setZoom(level) }))}
+            items={ZOOMS.map((level) => ({
+              label: `${level}%`,
+              icon: level === zoom ? 'check' : undefined,
+              onSelect: () => setZoom(level),
+            }))}
           />
           <span aria-hidden="true" className="mx-1 h-4 w-px bg-line" />
         </span>
@@ -453,9 +520,7 @@ export function ArtifactViewer({
           />
         </span>
         <span className="hidden shrink-0 @md/artifact:@max-xl/artifact:inline-flex">{more(pageItems)}</span>
-        <span className="hidden shrink-0 @max-md/artifact:inline-flex">
-          {more(narrowItems)}
-        </span>
+        <span className="hidden shrink-0 @max-md/artifact:inline-flex">{more(narrowItems)}</span>
         <ArtifactCommentsButton
           thread={thread}
           group={group}
@@ -474,7 +539,12 @@ export function ArtifactViewer({
           onReveal={(shownAnchor) => revealing.current?.(shownAnchor)}
         />
         {onFull && (
-          <IconButton icon={full ? 'collapse' : 'expand'} label={full ? 'Leave the full view (F)' : 'Full view (F)'} onClick={onFull} className="max-lg:hidden" />
+          <IconButton
+            icon={full ? 'collapse' : 'expand'}
+            label={full ? 'Leave the full view (F)' : 'Full view (F)'}
+            onClick={onFull}
+            className="max-lg:hidden"
+          />
         )}
         <IconButton icon="x" label="Close the artifact" onClick={onClose} />
       </div>
@@ -529,7 +599,9 @@ export function ArtifactViewer({
           >
             <Icon name="alert" className="h-3.5 w-3.5 shrink-0 text-warn" />
             <span className="min-w-0 flex-1">
-              {seen.length === 1 ? 'Your browser saw a problem in this version: ' : `Your browser saw ${seen.length} problems in this version, first: `}
+              {seen.length === 1
+                ? 'Your browser saw a problem in this version: '
+                : `Your browser saw ${seen.length} problems in this version, first: `}
               <span className="font-mono break-all text-fg-2">{seen[0].text}</span>
             </span>
             <Button size="sm" onClick={() => void sendProblems()}>
@@ -619,7 +691,12 @@ function ArtifactPage({
         version: artifact.version,
         theme: startTheme,
         parent: window.location.origin,
-        boot: { storage: keptFor(thread, artifact.id), hot: lastSnapshot(thread, artifact.id), contract: artifact.contract ?? '1', nonce },
+        boot: {
+          storage: keptFor(thread, artifact.id),
+          hot: lastSnapshot(thread, artifact.id),
+          contract: artifact.contract ?? '1',
+          nonce,
+        },
       }),
     enabled: artifact.kind === 'html',
     staleTime: Infinity,
@@ -627,11 +704,21 @@ function ArtifactPage({
     refetchOnWindowFocus: false,
   })
   // A plain `#name` in the artifact's link reaches the page, for its own views; `#artifact-…` is Silt's.
-  const [pageHash] = useState(() => (/^#[A-Za-z0-9-]{1,64}$/.test(window.location.hash) && !window.location.hash.startsWith('#artifact-') ? window.location.hash : ''))
+  const [pageHash] = useState(() =>
+    /^#[A-Za-z0-9-]{1,64}$/.test(window.location.hash) && !window.location.hash.startsWith('#artifact-')
+      ? window.location.hash
+      : '',
+  )
   // Where no frame address can be had, the page is composed here as before.
   const [framed] = useState(() =>
     artifact.kind === 'html'
-      ? sandboxedDocument(textOf(content), { style, theme: startTheme, vendor, parent: window.location.origin, boot: JSON.stringify({ nonce }) })
+      ? sandboxedDocument(textOf(content), {
+          style,
+          theme: startTheme,
+          vendor,
+          parent: window.location.origin,
+          boot: JSON.stringify({ nonce }),
+        })
       : '',
   )
   // The page's Mermaid diagrams, drawn here in the viewer's theme and sent back as images (ADR 0073).
@@ -683,7 +770,8 @@ function ArtifactPage({
         for (const message of held.current.splice(0)) send.current(message)
       }
       if (said?.silt === 'selection') callbacks.current.onSelect(typeof said.text === 'string' ? said.text.slice(0, 500) : '')
-      if (said?.silt === 'problems' && Array.isArray(said.problems)) callbacks.current.onProblems(said.problems.filter(isProblem).slice(0, 20))
+      if (said?.silt === 'problems' && Array.isArray(said.problems))
+        callbacks.current.onProblems(said.problems.filter(isProblem).slice(0, 20))
       const call = callOf(said)
       if (call) {
         void broker.answer(call).then((answer) => send.current({ silt: 'reply', id: call.id, ...answer }))
@@ -697,7 +785,7 @@ function ArtifactPage({
       }
       if (said?.silt === 'snapshotted') rememberSnapshot(thread, artifact.id, (said as { data?: unknown }).data)
       if (said?.silt === 'mermaid' && Array.isArray((said as { diagrams?: unknown }).diagrams)) {
-        diagrams.current = ((said as { diagrams: unknown[] }).diagrams)
+        diagrams.current = (said as { diagrams: unknown[] }).diagrams
           .filter((diagram): diagram is { i: number; text: string } => {
             const candidate = diagram as { i?: unknown; text?: unknown }
             return typeof candidate.i === 'number' && typeof candidate.text === 'string' && candidate.text.length <= 65536
@@ -714,7 +802,12 @@ function ArtifactPage({
       broker.dispose()
     }
   }, [thread, artifact, holder, nonce])
-  const selected = () => onSelect(String(window.getSelection() ?? '').trim().slice(0, 500))
+  const selected = () =>
+    onSelect(
+      String(window.getSelection() ?? '')
+        .trim()
+        .slice(0, 500),
+    )
   // A deck's or a canvas's own files, carried into their frames, which can't reach Silt (ADR 0074).
   const files = useQuery({
     queryKey: ['artifact-files', thread, artifact.id, artifact.version],
@@ -726,7 +819,11 @@ function ArtifactPage({
   const zoomed = { transform: `scale(${scale})`, transformOrigin: '0 0', width: `${100 / scale}%`, height: `${100 / scale}%` }
   if (source)
     return (
-      <pre onMouseUp={selected} className="h-full overflow-auto px-4 pt-4 pb-6 font-mono text-xs leading-5 whitespace-pre-wrap text-fg-1" data-testid="artifact-source">
+      <pre
+        onMouseUp={selected}
+        className="h-full overflow-auto px-4 pt-4 pb-6 font-mono text-xs leading-5 whitespace-pre-wrap text-fg-1"
+        data-testid="artifact-source"
+      >
         {textOf(content)}
       </pre>
     )
@@ -771,17 +868,37 @@ function ArtifactPage({
       />,
     )
   if (artifact.kind === 'canvas')
-    return typed(<CanvasView text={textOf(content)} style={style} theme={startTheme} files={files.data} onComment={(quote) => holder.openComposer(quote)} />)
+    return typed(
+      <CanvasView
+        text={textOf(content)}
+        style={style}
+        theme={startTheme}
+        files={files.data}
+        onComment={(quote) => holder.openComposer(quote)}
+      />,
+    )
   if (artifact.kind === 'data')
-    return typed(<DataView text={textOf(content)} theme={theme} style={style} live={{ thread, artifact: artifact.id, version: artifact.version }} />)
+    return typed(
+      <DataView
+        text={textOf(content)}
+        theme={theme}
+        style={style}
+        live={{ thread, artifact: artifact.id, version: artifact.version }}
+      />,
+    )
   // Docs and sheets show as they stand now, edited in place (ADR 0077).
-  if (artifact.kind === 'doc') return typed(<DocEditor thread={thread} artifact={artifact.id} title={artifact.title} versions={versions} />)
+  if (artifact.kind === 'doc')
+    return typed(<DocEditor thread={thread} artifact={artifact.id} title={artifact.title} versions={versions} />)
   if (artifact.kind === 'sheet') return typed(<SheetGrid thread={thread} artifact={artifact.id} title={artifact.title} />)
-  if (artifact.kind === 'whiteboard') return typed(<WhiteboardView thread={thread} artifact={artifact.id} title={artifact.title} />)
+  if (artifact.kind === 'whiteboard')
+    return typed(<WhiteboardView thread={thread} artifact={artifact.id} title={artifact.title} />)
   // A kind this UI doesn't know shows as its source rather than failing as an image.
   if (!artifact.media_type.startsWith('image/'))
     return (
-      <pre className="h-full overflow-auto px-4 pt-4 pb-6 font-mono text-xs leading-5 whitespace-pre-wrap text-fg-1" data-testid="artifact-source">
+      <pre
+        className="h-full overflow-auto px-4 pt-4 pb-6 font-mono text-xs leading-5 whitespace-pre-wrap text-fg-1"
+        data-testid="artifact-source"
+      >
         {textOf(content)}
       </pre>
     )
@@ -809,7 +926,14 @@ export function Mermaid({ text, title }: { text: string; title: string }) {
         <pre className="font-mono text-xs whitespace-pre-wrap text-fg-2">{text}</pre>
       </div>
     )
-  return <img src={svgUrl(drawn.svg)} alt={title} className="mx-auto block max-w-full rounded-sm bg-white p-3" data-testid="artifact-diagram" />
+  return (
+    <img
+      src={svgUrl(drawn.svg)}
+      alt={title}
+      className="mx-auto block max-w-full rounded-sm bg-white p-3"
+      data-testid="artifact-diagram"
+    />
+  )
 }
 
 /** What an offline copy shows for an artifact that isn't a page of its own: Markdown's markup, a diagram's SVG. */
@@ -817,7 +941,9 @@ export function Mermaid({ text, title }: { text: string; title: string }) {
 async function printDeck(thread: string, artifact: ArtifactView, html: string) {
   try {
     const printed = await api.artifactPdf(thread, artifact.id, html)
-    const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(printed.data), (char) => char.charCodeAt(0))], { type: 'application/pdf' }))
+    const url = URL.createObjectURL(
+      new Blob([Uint8Array.from(atob(printed.data), (char) => char.charCodeAt(0))], { type: 'application/pdf' }),
+    )
     const anchor = document.createElement('a')
     anchor.href = url
     anchor.download = `${artifact.title.replace(/[^A-Za-z0-9_-]+/g, '-') || 'deck'}.pdf`

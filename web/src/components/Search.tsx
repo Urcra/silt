@@ -67,7 +67,9 @@ function ThreadHits({
         </Link>
         <span className="font-mono text-2xs text-fg-2">
           <span data-volatile>{short(thread)}</span>
-          {[projectName(hits[0].repo ?? project ?? ''), hits[0].owner, hits[0].status].filter(Boolean).map((part) => ` · ${part}`)}
+          {[projectName(hits[0].repo ?? project ?? ''), hits[0].owner, hits[0].status]
+            .filter(Boolean)
+            .map((part) => ` · ${part}`)}
         </span>
         <span className="ml-auto text-xs text-fg-2">
           {hits.length} {hits.length === 1 ? 'hit' : 'hits'}
@@ -75,7 +77,10 @@ function ThreadHits({
       </header>
       <ul className="flex flex-col">
         {shown.map((hit, index) => (
-          <li key={index} className="grid grid-cols-[64px_84px_minmax(0,1fr)] items-baseline gap-3 border-b border-line-subtle px-3 py-2 text-sm last:border-b-0 max-md:grid-cols-[56px_minmax(0,1fr)]">
+          <li
+            key={index}
+            className="grid grid-cols-[64px_84px_minmax(0,1fr)] items-baseline gap-3 border-b border-line-subtle px-3 py-2 text-sm last:border-b-0 max-md:grid-cols-[56px_minmax(0,1fr)]"
+          >
             {hit.artifact ? (
               <Link
                 className="font-mono text-2xs text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center"
@@ -96,7 +101,9 @@ function ThreadHits({
             ) : (
               <span className="font-mono text-2xs text-fg-2">—</span>
             )}
-            <span className="font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase max-md:hidden">{ROLE[hit.kind] ?? hit.kind}</span>
+            <span className="font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase max-md:hidden">
+              {ROLE[hit.kind] ?? hit.kind}
+            </span>
             <span className={cx('flex min-w-0 flex-col gap-0.5', hit.kind.startsWith('tool') && 'font-mono text-xs')}>
               <span>
                 <Snippet text={hit.snippet} />
@@ -247,14 +254,21 @@ export function Search() {
                     />
                   </form>
                 ) : (
-                  <Button key={name} variant="ghost" size="sm" className="border-dashed border-line" onClick={() => setAdding(name)}>
+                  <Button
+                    key={name}
+                    variant="ghost"
+                    size="sm"
+                    className="border-dashed border-line"
+                    onClick={() => setAdding(name)}
+                  >
                     + {label}
                   </Button>
                 ),
               )}
               {results && (
                 <span className="ml-auto text-xs text-fg-2">
-                  {results.length} {results.length === 1 ? 'hit' : 'hits'} in {grouped.length} {grouped.length === 1 ? 'thread' : 'threads'}
+                  {results.length} {results.length === 1 ? 'hit' : 'hits'} in {grouped.length}{' '}
+                  {grouped.length === 1 ? 'thread' : 'threads'}
                   {early > 0 && ` · ${early} from before compaction`}
                 </span>
               )}
@@ -287,8 +301,8 @@ export function Search() {
           )}
         </div>
         <Mock id="search.saved">
-        <aside aria-label="saved searches" className="flex shrink-0 flex-col gap-1.5 lg:w-56">
-          <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Saved</h2>
+          <aside aria-label="saved searches" className="flex shrink-0 flex-col gap-1.5 lg:w-56">
+            <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Saved</h2>
             {[
               { label: 'author:alice status:active', filters: { author: 'alice', status: 'active' } as SearchForm },
               { label: 'status:merged', filters: { status: 'merged' } as SearchForm },
@@ -305,7 +319,7 @@ export function Search() {
                 {saved.label}
               </button>
             ))}
-        </aside>
+          </aside>
         </Mock>
       </div>
     </Page>

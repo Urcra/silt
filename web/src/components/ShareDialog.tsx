@@ -50,14 +50,24 @@ export function Links({ thread, artifact }: { thread: string; artifact?: { id: s
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-xs text-fg-2">
           Expires
-          <Select aria-label="link lasts" value={days} onChange={(event) => setDays(Number(event.target.value))} className="text-xs">
+          <Select
+            aria-label="link lasts"
+            value={days}
+            onChange={(event) => setDays(Number(event.target.value))}
+            className="text-xs"
+          >
             <option value={1}>in 1 day</option>
             <option value={7}>in 7 days</option>
             <option value={30}>in 30 days</option>
           </Select>
         </label>
         <label className="flex items-center gap-1.5 text-xs max-md:min-h-11">
-          <input type="checkbox" checked={follow} onChange={(event) => setFollow(event.target.checked)} className="accent-[var(--accent)]" />
+          <input
+            type="checkbox"
+            checked={follow}
+            onChange={(event) => setFollow(event.target.checked)}
+            className="accent-[var(--accent)]"
+          />
           {artifact ? 'Follow new versions' : 'Follow new turns'}
         </label>
         <Button className="ml-auto" onClick={make}>
@@ -100,7 +110,12 @@ export function Links({ thread, artifact }: { thread: string; artifact?: { id: s
                 , until {new Date(Number(link.expires_ms)).toLocaleDateString()}
                 <Mock id="share.link-opens"> · opened 3 times</Mock>
               </span>
-              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => void api.revokeLink(thread, link.id).then(refresh)}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto"
+                onClick={() => void api.revokeLink(thread, link.id).then(refresh)}
+              >
                 Revoke
               </Button>
             </li>
@@ -113,7 +128,19 @@ export function Links({ thread, artifact }: { thread: string; artifact?: { id: s
 }
 
 /** One choice of who sees the thread, as a card with what it means. */
-function Who({ value, chosen, title, children, onChoose }: { value: string; chosen: boolean; title: string; children: ReactNode; onChoose: () => void }) {
+function Who({
+  value,
+  chosen,
+  title,
+  children,
+  onChoose,
+}: {
+  value: string
+  chosen: boolean
+  title: string
+  children: ReactNode
+  onChoose: () => void
+}) {
   return (
     <label
       className={cx(
@@ -121,7 +148,14 @@ function Who({ value, chosen, title, children, onChoose }: { value: string; chos
         chosen ? 'border-accent bg-accent-tint' : 'border-line hover:bg-surface-2',
       )}
     >
-      <input type="radio" name="who" value={value} checked={chosen} onChange={onChoose} className="mt-0.5 accent-[var(--accent)]" />
+      <input
+        type="radio"
+        name="who"
+        value={value}
+        checked={chosen}
+        onChange={onChoose}
+        className="mt-0.5 accent-[var(--accent)]"
+      />
       <span className="flex flex-col gap-0.5">
         <span className="text-sm font-medium">{title}</span>
         <span className="text-xs text-fg-2">{children}</span>
@@ -184,7 +218,12 @@ export function ShareDialog({ thread }: { thread: ThreadSummary }) {
                   It follows its project’s or org’s default.
                 </Who>
               )}
-              <Who value="private" chosen={choice === 'private'} title={`Only ${thread.owner || 'you'}`} onChoose={() => choose('private')}>
+              <Who
+                value="private"
+                chosen={choice === 'private'}
+                title={`Only ${thread.owner || 'you'}`}
+                onChoose={() => choose('private')}
+              >
                 And the people below, plus work offered through a merge request.
               </Who>
               <Who value="team" chosen={choice === 'team'} title="A team" onChoose={() => choose('team')}>
@@ -229,7 +268,12 @@ export function ShareDialog({ thread }: { thread: ThreadSummary }) {
                 {thread.collaborators.map((name) => (
                   <li key={name} className="flex items-center gap-2">
                     <span>{name}</span>
-                    <Button variant="ghost" size="sm" className="ml-auto" onClick={() => void act(api.share(thread.id, name, true))}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="ml-auto"
+                      onClick={() => void act(api.share(thread.id, name, true))}
+                    >
                       Remove
                     </Button>
                   </li>
@@ -242,7 +286,14 @@ export function ShareDialog({ thread }: { thread: ThreadSummary }) {
                   void act(api.share(thread.id, user.trim(), false)).then(() => setUser(''))
                 }}
               >
-                <Input id="share-person" aria-label="person to add" placeholder="user name" value={user} onChange={(event) => setUser(event.target.value)} className="flex-1" />
+                <Input
+                  id="share-person"
+                  aria-label="person to add"
+                  placeholder="user name"
+                  value={user}
+                  onChange={(event) => setUser(event.target.value)}
+                  className="flex-1"
+                />
                 <Button type="submit" variant="primary" disabled={!user.trim()}>
                   Add
                 </Button>

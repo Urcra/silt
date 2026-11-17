@@ -37,7 +37,8 @@ export function ImportOffer() {
           Import the {sessions === 1 ? 'session' : `${sessions} sessions`} found in {folders}
         </b>
         <span className="block text-xs text-fg-2">
-          Each becomes a thread you can read and search right away. They stay on this machine until you sync. Same as <code className="font-mono">silt import</code>.
+          Each becomes a thread you can read and search right away. They stay on this machine until you sync. Same as{' '}
+          <code className="font-mono">silt import</code>.
         </span>
         {running && <ImportProgress done={progress?.done ?? 0} total={progress?.total ?? sessions} />}
         {error && <span className="block text-xs text-danger">{error}</span>}
