@@ -2183,14 +2183,15 @@ fn a_page_calls_a_ticked_tool_of_a_page_connector() {
 }
 
 /// An agent the web UI runs reads the artifact guide, and its HTML artifact
-/// takes the design system the repository names as its default; the CSS
-/// its tokens compiled to is served beside the page, a new version keeps
-/// it, and the agent reads the latest version back (ADR 0071).
+/// takes the design system the repository names as its default, here Silt's
+/// own Nous as its repository keeps it; the CSS its tokens compiled to is
+/// served beside the page, a new version keeps it, and the agent reads the
+/// latest version back (ADR 0071, ADR 0087).
 #[test]
 fn an_artifact_takes_the_repositorys_design_system() {
     let env = Env::new();
     let systems = env.repo.join(".silt/design-systems");
-    fs::create_dir_all(&systems).expect("mkdir");
+    copy_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.silt/design-systems/nous"), &systems.join("nous"));
     fs::write(systems.join("default"), "nous\n").expect("write");
     git(&env.repo, &["add", "."]);
     git(&env.repo, &["commit", "-q", "-m", "design system"]);
@@ -2230,6 +2231,18 @@ fn an_artifact_takes_the_repositorys_design_system() {
     prompt("Artifact numbers");
     let data = artifacts_of(&api, &thread).into_iter().find(|made| made["kind"] == "data").expect("a data page");
     assert!(data["design_system"] == "nous" && data["style"].is_string(), "a data page's charts take its colours: {data}");
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    fs::create_dir_all(to).expect("mkdir");
+    for entry in fs::read_dir(from).expect("read dir").flatten() {
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).expect("copy");
+        }
+    }
 }
 
 /// Talks to the MCP server Silt configured for the session, the way

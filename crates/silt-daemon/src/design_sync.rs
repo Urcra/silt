@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use silt_proto::DesignSystemCopy;
 use tracing::warn;
 
-use crate::design::PERSONAL_DIR;
+use crate::design::{COMPONENTS_CSS, COMPONENTS_DIR, PERSONAL_DIR, component_files};
 use crate::remote::Remote;
 
 /// What each system held when last synced, here.
@@ -71,7 +71,12 @@ fn read_folder(name: &str, dir: &Path) -> Option<DesignSystemCopy> {
             }
         }
     }
-    let copy = DesignSystemCopy { name: name.to_owned(), at_ms: 0, deleted: false, readme, tokens, fonts };
+    let components_css = read_capped(&dir.join(COMPONENTS_CSS), silt_proto::DESIGN_COMPONENTS_CSS_BYTES as u64)
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .unwrap_or_default();
+    let components = component_files(&dir.join(COMPONENTS_DIR));
+    let copy =
+        DesignSystemCopy { name: name.to_owned(), at_ms: 0, deleted: false, readme, tokens, fonts, components_css, components };
     copy.valid().then_some(copy)
 }
 
@@ -86,6 +91,19 @@ fn hash(copy: &DesignSystemCopy) -> String {
         digest.update(&[0]);
         digest.update(data.as_bytes());
         digest.update(&[0]);
+    }
+    // Only a system with components digests them, so one without keeps the
+    // hash it had before they existed and isn't sent again.
+    if !copy.components_css.is_empty() || !copy.components.is_empty() {
+        digest.update(b"components\0");
+        digest.update(copy.components_css.as_bytes());
+        digest.update(&[0]);
+        for (name, html) in &copy.components {
+            digest.update(name.as_bytes());
+            digest.update(&[0]);
+            digest.update(html.as_bytes());
+            digest.update(&[0]);
+        }
     }
     digest.finalize().to_hex()[..32].to_owned()
 }
@@ -134,6 +152,8 @@ fn changes(data_dir: &Path, index: &mut Index, now: i64) -> Vec<DesignSystemCopy
                 readme: String::new(),
                 tokens: String::new(),
                 fonts: BTreeMap::new(),
+                components_css: String::new(),
+                components: BTreeMap::new(),
             },
         })
         .collect()
@@ -173,6 +193,15 @@ fn write_folder(root: &Path, dir: &Path, copy: &DesignSystemCopy) -> std::io::Re
     for (file, data) in &copy.fonts {
         let bytes = BASE64.decode(data).map_err(std::io::Error::other)?;
         fs::write(staging.join("fonts").join(file), bytes)?;
+    }
+    if !copy.components_css.is_empty() {
+        fs::write(staging.join(COMPONENTS_CSS), &copy.components_css)?;
+    }
+    if !copy.components.is_empty() {
+        fs::create_dir_all(staging.join(COMPONENTS_DIR))?;
+        for (name, html) in &copy.components {
+            fs::write(staging.join(COMPONENTS_DIR).join(format!("{name}.html")), html)?;
+        }
     }
     remove(dir)?;
     fs::rename(&staging, dir)
@@ -283,5 +312,42 @@ mod tests {
         bad_font.at_ms = 900;
         bad_font.fonts.insert("../x".into(), "AA==".into());
         assert!(!take(data.path(), &mut index, &bad_font));
+    }
+
+    #[test]
+    fn components_travel_with_their_system_and_only_plainly_named() {
+        let here = tempfile::tempdir().expect("temp dir");
+        system(here.path(), "acme", r#"{"name":"Acme"}"#);
+        let mut index = Index::new();
+        let without = changes(here.path(), &mut index, 100).remove(0);
+        let dir = here.path().join(PERSONAL_DIR).join("acme");
+        fs::create_dir_all(dir.join(COMPONENTS_DIR)).expect("dir");
+        fs::write(dir.join(COMPONENTS_CSS), ".a-row { height: 28px; }").expect("css");
+        fs::write(dir.join(COMPONENTS_DIR).join("row.html"), "<a class=\"a-row\">x</a>").expect("row");
+        let with = changes(here.path(), &mut index, 200).remove(0);
+        assert_ne!(hash(&without), hash(&with), "adding components is a change");
+        assert_eq!(with.components_css, ".a-row { height: 28px; }");
+        assert_eq!(with.components.keys().collect::<Vec<_>>(), ["row"]);
+
+        let there = tempfile::tempdir().expect("temp dir");
+        let mut theirs = Index::new();
+        assert!(take(there.path(), &mut theirs, &with));
+        let taken = there.path().join(PERSONAL_DIR).join("acme");
+        assert_eq!(fs::read_to_string(taken.join(COMPONENTS_CSS)).expect("css"), ".a-row { height: 28px; }");
+        assert_eq!(fs::read_to_string(taken.join(COMPONENTS_DIR).join("row.html")).expect("row"), "<a class=\"a-row\">x</a>");
+
+        let mut hostile = DesignSystemCopy { at_ms: 300, ..with.clone() };
+        hostile.components.insert("../../escape".into(), "<b></b>".into());
+        assert!(!take(there.path(), &mut theirs, &hostile));
+        let mut huge = DesignSystemCopy { at_ms: 300, ..with };
+        huge.components.insert("big".into(), "x".repeat(silt_proto::DESIGN_COMPONENT_BYTES + 1));
+        assert!(!take(there.path(), &mut theirs, &huge));
+    }
+
+    #[test]
+    fn the_wire_keeps_what_a_system_may_hold() {
+        assert_eq!(silt_proto::DESIGN_COMPONENTS, silt_design::MAX_COMPONENTS);
+        assert_eq!(silt_proto::DESIGN_COMPONENT_BYTES, silt_design::COMPONENT_BYTES);
+        assert_eq!(silt_proto::DESIGN_COMPONENTS_CSS_BYTES, silt_design::COMPONENTS_CSS_BYTES);
     }
 }

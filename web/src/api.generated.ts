@@ -699,7 +699,7 @@ export type ConnectorTool = { name: string, description: string | null,
  */
 read_only: boolean, input_schema: unknown, };
 
-export type DesignSource = "project" | "personal" | "builtin";
+export type DesignSource = "project" | "personal";
 
 export type ArtifactSettings = { 
 /**
@@ -720,7 +720,13 @@ title: string, source: DesignSource, readme?: string | null,
 /**
  * Its custom properties and type classes, by family.
  */
-tokens?: { [key in string]: Array<string> }, };
+tokens?: { [key in string]: Array<string> }, 
+/**
+ * Its components, given with its README (ADR 0086).
+ */
+components?: Array<DesignComponentView>, };
+
+export type DesignComponentView = { name: string, about: string, html: string, };
 
 export type ArtifactContent = { media_type: string, 
 /**

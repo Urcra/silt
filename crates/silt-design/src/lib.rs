@@ -11,31 +11,6 @@ use std::fmt::Write as _;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-/// Built-in systems, by name: Silt's own look and a neutral one.
-pub const BUILTIN: [Builtin; 2] = [
-    Builtin {
-        name: "nous",
-        readme: include_str!("../systems/nous/README.md"),
-        tokens: include_str!("../systems/nous/tokens.json"),
-    },
-    Builtin {
-        name: "plain",
-        readme: include_str!("../systems/plain/README.md"),
-        tokens: include_str!("../systems/plain/tokens.json"),
-    },
-];
-
-#[derive(Debug, Clone, Copy)]
-pub struct Builtin {
-    pub name: &'static str,
-    pub readme: &'static str,
-    pub tokens: &'static str,
-}
-
-pub fn builtin(name: &str) -> Option<Builtin> {
-    BUILTIN.into_iter().find(|system| system.name == name)
-}
-
 /// A font file, an inlined face, may be at most this large.
 pub const FONT_BYTES: usize = 1 << 20;
 const FONTS_BYTES: usize = 4 << 20;
@@ -200,6 +175,101 @@ pub fn parse(json: &str) -> Result<Tokens, InvalidTokens> {
 pub struct Compiled {
     pub css: String,
     pub dropped: Vec<String>,
+}
+
+/// `components.css` may be at most this large (ADR 0086).
+pub const COMPONENTS_CSS_BYTES: usize = 128 << 10;
+/// One component's example may be at most this large.
+pub const COMPONENT_BYTES: usize = 16 << 10;
+/// A system holds at most this many components...
+pub const MAX_COMPONENTS: usize = 48;
+/// ...and their examples at most this much together.
+pub const COMPONENTS_BYTES: usize = 128 << 10;
+
+impl Compiled {
+    /// Adds a system's `components.css` after its tokens. It's unlayered,
+    /// so a library's layered reset (Tailwind's preflight) doesn't undo it,
+    /// and it comes before the page, whose own rules win at equal
+    /// specificity. A file that could load anything or close the frame's
+    /// `<style>` is left out whole.
+    pub fn add_components(&mut self, css: &str) {
+        if css.trim().is_empty() {
+            return;
+        }
+        match components_css_problem(css) {
+            Some(why) => self.dropped.push(format!("components.css {why}")),
+            None => {
+                let _ = writeln!(self.css, "/* components */\n{}", css.trim_end());
+            }
+        }
+    }
+}
+
+fn components_css_problem(css: &str) -> Option<&'static str> {
+    if css.len() > COMPONENTS_CSS_BYTES {
+        return Some("is larger than 128 KiB");
+    }
+    let lower = css.to_ascii_lowercase();
+    if lower.contains("@import") {
+        Some("holds an @import")
+    } else if lower.contains("</") {
+        Some("holds `</`")
+    } else if lower
+        .match_indices("url(")
+        .any(|(at, _)| !lower[at + 4..].trim_start().trim_start_matches(['"', '\'']).starts_with("data:"))
+    {
+        Some("loads a url() that isn't a data: URI")
+    } else {
+        None
+    }
+}
+
+/// One of a system's components: its example markup and the note that
+/// heads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Component {
+    pub name: String,
+    pub about: String,
+    pub html: String,
+}
+
+/// Whether `name` can name a component: what names a system.
+pub fn valid_component_name(name: &str) -> bool {
+    name.parse::<SystemName>().is_ok()
+}
+
+/// A system's components from their files, by name, in name order, within
+/// the limits, and what was left out and why.
+pub fn components<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> (Vec<Component>, Vec<String>) {
+    let mut files: Vec<(&str, &str)> = files.into_iter().collect();
+    files.sort_by_key(|(name, _)| *name);
+    let mut out = Vec::new();
+    let mut dropped = Vec::new();
+    let mut total = 0;
+    for (name, html) in files {
+        if !valid_component_name(name) {
+            dropped.push(format!("{name:?} isn't a component's name"));
+        } else if html.len() > COMPONENT_BYTES {
+            dropped.push(format!("the component {name} is larger than 16 KiB"));
+        } else if out.len() == MAX_COMPONENTS {
+            dropped.push(format!("the component {name} is past the {MAX_COMPONENTS} a system may hold"));
+        } else if total + html.len() > COMPONENTS_BYTES {
+            dropped.push(format!("the component {name} is past the 128 KiB a system's components may hold together"));
+        } else {
+            total += html.len();
+            out.push(Component { name: name.to_owned(), about: component_note(html), html: html.trim().to_owned() });
+        }
+    }
+    (out, dropped)
+}
+
+/// The `<!-- … -->` comment an example opens with, on one line.
+fn component_note(html: &str) -> String {
+    html.trim_start()
+        .strip_prefix("<!--")
+        .and_then(|rest| rest.split_once("-->"))
+        .map(|(note, _)| note.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default()
 }
 
 /// Compiles `tokens` into custom properties: the first theme's on `:root`,
@@ -611,6 +681,29 @@ mod tests {
         compile(&parse(json).expect("tokens"), &BTreeMap::new())
     }
 
+    /// Silt's own system, which its repository keeps as any repository
+    /// keeps one (ADR 0087).
+    struct Nous {
+        tokens: String,
+        components_css: String,
+        components: Vec<(String, String)>,
+    }
+
+    fn nous() -> Nous {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.silt/design-systems/nous");
+        let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap_or_else(|_| panic!("{}", path.display()));
+        let mut components: Vec<(String, String)> = std::fs::read_dir(dir.join("components"))
+            .expect("components")
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().to_str()?.strip_suffix(".html")?.to_owned();
+                Some((name, read(&entry.path())))
+            })
+            .collect();
+        components.sort();
+        Nous { tokens: read(&dir.join("tokens.json")), components_css: read(&dir.join("components.css")), components }
+    }
+
     #[test]
     fn light_and_dark_follow_the_viewer_both_ways() {
         let out = compiled(
@@ -679,15 +772,89 @@ mod tests {
     }
 
     #[test]
-    fn the_built_in_systems_compile_whole() {
-        for system in BUILTIN {
-            let tokens = parse(system.tokens).expect(system.name);
-            let out = compile(&tokens, &BTreeMap::new());
-            assert!(out.dropped.is_empty(), "{}: {:?}", system.name, out.dropped);
-            assert!(out.css.contains("--bg:") && out.css.contains("--chart-6:"), "{}", system.name);
-            assert!(out.css.contains("--chart-texture: repeating-linear-gradient(45deg"), "{}: {:?}", system.name, out.dropped);
-            assert!(SystemName::try_from(system.name.to_owned()).is_ok());
+    fn components_css_comes_after_the_tokens_unless_it_reaches_out() {
+        let mut out = compiled(r##"{"name":"A","color":{"themes":[{"id":"light"}],"tokens":[{"name":"bg","value":"#fff"}]}}"##);
+        out.add_components(".a-button { background: var(--bg); mask: url( 'data:image/svg+xml,x'); }");
+        assert!(
+            out.css.ends_with("/* components */\n.a-button { background: var(--bg); mask: url( 'data:image/svg+xml,x'); }\n"),
+            "{}",
+            out.css
+        );
+        assert!(out.dropped.is_empty(), "{:?}", out.dropped);
+        for (css, why) in [
+            ("@IMPORT 'x.css';", "@import"),
+            ("a::after { content: '</style>'; }", "`</`"),
+            ("a { background: URL(https://example.com/x.png) }", "data: URI"),
+            (&"a{}".repeat(COMPONENTS_CSS_BYTES), "128 KiB"),
+        ] {
+            let before = out.css.clone();
+            out.add_components(css);
+            assert_eq!(out.css, before, "{css:.40} left out whole");
+            assert!(out.dropped.last().is_some_and(|dropped| dropped.contains(why)), "{:?}", out.dropped);
         }
+    }
+
+    #[test]
+    fn components_are_named_noted_and_kept_within_their_limits() {
+        let big = "x".repeat(COMPONENT_BYTES + 1);
+        let (kept, dropped) = components([
+            ("row", "  <!-- A list row:\n   28px tall. -->\n<a class=\"r\">x</a>\n"),
+            ("Bad name", "<b>x</b>"),
+            ("huge", big.as_str()),
+            ("button", "<button>x</button>"),
+        ]);
+        let names: Vec<&str> = kept.iter().map(|component| component.name.as_str()).collect();
+        assert_eq!(names, ["button", "row"]);
+        assert_eq!(kept[1].about, "A list row: 28px tall.");
+        assert_eq!(kept[1].html, "<!-- A list row:\n   28px tall. -->\n<a class=\"r\">x</a>");
+        assert_eq!(kept[0].about, "");
+        assert_eq!(dropped.len(), 2, "{dropped:?}");
+
+        let names: Vec<String> = (0..=MAX_COMPONENTS).map(|n| format!("c{n:02}")).collect();
+        let (kept, dropped) = components(names.iter().map(|name| (name.as_str(), "<i></i>")));
+        assert_eq!((kept.len(), dropped.len()), (MAX_COMPONENTS, 1));
+        let half = "x".repeat(COMPONENT_BYTES);
+        let (kept, dropped) = components((0..9).map(|n| (["a", "b", "c", "d", "e", "f", "g", "h", "i"][n], half.as_str())));
+        assert_eq!((kept.len(), dropped.len()), (8, 1), "{dropped:?}");
+    }
+
+    #[test]
+    fn nous_components_read_only_its_tokens_and_use_only_classes_it_defines() {
+        let nous = nous();
+        let tokens = parse(&nous.tokens).expect("tokens");
+        let known: BTreeSet<String> = token_names(&tokens).into_values().flatten().collect();
+        let css = nous.components_css.as_str();
+        for (at, _) in css.match_indices("var(--") {
+            let name: String = css[at + 4..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+            assert!(known.contains(&name), "components.css reads {name}, which Nous doesn't define");
+        }
+        let mut out = compile(&tokens, &BTreeMap::new());
+        out.add_components(css);
+        assert!(out.dropped.is_empty(), "{:?}", out.dropped);
+
+        let (kept, dropped) = components(nous.components.iter().map(|(name, html)| (name.as_str(), html.as_str())));
+        assert!(dropped.is_empty(), "{dropped:?}");
+        assert_eq!(kept.len(), nous.components.len());
+        for component in &kept {
+            assert!(!component.about.is_empty(), "{} has a note", component.name);
+            for class in component.html.split("class=\"").skip(1).filter_map(|rest| rest.split('"').next()) {
+                for class in class.split_whitespace().filter(|class| class.starts_with("n-")) {
+                    assert!(
+                        css.contains(&format!(".{class}")),
+                        "{} uses .{class}, which components.css doesn't define",
+                        component.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nous_compiles_whole() {
+        let out = compile(&parse(&nous().tokens).expect("tokens"), &BTreeMap::new());
+        assert!(out.dropped.is_empty(), "{:?}", out.dropped);
+        assert!(out.css.contains("--bg:") && out.css.contains("--chart-6:"), "{}", out.css);
+        assert!(out.css.contains("--chart-texture: repeating-linear-gradient(45deg"), "{:?}", out.dropped);
     }
 
     /// Nous's tokens are the web UI's: each colour both define has the same
@@ -712,7 +879,7 @@ mod tests {
             }
         }
         let resolve = |value: &str| palette.get(value.trim()).cloned().unwrap_or_else(|| value.trim().to_owned());
-        let tokens = parse(builtin("nous").expect("nous").tokens).expect("tokens");
+        let tokens = parse(&nous().tokens).expect("tokens");
         let mut compared = 0;
         for token in tokens.color.expect("colours").tokens {
             let Some(pair) = defined.get(&token.name) else {
@@ -745,25 +912,47 @@ mod tests {
         None
     }
 
-    /// The built-in systems' chart colours pass the palette checks they ask
-    /// agents to run (ADR 0073): the categorical palette in order on `bg`,
-    /// the first three for all pairs, and the sequential and diverging
-    /// scales as ordinal ramps, in both themes.
+    /// Nous's chart colours, and the default palette `artifact-dataviz`
+    /// gives a page with no system, pass the palette checks they ask agents
+    /// to run (ADR 0073): the categorical palette in order on `bg`, the
+    /// first three for all pairs, and the sequential and diverging scales
+    /// as ordinal ramps, in both themes.
     #[test]
-    fn the_built_in_chart_colours_pass_the_palette_checks() {
+    fn the_chart_colours_silt_offers_pass_the_palette_checks() {
         use crate::frame::Theme;
         use crate::palette::{Pairs, Srgb, categorical, ordinal};
-        for name in ["nous", "plain"] {
-            let tokens = parse(builtin(name).expect("built in").tokens).expect("tokens");
-            let colors = tokens.color.expect("colours").tokens;
-            for theme in [Theme::Light, Theme::Dark] {
+        let mut palettes: Vec<(&str, BTreeMap<String, [String; 2]>)> = Vec::new();
+        let nous: BTreeMap<String, [String; 2]> = parse(&nous().tokens)
+            .expect("tokens")
+            .color
+            .expect("colours")
+            .tokens
+            .into_iter()
+            .filter_map(|token| match token.value {
+                TokenValue::ByTheme(values) => Some((token.name, [values.get("light")?.clone(), values.get("dark")?.clone()])),
+                TokenValue::One(_) => None,
+            })
+            .collect();
+        palettes.push(("nous", nous));
+        // Each table row of the default palette names its token first, then
+        // its light and dark values.
+        let default: BTreeMap<String, [String; 2]> =
+            include_str!("../../silt-agents/skills/artifact-dataviz/references/palette.md")
+                .lines()
+                .filter_map(|line| {
+                    let quoted: Vec<&str> = line.split('`').skip(1).step_by(2).collect();
+                    let hexes: Vec<&str> = quoted.iter().copied().filter(|value| value.starts_with('#')).collect();
+                    let name = quoted.first().filter(|name| !name.starts_with('#'))?;
+                    (line.starts_with('|') && hexes.len() >= 2)
+                        .then(|| ((*name).to_owned(), [hexes[0].to_owned(), hexes[1].to_owned()]))
+                })
+                .collect();
+        palettes.push(("the default palette", default));
+        for (name, colors) in &palettes {
+            for (theme, index) in [(Theme::Light, 0), (Theme::Dark, 1)] {
                 let value = |token: &str| {
-                    let found =
-                        colors.iter().find(|candidate| candidate.name == token).unwrap_or_else(|| panic!("{name} has {token}"));
-                    let TokenValue::ByTheme(values) = &found.value else {
-                        panic!("{name}'s {token} has one value");
-                    };
-                    Srgb::parse(&values[theme.as_str()]).expect("a hex colour")
+                    let found = colors.get(token).unwrap_or_else(|| panic!("{name} has {token}"));
+                    Srgb::parse(&found[index]).expect("a hex colour")
                 };
                 let bg = value("bg");
                 let slots: Vec<Srgb> = (1..=6).map(|slot| value(&format!("chart-{slot}"))).collect();

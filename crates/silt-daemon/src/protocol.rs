@@ -1060,6 +1060,10 @@ pub struct ArtifactPut {
     /// What its tokens couldn't use, for the agent to fix.
     #[serde(default)]
     pub dropped: Vec<String>,
+    /// The system the last version or a default named, which isn't on this
+    /// machine, so the version has none (ADR 0087).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing: Option<String>,
 }
 
 /// How artifacts' frames load libraries and fonts (ADR 0071).
@@ -1100,7 +1104,6 @@ pub enum DesignSource {
     Project,
     /// The person's, under Silt's data dir.
     Personal,
-    Builtin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1116,6 +1119,18 @@ pub struct DesignSystemView {
     /// Its custom properties and type classes, by family.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub tokens: std::collections::BTreeMap<String, Vec<String>>,
+    /// Its components, given with its README (ADR 0086).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<DesignComponentView>,
+}
+
+/// One of a design system's components: its example and the note it opens with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct DesignComponentView {
+    pub name: String,
+    pub about: String,
+    pub html: String,
 }
 
 /// What [`Request::ArtifactGuide`] answers.
@@ -1126,6 +1141,10 @@ pub struct ArtifactGuide {
     /// Why it applies: asked for, the project's default, the workspace's.
     pub why: Option<String>,
     pub systems: Vec<DesignSystemView>,
+    /// A default that names a system this machine doesn't have, and why it
+    /// applied, so none does (ADR 0087).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1907,6 +1926,7 @@ mod tests {
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
             DesignSystemView::decl(&config),
+            DesignComponentView::decl(&config),
             silt_proto::view::ArtifactContent::decl(&config),
             silt_proto::view::LinkedArtifact::decl(&config),
             UsageView::decl(&config),

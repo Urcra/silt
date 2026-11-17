@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { type ReactNode, useState } from 'react'
 import { PRESETS, permissionModes, startSettings } from '../agentState'
+import { missingSystem } from '../artifacts'
 import { type AgentChoice, type AgentDefaults, api, type MatchRule, type Policy, type Preset, type Workspace, type WorkspaceView, type Workspaces as WorkspacesFile } from '../api'
 import { keys, message } from '../query'
 import { KNOWN_AGENTS, PRESET_LABELS, rulesLine, serverLine } from '../rules'
@@ -236,9 +237,11 @@ export function WorkspacesSettings() {
             {(designSystems.data ?? []).map((system) => (
               <option key={system.name} value={system.name}>
                 {system.title}
-                {system.source === 'builtin' ? ' (built in)' : ''}
               </option>
             ))}
+            {missingSystem(workspace.defaults.design_system, designSystems.data) && (
+              <option value={workspace.defaults.design_system ?? ''}>{workspace.defaults.design_system} (not on this machine)</option>
+            )}
           </Select>
         </div>
         <AgentDefaultsRows

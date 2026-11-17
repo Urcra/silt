@@ -1,0 +1,5 @@
+<!-- A file's diff: path and counts in the header, numbered lines below, added on ok-tint and removed on danger-tint. -->
+<section class="n-diff">
+  <header class="n-diff-head"><span class="n-diff-path">src/upload.rs</span><span class="n-diff-counts"><span class="n-added">+2</span> <span class="n-removed">−1</span></span></header>
+  <pre class="n-diff-lines"><span class="n-diff-line"><span>41</span><span>    let response = client.put(url).send().await?;</span></span><span class="n-diff-line n-removed"><span>42</span><span>    response.error_for_status()?;</span></span><span class="n-diff-line n-added"><span>42</span><span>    if response.status().is_server_error() {</span></span><span class="n-diff-line n-added"><span>43</span><span>        return Err(Retry);</span></span></pre>
+</section>

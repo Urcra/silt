@@ -24,8 +24,10 @@ pub mod view;
 /// diff may leave out (ADR 0069). 12: a person's own design systems, synced
 /// through each server they use (ADR 0071). 13: an artifact's page data
 /// (`Op::Page`) and comments on a doc's text (ADR 0072, ADR 0077). 14:
-/// rooms that span machines through `/v1/rooms` (ADR 0081).
-pub const PROTOCOL: u32 = 15;
+/// rooms that span machines through `/v1/rooms` (ADR 0081). 15: a room's
+/// presence sent as it changes, and comments on a sheet's cells. 16: a
+/// design system's components (ADR 0086).
+pub const PROTOCOL: u32 = 16;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -239,6 +241,12 @@ pub struct DesignSystemCopy {
     /// Its font files, by their name under `fonts/`, in base64.
     #[serde(default)]
     pub fonts: std::collections::BTreeMap<String, String>,
+    /// Its `components.css` (ADR 0086).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub components_css: String,
+    /// Its components' examples, by their name under `components/`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub components: std::collections::BTreeMap<String, String>,
 }
 
 /// The most a design system's copy may hold, its fonts in base64 included.
@@ -246,20 +254,37 @@ pub const DESIGN_SYSTEM_BYTES: usize = 8 << 20;
 
 impl DesignSystemCopy {
     /// Whether a device may take it as it is: a system's name, font files
-    /// named plainly, and no more than [`DESIGN_SYSTEM_BYTES`].
+    /// and components named plainly, and no more than
+    /// [`DESIGN_SYSTEM_BYTES`] and [`DESIGN_COMPONENTS`].
     pub fn valid(&self) -> bool {
-        let name = (1..=64).contains(&self.name.len())
-            && self.name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-            && !self.name.starts_with('-');
+        let named = |name: &str| {
+            (1..=64).contains(&name.len())
+                && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                && !name.starts_with('-')
+        };
         let fonts = self.fonts.keys().all(|file| {
             (1..=128).contains(&file.len())
                 && !file.starts_with('.')
                 && file.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
         });
-        let size = self.readme.len() + self.tokens.len() + self.fonts.values().map(String::len).sum::<usize>();
-        name && fonts && size <= DESIGN_SYSTEM_BYTES && self.fonts.len() <= 64
+        let components = self.components.len() <= DESIGN_COMPONENTS
+            && self.components.keys().all(|name| named(name))
+            && self.components_css.len() <= DESIGN_COMPONENTS_CSS_BYTES
+            && self.components.values().all(|html| html.len() <= DESIGN_COMPONENT_BYTES);
+        let size = self.readme.len()
+            + self.tokens.len()
+            + self.fonts.values().map(String::len).sum::<usize>()
+            + self.components_css.len()
+            + self.components.values().map(String::len).sum::<usize>();
+        named(&self.name) && fonts && components && size <= DESIGN_SYSTEM_BYTES && self.fonts.len() <= 64
     }
 }
+
+/// The most components a copy holds, and how large they may be; what
+/// `silt_design` keeps of a system's folder (ADR 0086).
+pub const DESIGN_COMPONENTS: usize = 48;
+pub const DESIGN_COMPONENT_BYTES: usize = 16 << 10;
+pub const DESIGN_COMPONENTS_CSS_BYTES: usize = 128 << 10;
 
 /// A person's marks on one thread's files (ADR 0067).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
