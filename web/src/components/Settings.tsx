@@ -13,6 +13,7 @@ import { NotificationBanner, NotificationSettings } from './Inbox'
 import { Orgs } from './Orgs'
 import { InSettings, SETTINGS_HEADING } from '../settingsContext'
 import { Page } from './Page'
+import { DesignSystemsSettings } from './DesignSystems'
 import { AddProjectPage, Projects } from './Projects'
 import { WorkspacesSettings } from './Workspaces'
 
@@ -23,6 +24,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
       ...(hosted() ? [] : [{ id: 'workspaces', label: 'Workspaces' }]),
       { id: 'projects', label: 'Projects' },
       { id: 'orgs', label: 'Orgs' },
+      ...(hosted() ? [] : [{ id: 'design-systems', label: 'Design systems' }]),
     ],
   },
   {
@@ -341,6 +343,7 @@ export function Settings() {
     chats: <Chats />,
     workspaces: <WorkspacesSettings />,
     appearance: <Appearance />,
+    'design-systems': <DesignSystemsSettings />,
   }
   return (
     <Page title="Settings" meta={signIn ? `${signIn.user} on ${serverName(signIn.url)}` : hosted() ? undefined : 'this machine'} label="settings">
