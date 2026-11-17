@@ -26,17 +26,44 @@ impl Core {
         if let Some(selector) = selector {
             return self.find_thread(selector);
         }
-        self.thread_checked_out_at(&CanonicalCwd::new(cwd)?)
-            .ok_or_else(|| CoreError::Invalid("no thread is checked out here; name one".into()))
+        match self.threads_checked_out_at(&CanonicalCwd::new(cwd)?).as_slice() {
+            [] => Err(CoreError::Invalid("no thread is checked out here; name one".into())),
+            [thread] => Ok(*thread),
+            several => {
+                let named: Vec<String> = several.iter().map(|thread| thread.short().to_string()).collect();
+                Err(CoreError::Invalid(format!("agents of threads {} work here; name one", named.join(", "))))
+            }
+        }
     }
 
-    /// The thread of the innermost checkout holding `cwd`.
+    /// The thread of the innermost checkout holding `cwd`. In a clone
+    /// several agents work in, the newest of their threads (ADR 0089).
     pub(crate) fn thread_checked_out_at(&self, cwd: &CanonicalCwd) -> Option<ThreadId> {
-        self.checkouts
+        self.threads_checked_out_at(cwd).last().copied()
+    }
+
+    /// The threads of the innermost checkouts holding `cwd`, oldest first:
+    /// those whose agents work there, or else the one there.
+    pub(crate) fn threads_checked_out_at(&self, cwd: &CanonicalCwd) -> Vec<ThreadId> {
+        let Some(innermost) = self
+            .checkouts
             .values()
             .filter(|checkout| cwd.starts_with(&checkout.record.path))
             .max_by_key(|checkout| checkout.record.path.as_os_str().len())
+        else {
+            return Vec::new();
+        };
+        let rows: Vec<&crate::core::Checkout> =
+            self.checkouts.values().filter(|checkout| checkout.record.path == innermost.record.path).collect();
+        let at_work: Vec<ThreadId> = rows
+            .iter()
+            .filter(|checkout| self.agent_at_work_anywhere(checkout.record.thread))
             .map(|checkout| checkout.record.thread)
+            .collect();
+        match at_work.as_slice() {
+            [] => rows.last().map(|checkout| checkout.record.thread).into_iter().collect(),
+            _ => at_work,
+        }
     }
 
     fn loaded_family(&self, thread: ThreadId) -> Result<(FamilyId, &Family), CoreError> {
@@ -216,7 +243,7 @@ impl Core {
         }
     }
 
-    pub(crate) fn mr_show(&self, selector: &str, hide_git: bool) -> Result<MrDetails, CoreError> {
+    pub(crate) fn mr_show(&self, selector: &str, hide: silt_log::Hide) -> Result<MrDetails, CoreError> {
         let (family_id, request) = self.find_mr(selector)?;
         let family = &self.families[&family_id];
         let graph = family.graph();
@@ -230,7 +257,7 @@ impl Core {
         let conflicts = conflicts(&ours, &theirs);
         let mr = request.id.to_string();
         // Seen marks keep to the files as they are, git's edits and all.
-        let shown = if hide_git { self.changes_without_git(family_id, &base, &offered) } else { theirs.clone() };
+        let shown = if hide.any() { self.changes_hiding(family_id, &base, &offered, hide) } else { theirs.clone() };
         let shown_paths: HashSet<&str> = shown.iter().map(FileChange::path).collect();
         let files = file_hashes(&theirs)
             .into_iter()

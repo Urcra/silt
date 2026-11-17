@@ -93,7 +93,7 @@ impl Core {
         }
         channel.reporting = true;
         let events = self.events.clone();
-        let startable = silt_acp::registry::installed_here(&self.data_dir)
+        let startable = crate::acp::agents_here(&self.data_dir)
             .into_iter()
             .map(|agent| Startable { id: agent.id, name: agent.name })
             .collect();
@@ -245,7 +245,7 @@ impl Core {
             RemoteCommand::Preset { preset: chosen } => Request::AgentPreset { thread, preset: preset(chosen)? },
             RemoteCommand::Mode { mode } => Request::AcpMode { thread, mode },
             RemoteCommand::Setting { id, value } => Request::AcpSetting { thread, id, value },
-            RemoteCommand::MrShow { mr, hide_git } => Request::MrShow { mr, hide_git },
+            RemoteCommand::MrShow { mr, hide_git, hide_others } => Request::MrShow { mr, hide_git, hide_others },
             RemoteCommand::MrSeen { mr, path, seen } => Request::MrSeen { mr, path, seen },
             RemoteCommand::FileAt { path, at } => Request::FileAt { thread, query: silt_proto::view::FileQuery { path, at } },
             RemoteCommand::SignIn { method } => Request::AcpSignIn { thread, method },

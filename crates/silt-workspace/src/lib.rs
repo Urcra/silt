@@ -9,7 +9,8 @@ mod sandbox;
 mod workspace;
 
 pub use policy::{
-    AgentChoice, AgentKey, Broken, KNOWN_AGENTS, ModeMeaning, OrgPolicy, Policy, Refusal, Rules, Source, agent_key, check_move,
+    AgentChoice, AgentKey, Broken, KNOWN_AGENTS, ModeMeaning, OrgPolicy, Policy, Refusal, Rules, SandboxSupport, Source,
+    agent_key, check_move,
 };
 pub use preset::Preset;
 pub use reach::{Devices, Extra, Network, Reach};

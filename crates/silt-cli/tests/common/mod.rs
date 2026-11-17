@@ -239,6 +239,9 @@ impl Machine {
             .env("COPILOT_HOME", self.agents.join("copilot"))
             .env("FAKE_OPENCODE_DIR", self.agents.join("opencode"))
             .env("FAKE_LOG_DIR", self.agents.join("logs"))
+            .env("SILT_LLAMA_SERVER", fake_agent("llama"))
+            .env("FAKE_MODEL_LOG", self.agents.join("logs/model-requests.jsonl"))
+            .env("FAKE_MODEL_TOOLS_FILE", self.agents.join("logs/model-tools.json"))
             .env("HOME", self.agents.parent().expect("the machine's home"))
             .envs(envs.iter().copied());
         command
@@ -333,6 +336,11 @@ impl Machine {
 
 impl Drop for Machine {
     fn drop(&mut self) {
+        // A test failing under load rarely fails again on its own; what the
+        // daemon logged meanwhile is often all that says why.
+        if std::thread::panicking() {
+            eprintln!("--- {} daemon.log ---\n{}", self.silt_home.display(), self.daemon_log());
+        }
         let _ = silt_command().args(["daemon", "stop"]).env("SILT_HOME", &self.silt_home).output();
     }
 }

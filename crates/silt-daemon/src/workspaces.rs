@@ -203,6 +203,21 @@ impl Core {
     /// Replaces the workspaces with `workspaces`, checked first.
     pub(crate) fn set_workspaces(&mut self, workspaces: Workspaces) -> Result<(), CoreError> {
         let workspaces = tidied(workspaces);
+        for workspace in workspaces.workspaces.iter().filter(|workspace| workspace.policy.local_only) {
+            let syncing = self.family_workspaces.iter().filter(|(_, id)| **id == workspace.id).find_map(|(family, _)| match self
+                .homes
+                .get(family)
+            {
+                Some(Home::Server(url)) => Some(url.clone()),
+                _ => None,
+            });
+            if let Some(url) = syncing {
+                return Err(CoreError::Invalid(format!(
+                    "{} has threads that sync with {url}; a Local only workspace keeps everything on this machine, so make a new one for them",
+                    workspace.name
+                )));
+            }
+        }
         for workspace in &workspaces.workspaces {
             if let Some(binding) = &workspace.server
                 && !self.remotes.iter().any(|remote| remote.config.url == binding.url)
@@ -359,13 +374,14 @@ impl Core {
         &self,
         thread: silt_types::ThreadId,
         workspace: &WorkspaceId,
+        project: Option<&str>,
     ) -> Result<String, CoreError> {
-        mint_run_token(&self.store, thread, workspace).await
+        mint_run_token(&self.store, thread, workspace, project).await
     }
 
-    /// The workspace a scoped request's token may read, if it asks only what
-    /// history tools ask.
-    pub(crate) async fn scope_of(&self, token: &str, asking: &crate::protocol::Request) -> Result<WorkspaceId, CoreError> {
+    /// What a scoped request's token may read, if it asks only what history
+    /// tools ask.
+    pub(crate) async fn scope_of(&self, token: &str, asking: &crate::protocol::Request) -> Result<Scope, CoreError> {
         use crate::protocol::Request;
         if !matches!(
             asking,
@@ -378,12 +394,21 @@ impl Core {
             return Err(CoreError::Invalid("an agent's history tools may only read history".into()));
         }
         let hash = blake3::hash(token.as_bytes());
-        let (_, workspace) = self
+        let made = self
             .store
             .run_token(hash.as_bytes())
             .await?
             .ok_or_else(|| CoreError::Invalid("this run's token isn't known here".into()))?;
-        WorkspaceId::new(workspace).map_err(|error| CoreError::Invalid(error.to_string()))
+        let workspace = WorkspaceId::new(made.workspace).map_err(|error| CoreError::Invalid(error.to_string()))?;
+        let by_project = self.workspaces().get(&workspace).is_some_and(|kept| self.effective_policy(kept).history_by_project());
+        // A run whose project wasn't known reads none in a workspace kept by project.
+        let project = by_project.then(|| made.project.unwrap_or_default());
+        Ok(Scope { workspace, project })
+    }
+
+    /// The project a family belongs to, by its threads here.
+    fn family_project(&self, family: FamilyId) -> Option<&str> {
+        self.threads.values().find(|record| record.family == family).map(|record| record.repo.as_str())
     }
 
     /// Folders an agent in `workspace` may not show the person files from:
@@ -407,9 +432,11 @@ impl Core {
     }
 
     /// Whether the request being handled may read a family: always, unless
-    /// an agent's token scopes it to a workspace.
+    /// an agent's token scopes it to a workspace, or a project of one.
     pub(crate) fn in_scope(&self, family: FamilyId) -> bool {
-        self.scope.as_ref().is_none_or(|scope| self.family_workspace(family).id == *scope)
+        self.scope.as_ref().is_none_or(|scope| {
+            self.family_workspace(family).id == scope.workspace && scope.allows_project(self.family_project(family))
+        })
     }
 
     /// Search results the request may read: threads of its workspace, and
@@ -423,8 +450,12 @@ impl Core {
             .filter(|result| {
                 let here = self.threads.iter().find(|(thread, _)| thread.to_string() == result.thread);
                 match (here, &result.repo) {
-                    (Some((_, record)), _) => self.family_workspace(record.family).id == *scope,
-                    (None, Some(repo)) => self.project_workspace(repo, None).0.id == *scope,
+                    (Some((_, record)), _) => {
+                        self.family_workspace(record.family).id == scope.workspace && scope.allows_project(Some(&record.repo))
+                    }
+                    (None, Some(repo)) => {
+                        self.project_workspace(repo, None).0.id == scope.workspace && scope.allows_project(Some(repo))
+                    }
                     (None, None) => false,
                 }
             })
@@ -437,7 +468,13 @@ impl Core {
         };
         silt_git::Repo::discover(cwd)
             .ok()
-            .and_then(|repo| Some(self.project_workspace(&repo.project().ok()?, Some(repo.root())).0.id == *scope))
+            .and_then(|repo| {
+                let project = repo.project().ok()?;
+                Some(
+                    self.project_workspace(&project, Some(repo.root())).0.id == scope.workspace
+                        && scope.allows_project(Some(&project)),
+                )
+            })
             .unwrap_or(false)
     }
 
@@ -485,6 +522,7 @@ impl Core {
         preset: Option<Preset>,
         chosen: bool,
         mode: Option<&str>,
+        on_local_model: bool,
     ) -> Result<(Option<Preset>, Option<silt_workspace::Reach>), CoreError> {
         let rules = self.rules(workspace);
         let policy = rules.effective();
@@ -496,7 +534,10 @@ impl Core {
         } else {
             silt_workspace::AgentChoice::Known { key: silt_workspace::agent_key(&agent.id), name: agent.name.clone() }
         };
-        rules.check_agent(&choice, ours || can_sandbox(silt_agents::SandboxSupport::None, &policy)).map_err(refused)?;
+        // Silt's own sandbox holds the agent to every sandbox rule.
+        let support = if ours { silt_agents::SandboxSupport::Isolate } else { silt_agents::SandboxSupport::None };
+        rules.check_agent(&choice, support).map_err(refused)?;
+        rules.check_model(&choice, on_local_model).map_err(refused)?;
         let preset = match (preset, policy.max_preset) {
             (Some(preset), Some(cap)) if !chosen && !preset.within(cap) => Some(cap),
             (preset, _) => preset,
@@ -563,13 +604,17 @@ fn locks_for(data_dir: &Path, all: &Workspaces, workspace: &Workspace, policy: &
     silt_agents::Locks { no_bypass: !policy.allows_full_access(), sandbox: policy.sandbox_required(), deny }
 }
 
-/// Whether `agent` can run under `policy`'s sandbox rules.
-pub(crate) fn can_sandbox(support: silt_agents::SandboxSupport, policy: &Policy) -> bool {
-    use silt_agents::SandboxSupport;
-    match support {
-        SandboxSupport::Isolate => true,
-        SandboxSupport::Sandbox => !policy.isolated,
-        SandboxSupport::None => !policy.sandbox_required(),
+/// What an agent's history tools may read (ADR 0065): its workspace, and
+/// in a Local only one its own project only (ADR 0092).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Scope {
+    pub(crate) workspace: WorkspaceId,
+    pub(crate) project: Option<String>,
+}
+
+impl Scope {
+    fn allows_project(&self, project: Option<&str>) -> bool {
+        self.project.as_deref().is_none_or(|own| project == Some(own))
     }
 }
 
@@ -584,16 +629,21 @@ pub struct RunRules {
     /// What Silt's sandbox lets it reach, when it runs in one (ADR 0093).
     #[serde(default)]
     pub reach: Option<silt_workspace::Reach>,
+    /// The arguments to run it with, when they differ from those given: a
+    /// local model's flag goes in its environment instead (ADR 0092).
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
 }
 
 async fn mint_run_token(
     store: &silt_store::Store,
     thread: silt_types::ThreadId,
     workspace: &WorkspaceId,
+    project: Option<&str>,
 ) -> Result<String, CoreError> {
     let token = format!("{:032x}{:032x}", uuid::Uuid::new_v4().as_u128(), uuid::Uuid::new_v4().as_u128());
     let hash = blake3::hash(token.as_bytes());
-    store.add_run_token(hash.as_bytes(), thread, workspace.as_str(), crate::core::now_ms()).await?;
+    store.add_run_token(hash.as_bytes(), thread, workspace.as_str(), project, crate::core::now_ms()).await?;
     Ok(token)
 }
 
@@ -662,10 +712,15 @@ pub async fn run_rules(
         local: &workspace.policy,
         org: org.as_ref().map(|org| org.as_ref().map_err(Clone::clone)),
     };
+    if silt_workspace::agent_key(agent.id()).as_str() == "claude" && silt_llm::local_model_in_args(args).is_some() {
+        return Err(CoreError::Invalid("a local model runs through Silt's daemon; start it with `silt daemon start`".into()));
+    }
     let (locks, env, reach) = check_run(data_dir, &all, &workspace, &rules, agent, args)?;
     let thread = record.as_ref().map_or(silt_types::ThreadId(0), |record| record.id);
-    let token = mint_run_token(&store, thread, &workspace.id).await?;
-    Ok(RunRules { workspace, locks, env, token, reach })
+    let project =
+        record.as_ref().map(|record| record.repo.clone()).or_else(|| here.as_ref().and_then(|repo| repo.project().ok()));
+    let token = mint_run_token(&store, thread, &workspace.id, project.as_deref()).await?;
+    Ok(RunRules { workspace, locks, env, token, reach, args: None })
 }
 
 /// What a run is held to: the agent's own locks, the workspace's
@@ -687,7 +742,10 @@ fn check_run(
     let choice =
         silt_workspace::AgentChoice::Known { key: silt_workspace::agent_key(agent.id()), name: agent.display_name().to_owned() };
     let ours = policy.sandbox_required() && crate::sandbox::supported();
-    rules.check_agent(&choice, ours || can_sandbox(agent.sandbox_support(), &policy)).map_err(refused)?;
+    // Silt's own sandbox holds the agent to every sandbox rule.
+    let support = if ours { silt_agents::SandboxSupport::Isolate } else { agent.sandbox_support() };
+    rules.check_agent(&choice, support).map_err(refused)?;
+    rules.check_model(&choice, silt_llm::local_model_in_args(args).is_some()).map_err(refused)?;
     if let Some(flag) = agent.bypass_flag(args) {
         rules.check_flag(&flag, agent.display_name()).map_err(refused)?;
     }
@@ -718,26 +776,35 @@ impl Core {
             .find(|candidate| candidate.id() == agent)
             .ok_or_else(|| CoreError::Invalid(format!("no agent {agent}")))?;
         let all = self.workspaces();
-        let (thread, workspace) = match (thread, cwd) {
+        let (thread, workspace, project) = match (thread, cwd) {
             (Some(selector), _) => {
                 let thread = self.find_thread(selector)?;
-                let family = self
-                    .threads
-                    .get(&thread)
-                    .map(|record| record.family)
-                    .ok_or_else(|| CoreError::Invalid("no such thread".into()))?;
-                (thread, self.family_workspace(family))
+                let record = self.threads.get(&thread).ok_or_else(|| CoreError::Invalid("no such thread".into()))?;
+                (thread, self.family_workspace(record.family), record.repo.clone())
             }
             (None, Some(cwd)) => {
                 let repo = silt_git::Repo::discover(cwd)?;
-                let id = self.new_family_workspace(&repo, &repo.project()?);
-                (silt_types::ThreadId(0), all.get(&id).cloned().unwrap_or_else(|| all.default_workspace().clone()))
+                let project = repo.project()?;
+                let id = self.new_family_workspace(&repo, &project);
+                (silt_types::ThreadId(0), all.get(&id).cloned().unwrap_or_else(|| all.default_workspace().clone()), project)
             }
             (None, None) => return Err(CoreError::Invalid("name the thread or the folder the agent runs in".into())),
         };
-        let (locks, env, reach) = check_run(&self.data_dir, &all, &workspace, &self.rules(&workspace), agent, args)?;
-        let token = self.mint_run_token(thread, &workspace.id).await?;
-        Ok(RunRules { workspace, locks, env, token, reach })
+        let (locks, mut env, reach) = check_run(&self.data_dir, &all, &workspace, &self.rules(&workspace), agent, args)?;
+        let local =
+            match silt_llm::local_model_in_args(args).filter(|_| silt_workspace::agent_key(agent.id()).as_str() == "claude") {
+                Some((model, rest)) => Some((self.models.installed(&model).await?, rest)),
+                None => None,
+            };
+        let token = self.mint_run_token(thread, &workspace.id, Some(&project)).await?;
+        let args = match local {
+            Some((model, rest)) => {
+                env.extend(crate::models::claude_env(&self.models.gateway().await?, &token, &model));
+                Some(rest)
+            }
+            None => None,
+        };
+        Ok(RunRules { workspace, locks, env, token, reach, args })
     }
 }
 

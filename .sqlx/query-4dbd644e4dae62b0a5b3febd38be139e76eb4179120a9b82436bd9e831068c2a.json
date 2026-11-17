@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT path FROM session_touches WHERE agent = ? AND session_id = ? ORDER BY touched_ms DESC, path LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "path",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_touches",
+            "name": "path"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4dbd644e4dae62b0a5b3febd38be139e76eb4179120a9b82436bd9e831068c2a"
+}

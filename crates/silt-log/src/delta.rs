@@ -24,6 +24,23 @@ pub enum Author {
     },
     /// Content brought in from git or another existing state.
     Import,
+    /// Made by the agent of another thread working in the same clone; one
+    /// session, or several when it's unclear which (ADR 0089).
+    Others {
+        sessions: Vec<SessionRef>,
+    },
+    /// Made by one of several agents working in the same clone, this
+    /// thread's own among them; it's unclear which (ADR 0089).
+    Agents {
+        sessions: Vec<SessionRef>,
+    },
+}
+
+impl Author {
+    /// Whether an agent made it, this thread's or another's.
+    pub fn is_agents(&self) -> bool {
+        matches!(self, Self::Agent { .. } | Self::Others { .. } | Self::Agents { .. })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

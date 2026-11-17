@@ -4,9 +4,9 @@
 // grouped by run and by turn (ADR 0049).
 
 import { execFileSync } from 'node:child_process'
-import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
+import { teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -18,8 +18,7 @@ test.beforeAll(() => {
 })
 
 test.afterAll(() => {
-  execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: join(world.work, 'silt') } })
-  rmSync(world.work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  teardown(SILT, world.work, [join(world.work, 'silt')])
 })
 
 /** Picks how the transcript groups the agent's work, or how much each step shows, from the thread's menu. */

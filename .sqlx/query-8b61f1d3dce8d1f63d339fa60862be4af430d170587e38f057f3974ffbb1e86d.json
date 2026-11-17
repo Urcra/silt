@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM run_tokens WHERE thread_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "8b61f1d3dce8d1f63d339fa60862be4af430d170587e38f057f3974ffbb1e86d"
+}

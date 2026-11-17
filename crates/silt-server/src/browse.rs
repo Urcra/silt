@@ -369,6 +369,7 @@ fn summary(
         created_ms: row.created_ms,
         messages: conversation.messages,
         edits: own.iter().filter(|delta| matches!(delta.op, Op::Text { .. })).count(),
+        shared: own.iter().any(|delta| matches!(delta.author, silt_log::Author::Others { .. })),
         location: "remote".into(),
         forked_from: own.iter().find_map(|delta| match delta.op {
             Op::Fork { from } => Some(from.to_string()),

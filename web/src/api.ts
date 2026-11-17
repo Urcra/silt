@@ -15,6 +15,11 @@ import type {
   ChatSettings,
   CloudLaunch,
   DesignSystemView,
+  DesignCatalog,
+  DesignDetail,
+  DesignAssetData,
+  DesignStart,
+  ThreadDesign,
   CommentLocation,
   CommentOn,
   CommentView,
@@ -31,10 +36,13 @@ import type {
   HistoryPage,
   InboxEntry,
   InboxRead,
+  FoundModel,
   KindSetting,
   LiveState,
+  LocalModels,
   MarkSeen,
   Mine,
+  ModelFiles,
   MrDetails,
   MrSummary,
   NewLink,
@@ -157,13 +165,43 @@ export interface SearchForm {
 }
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
-/** Which of a thread's changes a diff shows: those of `turn`, or of turns `turn` to `toTurn`, else since `base`; with
- * `hideGit`, without what git itself rewrote (ADR 0069). */
-export interface DiffSpec {
+
+/** Where a design system is: a project's clone, the person's own, or the folder of the thread making it. */
+export interface DesignWhere {
+  source: 'project' | 'personal'
+  name: string
+  clone?: string
+  thread?: string
+}
+
+function designQuery(where: DesignWhere): string {
+  const query = new URLSearchParams({ source: where.source, name: where.name })
+  if (where.clone) query.set('clone', where.clone)
+  if (where.thread) query.set('thread', where.thread)
+  return query.toString()
+}
+
+/** What a diff leaves out: with `hideGit`, what git itself rewrote (ADR 0069); with `hideOthers`, the edits of other
+ * agents working in the same clone (ADR 0089). */
+export interface Hidden {
+  hideGit?: boolean
+  hideOthers?: boolean
+}
+
+const hiddenParams = (params: URLSearchParams, hidden: Hidden) => {
+  if (hidden.hideGit) params.set('git', 'hide')
+  if (hidden.hideOthers) params.set('others', 'hide')
+  return params
+}
+
+/** The same, as a comment's or its anchors' lines say how they're numbered. */
+export const hiddenLines = (hidden: Hidden) => ({ hide_git: hidden.hideGit ?? false, hide_others: hidden.hideOthers ?? false })
+
+/** Which of a thread's changes a diff shows: those of `turn`, or of turns `turn` to `toTurn`, else since `base`. */
+export interface DiffSpec extends Hidden {
   turn?: number
   toTurn?: number
   base?: string
-  hideGit?: boolean
 }
 
 const diffParams = (options: DiffSpec) => {
@@ -171,8 +209,7 @@ const diffParams = (options: DiffSpec) => {
   if (options.turn !== undefined) params.set('turn', String(options.turn))
   if (options.toTurn !== undefined) params.set('to_turn', String(options.toTurn))
   if (options.base) params.set('base', options.base)
-  if (options.hideGit) params.set('git', 'hide')
-  return params
+  return hiddenParams(params, options)
 }
 /** Names which server to ask, on a machine signed in to several (ADR 0032). */
 const onServer = (server?: string | null) => (server ? `?server=${encodeURIComponent(server)}` : '')
@@ -186,6 +223,19 @@ export function dictationSocket(): WebSocket {
 export const api = {
   voiceStatus: () => request<VoiceStatus>('GET', '/api/voice'),
   voiceModel: () => request<VoiceStatus>('POST', '/api/voice/model'),
+  /** The local models here, and the llama-server that runs them (ADR 0092); a daemon's only. */
+  models: () => request<LocalModels>('GET', '/api/models'),
+  /** Starts a download: `owner/repo:file.gguf`, or a GGUF file's path. Answers with the model's name. */
+  pullModel: (source: string) => request<string>('POST', '/api/models/pull', { source }),
+  removeModel: (id: string) => request<string>('DELETE', `/api/models/${encodeURIComponent(id)}`),
+  /** GGUF models on Hugging Face, the most downloaded first; with no words, the most downloaded of all. */
+  searchModels: (words: string) => request<FoundModel[]>('GET', `/api/models/search?q=${encodeURIComponent(words)}`),
+  /** A Hugging Face repository's quantizations, as this machine would run each. */
+  modelFiles: (repo: string) => request<ModelFiles>('GET', `/api/models/files?repo=${encodeURIComponent(repo)}`),
+  /** Starts downloading llama.cpp's latest build for this machine. */
+  pullRuntime: () => request<string>('POST', '/api/models/runtime'),
+  /** Erases a Local only thread and its forks (ADR 0092); unconfirmed, says what would go. */
+  eraseThread: (id: string, confirm: boolean) => request<string>('POST', `${thread(id)}/erase`, { confirm }),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
   /** An artifact's content, by the blob a version of it names (ADR 0068). */
   artifact: (id: string, blob: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${blob}`),
@@ -307,11 +357,10 @@ export const api = {
   /** For the diff's files, the turns that last wrote their new lines. */
   diffTurns: (id: string, options: DiffSpec = {}) => request<FileTurns[]>('GET', `${thread(id)}/diff/turns?${diffParams(options)}`),
   /** With `base`, a diff base, code comments say where they are there too. */
-  comments: (id: string, base?: string, hideGit = false) => {
+  comments: (id: string, base?: string, hidden: Hidden = {}) => {
     const params = new URLSearchParams()
     if (base) params.set('base', base)
-    if (hideGit) params.set('git', 'hide')
-    const query = params.toString()
+    const query = hiddenParams(params, hidden).toString()
     return request<CommentView[]>('GET', `${thread(id)}/comments${query ? `?${query}` : ''}`)
   },
   commentsSent: (id: string, comments: string[]) => request<CommentView[]>('POST', `${thread(id)}/comments/sent`, { comments }),
@@ -379,6 +428,13 @@ export const api = {
   workspaces: () => request<WorkspacesView>('GET', '/api/workspaces'),
   // The person's design systems and Silt's own, for a workspace's default (ADR 0071).
   designSystems: (clone?: string) => request<DesignSystemView[]>('GET', clone ? `/api/design-systems?clone=${encodeURIComponent(clone)}` : '/api/design-systems'),
+  // Settings › Design systems: every system, one system's page, its assets, and the threads that make one (ADR 0088).
+  designCatalog: () => request<DesignCatalog>('GET', '/api/design-systems/catalog'),
+  designSystem: (where: DesignWhere) => request<DesignDetail>('GET', `/api/design-systems/system?${designQuery(where)}`),
+  designAsset: (where: DesignWhere, path: string) =>
+    request<DesignAssetData>('GET', `/api/design-systems/asset?${designQuery(where)}&path=${encodeURIComponent(path)}`),
+  designStart: (start: DesignStart) => request<string>('POST', '/api/design-systems/start', start),
+  threadDesign: (id: string) => request<ThreadDesign | null>('GET', `${thread(id)}/design-system`),
   artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),
   setArtifactSettings: (settings: ArtifactSettings) => request<string>('PUT', '/api/artifact-settings', settings),
   projectDesignSystems: () => request<Record<string, string>>('GET', '/api/projects/design-systems'),
@@ -439,8 +495,10 @@ export const api = {
   share: (id: string, user: string, remove: boolean) => request<string>('POST', `${thread(id)}/share`, { user, remove }),
   offerMergeRequest: (id: string, title: string) => request<MrSummary>('POST', `${thread(id)}/mrs`, { title }),
   mergeRequests: () => request<MrSummary[]>('GET', '/api/mrs'),
-  mergeRequest: (id: string, hideGit = false) =>
-    request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}${hideGit ? '?git=hide' : ''}`),
+  mergeRequest: (id: string, hidden: Hidden = {}) => {
+    const query = hiddenParams(new URLSearchParams(), hidden).toString()
+    return request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}${query ? `?${query}` : ''}`)
+  },
   approve: (id: string) => request<MrSummary>('POST', `/api/mrs/${encodeURIComponent(id)}/approve`),
   writeGuide: (id: string, text?: string) =>
     request<string>('POST', `/api/mrs/${encodeURIComponent(id)}/guide`, text === undefined ? {} : { text }),

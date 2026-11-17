@@ -15,10 +15,11 @@ silt-web = { path = "../silt-web" }
 axum = { version = "0.8.9", features = ["ws"] }
 base64 = "0.23.1"
 blake3 = "1.8.7"
+futures-util = "0.3.34"
 postcard = { version = "1.1.3", features = ["alloc"] }
 notify = "9.0.0-rc.6"
 notify-debouncer-full = "0.8.0-rc.2"
-reqwest = { version = "0.13.5", features = ["json", "query"] }
+reqwest = { version = "0.13.5", features = ["json", "query", "stream"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 silt-acp = { path = "../silt-acp" }
@@ -31,6 +32,8 @@ silt-vendor = { path = "../silt-vendor" }
 silt-access = { path = "../silt-access" }
 silt-gateway = { path = "../silt-gateway" }
 silt-git = { path = "../silt-git" }
+silt-llm = { path = "../silt-llm" }
+silt-local = { path = "../silt-local" }
 silt-log = { path = "../silt-log" }
 silt-mcp = { path = "../silt-mcp" }
 silt-os = { path = "../silt-os" }
@@ -47,11 +50,10 @@ tracing = "0.1.44"
 uuid = { version = "1.28.0", features = ["v4", "v7"] }
 rmcp = { version = "3.10.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
-futures-util = "0.3.34"
 
 [dev-dependencies]
 silt-proto = { path = "../silt-proto", features = ["ts"] }
 silt-access = { path = "../silt-access", features = ["ts"] }
 silt-workspace = { path = "../silt-workspace", features = ["ts"] }
 tempfile = "3.27.0"
-ts-rs = "12.0.1"
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }

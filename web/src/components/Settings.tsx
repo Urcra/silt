@@ -9,10 +9,12 @@ import { THEMES, type Theme, applyTheme, storedTheme } from '../theme'
 import { Button, Dot, EmptyState, Input, cx, toast } from '../ui'
 import { ChipSelect } from './ChipSelect'
 import { Devices } from './Devices'
+import { LocalModelsSettings } from './LocalModels'
 import { NotificationBanner, NotificationSettings } from './Inbox'
 import { Orgs } from './Orgs'
 import { InSettings, SETTINGS_HEADING } from '../settingsContext'
 import { Page } from './Page'
+import { DesignSystemsSettings } from './DesignSystems'
 import { AddProjectPage, Projects } from './Projects'
 import { WorkspacesSettings } from './Workspaces'
 
@@ -23,6 +25,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
       ...(hosted() ? [] : [{ id: 'workspaces', label: 'Workspaces' }]),
       { id: 'projects', label: 'Projects' },
       { id: 'orgs', label: 'Orgs' },
+      ...(hosted() ? [] : [{ id: 'design-systems', label: 'Design systems' }]),
     ],
   },
   {
@@ -30,6 +33,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
     sections: [
       { id: 'devices', label: 'Devices and sync' },
       ...(hosted() ? [] : [{ id: 'chats', label: 'Chats' }]),
+      ...(hosted() ? [] : [{ id: 'models', label: 'Local models' }]),
       { id: 'notifications', label: 'Notifications' },
       { id: 'appearance', label: 'Appearance' },
     ],
@@ -339,8 +343,10 @@ export function Settings() {
     orgs: <Orgs />,
     notifications: <Notifications />,
     chats: <Chats />,
+    models: <LocalModelsSettings />,
     workspaces: <WorkspacesSettings />,
     appearance: <Appearance />,
+    'design-systems': <DesignSystemsSettings />,
   }
   return (
     <Page title="Settings" meta={signIn ? `${signIn.user} on ${serverName(signIn.url)}` : hosted() ? undefined : 'this machine'} label="settings">

@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { type ReactNode, useState } from 'react'
 import { PRESETS, permissionModes, startSettings } from '../agentState'
+import { missingSystem } from '../artifacts'
 import { type AgentChoice, type AgentDefaults, api, type MatchRule, type Policy, type Preset, type Workspace, type WorkspaceView, type Workspaces as WorkspacesFile } from '../api'
 import { keys, message } from '../query'
 import { KNOWN_AGENTS, PRESET_LABELS, rulesLine, serverLine } from '../rules'
@@ -237,9 +238,11 @@ export function WorkspacesSettings() {
             {(designSystems.data ?? []).map((system) => (
               <option key={system.name} value={system.name}>
                 {system.title}
-                {system.source === 'builtin' ? ' (built in)' : ''}
               </option>
             ))}
+            {missingSystem(workspace.defaults.design_system, designSystems.data) && (
+              <option value={workspace.defaults.design_system ?? ''}>{workspace.defaults.design_system} (not on this machine)</option>
+            )}
           </Select>
         </div>
         <AgentDefaultsRows
@@ -333,6 +336,19 @@ export function WorkspacesSettings() {
                 mine={<Toggle label="hide other workspaces' files" on={Boolean(workspace.policy.isolated)} onChange={(isolated) => changePolicy({ isolated })} />}
                 theirs={org?.policy.isolated ? 'On' : '—'}
                 effect={effective.isolated ? 'On' : 'Off'}
+              />
+              <Rule
+                name="Local only"
+                mine={
+                  <Toggle
+                    label="local only"
+                    on={Boolean(workspace.policy.local_only)}
+                    disabled={Boolean(workspace.server)}
+                    onChange={(local_only) => changePolicy({ local_only })}
+                  />
+                }
+                theirs="—"
+                effect={effective.local_only ? 'Local models only; nothing leaves this machine' : workspace.server ? 'Needs no server' : 'Off'}
               />
               <Rule
                 name="Where threads sync"
@@ -502,10 +518,17 @@ function PresetSelect({
   )
 }
 
-function Toggle({ label, on, onChange }: { label: string; on: boolean; onChange: (on: boolean) => void }) {
+function Toggle({ label, on, onChange, disabled }: { label: string; on: boolean; onChange: (on: boolean) => void; disabled?: boolean }) {
   return (
-    <label className="inline-flex cursor-pointer items-center gap-2 text-xs">
-      <input type="checkbox" aria-label={label} checked={on} onChange={(event) => onChange(event.target.checked)} className="accent-[var(--accent)]" />
+    <label className={cx('inline-flex items-center gap-2 text-xs', disabled ? 'opacity-50' : 'cursor-pointer')}>
+      <input
+        type="checkbox"
+        aria-label={label}
+        checked={on}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        className="accent-[var(--accent)]"
+      />
       {on ? 'on' : 'off'}
     </label>
   )

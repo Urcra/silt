@@ -5,14 +5,13 @@
 
 use std::env;
 use std::fs;
-use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
 use std::time::Duration;
 
 use serde_json::{Value, json};
 use silt_fake_agent::{
-    Failed, Step, Utc, append, cwd, env_dir, env_or, exit, expect_words, has, io, main_rs, read, records, write,
+    Failed, Step, Utc, append, cwd, env_dir, env_or, exit, expect_words, feed_hook, has, io, main_rs, read, records, write,
 };
 
 struct Session {
@@ -105,7 +104,7 @@ impl Session {
         let output = fs::File::create(self.home.join(format!("hook-{name}"))).map_err(io)?;
         let mut child = run.stdin(Stdio::piped()).stdout(output).spawn().map_err(io)?;
         let input = json!({"sessionId": self.id, "timestamp": self.time, "cwd": self.cwd, "prompt": prompt});
-        child.stdin.take().expect("piped").write_all(input.to_string().as_bytes()).map_err(io)?;
+        feed_hook(&mut child, input.to_string().as_bytes())?;
         match child.wait().map_err(io)?.code() {
             Some(0) => Ok(()),
             code => Err(Failed(code.and_then(|code| u8::try_from(code).ok()).unwrap_or(1), String::new())),

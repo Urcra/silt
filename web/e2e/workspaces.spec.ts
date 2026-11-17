@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
-import { stopAgent } from './fixture'
+import { stopAgent, teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -21,12 +21,8 @@ test.beforeAll(() => {
 })
 
 test.afterAll(() => {
-  execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: join(fixture.dir, 'ada', 'silt') } })
-  for (const server of ['work', 'oss']) {
-    process.kill(Number(readFileSync(join(fixture.dir, `${server}.pid`), 'utf8')))
-  }
-  // A daemon, or a server just killed, can still be writing there for a moment.
-  rmSync(fixture.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  const servers = ['work', 'oss'].map((server) => join(fixture.dir, `${server}.pid`))
+  teardown(SILT, fixture.dir, [join(fixture.dir, 'ada', 'silt')], servers)
 })
 
 const host = (url: string) => new URL(url).host

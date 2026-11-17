@@ -4,9 +4,9 @@
 // compares the new one with its board.
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
+import { teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -31,12 +31,8 @@ test.beforeAll(() => {
 })
 
 test.afterAll(() => {
-  for (const home of ['alice', 'bob', 'alice-laptop']) {
-    execFileSync(SILT, ['daemon', 'stop'], { env: { ...process.env, SILT_HOME: join(world.work, home, 'silt') } })
-  }
-  process.kill(Number(readFileSync(join(world.work, 'server.pid'), 'utf8')))
-  // A daemon's agents can still be writing there for a moment after it stops.
-  rmSync(world.work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  const homes = ['alice', 'bob', 'alice-laptop'].map((home) => join(world.work, home, 'silt'))
+  teardown(SILT, world.work, homes, [join(world.work, 'server.pid')])
 })
 
 const VARIANTS = [
@@ -194,7 +190,14 @@ test('reconciling a diverged thread', async ({ page }) => {
 test("a new thread's project picker", async ({ page }) => {
   await shoot(page, 'new-thread', async (shown) => {
     await open(shown, '/?pick=projects')
-    await expect(shown.getByRole('dialog', { name: 'Pick a project' })).toBeVisible()
+    const picker = shown.getByRole('dialog', { name: 'Pick a project' })
+    await expect(picker).toBeVisible()
+    // The page fills in as its lists load, each on its own, after the picker opens.
+    await expect(picker.getByText('tools', { exact: true })).toBeVisible()
+    const main = shown.getByRole('main')
+    await expect(main.getByLabel('agent to start')).toHaveValue('plain')
+    await expect(main.getByText('Add a farewell')).toBeVisible()
+    await expect(main.getByText('Retry blob uploads on a 5xx')).toBeVisible()
   })
 })
 
@@ -217,6 +220,41 @@ test('projects', async ({ page }) => {
   await open(page, '/settings/projects')
   await shoot(page, 'projects', async (shown) => {
     await expect(shown.getByTestId('projects')).toBeVisible()
+  })
+})
+
+test('design systems (ADR 0088)', async ({ page }) => {
+  await open(page, '/settings/design-systems')
+  await shoot(page, 'design-systems', async (shown) => {
+    await expect(shown.getByRole('link', { name: /Harbor/ })).toBeVisible()
+  })
+})
+
+test('a new design system (ADR 0088)', async ({ page }) => {
+  await open(page, '/settings/design-systems')
+  await shoot(page, 'new-design-system', async (shown) => {
+    if (!(await shown.getByRole('dialog', { name: 'New design system' }).isVisible())) await shown.getByRole('button', { name: 'New design system' }).first().click()
+    await shown.getByRole('textbox', { name: 'Name' }).fill('Harbor')
+    await expect(shown.getByRole('button', { name: 'Start building' })).toBeVisible()
+  })
+})
+
+test("a design system's page (ADR 0088)", async ({ page }) => {
+  await open(page, '/settings/design-systems/system?source=personal&name=harbor')
+  await shoot(page, 'design-system', async (shown) => {
+    await expect(shown.frameLocator('iframe[title="button preview"]').getByRole('button', { name: 'Set sail' })).toBeVisible()
+    await expect(shown.frameLocator('iframe[title="tag preview"]').getByText('Docked')).toBeVisible()
+    // Each frame sizes itself to its content once drawn.
+    await shown.waitForTimeout(300)
+  })
+})
+
+test("a design system's tokens (ADR 0088)", async ({ page }) => {
+  await open(page, '/settings/design-systems/system?source=personal&name=harbor')
+  await shoot(page, 'design-system-tokens', async (shown) => {
+    await shown.getByRole('tab', { name: 'Tokens' }).click()
+    await expect(shown.frameLocator('iframe[title="type scale"]').getByText('Sphinx of black quartz, judge my vow').first()).toBeVisible()
+    await shown.waitForTimeout(300)
   })
 })
 

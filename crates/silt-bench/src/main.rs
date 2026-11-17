@@ -14,6 +14,7 @@ mod measure;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::time::Instant;
 
 use clap::{Parser, Subcommand};
 use exn::{Exn, ResultExt};
@@ -112,7 +113,9 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
     let wanted: Vec<&str> = selected.iter().map(|budget| budget.name).collect();
     let mut measured: HashMap<&str, Measured> = HashMap::new();
     for scenario in &scenarios {
+        let start = Instant::now();
         measured.extend(scenario.run(&silt, &fixtures, &wanted, cli.keep).await?);
+        eprintln!("silt-bench: {scenario:?} measured in {:.1?}", start.elapsed());
     }
     if cli.mode == Mode::Check {
         // ADR 0034: one more run before an enforced budget fails, for the

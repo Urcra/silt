@@ -478,7 +478,7 @@ impl Core {
     /// The workspace and thread a run's token was made for.
     async fn run_of(&self, token: &str) -> Result<(String, String), CoreError> {
         let hash = blake3::hash(token.as_bytes());
-        let (thread, workspace) = self
+        let silt_store::RunToken { thread, workspace, .. } = self
             .store
             .run_token(hash.as_bytes())
             .await?
@@ -792,8 +792,8 @@ mod tests {
         };
         store.create_thread(&record).await.expect("thread");
         store.create_thread(&ThreadRecord { id: ThreadId(8), family: FamilyId(10), ..record }).await.expect("thread");
-        store.add_run_token(blake3::hash(b"work-run").as_bytes(), thread, "work", 1).await.expect("token");
-        store.add_run_token(blake3::hash(b"home-run").as_bytes(), ThreadId(8), "personal", 1).await.expect("token");
+        store.add_run_token(blake3::hash(b"work-run").as_bytes(), thread, "work", None, 1).await.expect("token");
+        store.add_run_token(blake3::hash(b"home-run").as_bytes(), ThreadId(8), "personal", None, 1).await.expect("token");
         let mut plugin = ssh();
         plugin.kind = Kind::Command { argv: vec!["echo".into(), "ran on {target}".into()] };
         plugin.environments.get_mut("fleet").expect("fleet").changes = Rule::Ask;

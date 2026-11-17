@@ -195,8 +195,20 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/found/import", post(import_found))
         .route("/api/projects/home", axum::routing::put(project_home))
         .route("/api/chats/settings", get(chat_settings).put(set_chat_settings))
+        .route("/api/models", get(models))
+        .route("/api/models/pull", post(model_pull))
+        .route("/api/models/search", get(model_search))
+        .route("/api/models/files", get(model_files))
+        .route("/api/models/runtime", post(runtime_pull))
+        .route("/api/models/{id}", delete(model_remove))
+        .route("/api/threads/{id}/erase", post(thread_erase))
         .route("/api/workspaces", get(workspaces).put(set_workspaces))
         .route("/api/design-systems", get(design_systems))
+        .route("/api/design-systems/catalog", get(design_catalog))
+        .route("/api/design-systems/system", get(design_system))
+        .route("/api/design-systems/asset", get(design_asset))
+        .route("/api/design-systems/start", post(design_start))
+        .route("/api/threads/{id}/design-system", get(thread_design))
         .route("/api/artifact-settings", get(artifact_settings).put(set_artifact_settings))
         .route("/api/projects/design-systems", get(project_design_systems).put(set_project_design_system))
         .route("/api/workspaces/assign", post(assign_project))
@@ -663,32 +675,35 @@ struct DiffQuery {
     /// `hide` leaves out what git itself rewrote (ADR 0069).
     #[serde(default)]
     git: Option<String>,
+    /// `hide` leaves out other agents' edits (ADR 0089).
+    #[serde(default)]
+    others: Option<String>,
 }
 
 impl DiffQuery {
-    fn hide_git(&self) -> bool {
-        silt_proto::view::GitQuery { git: self.git.clone() }.hide_git()
+    fn hide(&self) -> silt_log::Hide {
+        silt_proto::view::GitQuery { git: self.git.clone(), others: self.others.clone() }.hide()
     }
 }
 
 async fn diff(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
     let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let base = query.base.filter(|base| !base.is_empty());
     let path = query.path.filter(|path| !path.is_empty());
-    ask(&web, Request::Diff { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git }).await
+    ask(&web, Request::Diff { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git, hide_others }).await
 }
 
 async fn diff_stats(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let base = query.base.filter(|base| !base.is_empty());
-    ask(&web, Request::DiffStats { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git }).await
+    ask(&web, Request::DiffStats { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git, hide_others }).await
 }
 
 async fn thread_seen(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let base = query.base.filter(|base| !base.is_empty());
-    ask(&web, Request::ThreadSeen { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git }).await
+    ask(&web, Request::ThreadSeen { thread, turn: query.turn, to_turn: query.to_turn, base, hide_git, hide_others }).await
 }
 
 async fn mark_thread_seen(
@@ -701,10 +716,11 @@ async fn mark_thread_seen(
 
 async fn diff_turns(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<DiffQuery>) -> HttpResponse {
     let files = query.limit.map(|limit| crate::protocol::FilePage { offset: query.offset.unwrap_or(0), limit });
-    let hide_git = query.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let base = query.base.filter(|base| !base.is_empty());
     let path = query.path.filter(|path| !path.is_empty());
-    ask(&web, Request::DiffTurns { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git }).await
+    ask(&web, Request::DiffTurns { thread, turn: query.turn, to_turn: query.to_turn, base, files, path, hide_git, hide_others })
+        .await
 }
 
 /// The web UI has no clone of its own; comments that need one say so.
@@ -718,12 +734,16 @@ struct CommentsQuery {
     /// `hide` places them as a diff without git's rewrites shows the lines.
     #[serde(default)]
     git: Option<String>,
+    /// `hide`, and without other agents' edits.
+    #[serde(default)]
+    others: Option<String>,
 }
 
 async fn comments(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<CommentsQuery>) -> HttpResponse {
-    let hide_git = silt_proto::view::GitQuery { git: query.git }.hide_git();
+    let silt_log::Hide { git: hide_git, others: hide_others } =
+        silt_proto::view::GitQuery { git: query.git, others: query.others }.hide();
     let base = query.base.filter(|base| !base.is_empty());
-    ask(&web, Request::Comments { thread, base, hide_git, cwd: no_clone() }).await
+    ask(&web, Request::Comments { thread, base, hide_git, hide_others, cwd: no_clone() }).await
 }
 
 #[derive(Deserialize)]
@@ -1343,6 +1363,56 @@ struct AgentStart {
     options: crate::protocol::StartOptions,
 }
 
+#[derive(Deserialize)]
+struct Erase {
+    #[serde(default)]
+    confirm: bool,
+}
+
+async fn thread_erase(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<Erase>) -> HttpResponse {
+    ask(&web, Request::ThreadErase { thread, confirm: body.confirm }).await
+}
+
+async fn models(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::Models).await
+}
+
+#[derive(Deserialize)]
+struct ModelSource {
+    source: String,
+}
+
+async fn model_pull(State(web): State<Web>, Json(body): Json<ModelSource>) -> HttpResponse {
+    ask(&web, Request::ModelPull { source: body.source }).await
+}
+
+#[derive(Deserialize)]
+struct ModelQuery {
+    #[serde(default)]
+    q: String,
+}
+
+async fn model_search(State(web): State<Web>, Query(query): Query<ModelQuery>) -> HttpResponse {
+    ask(&web, Request::ModelSearch { query: query.q }).await
+}
+
+#[derive(Deserialize)]
+struct RepoQuery {
+    repo: String,
+}
+
+async fn model_files(State(web): State<Web>, Query(query): Query<RepoQuery>) -> HttpResponse {
+    ask(&web, Request::ModelFiles { repo: query.repo }).await
+}
+
+async fn runtime_pull(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::RuntimePull).await
+}
+
+async fn model_remove(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
+    ask(&web, Request::ModelRemove { model: id }).await
+}
+
 async fn chat_settings(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::ChatSettings).await
 }
@@ -1363,6 +1433,40 @@ struct DesignSystemsQuery {
 
 async fn design_systems(State(web): State<Web>, Query(query): Query<DesignSystemsQuery>) -> HttpResponse {
     ask(&web, Request::DesignSystems { clone: query.clone }).await
+}
+
+async fn design_catalog(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::DesignCatalog).await
+}
+
+#[derive(Deserialize)]
+struct DesignSystemQuery {
+    source: crate::protocol::DesignSource,
+    name: String,
+    #[serde(default)]
+    clone: Option<PathBuf>,
+    #[serde(default)]
+    thread: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+async fn design_system(State(web): State<Web>, Query(query): Query<DesignSystemQuery>) -> HttpResponse {
+    ask(&web, Request::DesignSystem { source: query.source, name: query.name, clone: query.clone, thread: query.thread }).await
+}
+
+async fn design_asset(State(web): State<Web>, Query(query): Query<DesignSystemQuery>) -> HttpResponse {
+    let path = query.path.unwrap_or_default();
+    ask(&web, Request::DesignAsset { source: query.source, name: query.name, clone: query.clone, thread: query.thread, path })
+        .await
+}
+
+async fn design_start(State(web): State<Web>, Json(start): Json<crate::protocol::DesignStart>) -> HttpResponse {
+    ask(&web, Request::DesignStart(start)).await
+}
+
+async fn thread_design(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
+    ask(&web, Request::ThreadDesignSystem { thread }).await
 }
 
 async fn project_design_systems(State(web): State<Web>) -> HttpResponse {
@@ -1785,7 +1889,8 @@ async fn merge_request(
     Path(mr): Path<String>,
     Query(query): Query<silt_proto::view::GitQuery>,
 ) -> HttpResponse {
-    ask(&web, Request::MrShow { mr, hide_git: query.hide_git() }).await
+    let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
+    ask(&web, Request::MrShow { mr, hide_git, hide_others }).await
 }
 
 async fn approve(State(web): State<Web>, Path(mr): Path<String>) -> HttpResponse {
@@ -1943,7 +2048,8 @@ async fn file_at(
 
 /// Other threads of the thread's repository that changed the path.
 async fn in_flight(State(web): State<Web>, Path(thread): Path<String>, Query(query): Query<PathQuery>) -> HttpResponse {
-    ask_in_clone(&web, &thread, |cwd| Request::InFlight { cwd, path: query.path }).await
+    let caller = Some(thread.clone());
+    ask_in_clone(&web, &thread, |cwd| Request::InFlight { cwd, path: query.path, thread: caller }).await
 }
 
 #[derive(Deserialize)]

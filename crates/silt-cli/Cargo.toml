@@ -23,6 +23,9 @@ silt-agents = { path = "../silt-agents" }
 silt-daemon = { path = "../silt-daemon" }
 silt-design = { path = "../silt-design" }
 silt-git = { path = "../silt-git" }
+silt-log = { path = "../silt-log" }
+silt-llm = { path = "../silt-llm" }
+silt-local = { path = "../silt-local" }
 silt-mcp = { path = "../silt-mcp" }
 silt-os = { path = "../silt-os" }
 silt-proto = { path = "../silt-proto" }
@@ -40,8 +43,12 @@ serde = { version = "1.0.229", features = ["derive"] }
 rpassword = "7.5.4"
 
 [dev-dependencies]
+axum = "0.8.9"
 base64 = "0.23.1"
+flate2 = "1.1.11"
 futures-util = "0.3.34"
+sha2 = "0.11.1"
+tar = "0.4.46"
 tempfile = "3.27.0"
 serde_json = "1.0.154"
 silt-redact = { path = "../silt-redact" }

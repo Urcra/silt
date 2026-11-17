@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM checkout_git_states WHERE thread_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "4db2daf75f38c2bab0fa8cbaee14e529c2f00339b90746002348a48ace91978b"
+}
