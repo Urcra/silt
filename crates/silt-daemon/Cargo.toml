@@ -28,6 +28,7 @@ silt-crdt = { path = "../silt-crdt" }
 silt-sheet = { path = "../silt-sheet" }
 silt-design = { path = "../silt-design" }
 silt-vendor = { path = "../silt-vendor" }
+silt-access = { path = "../silt-access" }
 silt-gateway = { path = "../silt-gateway" }
 silt-git = { path = "../silt-git" }
 silt-log = { path = "../silt-log" }
@@ -50,6 +51,7 @@ futures-util = "0.3.34"
 
 [dev-dependencies]
 silt-proto = { path = "../silt-proto", features = ["ts"] }
+silt-access = { path = "../silt-access", features = ["ts"] }
 silt-workspace = { path = "../silt-workspace", features = ["ts"] }
 tempfile = "3.27.0"
 ts-rs = "12.0.1"

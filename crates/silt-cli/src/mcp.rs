@@ -19,9 +19,12 @@ use crate::CliError;
 use crate::render::short;
 
 const DEFAULT_LIMIT: usize = 40;
+const PLUGIN_WAIT: &str = "silt_plugin_wait";
 /// Longest text of one history entry an agent reads.
 const ENTRY_CHARS: usize = 4000;
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// A plugin's call may run its command for two minutes, or wait on the person.
+const PLUGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 struct DaemonTools {
     thread: String,
@@ -42,8 +45,12 @@ pub fn serve(thread: &str, checkout: Option<PathBuf>, token: Option<String>, sho
 }
 
 fn ask_daemon<T: DeserializeOwned>(request: &Request) -> Result<T, String> {
+    ask_daemon_within(request, REQUEST_TIMEOUT)
+}
+
+fn ask_daemon_within<T: DeserializeOwned>(request: &Request, timeout: std::time::Duration) -> Result<T, String> {
     let socket = paths::run_channel().map_or_else(paths::socket_path, |(socket, _)| socket);
-    match client::send(&socket, request, Some(REQUEST_TIMEOUT)) {
+    match client::send(&socket, request, Some(timeout)) {
         Ok(Response::Ok { data }) => serde_json::from_value(data).map_err(|error| error.to_string()),
         Ok(Response::Error { message }) => Err(message),
         Err(error) => Err(format!("the Silt daemon is not answering: {error}")),
@@ -76,6 +83,26 @@ impl DaemonTools {
     fn show(&self, artifact: NewArtifact) -> Result<ArtifactPut, String> {
         let token = self.token.clone().ok_or("only an agent the web UI runs can show the person something")?;
         ask_daemon(&Request::Scoped { token, asking: Box::new(Request::PutArtifact { artifact: Box::new(artifact) }) })
+    }
+
+    /// The tools of the plugins on in the run's workspace; none for a run
+    /// without a token, which no workspace's plugins reach.
+    fn plugin_tools(&self) -> Vec<silt_daemon::plugins::PluginTool> {
+        let Some(token) = self.token.clone() else {
+            return Vec::new();
+        };
+        ask_daemon(&Request::Scoped { token, asking: Box::new(Request::PluginTools) }).unwrap_or_default()
+    }
+
+    fn plugin(&self, asking: Request) -> Result<String, String> {
+        let token = self.token.clone().ok_or("only a run Silt started reaches its workspace's plugins")?;
+        let outcome: silt_daemon::plugins::Outcome =
+            ask_daemon_within(&Request::Scoped { token, asking: Box::new(asking) }, PLUGIN_TIMEOUT)?;
+        let said = outcome.said();
+        match outcome {
+            silt_daemon::plugins::Outcome::Done { .. } | silt_daemon::plugins::Outcome::Pending { .. } => Ok(said),
+            _ => Err(said),
+        }
     }
 
     /// `path` as the agent meant it: relative to where it runs.
@@ -119,7 +146,31 @@ impl silt_mcp::Backend for DaemonTools {
         Ok(format!("Use the {name} skill (its files are in {}):\n\n{body}", skill.dir.display()))
     }
 
+    fn extra(&mut self) -> Vec<Value> {
+        let tools = self.plugin_tools();
+        if tools.is_empty() {
+            return Vec::new();
+        }
+        let mut listed: Vec<Value> = tools
+            .into_iter()
+            .map(|tool| serde_json::json!({"name": tool.name, "description": tool.description, "inputSchema": tool.input_schema}))
+            .collect();
+        listed.push(serde_json::json!({
+            "name": PLUGIN_WAIT,
+            "description": "Wait on a plugin call that is waiting for the person's approval, by the approval number it gave.",
+            "inputSchema": {"type": "object", "required": ["approval"], "properties": {"approval": {"type": "integer", "minimum": 1}}}
+        }));
+        listed
+    }
+
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<String, String> {
+        if tool == PLUGIN_WAIT {
+            let approval = arguments.get("approval").and_then(Value::as_u64).ok_or("give `approval`, a number")?;
+            return self.plugin(Request::PluginWait { approval });
+        }
+        if !tool.starts_with("silt_") && self.token.is_some() {
+            return self.plugin(Request::PluginCall { tool: tool.to_owned(), input: arguments.clone() });
+        }
         match tool {
             "silt_skills" => {
                 let skills: Vec<Skill> = self.skills().into_iter().filter(|skill| skill.model_invocable).collect();

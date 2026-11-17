@@ -37,6 +37,12 @@ pub trait Backend {
     fn listed(&self) -> Option<Value> {
         None
     }
+
+    /// Tools offered beside Silt's, such as the plugins' of the run's
+    /// workspace (ADR 0086).
+    fn extra(&mut self) -> Vec<Value> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -409,7 +415,16 @@ fn respond(line: &str, backend: &mut impl Backend) -> Option<Value> {
             "instructions": instructions(backend.shows())
         }),
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": backend.listed().unwrap_or_else(|| tools(backend.shows())) }),
+        "tools/list" => {
+            let listed = backend.listed().unwrap_or_else(|| {
+                let mut all = tools(backend.shows());
+                if let Some(all) = all.as_array_mut() {
+                    all.extend(backend.extra());
+                }
+                all
+            });
+            json!({ "tools": listed })
+        }
         "prompts/list" => {
             let prompts: Vec<Value> = backend
                 .prompts()

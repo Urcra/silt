@@ -6,6 +6,7 @@ mod credential;
 mod design;
 mod desktop;
 mod mcp;
+mod plugin;
 mod recording;
 mod reference;
 mod render;
@@ -192,6 +193,26 @@ enum Command {
     Credential {
         #[command(subcommand)]
         command: credential::CredentialCommand,
+    },
+    /// Plugins: what a workspace's sandboxed agents reach production and other systems through
+    Plugin {
+        #[command(subcommand)]
+        command: plugin::PluginCommand,
+    },
+    /// Plugin calls waiting for your approval
+    Approvals {
+        /// Answered and expired ones too
+        #[arg(long)]
+        all: bool,
+        /// Only this thread's
+        #[arg(long)]
+        thread: Option<String>,
+    },
+    /// Approve a plugin call, after reading exactly what it runs; or reject it
+    Approve {
+        id: u64,
+        #[arg(long)]
+        reject: bool,
     },
     /// Check chart palettes and text contrast, as artifacts' design guidance asks
     Design {
@@ -801,6 +822,9 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Chat { agent, about, workspace, args } => commands::chat(&agent, about.as_deref(), workspace.as_deref(), &args),
         Command::Workspace { command } => workspace::run(command),
         Command::Credential { command } => credential::run(command),
+        Command::Plugin { command } => plugin::run(command),
+        Command::Approvals { all, thread } => plugin::list(all, thread),
+        Command::Approve { id, reject } => plugin::answer(id, reject),
         Command::Access { command } => access::run(command),
         Command::Design { command } => design::run(command),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),

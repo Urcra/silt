@@ -80,35 +80,48 @@ pub fn resolve(data_dir: &Path, workspace: &str) -> (Vec<silt_gateway::Credentia
     let mut placeholders = Vec::new();
     let mut missing = Vec::new();
     for stored in load(data_dir).into_iter().filter(|stored| stored.workspace == workspace) {
-        let secret = match &stored.source {
-            Source::Keyring => silt_os::secret(&keyring_name(&stored.name)).ok().flatten(),
-            // Run outside every sandbox, as the person, with what the run's
-            // own environment wouldn't hold.
-            Source::Command { argv } => argv.split_first().and_then(|(program, args)| {
-                let output = std::process::Command::new(program).args(args).stdin(std::process::Stdio::null()).output().ok()?;
-                output
-                    .status
-                    .success()
-                    .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-                    .filter(|secret| !secret.is_empty())
-            }),
-        };
-        let Some(secret) = secret else {
+        let Some(credential) = secret_of(&stored) else {
             missing.push(stored.name.clone());
             continue;
         };
-        let value = if stored.scheme.is_empty() { secret } else { format!("{} {secret}", stored.scheme) };
         if let Some(variable) = &stored.placeholder {
             placeholders.push((variable.clone(), "silt-placeholder".to_owned()));
         }
-        credentials.push(silt_gateway::Credential {
-            host: stored.host,
-            path: stored.path,
-            header: stored.header.to_ascii_lowercase(),
-            value,
-        });
+        credentials.push(credential);
     }
     (credentials, placeholders, missing)
+}
+
+/// Workspace `workspace`'s credential `name`, with its secret, for a
+/// plugin's requests; `None` when it has none here.
+pub fn resolve_named(data_dir: &Path, workspace: &str, name: &str) -> Option<silt_gateway::Credential> {
+    load(data_dir)
+        .into_iter()
+        .find(|stored| stored.workspace == workspace && stored.name == name)
+        .and_then(|stored| secret_of(&stored))
+}
+
+fn secret_of(stored: &StoredCredential) -> Option<silt_gateway::Credential> {
+    let secret = match &stored.source {
+        Source::Keyring => silt_os::secret(&keyring_name(&stored.name)).ok().flatten(),
+        // Run outside every sandbox, as the person, with what the run's
+        // own environment wouldn't hold.
+        Source::Command { argv } => argv.split_first().and_then(|(program, args)| {
+            let output = std::process::Command::new(program).args(args).stdin(std::process::Stdio::null()).output().ok()?;
+            output
+                .status
+                .success()
+                .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+                .filter(|secret| !secret.is_empty())
+        }),
+    }?;
+    let value = if stored.scheme.is_empty() { secret } else { format!("{} {secret}", stored.scheme) };
+    Some(silt_gateway::Credential {
+        host: stored.host.clone(),
+        path: stored.path.clone(),
+        header: stored.header.to_ascii_lowercase(),
+        value,
+    })
 }
 
 #[cfg(test)]

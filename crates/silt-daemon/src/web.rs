@@ -221,6 +221,10 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/queue/{item}/send", post(queue_send))
         .route("/api/inbox", get(inbox))
         .route("/api/inbox/read", post(inbox_read))
+        .route("/api/approvals", get(approvals))
+        .route("/api/approvals/{id}", post(approval_answer))
+        .route("/api/plugins", get(plugins))
+        .route("/api/plugins/{name}", put(plugin_put).delete(plugin_remove))
         .route("/api/mrs", get(merge_requests))
         .route("/api/mrs/{id}", get(merge_request))
         .route("/api/mrs/{id}/approve", post(approve))
@@ -1731,6 +1735,45 @@ async fn inbox(State(web): State<Web>, Query(query): Query<InboxQuery>, Query(on
 
 async fn inbox_read(State(web): State<Web>, Query(on): Query<OnServer>, Json(read): Json<silt_proto::InboxRead>) -> HttpResponse {
     ask(&web, on.ask(Request::InboxRead { read })).await
+}
+
+#[derive(Deserialize)]
+struct ApprovalsQuery {
+    thread: Option<String>,
+}
+
+async fn approvals(State(web): State<Web>, Query(query): Query<ApprovalsQuery>) -> HttpResponse {
+    ask(&web, Request::Approvals { thread: query.thread }).await
+}
+
+#[derive(Deserialize)]
+struct ApprovalBody {
+    approve: bool,
+    hash: String,
+}
+
+async fn approval_answer(State(web): State<Web>, Path(id): Path<u64>, Json(body): Json<ApprovalBody>) -> HttpResponse {
+    ask(&web, Request::ApprovalAnswer { id, approve: body.approve, hash: body.hash }).await
+}
+
+async fn plugins(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::Plugins).await
+}
+
+async fn plugin_put(
+    State(web): State<Web>,
+    Path(name): Path<String>,
+    Json(plugin): Json<crate::plugins::Plugin>,
+) -> HttpResponse {
+    if plugin.name != name {
+        return Failed { status: StatusCode::BAD_REQUEST, message: "the plugin's name isn't the one in its path".into() }
+            .into_response();
+    }
+    ask(&web, Request::PluginPut { plugin: Box::new(plugin) }).await
+}
+
+async fn plugin_remove(State(web): State<Web>, Path(name): Path<String>) -> HttpResponse {
+    ask(&web, Request::PluginRemove { name }).await
 }
 
 async fn merge_requests(State(web): State<Web>) -> HttpResponse {

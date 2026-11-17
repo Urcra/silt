@@ -643,6 +643,41 @@ pub enum Request {
         #[serde(default)]
         version: Option<u32>,
     },
+    /// The tools of the plugins on in the run's workspace (ADR 0086); only
+    /// inside [`Request::Scoped`].
+    PluginTools,
+    /// Calls a plugin's tool for the run; only inside [`Request::Scoped`].
+    PluginCall {
+        tool: String,
+        input: serde_json::Value,
+    },
+    /// Waits on an approval the run's call made; only inside
+    /// [`Request::Scoped`].
+    PluginWait {
+        approval: u64,
+    },
+    /// This machine's plugins.
+    Plugins,
+    /// Adds a plugin, or replaces the one of its name.
+    PluginPut {
+        plugin: Box<crate::plugins::Plugin>,
+    },
+    PluginRemove {
+        name: String,
+    },
+    /// Plugin calls waiting for the person or answered, a thread's alone
+    /// when one is named.
+    Approvals {
+        #[serde(default)]
+        thread: Option<String>,
+    },
+    /// The person's answer to an approval, naming the hash of the request
+    /// they were shown.
+    ApprovalAnswer {
+        id: u64,
+        approve: bool,
+        hash: String,
+    },
     /// A request of an agent's history tools, answered only for the
     /// workspace its run's token was made for (ADR 0065).
     Scoped {
@@ -1762,6 +1797,8 @@ pub enum BusEvent {
         #[cfg_attr(test, ts(type = "unknown"))]
         deliveries: serde_json::Value,
     },
+    /// Plugin calls waiting for the person changed.
+    Approvals,
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
 }
@@ -1791,7 +1828,7 @@ impl BusEvent {
             Self::Sample { ask, .. } | Self::SampleTool { ask, .. } => Some(format!("sample:{ask}")),
             Self::Room { .. } => Some("rooms".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
-            Self::Agents | Self::Lagged => None,
+            Self::Agents | Self::Approvals | Self::Lagged => None,
         }
     }
 }
@@ -1864,6 +1901,14 @@ mod tests {
             QuestionFieldAsked::decl(&config),
             ChoiceAsked::decl(&config),
             BusEvent::decl(&config),
+            silt_access::DataClass::decl(&config),
+            crate::plugins::Plugin::decl(&config),
+            crate::plugins::Kind::decl(&config),
+            crate::plugins::Rule::decl(&config),
+            crate::plugins::Environment::decl(&config),
+            crate::plugins::Outcome::decl(&config),
+            crate::plugins::ApprovalState::decl(&config),
+            crate::plugins::ApprovalView::decl(&config),
             BusSubscription::decl(&config),
             CloneInfo::decl(&config),
             CloudLaunch::decl(&config),

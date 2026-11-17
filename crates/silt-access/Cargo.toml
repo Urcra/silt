@@ -1,0 +1,21 @@
+[package]
+name = "silt-access"
+description = "What reaches a sandboxed agent from a plugin: requests classified, approvals bound to them, and data rules"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+apollo-parser = "0.8.7"
+blake3 = "1.8.7"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+ts-rs = { version = "12.0.1", optional = true }
+
+[features]
+ts = ["dep:ts-rs"]

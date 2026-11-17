@@ -31,6 +31,7 @@ mod notes;
 mod page;
 pub mod paths;
 mod personal;
+pub mod plugins;
 mod presets;
 mod projects;
 pub mod protocol;

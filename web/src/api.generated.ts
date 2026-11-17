@@ -234,7 +234,56 @@ export type ChoiceAsked = {
  */
 value: string, label: string, description: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "lagged" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "approvals" } | { "event": "lagged" };
+
+export type DataClass = "location";
+
+export type Plugin = { 
+/**
+ * Its name, which its tools start with.
+ */
+name: string, description: string, kind: Kind, 
+/**
+ * The workspaces it's on in, by id.
+ */
+workspaces: Array<string>, 
+/**
+ * Its environments, such as `staging` and `production`, by name.
+ */
+environments: { [key in string]: Environment }, };
+
+export type Kind = { "type": "graphql" } | { "type": "command", argv: Array<string>, };
+
+export type Rule = "allow" | "ask";
+
+export type Environment = { 
+/**
+ * A GraphQL endpoint's URL, or the targets a command may name, such
+ * as `car-*.fleet.vpn`.
+ */
+target: string, reads: Rule, changes: Rule, 
+/**
+ * What a result may never carry to an agent.
+ */
+data: Array<DataClass>, 
+/**
+ * A credential of `silt credential` added to its requests.
+ */
+credential: string | null, };
+
+export type Outcome = { "status": "done", output: string, } | { "status": "refused", why: string, } | { "status": "failed", error: string, } | { "status": "unknown", why: string, } | { "status": "pending", approval: number, };
+
+export type ApprovalState = "pending" | "approved" | "rejected" | "expired";
+
+export type ApprovalView = { id: number, thread: string, plugin: string, tool: string, environment: string, target: string, 
+/**
+ * What runs, with what hides meaning made visible.
+ */
+shown: string, 
+/**
+ * The hash an answer must name, so it answers what was shown.
+ */
+hash: string, created_ms: number, state: ApprovalState, outcome: Outcome | null, };
 
 export type BusSubscription = { subscribe: Array<string>, unsubscribe: Array<string>, };
 
