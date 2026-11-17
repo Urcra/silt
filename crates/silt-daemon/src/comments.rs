@@ -114,7 +114,7 @@ impl Core {
 
     /// Anchors for lines `start..=end` (1-based) of `path` as the thread
     /// sees it now, or as it was at the diff base `base`, numbered without
-    /// what `hide` leaves out (ADR 0069, ADR 0086).
+    /// what `hide` leaves out (ADR 0069, ADR 0089).
     fn code_target(
         &mut self,
         family_id: FamilyId,
@@ -397,7 +397,7 @@ const MAX_PLACED: usize = 500;
 
 /// What placing a thread's anchored lines needs: its files' paths now and
 /// at a diff base, both versions, and what a diff leaves out (ADR 0069,
-/// ADR 0086).
+/// ADR 0089).
 struct Places<'a> {
     family: &'a Family,
     hidden: Option<Hidden>,

@@ -145,7 +145,7 @@ pub struct SessionRecord {
     pub checkout_id: CheckoutId,
 }
 
-/// A session as the agents in its project are told of it (ADR 0087): its
+/// A session as the agents in its project are told of it (ADR 0090): its
 /// thread, where it works, and what it last did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionActivity {
@@ -164,7 +164,7 @@ pub struct SessionActivity {
     pub doing: Option<String>,
 }
 
-/// What one thread's agent has to tell another's (ADR 0087).
+/// What one thread's agent has to tell another's (ADR 0090).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentMessageKind {
     /// Something it sent with `silt_message`.

@@ -37,7 +37,7 @@ impl Core {
     }
 
     /// The thread of the innermost checkout holding `cwd`. In a clone
-    /// several agents work in, the newest of their threads (ADR 0086).
+    /// several agents work in, the newest of their threads (ADR 0089).
     pub(crate) fn thread_checked_out_at(&self, cwd: &CanonicalCwd) -> Option<ThreadId> {
         self.threads_checked_out_at(cwd).last().copied()
     }

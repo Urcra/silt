@@ -1,4 +1,4 @@
-//! What a diff leaves out: git's edits (ADR 0069), other agents' (ADR 0086),
+//! What a diff leaves out: git's edits (ADR 0069), other agents' (ADR 0089),
 //! or both.
 
 use std::collections::BTreeMap;

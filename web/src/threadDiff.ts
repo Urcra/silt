@@ -22,7 +22,7 @@ export function useThreadDiff(thread: string, spec: DiffSpec, review: ReviewStat
   // A range of turns starts at a prompt, which isn't a version comments on deleted lines are numbered in.
   const commentBase = spec.turn === undefined ? commentBaseOf(spec.base ?? '') : undefined
   // Comments are placed as this diff numbers the lines, with git's rewrites or without (ADR 0069), and other agents'
-  // edits (ADR 0086).
+  // edits (ADR 0089).
   const hidden: Hidden = { hideGit: spec.hideGit ?? false, hideOthers: spec.hideOthers ?? false }
   const stats = useQuery({ queryKey: keys.diffStats(thread, spec), queryFn: () => api.diffStats(thread, spec) })
   const whole = stats.data === undefined ? undefined : readWhole(stats.data)

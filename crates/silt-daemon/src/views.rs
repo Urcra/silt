@@ -299,7 +299,7 @@ impl Core {
     }
 
     /// The files a diff of `thread` changes, without what `hide` leaves out:
-    /// what git itself rewrote (ADR 0069), other agents' edits (ADR 0086).
+    /// what git itself rewrote (ADR 0069), other agents' edits (ADR 0089).
     pub(crate) fn diff_changes(
         &self,
         thread: ThreadId,
@@ -415,7 +415,7 @@ impl Core {
     }
 
     /// [`Self::changes`] with what `hide` names left out on both sides
-    /// (ADR 0069, ADR 0086).
+    /// (ADR 0069, ADR 0089).
     pub(crate) fn changes_hiding(
         &self,
         family_id: FamilyId,
@@ -773,7 +773,7 @@ fn clip_title(text: &str) -> String {
 type EditsBy = (Option<String>, Option<SharedEdits>);
 
 /// Files each tool call changed (`None`: changes made outside tool calls),
-/// and apart from them those not this thread's agent's alone (ADR 0086).
+/// and apart from them those not this thread's agent's alone (ADR 0089).
 fn edits_by_tool(family: &Family, thread: ThreadId) -> BTreeMap<EditsBy, Vec<FileEdit>> {
     let shared = |others, sessions: &[silt_log::SessionRef]| {
         let agents = sessions.iter().map(|session| format!("{} {:.8}", session.agent, session.id)).collect();

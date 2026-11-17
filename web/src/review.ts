@@ -43,7 +43,7 @@ export interface Draft {
   anchor?: string
   /** Numbered as the diff showed them with git's rewrites left out (ADR 0069). */
   hideGit?: boolean
-  /** And with other agents' edits left out (ADR 0086). */
+  /** And with other agents' edits left out (ADR 0089). */
   hideOthers?: boolean
 }
 

@@ -1,4 +1,4 @@
-//! Agents in one project told of each other, and their messages (ADR 0087).
+//! Agents in one project told of each other, and their messages (ADR 0090).
 //! The functional core decides who is present and how each agent is
 //! described to another; the store's part, which both serving modes run, is
 //! at the end.

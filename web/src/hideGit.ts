@@ -25,7 +25,7 @@ function useFilter(kept: ReturnType<typeof filter>): [boolean, (on: boolean) => 
 
 /** Whether diffs leave out what git itself rewrote in a tool call, as a checkout, pull or stash does (ADR 0069). */
 const git = filter('silt.hide-git')
-/** Whether diffs leave out the edits of other agents working in the same clone (ADR 0086). */
+/** Whether diffs leave out the edits of other agents working in the same clone (ADR 0089). */
 const others = filter('silt.hide-others')
 
 export const setHideGit = git.set

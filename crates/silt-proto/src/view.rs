@@ -20,7 +20,7 @@ pub struct ThreadSummary {
     pub messages: usize,
     pub edits: usize,
     /// Whether it records edits by other agents that worked in the same
-    /// clone, which a diff can leave out (ADR 0086).
+    /// clone, which a diff can leave out (ADR 0089).
     #[serde(default)]
     pub shared: bool,
     /// `here` when checked out on this machine, `remote` when only known
@@ -157,7 +157,7 @@ pub enum ShowLine {
     Edits {
         tool_use_id: Option<String>,
         files: Vec<FileEdit>,
-        /// Set for edits that weren't this thread's agent's alone (ADR 0086).
+        /// Set for edits that weren't this thread's agent's alone (ADR 0089).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
         shared: Option<SharedEdits>,
@@ -178,7 +178,7 @@ pub enum ShowLine {
     },
 }
 
-/// Edits in a clone other agents work in too (ADR 0086).
+/// Edits in a clone other agents work in too (ADR 0089).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SharedEdits {
@@ -815,7 +815,7 @@ pub enum CommentOn {
         /// shows them (ADR 0069).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         hide_git: bool,
-        /// And with other agents' edits left out (ADR 0086).
+        /// And with other agents' edits left out (ADR 0089).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         hide_others: bool,
     },
@@ -841,7 +841,7 @@ pub struct PendingAnchor {
 /// Anchors of pending review comments to place in the thread as it is now,
 /// and at `base` too, as comments are; with `hide_git` and `hide_others`, as
 /// a diff without git's rewrites or other agents' edits numbers the lines
-/// (ADR 0069, ADR 0086).
+/// (ADR 0069, ADR 0089).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PlaceAnchors {
@@ -983,7 +983,7 @@ pub struct GitQuery {
     #[serde(default)]
     pub git: Option<String>,
     /// `hide` leaves out the edits of other agents working in the same
-    /// clone (ADR 0086).
+    /// clone (ADR 0089).
     #[serde(default)]
     pub others: Option<String>,
 }

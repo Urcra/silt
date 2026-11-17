@@ -302,7 +302,7 @@ async fn ask_device_watched(
 }
 
 /// Whose view of which merge request, with git's rewrites and other
-/// agents' edits left out or not (ADR 0069, ADR 0086).
+/// agents' edits left out or not (ADR 0069, ADR 0089).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct MrView {
     user: crate::UserId,

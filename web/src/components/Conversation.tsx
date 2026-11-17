@@ -9,7 +9,7 @@ function isWork(line: ShowLine): boolean {
 
 type Edits = Extract<ShowLine, { line: 'edits' }>
 
-/** Who made edits that weren't this thread's agent's alone, as `silt show` says it (ADR 0086). */
+/** Who made edits that weren't this thread's agent's alone, as `silt show` says it (ADR 0089). */
 function madeBy(shared: NonNullable<Edits['shared']>): string {
   const agents = shared.agents.length > 0 ? ` (${shared.agents.join(', ')})` : ''
   return `${shared.others ? 'by another agent' : 'by one of these agents'}${agents}`

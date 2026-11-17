@@ -194,7 +194,7 @@ pub struct Core {
     /// them to the tool that was running then.
     pub(crate) change_noticed: Option<Instant>,
     /// The session whose hook named the files being taken in, which made
-    /// those edits whoever else has a tool open (ADR 0086).
+    /// those edits whoever else has a tool open (ADR 0089).
     pub(crate) deciding: Option<String>,
     /// Set while a new thread takes in its clone's uncommitted changes,
     /// which are part of where it starts, not edits made in it.
@@ -478,7 +478,7 @@ impl Core {
     /// Holds the other checkouts at `path` whose threads' agents work there
     /// too, with their families, and returns their sessions: an edit found
     /// here is theirs to take in as well, and their open tools say who made
-    /// it (ADR 0086).
+    /// it (ADR 0089).
     async fn hold_sharing(&mut self, path: &Path, own: CheckoutId) -> Result<Vec<SessionRecord>, CoreError> {
         let mut held = Vec::new();
         for record in self.store.checkouts_at(path).await? {
@@ -1307,7 +1307,7 @@ impl Core {
 
     /// The other checkouts at `checkout`'s path whose threads' agents work
     /// there too, so an edit found through `checkout` is theirs to take in
-    /// as well (ADR 0086).
+    /// as well (ADR 0089).
     pub(crate) fn sharing(&self, checkout: CheckoutId) -> Vec<CheckoutId> {
         let Some(held) = self.checkouts.get(&checkout) else {
             return Vec::new();
@@ -1656,7 +1656,7 @@ impl Core {
     }
 
     /// Notes a file an agent of this thread edited, for its peers to hear of
-    /// (ADR 0087).
+    /// (ADR 0090).
     async fn touched(&self, author: &Author, path: &str) -> Result<(), CoreError> {
         if let Author::Agent { agent, session, .. } = author
             && !session.is_empty()

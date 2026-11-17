@@ -270,7 +270,7 @@ export type CommentOn = { "on": "entry", index: number, } | { "on": "lines", pat
  */
 hide_git?: boolean, 
 /**
- * And with other agents' edits left out (ADR 0086).
+ * And with other agents' edits left out (ADR 0089).
  */
 hide_others?: boolean, } | { "on": "anchored", anchor: string, } | { "on": "doc", artifact: string, start: number, end: number, } | { "on": "cell", artifact: string, sheet: number, address: string, } | { "on": "element", artifact: string, anchor: string, };
 
@@ -1010,7 +1010,7 @@ artifact: string | null, };
 
 export type ShowLine = { "line": "entry", kind: string, text: string, } | { "line": "tool_call", id: string, name: string, input: string, } | { "line": "edits", tool_use_id: string | null, files: Array<FileEdit>, 
 /**
- * Set for edits that weren't this thread's agent's alone (ADR 0086).
+ * Set for edits that weren't this thread's agent's alone (ADR 0089).
  */
 shared?: SharedEdits, } | { "line": "compaction", summary: string | null, } | { "line": "turn", mark: string, } | { "line": "segment", label: string, } | { "line": "event", text: string, };
 
@@ -1198,7 +1198,7 @@ export type ThreadSummary = { id: string, repo: string, title: string | null,
 agent: string | null, created_ms: number, messages: number, edits: number, 
 /**
  * Whether it records edits by other agents that worked in the same
- * clone, which a diff can leave out (ADR 0086).
+ * clone, which a diff can leave out (ADR 0089).
  */
 shared: boolean, 
 /**

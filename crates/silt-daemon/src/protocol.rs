@@ -90,7 +90,7 @@ pub enum Request {
         #[serde(default)]
         hide_git: bool,
         /// Leave out the edits of other agents working in the same clone
-        /// (ADR 0086).
+        /// (ADR 0089).
         #[serde(default)]
         hide_others: bool,
     },
@@ -331,7 +331,7 @@ pub enum Request {
         thread: Option<String>,
     },
     /// The other agents present in `thread`'s project, as its agent hears
-    /// of them (ADR 0087).
+    /// of them (ADR 0090).
     Agents {
         thread: String,
     },

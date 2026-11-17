@@ -27,7 +27,7 @@ pub mod view;
 /// rooms that span machines through `/v1/rooms` (ADR 0081). 15: a room's
 /// presence sent per peer, and comments on a page's elements (ADR 0085).
 /// 16: edits by another agent in the same clone, or by one of several
-/// (`Author::Others`, `Author::Agents`, ADR 0086).
+/// (`Author::Others`, `Author::Agents`, ADR 0089).
 pub const PROTOCOL: u32 = 16;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
@@ -1309,7 +1309,7 @@ pub enum RemoteCommand {
         /// Leave out what git itself rewrote (ADR 0069).
         #[serde(default)]
         hide_git: bool,
-        /// Leave out other agents' edits (ADR 0086).
+        /// Leave out other agents' edits (ADR 0089).
         #[serde(default)]
         hide_others: bool,
     },

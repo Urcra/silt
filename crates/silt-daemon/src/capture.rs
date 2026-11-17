@@ -102,7 +102,7 @@ impl Core {
             session.agent_cwd.clone(),
             session.record.agent.clone(),
         );
-        // Whether the agent is still around, as its peers are told (ADR 0087).
+        // Whether the agent is still around, as its peers are told (ADR 0090).
         match event {
             "SessionEnd" => {
                 // `/clear` starts the same agent over.
@@ -146,7 +146,7 @@ impl Core {
         if let Some(mark) = mark {
             if self.checkouts.contains_key(&checkout) {
                 // Other agents working in the same clone take in the same
-                // edits, each into its own thread (ADR 0086).
+                // edits, each into its own thread (ADR 0089).
                 let rows: Vec<_> = std::iter::once(checkout).chain(self.sharing(checkout)).collect();
                 match scan_for(event, input) {
                     Scan::Nothing => {}

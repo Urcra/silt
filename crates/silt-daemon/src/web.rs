@@ -659,7 +659,7 @@ struct DiffQuery {
     /// `hide` leaves out what git itself rewrote (ADR 0069).
     #[serde(default)]
     git: Option<String>,
-    /// `hide` leaves out other agents' edits (ADR 0086).
+    /// `hide` leaves out other agents' edits (ADR 0089).
     #[serde(default)]
     others: Option<String>,
 }

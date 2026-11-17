@@ -920,7 +920,7 @@ mod tests {
         assert_eq!(
             settings.pointer("/hooks/SessionEnd/0/hooks/0/command"),
             Some(&json!("silt hook SessionEnd")),
-            "Silt hears when the agent goes (ADR 0087)"
+            "Silt hears when the agent goes (ADR 0090)"
         );
         let ending: HookInput =
             serde_json::from_str(r#"{"session_id":"s","hook_event_name":"SessionEnd","reason":"clear"}"#).expect("parses");

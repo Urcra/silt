@@ -19,7 +19,7 @@ type Lines = [(String, Option<DeltaId>)];
 impl Core {
     /// For each file of the diff, the turns that last wrote its new lines;
     /// numbered as the diff without what `hide` leaves out shows them
-    /// (ADR 0069, ADR 0086).
+    /// (ADR 0069, ADR 0089).
     pub(crate) fn diff_turns(
         &self,
         thread: ThreadId,

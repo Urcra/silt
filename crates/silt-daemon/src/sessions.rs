@@ -48,7 +48,7 @@ pub(crate) struct StagedLine {
     pub(crate) rows: Vec<SearchRow>,
     pub(crate) marks: Vec<Mark>,
     /// For an agent without hooks, the prompt the line carries, which its
-    /// peers hear it was asked (ADR 0087).
+    /// peers hear it was asked (ADR 0090).
     pub(crate) prompt: Option<String>,
 }
 
@@ -408,7 +408,7 @@ impl Core {
 
     /// A fresh checkout for `thread` at `path`. It takes over the thread's
     /// own there, or else one whose thread's agent is gone; beside those of
-    /// agents still working there it's another (ADR 0086). From the store,
+    /// agents still working there it's another (ADR 0089). From the store,
     /// as a process other than the daemon doesn't hold every checkout.
     pub(crate) async fn bind_checkout(
         &mut self,
@@ -1290,7 +1290,7 @@ impl Core {
     }
 
     /// Who made an edit at `checkout`, from every session working at its
-    /// path: two agents may share a clone, each with a checkout (ADR 0086).
+    /// path: two agents may share a clone, each with a checkout (ADR 0089).
     pub(crate) fn author_for(&self, checkout: CheckoutId) -> Author {
         let Some(held) = self.checkouts.get(&checkout) else {
             return Author::User;

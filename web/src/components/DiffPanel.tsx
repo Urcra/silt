@@ -60,7 +60,7 @@ export const DiffPanel = memo(function DiffPanel({
   const [other, setOther] = useState('merge-base')
   const [commit, setCommit] = useState('')
   const base = baseOf(view, other, commit)
-  // Against main the diff is git's own; elsewhere git's rewrites (ADR 0069) and other agents' edits (ADR 0086) can be
+  // Against main the diff is git's own; elsewhere git's rewrites (ADR 0069) and other agents' edits (ADR 0089) can be
   // left out.
   const [hideGitSetting, setHideGit] = useHideGit()
   const [hideOthersSetting, setHideOthers] = useHideOthers()
@@ -134,7 +134,7 @@ export function HideGitBox(props: BoxProps) {
   return <HideBox {...props} label="Hide git’s changes" title="A checkout, pull, merge, rebase, reset or stash the agent ran" />
 }
 
-/** Leaves out of the diffs the edits of other agents working in the same clone (ADR 0086). */
+/** Leaves out of the diffs the edits of other agents working in the same clone (ADR 0089). */
 export function HideOthersBox(props: BoxProps) {
   return <HideBox {...props} label="Hide other agents’ changes" title="Edits by another agent working in the same clone" />
 }
@@ -154,7 +154,7 @@ function HideBox({ on, onChange, disabled = false, label, title }: BoxProps & { 
   )
 }
 
-/** Whether the thread records other agents' edits, the only threads where leaving them out shows anything (ADR 0086). */
+/** Whether the thread records other agents' edits, the only threads where leaving them out shows anything (ADR 0089). */
 export function useShared(thread: string | undefined): boolean {
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   return threads.data?.some((candidate) => candidate.id === thread && candidate.shared) ?? false

@@ -19,7 +19,7 @@ type OnChange = Box<dyn Fn(Vec<PathBuf>) + Send>;
 
 /// The checkouts watched, each by its root, for the handler to route the
 /// paths it hears about. Checkouts of several threads may share a root
-/// (ADR 0086), so each route has its own number.
+/// (ADR 0089), so each route has its own number.
 type Routes = Arc<Mutex<Vec<Route>>>;
 
 struct Route {

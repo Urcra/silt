@@ -1,6 +1,6 @@
 -- Whether each session's agent is still around and what it's doing, kept
 -- alike with or without a daemon, so agents in one project can be told of
--- each other (ADR 0087).
+-- each other (ADR 0090).
 ALTER TABLE sessions ADD COLUMN seen_ms INTEGER;
 ALTER TABLE sessions ADD COLUMN ended_ms INTEGER;
 -- Set after the agent's turn stopped, until its next prompt.

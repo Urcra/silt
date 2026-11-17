@@ -14,7 +14,7 @@ pub(crate) const MARK_SETTLE: Duration = Duration::from_millis(1000);
 
 /// What one session working at the checkout's path says about who is
 /// editing: a session of the checkout's own thread, or of another thread
-/// sharing the clone (ADR 0086).
+/// sharing the clone (ADR 0089).
 #[derive(Debug, Clone)]
 pub(crate) struct SessionState<'a> {
     pub(crate) agent: &'a str,

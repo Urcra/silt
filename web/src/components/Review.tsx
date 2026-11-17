@@ -72,7 +72,7 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
   const reviewed = summary.mine.reviewed_turn
   // Until the person picks, a review starts after the turn they reviewed through.
   const picked = kept.chosen ? kept.turns : (kept.turns ?? defaultTurns(turns.data?.length ?? 0, reviewed))
-  // Against main the diff is git's own; elsewhere git's rewrites (ADR 0069) and other agents' edits (ADR 0086) can be
+  // Against main the diff is git's own; elsewhere git's rewrites (ADR 0069) and other agents' edits (ADR 0089) can be
   // left out.
   const againstMain = !picked && base === 'main'
   const [hideGitSetting, setHideGit] = useHideGit()

@@ -156,7 +156,7 @@ export interface SearchForm {
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
 /** What a diff leaves out: with `hideGit`, what git itself rewrote (ADR 0069); with `hideOthers`, the edits of other
- * agents working in the same clone (ADR 0086). */
+ * agents working in the same clone (ADR 0089). */
 export interface Hidden {
   hideGit?: boolean
   hideOthers?: boolean

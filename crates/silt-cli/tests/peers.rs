@@ -1,4 +1,4 @@
-//! Two agents in one clone each record their own work (ADR 0086), and know about each other (ADR 0087).
+//! Two agents in one clone each record their own work (ADR 0089), and know about each other (ADR 0090).
 
 mod common;
 
