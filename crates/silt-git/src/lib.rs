@@ -68,7 +68,15 @@ pub struct Repo {
     /// What each directory of the worktree held when it was last walked,
     /// once [`Repo::keep_walks`] asks for it.
     untracked: std::cell::RefCell<Option<untracked::Cache>>,
+    /// The attribute lookup [`Repo::filters`] starts from, as of the
+    /// attributes and index it was built from. Building it reads the whole
+    /// index, so building it per file made a rescan quadratic.
+    filter_stack: std::cell::RefCell<Option<(FilterKey, gix::worktree::Stack)>>,
 }
+
+/// When `.git/info/attributes` and the index were last modified, and the
+/// index's size.
+type FilterKey = (Option<std::time::SystemTime>, Option<(std::time::SystemTime, u64)>);
 
 /// Now, in nanoseconds since the epoch, as file modification times are.
 fn now_ns() -> i64 {
@@ -84,7 +92,13 @@ impl Repo {
         let repo = gix::discover(path).map_err(|_| not_a_repo())?;
         let root = repo.workdir().ok_or_else(not_a_repo)?.to_owned();
         let root = silt_os::canonicalize(&root).unwrap_or(root);
-        Ok(Self { root, repo, needs_git_cli_filters: Cell::new(None), untracked: std::cell::RefCell::default() })
+        Ok(Self {
+            root,
+            repo,
+            needs_git_cli_filters: Cell::new(None),
+            untracked: std::cell::RefCell::default(),
+            filter_stack: std::cell::RefCell::default(),
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -403,11 +417,31 @@ impl Repo {
                 found
             }
         };
-        Filters::new(&self.repo, &self.root, use_git_cli)
+        let key = (info, self.index_info());
+        let cached = self.filter_stack.borrow().as_ref().filter(|(seen, _)| *seen == key).map(|(_, stack)| stack.clone());
+        let (pipeline, index) = match cached {
+            Some(stack) => (
+                gix::filter::Pipeline::new(&self.repo, stack).map_err(GitError::gix)?,
+                gix::worktree::IndexPersistedOrInMemory::Persisted(self.repo.index_or_empty().map_err(GitError::gix)?),
+            ),
+            None => {
+                let (pipeline, index) = self.repo.filter_pipeline(None).map_err(GitError::gix)?;
+                let (_, stack) = pipeline.into_parts();
+                self.filter_stack.replace(Some((key, stack.clone())));
+                (gix::filter::Pipeline::new(&self.repo, stack).map_err(GitError::gix)?, index)
+            }
+        };
+        Ok(Filters::new(pipeline, index, &self.root, self.repo.common_dir(), use_git_cli))
     }
 
     pub fn attributes_changed(&self) {
         self.needs_git_cli_filters.set(None);
+        self.filter_stack.replace(None);
+    }
+
+    fn index_info(&self) -> Option<(std::time::SystemTime, u64)> {
+        let index = std::fs::metadata(self.repo.index_path()).ok()?;
+        Some((index.modified().ok()?, index.len()))
     }
 
     /// Whether the repository's attributes need git's own filters rather

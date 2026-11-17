@@ -333,6 +333,11 @@ impl Machine {
 
 impl Drop for Machine {
     fn drop(&mut self) {
+        // A test failing under load rarely fails again on its own; what the
+        // daemon logged meanwhile is often all that says why.
+        if std::thread::panicking() {
+            eprintln!("--- {} daemon.log ---\n{}", self.silt_home.display(), self.daemon_log());
+        }
         let _ = silt_command().args(["daemon", "stop"]).env("SILT_HOME", &self.silt_home).output();
     }
 }

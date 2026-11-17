@@ -193,6 +193,19 @@ fn a_nested_attributes_file_counts_once_it_is_noticed() {
 }
 
 #[test]
+fn filters_built_again_follow_an_attributes_file_changed_since() {
+    let dir = repo_with_commit();
+    let root = dir.path();
+    let repo = Repo::discover(root).expect("discovers");
+    let smudge = |repo: &Repo| repo.filters().expect("filters").to_worktree("x.bat", b"a\n").expect("smudge");
+    assert_eq!(smudge(&repo), b"a\n");
+    fs::write(root.join(".gitattributes"), "*.bat text eol=crlf\n").expect("write");
+    assert_eq!(smudge(&repo), b"a\r\n", "the worktree's attributes files are read again");
+    fs::write(root.join(".gitattributes"), "").expect("write");
+    assert_eq!(smudge(&repo), b"a\n");
+}
+
+#[test]
 fn checks_more_ignored_paths_than_a_pipe_holds() {
     let dir = tempfile::tempdir().expect("tempdir");
     let status = std::process::Command::new("git").args(["init", "-q"]).current_dir(dir.path()).status().expect("git");

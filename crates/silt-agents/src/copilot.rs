@@ -136,6 +136,14 @@ pub fn read_line(line: &str) -> Read {
                     read.marks.push(Mark::Stopped);
                 }
             }
+            // The one tool asked for is under way from here: Copilot writes
+            // `tool.execution_start` after the tool's edits can land, so a
+            // busy machine could see them first and credit no tool. With
+            // several asked for, which one edited waits for their starts.
+            if let [request] = requests.as_slice() {
+                let field = |key: &str| request.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
+                read.marks.push(Mark::ToolStarted { tool_use_id: field("toolCallId"), tool: field("name") });
+            }
             for request in requests {
                 let field = |key: &str| request.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
                 read.entries.push(Entry::ToolCall {
@@ -485,6 +493,17 @@ mod tests {
     }
 
     #[test]
+    fn the_one_tool_asked_for_starts_with_the_ask() {
+        let asks = r#"{"type":"assistant.message","data":{"content":"","toolRequests":[{"toolCallId":"c1","name":"edit"}]}}"#;
+        let started = Mark::ToolStarted { tool_use_id: "c1".into(), tool: "edit".into() };
+        assert_eq!(read_line(asks).marks, std::slice::from_ref(&started));
+        let starts = r#"{"type":"tool.execution_start","data":{"toolCallId":"c1","toolName":"edit"}}"#;
+        assert_eq!(read_line(starts).marks, [started], "and again when it starts, which the log records once");
+        let two = r#"{"type":"assistant.message","data":{"content":"","toolRequests":[{"toolCallId":"c1","name":"edit"},{"toolCallId":"c2","name":"bash"}]}}"#;
+        assert!(read_line(two).marks.is_empty(), "with two, either may edit");
+    }
+
+    #[test]
     fn a_model_call_without_tools_ends_the_turn_when_it_ends() {
         let event =
             |kind: &str, data: &str| format!(r#"{{"type":"{kind}","data":{data},"id":"x","timestamp":"t","parentId":null}}"#);
@@ -493,7 +512,10 @@ mod tests {
         assert_eq!(marks(event("user.message", r#"{"content":"go"}"#)), vec![Mark::PromptSubmitted]);
         assert_eq!(marks(event("assistant.turn_start", r#"{"turnId":"0"}"#)), Vec::new());
         let asks = r#"{"content":"Editing.","toolRequests":[{"toolCallId":"c1","name":"edit"}]}"#;
-        assert_eq!(marks(event("assistant.message", asks)), Vec::new());
+        assert_eq!(
+            marks(event("assistant.message", asks)),
+            vec![Mark::ToolStarted { tool_use_id: "c1".into(), tool: "edit".into() }]
+        );
         assert_eq!(marks(event("assistant.turn_end", r#"{"turnId":"0"}"#)), Vec::new(), "tools come next");
         assert_eq!(marks(event("assistant.turn_start", r#"{"turnId":"1"}"#)), Vec::new());
         let answers = r#"{"content":"Done.","toolRequests":[]}"#;
@@ -555,6 +577,7 @@ mod tests {
             marks,
             vec![
                 Mark::PromptSubmitted,
+                Mark::ToolStarted { tool_use_id: "call_1".into(), tool: "bash".into() },
                 Mark::ToolStarted { tool_use_id: "call_1".into(), tool: "bash".into() },
                 Mark::ToolFinished { tool_use_id: "call_1".into() },
                 Mark::Stopped,
