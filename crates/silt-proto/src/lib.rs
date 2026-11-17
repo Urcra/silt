@@ -12,6 +12,7 @@ pub mod frames;
 pub mod page;
 pub mod rooms;
 pub mod svg;
+pub mod theme;
 pub mod view;
 
 /// 4: comment replies and requested changes (ADR 0025). 5: reverts mark

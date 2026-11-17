@@ -41,6 +41,9 @@ pub(crate) fn router(server: &Server) -> Router<Server> {
     let api = Router::new()
         .route("/app/api/status", get(status))
         .route("/app/api/artifact-settings", get(artifact_settings))
+        .route("/app/api/themes", get(themes))
+        .route("/app/api/themes/detail", get(theme_detail))
+        .route("/app/api/themes/css", get(theme_css))
         .merge(crate::browse::routes())
         .merge(crate::relayed::routes())
         .merge(crate::rooms::routes())
@@ -182,6 +185,47 @@ async fn artifact_settings(State(server): State<Server>) -> Response {
     Json(json!({ "proxy": server.config().artifact_proxy })).into_response()
 }
 
+/// Silt's own themes for the app's UI (ADR 0098); the pick stays in the
+/// browser, as the hosted app has no machine to keep it on.
+async fn themes() -> Response {
+    let themes = silt_proto::theme::bundled_entries().iter().map(silt_proto::theme::ThemeEntry::summary).collect();
+    Json(silt_proto::view::ThemeCatalog {
+        themes,
+        problems: Vec::new(),
+        folder: None,
+        appearance: silt_proto::view::AppearanceSettings::default(),
+    })
+    .into_response()
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ThemeQuery {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    light: Option<String>,
+    #[serde(default)]
+    dark: Option<String>,
+}
+
+async fn theme_detail(axum::extract::Query(query): axum::extract::Query<ThemeQuery>) -> Response {
+    match silt_proto::theme::bundled_entries().iter().find(|entry| entry.theme.id.as_str() == query.id) {
+        Some(entry) => Json(entry.detail()).into_response(),
+        None => refused(StatusCode::NOT_FOUND, "no such theme"),
+    }
+}
+
+async fn theme_css(axum::extract::Query(query): axum::extract::Query<ThemeQuery>) -> Response {
+    let defaults = silt_proto::view::AppearanceSettings::default();
+    let settings = silt_proto::view::AppearanceSettings {
+        light: query.light.unwrap_or(defaults.light),
+        dark: query.dark.unwrap_or(defaults.dark),
+        ..defaults
+    };
+    let css = silt_proto::theme::css(&silt_proto::theme::bundled_entries(), &settings);
+    Json(json!({ "css": css, "mode": "system" })).into_response()
+}
+
 async fn status(State(server): State<Server>, Extension(browser): Extension<Browser>) -> Response {
     let threads = match server.viewer(browser.user).await {
         Ok(viewer) => viewer.visible_threads().count(),
@@ -210,6 +254,20 @@ mod tests {
         assert!(hosted.contains(r#"<base href="/app/" />"#), "{hosted}");
         assert!(hosted.contains(r#"content="server""#), "{hosted}");
         assert!(hosted.contains(r#"src="./assets/a.js""#));
+    }
+
+    #[tokio::test]
+    async fn the_app_offers_silts_themes_and_their_css() {
+        let catalog = themes().await;
+        let body = axum::body::to_bytes(catalog.into_body(), usize::MAX).await.expect("body");
+        let catalog: silt_proto::view::ThemeCatalog = serde_json::from_slice(&body).expect("catalog");
+        assert!(catalog.themes.iter().any(|theme| theme.id == "catppuccin-mocha"));
+        assert!(catalog.folder.is_none() && catalog.problems.is_empty());
+        let query = ThemeQuery { id: String::new(), light: None, dark: Some("catppuccin-mocha".into()) };
+        let css = theme_css(axum::extract::Query(query)).await;
+        let body = axum::body::to_bytes(css.into_body(), usize::MAX).await.expect("body");
+        let css: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert!(css["css"].as_str().expect("css").contains("--bg:#1e1e2e;"));
     }
 
     #[tokio::test]

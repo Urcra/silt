@@ -1,0 +1,454 @@
+{
+  "$defs": {
+    "color": {
+      "description": "Hex only: #rgb, #rgba, #rrggbb or #rrggbbaa.",
+      "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+      "type": "string"
+    },
+    "fontList": {
+      "description": "Installed fonts by name, first choice first; a generic family such as sans-serif is added if none is given.",
+      "items": {
+        "pattern": "^[A-Za-z0-9 _-]{1,64}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "syntaxStyle": {
+      "additionalProperties": false,
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/color"
+        },
+        "font_style": {
+          "enum": [
+            "normal",
+            "italic"
+          ]
+        },
+        "font_weight": {
+          "maximum": 900,
+          "minimum": 100,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "theme": {
+      "additionalProperties": false,
+      "properties": {
+        "appearance": {
+          "enum": [
+            "light",
+            "dark"
+          ]
+        },
+        "colors": {
+          "additionalProperties": false,
+          "properties": {
+            "accent": {
+              "$ref": "#/$defs/color",
+              "description": "The primary action and the focus ring."
+            },
+            "accent-fg": {
+              "$ref": "#/$defs/color",
+              "description": "Links and accent text. Must reach 4.5:1 on bg."
+            },
+            "accent-hover": {
+              "$ref": "#/$defs/color",
+              "description": "The primary action, hovered."
+            },
+            "accent-tint": {
+              "$ref": "#/$defs/color",
+              "description": "Chosen rows and the selection; usually translucent accent."
+            },
+            "backdrop": {
+              "$ref": "#/$defs/color",
+              "description": "Behind dialogs; translucent."
+            },
+            "bg": {
+              "$ref": "#/$defs/color",
+              "description": "Page background."
+            },
+            "bg-elevated": {
+              "$ref": "#/$defs/color",
+              "description": "Fields, menus, code and the composer, raised from bg."
+            },
+            "border": {
+              "$ref": "#/$defs/color",
+              "description": "Hairlines around cards and fields."
+            },
+            "border-strong": {
+              "$ref": "#/$defs/color",
+              "description": "Borders of chosen and focused things."
+            },
+            "border-subtle": {
+              "$ref": "#/$defs/color",
+              "description": "Dividers inside lists; often translucent."
+            },
+            "danger": {
+              "$ref": "#/$defs/color",
+              "description": "Errors and removed lines. Must reach 4.5:1 on bg."
+            },
+            "danger-tint": {
+              "$ref": "#/$defs/color",
+              "description": "Behind removed lines and errors; usually translucent danger."
+            },
+            "fg-1": {
+              "$ref": "#/$defs/color",
+              "description": "Body text. Must reach 4.5:1 on bg and the surfaces."
+            },
+            "fg-2": {
+              "$ref": "#/$defs/color",
+              "description": "Secondary text and labels. Must reach 4.5:1 on bg."
+            },
+            "fg-3": {
+              "$ref": "#/$defs/color",
+              "description": "Metadata and placeholders. Must reach 4.5:1 on bg."
+            },
+            "fg-on-accent": {
+              "$ref": "#/$defs/color",
+              "description": "Text on accent, as in primary buttons."
+            },
+            "info": {
+              "$ref": "#/$defs/color",
+              "description": "Information and types. Must reach 4.5:1 on bg."
+            },
+            "info-tint": {
+              "$ref": "#/$defs/color",
+              "description": "Behind information; usually translucent info."
+            },
+            "ok": {
+              "$ref": "#/$defs/color",
+              "description": "Done, added lines. Must reach 4.5:1 on bg."
+            },
+            "ok-tint": {
+              "$ref": "#/$defs/color",
+              "description": "Behind added lines; usually translucent ok."
+            },
+            "surface-1": {
+              "$ref": "#/$defs/color",
+              "description": "Cards and panels on bg; secondary buttons."
+            },
+            "surface-2": {
+              "$ref": "#/$defs/color",
+              "description": "Hovered rows and the chosen tab."
+            },
+            "surface-3": {
+              "$ref": "#/$defs/color",
+              "description": "Pressed and active surfaces."
+            },
+            "warn": {
+              "$ref": "#/$defs/color",
+              "description": "Warnings; used for icons and dots more than text."
+            },
+            "warn-tint": {
+              "$ref": "#/$defs/color",
+              "description": "Behind warnings; usually translucent warn."
+            }
+          },
+          "required": [
+            "bg",
+            "fg-1",
+            "accent"
+          ],
+          "type": "object"
+        },
+        "fonts": {
+          "additionalProperties": false,
+          "properties": {
+            "mono": {
+              "$ref": "#/$defs/fontList"
+            },
+            "ui": {
+              "$ref": "#/$defs/fontList"
+            }
+          },
+          "type": "object"
+        },
+        "id": {
+          "description": "Unique among your themes and Silt's; yours replaces Silt's with the same id.",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "radii": {
+          "additionalProperties": false,
+          "properties": {
+            "lg": {
+              "description": "Pixels.",
+              "maximum": 24,
+              "minimum": 0,
+              "type": "number"
+            },
+            "md": {
+              "description": "Pixels.",
+              "maximum": 24,
+              "minimum": 0,
+              "type": "number"
+            },
+            "sm": {
+              "description": "Pixels.",
+              "maximum": 24,
+              "minimum": 0,
+              "type": "number"
+            }
+          },
+          "type": "object"
+        },
+        "syntax": {
+          "additionalProperties": false,
+          "properties": {
+            "comment": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Comments."
+            },
+            "constant": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Booleans, atoms and other literals."
+            },
+            "definition": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "A name where it's defined."
+            },
+            "emphasis": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Emphasised text in Markdown."
+            },
+            "heading": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Headings in Markdown."
+            },
+            "keyword": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Keywords: fn, let, if, return."
+            },
+            "link": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Links and URLs."
+            },
+            "macro": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Macro names."
+            },
+            "meta": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Attributes, annotations and preprocessor lines."
+            },
+            "number": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Numbers."
+            },
+            "operator": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Operators."
+            },
+            "property": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Property and field names."
+            },
+            "punctuation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Brackets, commas and other punctuation."
+            },
+            "string": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "String literals."
+            },
+            "string-special": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Regular expressions, escapes and special strings."
+            },
+            "strong": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Strong text in Markdown."
+            },
+            "type": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Type, class and namespace names."
+            },
+            "variable": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/color"
+                },
+                {
+                  "$ref": "#/$defs/syntaxStyle"
+                }
+              ],
+              "description": "Variable names."
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "appearance",
+        "colors"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://raw.githubusercontent.com/Urcra/silt/main/docs/reference/theme.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A family of themes for Silt's UI. Only bg, fg-1 and accent are required in a theme; Silt derives the rest. Generated by `UPDATE_THEME_SCHEMA=1 cargo test -p silt-theme theme_schema`.",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "author": {
+      "type": "string"
+    },
+    "copyright": {
+      "type": "string"
+    },
+    "license": {
+      "description": "An SPDX identifier, such as MIT.",
+      "type": "string"
+    },
+    "name": {
+      "description": "The family's name.",
+      "type": "string"
+    },
+    "source": {
+      "description": "Where the theme comes from, for a port.",
+      "type": "string"
+    },
+    "themes": {
+      "items": {
+        "$ref": "#/$defs/theme"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "name",
+    "themes"
+  ],
+  "title": "Silt theme",
+  "type": "object"
+}

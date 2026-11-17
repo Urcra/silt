@@ -460,6 +460,31 @@ pub enum Request {
         #[serde(default)]
         clone: Option<PathBuf>,
     },
+    /// The themes for Silt's UI and the pick (ADR 0098).
+    Themes,
+    /// One theme's page: its tokens, checks, fonts and radii.
+    ThemeDetail {
+        id: String,
+    },
+    SetAppearance {
+        settings: silt_proto::view::AppearanceSettings,
+    },
+    /// A VS Code theme or a Zed family the person picked, saved as theirs.
+    ImportTheme {
+        text: String,
+    },
+    /// A copy of a theme saved as the person's, to edit.
+    DuplicateTheme {
+        from: String,
+    },
+    /// The CSS for the pick, or for `light` and `dark` in its place, with
+    /// the pick's mode.
+    ThemeCss {
+        #[serde(default)]
+        light: Option<String>,
+        #[serde(default)]
+        dark: Option<String>,
+    },
     /// How this machine's web UI loads artifacts' libraries and fonts.
     ArtifactSettings,
     SetArtifactSettings {
@@ -2327,6 +2352,9 @@ pub enum BusEvent {
     },
     /// Plugin calls waiting for the person changed.
     Approvals,
+    /// The themes or the pick changed: a file in `themes/` was saved, or
+    /// another page picked (ADR 0098).
+    Appearance,
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
 }
@@ -2356,7 +2384,7 @@ impl BusEvent {
             Self::Sample { ask, .. } | Self::SampleTool { ask, .. } => Some(format!("sample:{ask}")),
             Self::Room { .. } => Some("rooms".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
-            Self::Agents | Self::Approvals | Self::Lagged => None,
+            Self::Agents | Self::Approvals | Self::Appearance | Self::Lagged => None,
         }
     }
 }
@@ -2486,6 +2514,18 @@ mod tests {
             crate::connectors::ConnectorTool::decl(&config),
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
+            silt_proto::view::AppearanceMode::decl(&config),
+            silt_proto::view::AppearanceSettings::decl(&config),
+            silt_proto::view::ThemeSource::decl(&config),
+            silt_proto::view::ThemeSummary::decl(&config),
+            silt_proto::view::ThemeProblem::decl(&config),
+            silt_proto::view::ThemeCatalog::decl(&config),
+            silt_proto::view::ThemeColorView::decl(&config),
+            silt_proto::view::ThemeSyntaxView::decl(&config),
+            silt_proto::view::ThemeCheckView::decl(&config),
+            silt_proto::view::ThemeDetail::decl(&config),
+            silt_proto::view::ThemeCss::decl(&config),
+            silt_proto::view::ThemeSaved::decl(&config),
             DesignSystemView::decl(&config),
             DesignComponentView::decl(&config),
             DesignCatalog::decl(&config),

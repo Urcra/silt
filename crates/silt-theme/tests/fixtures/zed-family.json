@@ -1,0 +1,51 @@
+{
+  "$schema": "https://zed.dev/schema/themes/v0.2.0.json",
+  "name": "Fixture Harbour",
+  "author": "Silt's tests",
+  "themes": [
+    {
+      "name": "Fixture Harbour Light",
+      "appearance": "light",
+      "style": {
+        "background": "#eceee9",
+        "editor.background": "#f7f8f6",
+        "elevated_surface.background": "#ffffff",
+        "surface.background": "#eceee9",
+        "element.hover": "#dfe3dc",
+        "border": "#9aa39d",
+        "border.variant": "#cfd3cb",
+        "text": "#22302c",
+        "text.muted": "#4d5c57",
+        "text.placeholder": "#5f6d68",
+        "text.accent": "#2f7d6d",
+        "created": "#3d7a3a",
+        "deleted": "#a8402f",
+        "warning": "#9a6a12",
+        "info": null,
+        "players": [{ "cursor": "#2f7d6d" }],
+        "syntax": {
+          "keyword": { "color": "#2f7d6d", "font_weight": 600 },
+          "comment": { "color": "#5f6d68", "font_style": "italic" },
+          "string": { "color": "#3d7a3a" },
+          "function": { "color": "#355a8a" },
+          "boolean": { "color": "#9a4f12" },
+          "variable": { "color": null }
+        }
+      }
+    },
+    {
+      "name": "Fixture Harbour Dark",
+      "appearance": "dark",
+      "style": {
+        "editor.background": "#151b20",
+        "text": "#dfe8ee",
+        "text.accent": "#4fb3a9"
+      }
+    },
+    {
+      "name": "Broken",
+      "appearance": "sepia",
+      "style": { "editor.background": "#000000" }
+    }
+  ]
+}

@@ -12,6 +12,7 @@ mod recording;
 mod reference;
 mod render;
 mod sandbox;
+mod theme;
 mod workspace;
 
 use std::path::PathBuf;
@@ -236,6 +237,11 @@ enum Command {
     Design {
         #[command(subcommand)]
         command: design::DesignCommand,
+    },
+    /// Themes for Silt's UI: list, start, import from VS Code or Zed, and check them
+    Theme {
+        #[command(subcommand)]
+        command: theme::ThemeCommand,
     },
     /// List recorded threads, or with --commit the threads and turns that
     /// made a commit
@@ -896,6 +902,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Revoke { grant } => plugin::revoke(grant),
         Command::Access { command } => access::run(command),
         Command::Design { command } => design::run(command),
+        Command::Theme { command } => theme::run(command),
         Command::Model { command } => model::run(command),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
         Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),

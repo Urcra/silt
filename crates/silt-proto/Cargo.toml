@@ -17,6 +17,7 @@ thiserror = "2.0.21"
 silt-crdt = { path = "../silt-crdt" }
 silt-log = { path = "../silt-log" }
 silt-sheet = { path = "../silt-sheet" }
+silt-theme = { path = "../silt-theme" }
 silt-types = { path = "../silt-types" }
 silt-workspace = { path = "../silt-workspace" }
 ts-rs = { version = "12.0.1", optional = true, features = ["no-serde-warnings"] }

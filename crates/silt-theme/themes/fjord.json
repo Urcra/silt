@@ -1,0 +1,174 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Urcra/silt/main/docs/reference/theme.schema.json",
+  "name": "Fjord",
+  "author": "Silt",
+  "license": "AGPL-3.0-only",
+  "themes": [
+    {
+      "id": "fjord-light",
+      "name": "Fjord Light",
+      "appearance": "light",
+      "colors": {
+        "bg": "#f3f6f8",
+        "bg-elevated": "#fbfcfd",
+        "surface-1": "#e8eef2",
+        "surface-2": "#dbe4ea",
+        "surface-3": "#cdd8e0",
+        "fg-1": "#1f2d36",
+        "fg-2": "#44545f",
+        "fg-3": "#56676f",
+        "border": "#c9d5dc",
+        "border-strong": "#8b9ca8",
+        "accent": "#1f8a80",
+        "accent-fg": "#136860",
+        "ok": "#3d7a3a",
+        "warn": "#b07d14",
+        "danger": "#b23b2e",
+        "info": "#2a5a8c"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#136860"
+        },
+        "string": {
+          "color": "#3d7a3a"
+        },
+        "string-special": {
+          "color": "#7a4c9e"
+        },
+        "number": {
+          "color": "#9a4f12"
+        },
+        "constant": {
+          "color": "#9a4f12"
+        },
+        "comment": {
+          "color": "#56676f",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#2a5a8c"
+        },
+        "macro": {
+          "color": "#7a4c9e"
+        },
+        "definition": {
+          "color": "#2a5a8c"
+        },
+        "operator": {
+          "color": "#44545f"
+        },
+        "punctuation": {
+          "color": "#44545f"
+        },
+        "meta": {
+          "color": "#44545f"
+        },
+        "heading": {
+          "color": "#1f2d36",
+          "font_weight": 600
+        }
+      },
+      "fonts": {
+        "ui": [
+          "Inter",
+          "IBM Plex Sans",
+          "system-ui"
+        ],
+        "mono": [
+          "JetBrains Mono",
+          "IBM Plex Mono",
+          "ui-monospace"
+        ]
+      },
+      "radii": {
+        "sm": 4,
+        "md": 6,
+        "lg": 10
+      }
+    },
+    {
+      "id": "fjord-dark",
+      "name": "Fjord Dark",
+      "appearance": "dark",
+      "colors": {
+        "bg": "#151b20",
+        "bg-elevated": "#1b232a",
+        "surface-1": "#1b232a",
+        "surface-2": "#24303a",
+        "surface-3": "#2e3b46",
+        "fg-1": "#dfe8ee",
+        "fg-2": "#a6b6c1",
+        "fg-3": "#8496a2",
+        "border": "#2c3a45",
+        "border-strong": "#4a5d6b",
+        "accent": "#4fb3a9",
+        "accent-fg": "#7fd1c8",
+        "ok": "#8fbf7a",
+        "warn": "#d6b25e",
+        "danger": "#e07a6c",
+        "info": "#8fb8e6"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#7fd1c8"
+        },
+        "string": {
+          "color": "#8fbf7a"
+        },
+        "string-special": {
+          "color": "#c3a6e0"
+        },
+        "number": {
+          "color": "#e0a96c"
+        },
+        "constant": {
+          "color": "#e0a96c"
+        },
+        "comment": {
+          "color": "#8496a2",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#8fb8e6"
+        },
+        "macro": {
+          "color": "#c3a6e0"
+        },
+        "definition": {
+          "color": "#8fb8e6"
+        },
+        "operator": {
+          "color": "#a6b6c1"
+        },
+        "punctuation": {
+          "color": "#a6b6c1"
+        },
+        "meta": {
+          "color": "#a6b6c1"
+        },
+        "heading": {
+          "color": "#dfe8ee",
+          "font_weight": 600
+        }
+      },
+      "fonts": {
+        "ui": [
+          "Inter",
+          "IBM Plex Sans",
+          "system-ui"
+        ],
+        "mono": [
+          "JetBrains Mono",
+          "IBM Plex Mono",
+          "ui-monospace"
+        ]
+      },
+      "radii": {
+        "sm": 4,
+        "md": 6,
+        "lg": 10
+      }
+    }
+  ]
+}

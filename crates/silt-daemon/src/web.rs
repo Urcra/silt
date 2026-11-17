@@ -212,6 +212,12 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/design-systems/keep", post(keep_design_system))
         .route("/api/threads/{id}/design-system", get(thread_design))
         .route("/api/artifact-settings", get(artifact_settings).put(set_artifact_settings))
+        .route("/api/themes", get(themes))
+        .route("/api/themes/detail", get(theme_detail))
+        .route("/api/themes/css", get(theme_css))
+        .route("/api/themes/import", post(import_theme).layer(DefaultBodyLimit::max(THEME_BODY_BYTES)))
+        .route("/api/themes/duplicate", post(duplicate_theme))
+        .route("/api/appearance", put(set_appearance))
         .route("/api/projects/design-systems", get(project_design_systems).put(set_project_design_system))
         .route("/api/workspaces/assign", post(assign_project))
         .route("/api/threads/{id}/make-project", post(make_project))
@@ -339,12 +345,15 @@ fn same_token(given: &str, expected: &str) -> bool {
     given.len() == expected.len() && std::hint::black_box(difference) == 0
 }
 
-async fn asset(request: HttpRequest) -> HttpResponse {
+async fn asset(State(web): State<Web>, request: HttpRequest) -> HttpResponse {
     let path = request.uri().path().trim_start_matches('/');
     let file = match silt_web::Assets::get(path) {
         Some(file) if !path.is_empty() => file,
         _ => match silt_web::Assets::get("index.html") {
-            Some(file) => file,
+            Some(file) => {
+                let html = String::from_utf8_lossy(&file.data);
+                return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], themed(&web, &html).await).into_response();
+            }
             None => {
                 return (StatusCode::NOT_FOUND, "the web UI was not built; run `pnpm -C web build` and rebuild silt")
                     .into_response();
@@ -353,6 +362,15 @@ async fn asset(request: HttpRequest) -> HttpResponse {
     };
     let mime = file.metadata.mimetype().to_owned();
     ([(header::CONTENT_TYPE, mime)], Body::from(file.data.into_owned())).into_response()
+}
+
+/// The page with the picked theme in it (ADR 0098); as built if the daemon
+/// doesn't answer.
+async fn themed(web: &Web, html: &str) -> String {
+    let Ok(theme) = answer(web, Request::ThemeCss { light: None, dark: None }).await else { return html.to_owned() };
+    let css = theme["css"].as_str().unwrap_or_default();
+    let mode = serde_json::from_value(theme["mode"].clone()).unwrap_or_default();
+    crate::theme::inject(html, css, mode)
 }
 
 /// Sends a request through the daemon's event loop.
@@ -849,6 +867,53 @@ async fn git_text(State(web): State<Web>, Path((thread, oid)): Path<(String, Str
 
 async fn artifact_content(State(web): State<Web>, Path((thread, blob)): Path<(String, String)>) -> HttpResponse {
     ask(&web, Request::ArtifactContent { thread, blob }).await
+}
+
+async fn themes(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::Themes).await
+}
+
+#[derive(Debug, Deserialize)]
+struct ThemeQuery {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    light: Option<String>,
+    #[serde(default)]
+    dark: Option<String>,
+}
+
+async fn theme_detail(State(web): State<Web>, Query(query): Query<ThemeQuery>) -> HttpResponse {
+    ask(&web, Request::ThemeDetail { id: query.id }).await
+}
+
+async fn theme_css(State(web): State<Web>, Query(query): Query<ThemeQuery>) -> HttpResponse {
+    ask(&web, Request::ThemeCss { light: query.light, dark: query.dark }).await
+}
+
+/// A theme file to import: VS Code's are rarely over a few hundred KiB.
+const THEME_BODY_BYTES: usize = 4 << 20;
+
+#[derive(Debug, Deserialize)]
+struct ThemeImport {
+    text: String,
+}
+
+async fn import_theme(State(web): State<Web>, Json(body): Json<ThemeImport>) -> HttpResponse {
+    ask(&web, Request::ImportTheme { text: body.text }).await
+}
+
+#[derive(Debug, Deserialize)]
+struct ThemeDuplicate {
+    from: String,
+}
+
+async fn duplicate_theme(State(web): State<Web>, Json(body): Json<ThemeDuplicate>) -> HttpResponse {
+    ask(&web, Request::DuplicateTheme { from: body.from }).await
+}
+
+async fn set_appearance(State(web): State<Web>, Json(settings): Json<silt_proto::view::AppearanceSettings>) -> HttpResponse {
+    ask(&web, Request::SetAppearance { settings }).await
 }
 
 async fn artifact_settings(State(web): State<Web>) -> HttpResponse {

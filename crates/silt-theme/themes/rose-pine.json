@@ -1,0 +1,250 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Urcra/silt/main/docs/reference/theme.schema.json",
+  "name": "Rosé Pine",
+  "author": "Rosé Pine",
+  "license": "MIT",
+  "source": "https://github.com/rose-pine/rose-pine-theme",
+  "copyright": "Copyright (c) 2023 Rosé Pine. Colours at or below WCAG AA's 4.5:1 for text were moved in lightness, keeping their hue.",
+  "themes": [
+    {
+      "id": "rose-pine-dawn",
+      "name": "Rosé Pine Dawn",
+      "appearance": "light",
+      "colors": {
+        "bg": "#faf4ed",
+        "bg-elevated": "#fffaf3",
+        "surface-1": "#fffaf3",
+        "surface-2": "#f2e9e1",
+        "surface-3": "#dfdad9",
+        "fg-1": "#575279",
+        "fg-2": "#706c8a",
+        "fg-3": "#736e7f",
+        "border": "#dfdad9",
+        "border-strong": "#cecacd",
+        "accent": "#d7827e",
+        "accent-fg": "#7d6795",
+        "ok": "#3b7984",
+        "warn": "#ea9d34",
+        "danger": "#a7576e",
+        "info": "#286983"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#286983"
+        },
+        "string": {
+          "color": "#a65e00"
+        },
+        "string-special": {
+          "color": "#a65e00"
+        },
+        "number": {
+          "color": "#a85855"
+        },
+        "constant": {
+          "color": "#a85855"
+        },
+        "comment": {
+          "color": "#736e7f",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#3b7984"
+        },
+        "macro": {
+          "color": "#7d6795"
+        },
+        "variable": {
+          "color": "#575279"
+        },
+        "definition": {
+          "color": "#a85855"
+        },
+        "property": {
+          "color": "#3b7984"
+        },
+        "operator": {
+          "color": "#706c8a"
+        },
+        "punctuation": {
+          "color": "#706c8a"
+        },
+        "meta": {
+          "color": "#7d6795"
+        },
+        "heading": {
+          "color": "#7d6795",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#7d6795"
+        }
+      },
+      "radii": {
+        "sm": 4,
+        "md": 6,
+        "lg": 10
+      }
+    },
+    {
+      "id": "rose-pine",
+      "name": "Rosé Pine",
+      "appearance": "dark",
+      "colors": {
+        "bg": "#191724",
+        "bg-elevated": "#1f1d2e",
+        "surface-1": "#1f1d2e",
+        "surface-2": "#26233a",
+        "surface-3": "#403d52",
+        "fg-1": "#e0def4",
+        "fg-2": "#908caa",
+        "fg-3": "#8783a0",
+        "border": "#403d52",
+        "border-strong": "#524f67",
+        "accent": "#ebbcba",
+        "accent-fg": "#c4a7e7",
+        "ok": "#9ccfd8",
+        "warn": "#f6c177",
+        "danger": "#eb6f92",
+        "info": "#4d8fab"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#4d8fab"
+        },
+        "string": {
+          "color": "#f6c177"
+        },
+        "string-special": {
+          "color": "#f6c177"
+        },
+        "number": {
+          "color": "#ebbcba"
+        },
+        "constant": {
+          "color": "#ebbcba"
+        },
+        "comment": {
+          "color": "#8783a0",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#9ccfd8"
+        },
+        "macro": {
+          "color": "#c4a7e7"
+        },
+        "variable": {
+          "color": "#e0def4"
+        },
+        "definition": {
+          "color": "#ebbcba"
+        },
+        "property": {
+          "color": "#9ccfd8"
+        },
+        "operator": {
+          "color": "#908caa"
+        },
+        "punctuation": {
+          "color": "#908caa"
+        },
+        "meta": {
+          "color": "#c4a7e7"
+        },
+        "heading": {
+          "color": "#c4a7e7",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#c4a7e7"
+        }
+      },
+      "radii": {
+        "sm": 4,
+        "md": 6,
+        "lg": 10
+      }
+    },
+    {
+      "id": "rose-pine-moon",
+      "name": "Rosé Pine Moon",
+      "appearance": "dark",
+      "colors": {
+        "bg": "#232136",
+        "bg-elevated": "#2a273f",
+        "surface-1": "#2a273f",
+        "surface-2": "#393552",
+        "surface-3": "#44415a",
+        "fg-1": "#e0def4",
+        "fg-2": "#928eac",
+        "fg-3": "#918dab",
+        "border": "#44415a",
+        "border-strong": "#56526e",
+        "accent": "#ea9a97",
+        "accent-fg": "#c4a7e7",
+        "ok": "#9ccfd8",
+        "warn": "#f6c177",
+        "danger": "#eb6f92",
+        "info": "#4a9abb"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#4a9abb"
+        },
+        "string": {
+          "color": "#f6c177"
+        },
+        "string-special": {
+          "color": "#f6c177"
+        },
+        "number": {
+          "color": "#ea9a97"
+        },
+        "constant": {
+          "color": "#ea9a97"
+        },
+        "comment": {
+          "color": "#918dab",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#9ccfd8"
+        },
+        "macro": {
+          "color": "#c4a7e7"
+        },
+        "variable": {
+          "color": "#e0def4"
+        },
+        "definition": {
+          "color": "#ea9a97"
+        },
+        "property": {
+          "color": "#9ccfd8"
+        },
+        "operator": {
+          "color": "#928eac"
+        },
+        "punctuation": {
+          "color": "#928eac"
+        },
+        "meta": {
+          "color": "#c4a7e7"
+        },
+        "heading": {
+          "color": "#c4a7e7",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#c4a7e7"
+        }
+      },
+      "radii": {
+        "sm": 4,
+        "md": 6,
+        "lg": 10
+      }
+    }
+  ]
+}

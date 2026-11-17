@@ -4,6 +4,7 @@
 // compares the new one with its board.
 
 import { execFileSync } from 'node:child_process'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
 import { teardown } from './fixture'
@@ -74,6 +75,64 @@ async function shoot(page: Page, name: string, ready: (page: Page) => Promise<vo
     await expect(page).toHaveScreenshot(`${name}-${variant.name}.png`, shotOptions(page))
   }
 }
+
+// First, on the fixture as it was made: later screens add threads to the sidebar.
+/** Picks Alice's light and dark theme through her daemon, as Settings does. */
+async function pickThemes(page: Page, settings: { mode: string; light: string; dark: string }) {
+  await page.evaluate(async (settings) => {
+    const response = await fetch('/api/appearance', {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${sessionStorage.getItem('silt-token')}`, 'Content-Type': 'application/json', 'X-Silt-Request': '1' },
+      body: JSON.stringify(settings),
+    })
+    if (!response.ok) throw new Error(await response.text())
+  }, settings)
+}
+
+const NOUS = { mode: 'system', light: 'nous-light', dark: 'nous-dark' }
+
+test('Settings › Appearance, and a thread in a bundled pair (ADR 0098)', async ({ page }) => {
+  await open(page, '/settings/appearance')
+  await shoot(page, 'appearance', async (shown) => {
+    await expect(shown.getByRole('list', { name: 'themes' }).getByText('Catppuccin Mocha')).toBeVisible()
+  })
+  try {
+    await pickThemes(page, { mode: 'system', light: 'catppuccin-latte', dark: 'catppuccin-mocha' })
+    await open(page, `/t/${world.thread}`)
+    await page.setViewportSize({ width: 1440, height: 900 })
+    for (const colorScheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' })
+      await expect(page.getByText('Please add a farewell line to main').first()).toBeVisible()
+      await expect(page).toHaveScreenshot(`thread-catppuccin-desktop-${colorScheme}.png`, shotOptions(page))
+    }
+  } finally {
+    await pickThemes(page, NOUS)
+  }
+})
+
+test("a theme's file edited while the page is open restyles it (ADR 0098)", async ({ page }) => {
+  const themes = join(world.work, 'alice', 'silt', 'themes')
+  mkdirSync(themes, { recursive: true })
+  const file = join(themes, 'live-edit.json')
+  const write = (bg: string) =>
+    writeFileSync(
+      file,
+      JSON.stringify({ name: 'Live', themes: [{ id: 'live-edit', name: 'Live', appearance: 'light', colors: { bg, 'fg-1': '#1b1b1b', accent: '#0055cc' } }] }),
+    )
+  write('#fafafa')
+  await open(page, '/settings/appearance')
+  await page.emulateMedia({ colorScheme: 'light' })
+  const bg = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim())
+  try {
+    await pickThemes(page, { ...NOUS, light: 'live-edit' })
+    await expect.poll(bg).toBe('#fafafa')
+    write('#eef4ff')
+    await expect.poll(bg, { timeout: 10_000 }).toBe('#eef4ff')
+  } finally {
+    await pickThemes(page, NOUS)
+    rmSync(file, { force: true })
+  }
+})
 
 test('the workspace home, a new thread (ADR 0044)', async ({ page }) => {
   await open(page, '/')
@@ -382,3 +441,4 @@ test('a question waiting on you', async ({ page }) => {
     await expectInNeedsYou(shown, 'Ask me what to count')
   })
 })
+
