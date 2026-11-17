@@ -207,6 +207,13 @@ impl silt_mcp::Backend for DaemonTools {
                 if !kept.dropped.is_empty() {
                     let _ = write!(out, "\nThe design system's tokens left out: {}.", kept.dropped.join("; "));
                 }
+                if let Some(missing) = &kept.missing {
+                    let _ = write!(
+                        out,
+                        "\nIt has no design system: the last version or a default names `{missing}`, which isn't on this \
+machine. Pass `design_system` to choose one, or `none` to keep the page's own styles."
+                    );
+                }
                 return Ok(out);
             }
             "silt_artifact_data" if arguments.get("op").and_then(Value::as_str) == Some("add_asset") => {
@@ -611,11 +618,9 @@ fn asset_from(checkout: &std::path::Path, path: &str) -> Result<(String, String,
     Ok((name, media_type.to_owned(), base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
-/// What `silt_artifact_guide` answers: the design guidance for `kind`, the
-/// design system that applies and the others there are (ADR 0071).
-/// What the guide says when no design system applies. Agents read a listed
-/// built-in system as the answer, so this says where the look comes from
-/// instead.
+/// What the guide says when no design system applies: where the look comes
+/// from instead, as Silt ships no system to fall back on (ADR 0086,
+/// ADR 0087).
 const NO_SYSTEM: &str = "None applies: the person picked none for this project, the repository names no default in \
 `.silt/design-systems/default` and its workspace none. The look is yours to decide, in this order:\n\
 1. **A mockup of this project's product, or a page that shows it:** match the product. Before the first line, read \
@@ -624,6 +629,8 @@ screen is built from, and take its colours, type, spacing, radii and component s
 2. **Anything else:** commit to one look you could name in a few words, drawn from the subject, as artifact-design's \
 \"Plan the tokens first\" says. Say it in one line of your reply.\n\n";
 
+/// What `silt_artifact_guide` answers: the design guidance for `kind`, the
+/// design system that applies and the others there are (ADR 0071).
 fn guide_text(kind: &str, guide: &ArtifactGuide, skills: &[Skill]) -> String {
     // A skill with its folder, so the files it names beside it can be read
     // rather than searched for.
@@ -686,7 +693,6 @@ with why. Revise one with `patch`, an RFC 6902 JSON Patch, rather than resending
     let source = |source: DesignSource| match source {
         DesignSource::Project => "the repository's",
         DesignSource::Personal => "the person's own",
-        DesignSource::Builtin => "built into Silt",
     };
     out.push_str("\n# The design system\n\n");
     match &guide.system {
@@ -721,43 +727,35 @@ content and the state shown, and don't redraw a component listed here.\n\n",
                 }
             }
         }
-        None => out.push_str(NO_SYSTEM),
+        None => {
+            if let Some((name, why)) = &guide.missing {
+                let mut why = why.chars();
+                let why: String = why.next().map(|first| first.to_uppercase().chain(why).collect()).unwrap_or_default();
+                let _ = writeln!(out, "{why} names `{name}`, which isn't on this machine, so it isn't used.\n");
+            }
+            out.push_str(NO_SYSTEM);
+        }
     }
-    let listed = |builtin: bool| -> Vec<String> {
-        guide
-            .systems
-            .iter()
-            .filter(|system| guide.system.as_ref().is_none_or(|chosen| chosen.name != system.name))
-            .filter(|system| (system.source == DesignSource::Builtin) == builtin)
-            .map(|system| format!("`{}` ({}, {})", system.name, system.title, source(system.source)))
-            .collect()
-    };
-    let (own, builtin) = (listed(false), listed(true));
-    if guide.system.is_some() {
-        let others = [own, builtin].concat();
-        if !others.is_empty() {
+    let others: Vec<String> = guide
+        .systems
+        .iter()
+        .filter(|system| guide.system.as_ref().is_none_or(|chosen| chosen.name != system.name))
+        .map(|system| format!("`{}` ({}, {})", system.name, system.title, source(system.source)))
+        .collect();
+    if !others.is_empty() {
+        if guide.system.is_some() {
             let _ = writeln!(
                 out,
                 "Other design systems: {}. silt_artifact_guide with `design_system` reads one.\n",
                 others.join(", ")
             );
-        }
-    } else {
-        if !own.is_empty() {
+        } else {
             let _ = writeln!(
                 out,
                 "The person's and the repository's own systems: {}. Use one when the request names it or it plainly \
 belongs to this project; if you can't tell and the person is there to answer, name them in a line and ask. \
 silt_artifact_guide with `design_system` reads one.\n",
-                own.join(", ")
-            );
-        }
-        if !builtin.is_empty() {
-            let _ = writeln!(
-                out,
-                "Built into Silt: {}. `nous` is for pages about Silt itself and `plain` for a neutral document the person \
-asked to be plain. Neither is a fallback: don't pass one to avoid choosing a look.\n",
-                builtin.join(", ")
+                others.join(", ")
             );
         }
     }
@@ -996,30 +994,29 @@ mod tests {
         let checkout = tempfile::tempdir().expect("temp dir");
         let skills = conventions::discover_skills_with(checkout.path(), None, Some(&root));
         let guide = ArtifactGuide {
-            system: Some(system("nous", DesignSource::Builtin, Some("Use `accent` sparingly."))),
-            why: Some("the project's default".into()),
-            systems: vec![system("nous", DesignSource::Builtin, None), system("acme", DesignSource::Project, None)],
+            system: Some(system("nous", DesignSource::Project, Some("Use `accent` sparingly."))),
+            why: Some("the repository's default".into()),
+            systems: vec![system("nous", DesignSource::Project, None), system("acme", DesignSource::Personal, None)],
+            missing: None,
         };
         let text = guide_text("html", &guide, &skills);
         assert!(text.starts_with("# Making an artifact"), "{text}");
-        assert!(text.contains("This artifact uses NOUS (`nous`, built into Silt), the project's default."), "{text}");
+        assert!(text.contains("This artifact uses NOUS (`nous`, the repository's), the repository's default."), "{text}");
         assert!(text.contains("Use `accent` sparingly.") && text.contains("- color: --bg, --fg-1"), "{text}");
         assert!(
             text.contains("## Its components")
                 && text.contains("### `button`\n\n```html\n<!-- The button. -->\n<button class=\"n-button\">Go</button>\n```"),
             "{text}"
         );
-        assert!(text.contains("Other design systems: `acme` (ACME, the repository's)."), "{text}");
+        assert!(text.contains("Other design systems: `acme` (ACME, the person's own)."), "{text}");
 
-        let none = ArtifactGuide { system: None, why: None, systems: guide.systems.clone() };
+        let gone = ("plain".to_owned(), "the workspace's default".to_owned());
+        let none = ArtifactGuide { system: None, why: None, systems: vec![guide.systems[1].clone()], missing: Some(gone) };
         let text = guide_text("html", &none, &skills);
         assert!(text.contains("None applies") && text.contains("match the product"), "{text}");
-        assert!(text.contains("own systems: `acme` (ACME, the repository's)."), "{text}");
-        assert!(
-            text.contains("Built into Silt: `nous` (NOUS, built into Silt).") && text.contains("Neither is a fallback"),
-            "{text}"
-        );
-        assert!(!text.contains("Other design systems"), "built-in systems aren't offered as a choice like any other: {text}");
+        assert!(text.contains("The workspace's default names `plain`, which isn't on this machine"), "{text}");
+        assert!(text.contains("own systems: `acme` (ACME, the person's own). Use one when the request names it"), "{text}");
+        assert!(!text.contains("Other design systems"), "{text}");
         let svg = guide_text("svg", &guide, &skills);
         assert!(svg.contains("artifact-dataviz") && !svg.contains("Other design systems"), "{svg}");
     }
@@ -1030,7 +1027,7 @@ mod tests {
         let root = silt_agents::builtin::builtin_skills_root(data.path()).expect("skills");
         let checkout = tempfile::tempdir().expect("temp dir");
         let skills = conventions::discover_skills_with(checkout.path(), None, Some(&root));
-        let guide = ArtifactGuide { system: None, why: None, systems: Vec::new() };
+        let guide = ArtifactGuide { system: None, why: None, systems: Vec::new(), missing: None };
         for (kind, short) in [("doc", DOC_GUIDE), ("sheet", SHEET_GUIDE), ("whiteboard", WHITEBOARD_GUIDE)] {
             let skill = skills.iter().find(|skill| skill.name == format!("artifact-{kind}")).expect("built-in skill");
             let body = skill.body().expect("skill body");

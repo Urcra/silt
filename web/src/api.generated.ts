@@ -699,7 +699,7 @@ export type ConnectorTool = { name: string, description: string | null,
  */
 read_only: boolean, input_schema: unknown, };
 
-export type DesignSource = "project" | "personal" | "builtin";
+export type DesignSource = "project" | "personal";
 
 export type ArtifactSettings = { 
 /**

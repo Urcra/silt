@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use silt_design::{Builtin, SystemName};
+use silt_design::SystemName;
 
 use crate::core::CoreError;
 use crate::protocol::{ArtifactSettings, DesignComponentView, DesignSource, DesignSystemView};
@@ -28,42 +28,29 @@ const SETTINGS: &str = "artifacts.json";
 const README_BYTES: u64 = 256 << 10;
 const TOKENS_BYTES: u64 = 512 << 10;
 
+/// A design system: a folder of a repository's or the person's. Silt ships
+/// none of its own (ADR 0087).
 #[derive(Debug, Clone)]
 pub(crate) struct System {
     pub(crate) name: SystemName,
     pub(crate) source: DesignSource,
-    place: Place,
-}
-
-#[derive(Debug, Clone)]
-enum Place {
-    Folder(PathBuf),
-    Builtin(Builtin),
+    dir: PathBuf,
 }
 
 impl System {
     pub(crate) fn readme(&self) -> String {
-        match &self.place {
-            Place::Builtin(builtin) => builtin.readme.to_owned(),
-            Place::Folder(dir) => read_capped(&dir.join("README.md"), README_BYTES).unwrap_or_default(),
-        }
+        read_capped(&self.dir.join("README.md"), README_BYTES).unwrap_or_default()
     }
 
     pub(crate) fn tokens(&self) -> Result<silt_design::Tokens, CoreError> {
-        let json = match &self.place {
-            Place::Builtin(builtin) => builtin.tokens.to_owned(),
-            Place::Folder(dir) => read_capped(&dir.join("tokens.json"), TOKENS_BYTES)
-                .ok_or_else(|| CoreError::Invalid(format!("the design system {} has no readable tokens.json", self.name)))?,
-        };
+        let json = read_capped(&self.dir.join("tokens.json"), TOKENS_BYTES)
+            .ok_or_else(|| CoreError::Invalid(format!("the design system {} has no readable tokens.json", self.name)))?;
         silt_design::parse(&json).map_err(|error| CoreError::Invalid(format!("the design system {}: {error}", self.name)))
     }
 
     /// The font files its tokens name, each under its own `fonts/`.
     fn fonts(&self, tokens: &silt_design::Tokens) -> BTreeMap<String, Vec<u8>> {
-        let Place::Folder(dir) = &self.place else {
-            return BTreeMap::new();
-        };
-        let Ok(root) = silt_os::canonicalize(&dir.join("fonts")) else {
+        let Ok(root) = silt_os::canonicalize(&self.dir.join("fonts")) else {
             return BTreeMap::new();
         };
         let files = tokens.typography.iter().flat_map(|typography| typography.fonts.iter()).filter_map(|font| font.file.clone());
@@ -91,23 +78,13 @@ impl System {
 
     /// Its `components.css`, empty when it has none (ADR 0086).
     fn components_css(&self) -> String {
-        match &self.place {
-            Place::Builtin(builtin) => builtin.components_css.to_owned(),
-            Place::Folder(dir) => {
-                read_capped(&dir.join(COMPONENTS_CSS), silt_design::COMPONENTS_CSS_BYTES as u64).unwrap_or_default()
-            }
-        }
+        read_capped(&self.dir.join(COMPONENTS_CSS), silt_design::COMPONENTS_CSS_BYTES as u64).unwrap_or_default()
     }
 
     /// Its components' examples, and what was left out of them.
     pub(crate) fn components(&self) -> (Vec<silt_design::Component>, Vec<String>) {
-        match &self.place {
-            Place::Builtin(builtin) => silt_design::components(builtin.components.iter().copied()),
-            Place::Folder(dir) => {
-                let files = component_files(&dir.join(COMPONENTS_DIR));
-                silt_design::components(files.iter().map(|(name, html)| (name.as_str(), html.as_str())))
-            }
-        }
+        let files = component_files(&self.dir.join(COMPONENTS_DIR));
+        silt_design::components(files.iter().map(|(name, html)| (name.as_str(), html.as_str())))
     }
 
     /// The CSS its tokens and components compile to, for a frame.
@@ -168,7 +145,7 @@ pub(crate) fn read_capped(path: &Path, limit: u64) -> Option<String> {
 }
 
 /// Every system a run in `checkout` may use, a name found first hiding the
-/// same name later: the repository's, the person's, then the built-in ones.
+/// same name later: the repository's, then the person's.
 pub(crate) fn systems(checkout: Option<&Path>, data_dir: &Path) -> Vec<System> {
     let mut found: BTreeMap<SystemName, System> = BTreeMap::new();
     let roots = checkout
@@ -187,12 +164,7 @@ pub(crate) fn systems(checkout: Option<&Path>, data_dir: &Path) -> Vec<System> {
             else {
                 continue;
             };
-            found.entry(name.clone()).or_insert(System { name, source, place: Place::Folder(dir) });
-        }
-    }
-    for builtin in silt_design::BUILTIN {
-        if let Ok(name) = builtin.name.parse::<SystemName>() {
-            found.entry(name.clone()).or_insert(System { name, source: DesignSource::Builtin, place: Place::Builtin(builtin) });
+            found.entry(name.clone()).or_insert(System { name, source, dir });
         }
     }
     found.into_values().collect()
@@ -451,13 +423,15 @@ mod tests {
         write(&data.path().join(PERSONAL_DIR).join("Bad Name"), "Bad");
         fs::write(checkout.path().join(PROJECT_DIR).join("default"), "nous\n").expect("default");
 
+        write(&data.path().join(PERSONAL_DIR).join("nous"), "My Nous");
+
         let all = systems(Some(checkout.path()), data.path());
         let names: Vec<(&str, DesignSource)> = all.iter().map(|system| (system.name.as_str(), system.source)).collect();
-        assert_eq!(names, [("mine", DesignSource::Personal), ("nous", DesignSource::Project), ("plain", DesignSource::Builtin)]);
+        assert_eq!(names, [("mine", DesignSource::Personal), ("nous", DesignSource::Project)]);
         assert_eq!(find(&all, "nous").expect("nous").view(true).title, "Our Nous");
         assert!(find(&all, "acme").is_err());
+        assert!(find(&all, "plain").is_err(), "Silt ships no system of its own");
         assert_eq!(project_default(checkout.path()).as_deref(), Some("nous"));
-        assert!(find(&all, "plain").expect("plain").compiled().expect("css").css.contains("--chart-1:"));
     }
 
     #[test]
@@ -486,9 +460,21 @@ mod tests {
             }]
         );
         assert!(acme.view(false).components.is_empty(), "a listing leaves them out");
+    }
 
+    /// Silt's own repository names its own Nous, components and all, as its
+    /// default, as any repository may (ADR 0087).
+    #[test]
+    fn silts_own_repository_styles_its_artifacts_with_nous() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let elsewhere = tempfile::tempdir().expect("temp dir");
+        let all = systems(Some(&repository), elsewhere.path());
+        assert_eq!(project_default(&repository).as_deref(), Some("nous"));
         let nous = find(&all, "nous").expect("nous");
-        assert!(nous.compiled().expect("css").css.contains(".n-button"));
+        assert_eq!(nous.source, DesignSource::Project);
+        let compiled = nous.compiled().expect("css");
+        assert!(compiled.dropped.is_empty(), "{:?}", compiled.dropped);
+        assert!(compiled.css.contains("--bg: #f6f1e8;") && compiled.css.contains(".n-button"), "{}", compiled.css);
         assert!(nous.view(true).components.iter().any(|component| component.name == "row"));
     }
 

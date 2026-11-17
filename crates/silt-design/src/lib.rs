@@ -11,64 +11,6 @@ use std::fmt::Write as _;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-/// Built-in systems, by name: Silt's own look and a neutral one.
-pub const BUILTIN: [Builtin; 2] = [
-    Builtin {
-        name: "nous",
-        readme: include_str!("../systems/nous/README.md"),
-        tokens: include_str!("../systems/nous/tokens.json"),
-        components_css: include_str!("../systems/nous/components.css"),
-        components: NOUS_COMPONENTS,
-    },
-    Builtin {
-        name: "plain",
-        readme: include_str!("../systems/plain/README.md"),
-        tokens: include_str!("../systems/plain/tokens.json"),
-        components_css: "",
-        components: &[],
-    },
-];
-
-macro_rules! nous_components {
-    ($($name:literal),* $(,)?) => {
-        &[$(($name, include_str!(concat!("../systems/nous/components/", $name, ".html")))),*]
-    };
-}
-
-const NOUS_COMPONENTS: &[(&str, &str)] = nous_components![
-    "button",
-    "icon-button",
-    "field",
-    "select",
-    "tag",
-    "chip",
-    "kbd",
-    "dot",
-    "pill",
-    "section-label",
-    "card",
-    "row",
-    "banner",
-    "empty-state",
-    "diff",
-    "status-bar",
-    "icons",
-];
-
-#[derive(Debug, Clone, Copy)]
-pub struct Builtin {
-    pub name: &'static str,
-    pub readme: &'static str,
-    pub tokens: &'static str,
-    pub components_css: &'static str,
-    /// Each component's example, by name.
-    pub components: &'static [(&'static str, &'static str)],
-}
-
-pub fn builtin(name: &str) -> Option<Builtin> {
-    BUILTIN.into_iter().find(|system| system.name == name)
-}
-
 /// A font file, an inlined face, may be at most this large.
 pub const FONT_BYTES: usize = 1 << 20;
 const FONTS_BYTES: usize = 4 << 20;
@@ -739,6 +681,29 @@ mod tests {
         compile(&parse(json).expect("tokens"), &BTreeMap::new())
     }
 
+    /// Silt's own system, which its repository keeps as any repository
+    /// keeps one (ADR 0087).
+    struct Nous {
+        tokens: String,
+        components_css: String,
+        components: Vec<(String, String)>,
+    }
+
+    fn nous() -> Nous {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.silt/design-systems/nous");
+        let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap_or_else(|_| panic!("{}", path.display()));
+        let mut components: Vec<(String, String)> = std::fs::read_dir(dir.join("components"))
+            .expect("components")
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().to_str()?.strip_suffix(".html")?.to_owned();
+                Some((name, read(&entry.path())))
+            })
+            .collect();
+        components.sort();
+        Nous { tokens: read(&dir.join("tokens.json")), components_css: read(&dir.join("components.css")), components }
+    }
+
     #[test]
     fn light_and_dark_follow_the_viewer_both_ways() {
         let out = compiled(
@@ -855,10 +820,10 @@ mod tests {
 
     #[test]
     fn nous_components_read_only_its_tokens_and_use_only_classes_it_defines() {
-        let nous = builtin("nous").expect("nous");
-        let tokens = parse(nous.tokens).expect("tokens");
+        let nous = nous();
+        let tokens = parse(&nous.tokens).expect("tokens");
         let known: BTreeSet<String> = token_names(&tokens).into_values().flatten().collect();
-        let css = nous.components_css;
+        let css = nous.components_css.as_str();
         for (at, _) in css.match_indices("var(--") {
             let name: String = css[at + 4..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
             assert!(known.contains(&name), "components.css reads {name}, which Nous doesn't define");
@@ -867,7 +832,7 @@ mod tests {
         out.add_components(css);
         assert!(out.dropped.is_empty(), "{:?}", out.dropped);
 
-        let (kept, dropped) = components(nous.components.iter().copied());
+        let (kept, dropped) = components(nous.components.iter().map(|(name, html)| (name.as_str(), html.as_str())));
         assert!(dropped.is_empty(), "{dropped:?}");
         assert_eq!(kept.len(), nous.components.len());
         for component in &kept {
@@ -885,15 +850,11 @@ mod tests {
     }
 
     #[test]
-    fn the_built_in_systems_compile_whole() {
-        for system in BUILTIN {
-            let tokens = parse(system.tokens).expect(system.name);
-            let out = compile(&tokens, &BTreeMap::new());
-            assert!(out.dropped.is_empty(), "{}: {:?}", system.name, out.dropped);
-            assert!(out.css.contains("--bg:") && out.css.contains("--chart-6:"), "{}", system.name);
-            assert!(out.css.contains("--chart-texture: repeating-linear-gradient(45deg"), "{}: {:?}", system.name, out.dropped);
-            assert!(SystemName::try_from(system.name.to_owned()).is_ok());
-        }
+    fn nous_compiles_whole() {
+        let out = compile(&parse(&nous().tokens).expect("tokens"), &BTreeMap::new());
+        assert!(out.dropped.is_empty(), "{:?}", out.dropped);
+        assert!(out.css.contains("--bg:") && out.css.contains("--chart-6:"), "{}", out.css);
+        assert!(out.css.contains("--chart-texture: repeating-linear-gradient(45deg"), "{:?}", out.dropped);
     }
 
     /// Nous's tokens are the web UI's: each colour both define has the same
@@ -918,7 +879,7 @@ mod tests {
             }
         }
         let resolve = |value: &str| palette.get(value.trim()).cloned().unwrap_or_else(|| value.trim().to_owned());
-        let tokens = parse(builtin("nous").expect("nous").tokens).expect("tokens");
+        let tokens = parse(&nous().tokens).expect("tokens");
         let mut compared = 0;
         for token in tokens.color.expect("colours").tokens {
             let Some(pair) = defined.get(&token.name) else {
@@ -951,25 +912,47 @@ mod tests {
         None
     }
 
-    /// The built-in systems' chart colours pass the palette checks they ask
-    /// agents to run (ADR 0073): the categorical palette in order on `bg`,
-    /// the first three for all pairs, and the sequential and diverging
-    /// scales as ordinal ramps, in both themes.
+    /// Nous's chart colours, and the default palette `artifact-dataviz`
+    /// gives a page with no system, pass the palette checks they ask agents
+    /// to run (ADR 0073): the categorical palette in order on `bg`, the
+    /// first three for all pairs, and the sequential and diverging scales
+    /// as ordinal ramps, in both themes.
     #[test]
-    fn the_built_in_chart_colours_pass_the_palette_checks() {
+    fn the_chart_colours_silt_offers_pass_the_palette_checks() {
         use crate::frame::Theme;
         use crate::palette::{Pairs, Srgb, categorical, ordinal};
-        for name in ["nous", "plain"] {
-            let tokens = parse(builtin(name).expect("built in").tokens).expect("tokens");
-            let colors = tokens.color.expect("colours").tokens;
-            for theme in [Theme::Light, Theme::Dark] {
+        let mut palettes: Vec<(&str, BTreeMap<String, [String; 2]>)> = Vec::new();
+        let nous: BTreeMap<String, [String; 2]> = parse(&nous().tokens)
+            .expect("tokens")
+            .color
+            .expect("colours")
+            .tokens
+            .into_iter()
+            .filter_map(|token| match token.value {
+                TokenValue::ByTheme(values) => Some((token.name, [values.get("light")?.clone(), values.get("dark")?.clone()])),
+                TokenValue::One(_) => None,
+            })
+            .collect();
+        palettes.push(("nous", nous));
+        // Each table row of the default palette names its token first, then
+        // its light and dark values.
+        let default: BTreeMap<String, [String; 2]> =
+            include_str!("../../silt-agents/skills/artifact-dataviz/references/palette.md")
+                .lines()
+                .filter_map(|line| {
+                    let quoted: Vec<&str> = line.split('`').skip(1).step_by(2).collect();
+                    let hexes: Vec<&str> = quoted.iter().copied().filter(|value| value.starts_with('#')).collect();
+                    let name = quoted.first().filter(|name| !name.starts_with('#'))?;
+                    (line.starts_with('|') && hexes.len() >= 2)
+                        .then(|| ((*name).to_owned(), [hexes[0].to_owned(), hexes[1].to_owned()]))
+                })
+                .collect();
+        palettes.push(("the default palette", default));
+        for (name, colors) in &palettes {
+            for (theme, index) in [(Theme::Light, 0), (Theme::Dark, 1)] {
                 let value = |token: &str| {
-                    let found =
-                        colors.iter().find(|candidate| candidate.name == token).unwrap_or_else(|| panic!("{name} has {token}"));
-                    let TokenValue::ByTheme(values) = &found.value else {
-                        panic!("{name}'s {token} has one value");
-                    };
-                    Srgb::parse(&values[theme.as_str()]).expect("a hex colour")
+                    let found = colors.get(token).unwrap_or_else(|| panic!("{name} has {token}"));
+                    Srgb::parse(&found[index]).expect("a hex colour")
                 };
                 let bg = value("bg");
                 let slots: Vec<Srgb> = (1..=6).map(|slot| value(&format!("chart-{slot}"))).collect();

@@ -1,7 +1,7 @@
 // What agents showed the person (ADR 0068): artifacts, each a run of
 // versions under one id, and images shown in the conversation.
 
-import type { ArtifactContent, ArtifactListed, ArtifactView, CommentView, HistoryEntry } from './api'
+import type { ArtifactContent, ArtifactListed, ArtifactView, CommentView, DesignSystemView, HistoryEntry } from './api'
 import {
   FIRST_SCRIPT_BRIDGE,
   FIRST_SCRIPT_END,
@@ -314,4 +314,12 @@ export function artifactPrompt(shown: ArtifactVersion, comments: CommentView[]):
     return `- ${on}${comment.text.replace(/\n/g, '\n  ')}`
   })
   return [`Comments on the artifact "${title}" (id ${id}, version ${version}):`, '', ...items, '', `Make a new version with silt_artifact and id ${id}.`].join('\n')
+}
+
+/**
+ * Whether a picked design system is one this machine doesn't have, such as one Silt no longer ships (ADR 0087), so
+ * a picker can still show what's picked.
+ */
+export function missingSystem(picked: string | null | undefined, systems: DesignSystemView[] | undefined): boolean {
+  return Boolean(picked) && picked !== 'none' && systems !== undefined && !systems.some((system) => system.name === picked)
 }

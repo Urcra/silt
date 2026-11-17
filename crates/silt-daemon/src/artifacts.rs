@@ -619,6 +619,7 @@ impl Core {
         // otherwise, which the server checks by its declaration; a whiteboard
         // made before it took images takes them from its next version.
         let capabilities = silt_proto::artifact::with_kind_defaults(&kind, capabilities);
+        let mut missing = None;
         let styled = if matches!(kind.as_str(), "html" | "data") {
             let workspace_default = self.workspace_design_system(workspace);
             let repository = checkout.as_deref().and_then(design::project_default);
@@ -628,11 +629,19 @@ impl Core {
                 repository: repository.as_deref(),
                 workspace: workspace_default.as_deref(),
             };
+            let asked = new.design_system.as_deref().map(str::trim).is_some_and(|name| !name.is_empty());
             match design::chosen(new.design_system.as_deref(), previous.as_deref(), defaults) {
-                Some(name) => {
-                    let system = design::find(&design::systems(checkout.as_deref(), &self.data_dir), name)?;
-                    Some((system.name.to_string(), system.compiled()?))
-                }
+                Some(name) => match design::find(&design::systems(checkout.as_deref(), &self.data_dir), name) {
+                    Ok(system) => Some((system.name.to_string(), system.compiled()?)),
+                    // A name carried over from the last version or a default
+                    // may be one this machine lacks, or one Silt no longer
+                    // ships (ADR 0087): the version goes unstyled and says so.
+                    Err(_) if !asked => {
+                        missing = Some(name.to_owned());
+                        None
+                    }
+                    Err(error) => return Err(error),
+                },
                 None => None,
             }
         } else {
@@ -711,7 +720,7 @@ impl Core {
         if version == 1 && silt_proto::edited::is_edited(&view.kind) {
             self.seed_edited(thread, &id, &view.kind, std::str::from_utf8(&bytes).unwrap_or_default()).await?;
         }
-        Ok(ArtifactPut { id, version, design_system, dropped })
+        Ok(ArtifactPut { id, version, design_system, dropped, missing })
     }
 
     /// The design system a run reads before making an artifact: the one
@@ -740,11 +749,19 @@ impl Core {
                 None => (None, ""),
             },
         };
-        let system = name.map(|name| design::find(&systems, name)).transpose()?;
+        // Only a name asked for must exist; a default naming one this
+        // machine lacks leaves none applying (ADR 0087).
+        let (system, missing) = match name.map(|name| (name, design::find(&systems, name))) {
+            None => (None, None),
+            Some((_, Ok(system))) => (Some(system), None),
+            Some((_, Err(error))) if asked.is_some() => return Err(error),
+            Some((name, Err(_))) => (None, Some((name.to_owned(), why.to_owned()))),
+        };
         Ok(ArtifactGuide {
             system: system.as_ref().map(|system| system.view(true)),
             why: system.is_some().then(|| why.to_owned()),
             systems: systems.iter().map(|system| system.view(false)).collect(),
+            missing,
         })
     }
 

@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { type ReactNode, useId, useState } from 'react'
 import { DEFAULT_PRESETS, PRESETS } from '../agentState'
+import { missingSystem } from '../artifacts'
 import { api, type GitNotes, type Project, type WorkspaceView } from '../api'
 import { serverLine, workspaceOf } from '../rules'
 import { projectName } from '../projects'
@@ -94,9 +95,11 @@ function ProjectDesignSystem({ project }: { project: Project }) {
         {systems.data.map((system) => (
           <option key={system.name} value={system.name}>
             {system.title}
-            {system.source === 'builtin' ? ' (built in)' : ''}
           </option>
         ))}
+        {missingSystem(picks.data[project.repo], systems.data) && (
+          <option value={picks.data[project.repo]}>{picks.data[project.repo]} (not on this machine)</option>
+        )}
         <option value="none">None</option>
       </Select>
     </label>
