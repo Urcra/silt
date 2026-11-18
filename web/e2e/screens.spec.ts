@@ -72,7 +72,11 @@ async function shoot(page: Page, name: string, ready: (page: Page) => Promise<vo
     await page.setViewportSize({ width: variant.width, height: variant.height })
     await page.emulateMedia({ colorScheme: variant.colorScheme, reducedMotion: 'reduce' })
     await ready(page)
-    await expect(page).toHaveScreenshot(`${name}-${variant.name}.png`, shotOptions(page))
+    await expect(page).toHaveScreenshot(`${name}-${variant.name}.png`, {
+      ...shotOptions(page),
+      // The embedded type specimen rasterizes its own font slightly differently across machines.
+      maxDiffPixelRatio: name === 'design-system-tokens' ? 0.002 : 0.001,
+    })
   }
 }
 

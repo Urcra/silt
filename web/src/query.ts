@@ -61,6 +61,7 @@ export const keys = {
   branches: (clone: string) => ['branches', clone] as const,
   projects: ['projects'] as const,
   found: ['projects', 'found'] as const,
+  subfolders: (dir: string) => ['subfolders', dir] as const,
   orgs: ['orgs'] as const,
   devices: ['devices'] as const,
   links: (thread: string) => ['links', thread] as const,

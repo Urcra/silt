@@ -194,6 +194,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/projects/new", post(new_project))
         .route("/api/found", get(found_folders))
         .route("/api/found/import", post(import_found))
+        .route("/api/folders", get(subfolders))
         .route("/api/projects/home", axum::routing::put(project_home))
         .route("/api/chats/settings", get(chat_settings).put(set_chat_settings))
         .route("/api/models", get(models))
@@ -1745,6 +1746,15 @@ async fn new_project(State(web): State<Web>, Json(body): Json<CloneQuery>) -> Ht
 
 async fn found_folders(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::FoundFolders).await
+}
+
+#[derive(Deserialize)]
+struct FolderQuery {
+    dir: PathBuf,
+}
+
+async fn subfolders(State(web): State<Web>, Query(query): Query<FolderQuery>) -> HttpResponse {
+    ask(&web, Request::Subfolders { dir: query.dir }).await
 }
 
 #[derive(Deserialize)]

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import AxeBuilder from '@axe-core/playwright'
@@ -1592,6 +1592,32 @@ test('a new project made from New thread starts its first thread in a folder mad
   await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: hello')).toBeVisible()
   await stopAgent(page)
+})
+
+test('a typed path completes from the folders on this machine, as a shell completes it', async ({ page }) => {
+  const picks = join(live.work, 'picks')
+  execFileSync('git', ['init', '--quiet', join(picks, 'target-repo')])
+  for (const folder of ['tarot', '.tarry']) mkdirSync(join(picks, folder))
+  await page.goto(live.alice)
+  await page.getByRole('button', { name: /^project:/ }).click()
+  const picker = page.getByRole('dialog', { name: 'Pick a project' })
+  await picker.getByRole('tab', { name: 'Folder' }).click()
+  const path = picker.getByRole('combobox', { name: 'folder path' })
+  const options = picker.getByRole('listbox', { name: `folders in ${picks}/` }).getByRole('option')
+
+  await path.fill(picks.slice(0, -1))
+  await path.press('Tab')
+  await expect(path).toHaveValue(`${picks}/`)
+  await path.pressSequentially('t')
+  await expect(options).toHaveText(['target-repo/git', 'tarot/'])
+  await path.press('Tab')
+  await expect(path).toHaveValue(`${picks}/tar`)
+  await path.press('ArrowDown')
+  await expect(options.first()).toHaveAttribute('aria-selected', 'true')
+  await path.press('Enter')
+  await expect(path).toHaveValue(`${picks}/target-repo/`)
+  await picker.getByRole('button', { name: 'Open' }).click()
+  await expect(page.getByRole('button', { name: 'project: target-repo' })).toBeVisible()
 })
 
 test("the agent's commands are offered as / starts a prompt, in its thread and in a new one", async ({ page }) => {

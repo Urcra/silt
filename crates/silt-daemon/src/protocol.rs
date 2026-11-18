@@ -1005,6 +1005,10 @@ pub enum Request {
     NewProject {
         path: PathBuf,
     },
+    /// The folders in `dir`, for completing a path as it's typed.
+    Subfolders {
+        dir: PathBuf,
+    },
     /// Every workspace, the projects each holds and its rules (ADR 0065).
     Workspaces,
     /// Whether a terminal may run `agent` (its adapter's id) with `args`,
@@ -1801,6 +1805,15 @@ pub struct FoundFolder {
     /// Sessions not imported yet, by agent name, most first.
     pub sessions: Vec<FoundSessions>,
     pub last_ms: Option<i64>,
+}
+
+/// A folder in the one a typed path is in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Subfolder {
+    pub name: String,
+    /// Whether it holds a git repository of its own.
+    pub git: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2609,6 +2622,7 @@ mod tests {
             TurnInfo::decl(&config),
             FoundFolder::decl(&config),
             FoundSessions::decl(&config),
+            Subfolder::decl(&config),
             VoiceDownload::decl(&config),
             VoiceEvent::decl(&config),
             VoiceStatus::decl(&config),

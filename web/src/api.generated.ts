@@ -1734,6 +1734,12 @@ sessions: Array<FoundSessions>, last_ms: number | null, };
 
 export type FoundSessions = { agent: string, count: number, };
 
+export type Subfolder = { name: string, 
+/**
+ * Whether it holds a git repository of its own.
+ */
+git: boolean, };
+
 export type VoiceDownload = { done: number, total: number, };
 
 export type VoiceEvent = { "kind": "partial", text: string, } | { "kind": "segment", text: string, } | { "kind": "paused" } | { "kind": "done" } | { "kind": "failed", message: string, };
