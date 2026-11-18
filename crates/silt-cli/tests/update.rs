@@ -25,6 +25,10 @@ if [ -n "${FAIL_THE_BUILD:-}" ]; then
 fi
 echo "cargo install --locked --path crates/silt-voice"
 pwd > "$(dirname "$0")/ran-in"
+# As installing does: a new file where the daemon's program was.
+if [ -n "${SILT_TEST_INSTALLED:-}" ]; then
+    cp "$SILT_TEST_SOURCE" "$SILT_TEST_INSTALLED.new" && mv -f "$SILT_TEST_INSTALLED.new" "$SILT_TEST_INSTALLED"
+fi
 "#;
 
 struct Setup {
@@ -81,6 +85,7 @@ impl Setup {
             .env("SILT_BUILD_BRANCH", "main")
             .env("SILT_BUILD_CHANNEL", "nightly")
             .env("SILT_UPDATE_JUST", &self.just)
+            .env("SILT_ASK_AGENTS", "0")
             .envs(envs.iter().copied());
         command
     }
@@ -171,16 +176,21 @@ fn a_clone_with_changes_is_not_updated() {
 impl Setup {
     /// The daemon's web API: the status and the answer.
     fn web(&self, method: &str, path: &str) -> (String, serde_json::Value) {
+        self.web_with(method, path, None)
+    }
+
+    fn web_with(&self, method: &str, path: &str, body: Option<serde_json::Value>) -> (String, serde_json::Value) {
         let opened = self.run(&["open", "--no-browser"], &[]);
         assert!(opened.status.success(), "{}", text(&opened));
         let url = String::from_utf8_lossy(&opened.stdout).into_owned();
         let (base, token) = common::web_ui(&url);
-        let output = Command::new("curl")
-            .args(["-s", "-w", "\n%{http_code}", "-X", method, "-H"])
-            .arg(format!("Authorization: Bearer {token}"))
-            .arg(format!("{base}{path}"))
-            .output()
-            .expect("curl runs");
+        let mut curl = Command::new("curl");
+        curl.args(["-s", "-w", "\n%{http_code}", "-X", method, "-H", "Content-Type: application/json", "-H"])
+            .arg(format!("Authorization: Bearer {token}"));
+        if let Some(body) = body {
+            curl.arg("--data").arg(body.to_string());
+        }
+        let output = curl.arg(format!("{base}{path}")).output().expect("curl runs");
         let said = String::from_utf8_lossy(&output.stdout).into_owned();
         let (json, status) = said.rsplit_once('\n').expect("a status line");
         (status.to_owned(), serde_json::from_str(json).unwrap_or(serde_json::Value::Null))
@@ -219,4 +229,135 @@ fn the_web_ui_sees_the_update_starts_it_and_reads_it_back_after_the_restart() {
     assert_eq!(git(&setup.clone, &["rev-parse", "HEAD"]), newest);
     assert_eq!(view["run"]["percent"], 100);
     assert!(view["output"].as_array().is_some_and(|lines| lines.iter().any(|line| line == "pnpm -C web build")), "{view}");
+}
+
+impl Setup {
+    /// `silt` from `exe`, as this setup runs it.
+    fn silt_at(&self, exe: &Path, args: &[&str], envs: &[(&str, &str)]) -> Command {
+        let like = self.silt(args, envs);
+        let mut command = Command::new(exe);
+        for (key, value) in like.get_envs() {
+            match value {
+                Some(value) => command.env(key, value),
+                None => command.env_remove(key),
+            };
+        }
+        command.args(args).current_dir(&self.clone);
+        command
+    }
+
+    /// An installed copy of this build, as `just install` puts one, which
+    /// the update's stand-in for `just` replaces.
+    fn install(&self) -> PathBuf {
+        let bin = self.home.join("installed");
+        fs::create_dir_all(&bin).expect("dir");
+        let installed = bin.join("silt");
+        fs::copy(env!("CARGO_BIN_EXE_silt"), bin.join("silt.new")).expect("copy");
+        fs::rename(bin.join("silt.new"), &installed).expect("install");
+        installed
+    }
+
+    /// The daemon process of this setup's data dir.
+    fn daemon_pid(&self) -> u32 {
+        let home = format!("SILT_HOME={}", self.home.join("silt").display());
+        fs::read_dir("/proc")
+            .expect("lists processes")
+            .flatten()
+            .find_map(|entry| {
+                let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
+                let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
+                let args: Vec<&[u8]> = cmdline.split(|byte| *byte == 0).collect();
+                let daemon = args.windows(2).any(|pair| pair == [b"daemon".as_slice(), b"run".as_slice()]);
+                let environ = fs::read(entry.path().join("environ")).ok()?;
+                let ours = environ.split(|byte| *byte == 0).any(|variable| variable == home.as_bytes());
+                (daemon && ours).then_some(pid)
+            })
+            .expect("the daemon runs")
+    }
+
+    fn live(&self, thread: &str) -> serde_json::Value {
+        self.web("GET", &format!("/api/threads/{thread}/live")).1
+    }
+}
+
+/// A daemon run from an installed copy, with an agent the web UI started
+/// waiting on a permission, and `silt update` from that copy started: the
+/// update installs and waits for the agent to restart the daemon.
+fn an_update_waiting_on_an_agent(setup: &Setup) -> (u32, String, std::process::Child) {
+    let fake = Path::new(env!("CARGO_BIN_EXE_silt")).with_file_name("silt-fake-agent");
+    assert!(fake.is_file(), "{} isn't built; run `cargo build -p silt-fake-agent`", fake.display());
+    fs::create_dir_all(setup.home.join("silt")).expect("dir");
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(setup.home.join("silt/agents.json"), agents.to_string()).expect("agents.json");
+    let installed = setup.install();
+    let started = setup.silt_at(&installed, &["daemon", "start"], &[]).output().expect("silt runs");
+    assert!(started.status.success(), "{}", text(&started));
+    let (status, started) = setup.web_with(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": setup.clone, "agent": "v1", "prompt": "add acp", "preset": "ask_for_everything"})),
+    );
+    assert_eq!(status, "200", "{started}");
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    assert!(
+        common::eventually(|| setup.live(&thread)["agent"]["state"] == "awaiting_permission"),
+        "the agent asks: {}",
+        setup.live(&thread)
+    );
+    let before = setup.daemon_pid();
+
+    let source = env!("CARGO_BIN_EXE_silt");
+    let installed_text = installed.to_string_lossy().into_owned();
+    let envs = [("SILT_TEST_SOURCE", source), ("SILT_TEST_INSTALLED", installed_text.as_str())];
+    let runner = setup
+        .silt_at(&installed, &["update"], &envs)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("silt update runs");
+    assert!(
+        common::eventually(|| {
+            let state = setup.state();
+            state["outcome"]["kind"] == "waiting" && state["outcome"]["agents"] == 1
+        }),
+        "the update waits for the agent: {}",
+        setup.state()
+    );
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    assert_eq!(setup.daemon_pid(), before, "the agent's turn goes on");
+    (before, thread, runner)
+}
+
+#[test]
+fn an_update_restarts_the_daemon_once_the_agent_mid_turn_finishes() {
+    let setup = Setup::new();
+    let (before, thread, mut runner) = an_update_waiting_on_an_agent(&setup);
+
+    let permission = setup.live(&thread)["agent"]["permissions"][0]["id"].clone();
+    let (status, answered) = setup.web_with(
+        "POST",
+        &format!("/api/threads/{thread}/agent/answer"),
+        Some(serde_json::json!({"id": permission, "option": "allow"})),
+    );
+    assert_eq!(status, "200", "{answered}");
+    assert!(common::eventually(|| setup.state()["outcome"]["kind"] == "done"), "the update finishes: {}", setup.state());
+    assert!(runner.wait().expect("the update ends").success());
+    assert_ne!(setup.daemon_pid(), before, "the daemon runs the new build");
+    // The daemon restarted itself, so the update never stopped it beside that restart.
+    let log = fs::read_to_string(setup.home.join("silt/daemon.log")).unwrap_or_default();
+    assert!(log.contains("no agent works now; restarting on the build asked for"), "{log}");
+    let shown = setup.run(&["show", &thread], &[]);
+    assert!(String::from_utf8_lossy(&shown.stdout).contains("Done: add acp"), "the turn was recorded: {}", text(&shown));
+}
+
+#[test]
+fn restart_now_ends_the_wait_for_an_agent() {
+    let setup = Setup::new();
+    let (before, _thread, mut runner) = an_update_waiting_on_an_agent(&setup);
+
+    let (status, said) = setup.web("POST", "/api/update/restart");
+    assert_eq!(status, "200", "{said}");
+    assert!(common::eventually(|| setup.state()["outcome"]["kind"] == "done"), "the update finishes: {}", setup.state());
+    assert!(runner.wait().expect("the update ends").success());
+    assert_ne!(setup.daemon_pid(), before, "the daemon runs the new build");
 }

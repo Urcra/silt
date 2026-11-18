@@ -156,7 +156,7 @@ fn working(agents: usize) -> String {
 
 /// Asks the daemon to restart on this program once no agent works in it.
 /// A daemon from before it could be asked refuses.
-fn restart_when_idle() -> Result<(), Exn<CliError>> {
+pub(crate) fn restart_when_idle() -> Result<(), Exn<CliError>> {
     let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
     call::<()>(&Request::RestartWhenIdle { exe })
 }

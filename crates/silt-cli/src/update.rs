@@ -23,6 +23,11 @@ use crate::commands::{self, fail};
 
 /// How often a restart that waits for agents asks again.
 const AGENTS_POLL: Duration = Duration::from_secs(3);
+/// How long an idle daemon asked to restart itself gets before the update
+/// restarts it: it looks every couple of seconds.
+const HANDED_OVER: Duration = Duration::from_secs(10);
+/// Tries at starting the daemon again, as a restart of it may be under way.
+const START_TRIES: u32 = 3;
 /// Writes of the state while output streams, at most this often.
 const WRITE_EVERY: Duration = Duration::from_millis(250);
 
@@ -99,9 +104,11 @@ pub fn run(echo: bool) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
-/// `silt update restart`: restarts the daemon on the build just installed,
-/// once no agent the web UI started is mid-turn, or once it was stopped by
-/// Restart now.
+/// `silt update restart`: restarts the daemon on the build just installed.
+/// While agents the web UI started are mid-turn, the daemon is asked to
+/// restart itself once none is (`RestartWhenIdle`), so only one restart
+/// happens, and this waits for the new build to answer. Restart now stops
+/// the daemon at once, and this starts the new one.
 pub fn restart() -> Result<(), Exn<CliError>> {
     let data = paths::data_dir();
     let mut state = run::read_state(&data)
@@ -111,26 +118,50 @@ pub fn restart() -> Result<(), Exn<CliError>> {
     state.pid = std::process::id();
     state.begin(Phase::Restart, now_ms());
     let _ = run::write_state(&data, &state);
+    let mut asked = false;
+    let mut idle_since: Option<Instant> = None;
+    let mut tries = 0;
     let restarted = loop {
-        if commands::is_running()
-            && let Ok(build) = commands::call::<DaemonBuild>(&Request::DaemonBuild)
-            && build.replaced
-            && build.working > 0
-        {
-            let agents = u32::try_from(build.working).unwrap_or(u32::MAX);
-            if state.outcome != (Outcome::Waiting { agents }) {
-                state.outcome = Outcome::Waiting { agents };
-                let _ = run::write_state(&data, &state);
+        let build = if commands::is_running() { commands::call::<DaemonBuild>(&Request::DaemonBuild).ok() } else { None };
+        match build {
+            // The new build answers, whoever restarted it.
+            Some(build) if !build.replaced => break Ok(()),
+            Some(build) if build.working > 0 => {
+                // A daemon from before it could be asked refuses, and is
+                // restarted here once idle instead.
+                asked = asked || commands::restart_when_idle().is_ok();
+                idle_since = None;
+                let agents = u32::try_from(build.working).unwrap_or(u32::MAX);
+                if state.outcome != (Outcome::Waiting { agents }) {
+                    state.outcome = Outcome::Waiting { agents };
+                    let _ = run::write_state(&data, &state);
+                }
+                thread::sleep(AGENTS_POLL);
+                continue;
             }
-            thread::sleep(AGENTS_POLL);
-            continue;
+            // Idle, and asked to restart itself: it does on its next tick.
+            Some(_) if asked && idle_since.get_or_insert_with(Instant::now).elapsed() < HANDED_OVER => {
+                thread::sleep(Duration::from_millis(250));
+                continue;
+            }
+            _ => {}
         }
-        state.outcome = Outcome::Running;
-        let _ = run::write_state(&data, &state);
-        break commands::ensure_daemon();
+        if state.outcome != Outcome::Running {
+            state.outcome = Outcome::Running;
+            let _ = run::write_state(&data, &state);
+        }
+        match commands::ensure_daemon() {
+            Ok(_) => break Ok(()),
+            // Another restart of it may be under way, as the daemon's own.
+            Err(_) if tries < START_TRIES => {
+                tries += 1;
+                thread::sleep(Duration::from_secs(1));
+            }
+            Err(error) => break Err(error),
+        }
     };
     match restarted {
-        Ok(_) => {
+        Ok(()) => {
             state.finish(Outcome::Done, now_ms());
             let _ = run::write_state(&data, &state);
             Ok(())
