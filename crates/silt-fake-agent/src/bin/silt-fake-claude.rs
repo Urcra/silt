@@ -377,7 +377,8 @@ fn folder(run: &Run, config: &Path) -> Step {
 }
 
 /// Resumed after asking for `FAKE_FOLDER`: writes what it sees there to
-/// `folder-seen` in the checkout.
+/// `folder-seen` in the checkout, and what it was told first to
+/// `folder-told`.
 fn folder_resumed(run: &Run) -> Step {
     let folder = env::var("FAKE_FOLDER").map_err(|_| Failed(1, "FAKE_FOLDER is unset".into()))?;
     let mut names: Vec<String> = fs::read_dir(&folder)
@@ -385,6 +386,9 @@ fn folder_resumed(run: &Run) -> Step {
         .unwrap_or_default();
     names.sort();
     write(&run.cwd.join("folder-seen"), names.join(",").as_bytes())?;
+    // Claude Code takes its first prompt last, after the flags.
+    let told = env::args().skip(1).last().filter(|arg| !arg.starts_with('-')).unwrap_or_default();
+    write(&run.cwd.join("folder-told"), told.as_bytes())?;
     run.session_hook("SessionEnd", json!({"reason": "prompt_input_exit"}))
 }
 

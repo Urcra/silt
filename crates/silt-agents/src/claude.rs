@@ -311,8 +311,9 @@ impl Agent for ClaudeCode {
                 launch.arg("--session-id").arg(id);
             }
             Start::New { id: None } => {}
-            Start::Resume { id } => {
+            Start::Resume { id, prompt: first } => {
                 launch.arg("--resume").arg(id);
+                prompt.clone_from(first);
             }
             Start::Primed { id, prompt: text } => {
                 if let Some(id) = id {

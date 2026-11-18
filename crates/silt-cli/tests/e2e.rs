@@ -2824,5 +2824,7 @@ fn a_terminals_sandboxed_agent_is_restarted_with_the_folder_it_was_granted() {
     );
     assert!(!env.repo.join("folder-not-restarted").exists(), "{said}");
     assert_eq!(fs::read_to_string(env.repo.join("folder-seen")).expect("resumed"), "notes.md", "{said}");
+    let told = fs::read_to_string(env.repo.join("folder-told")).expect("resumed");
+    assert!(told.starts_with(&format!("{} is now in your sandbox, read-only", lib.display())), "told: {told}");
     assert!(started.elapsed() < std::time::Duration::from_secs(25), "restarted at the turn's end, not after waiting");
 }

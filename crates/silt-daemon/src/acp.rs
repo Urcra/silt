@@ -684,8 +684,7 @@ impl Core {
             Some(reach) => self.relayed_for(thread, reach).await?,
             None => Vec::new(),
         };
-        let folders =
-            crate::folders::granted(&self.data_dir, &thread.to_string(), Some(&crate::folders::run_of_token(&token)), now_ms());
+        let folders = self.folders_for(thread, &token, workspace.id.as_str());
         let sandbox = reach.map(|reach| AcpSandbox {
             reach: crate::folders::widened(reach, &folders),
             token,
@@ -2424,6 +2423,20 @@ fn send(run: &mut AcpRun, command: Command) {
 
 /// Finds the agent's command, downloading it if needed, then runs it and
 /// forwards what it does to the daemon's event loop.
+impl Core {
+    /// The folders granted to the run holding `token` that the rules in
+    /// force in `workspace` still allow (ADR 0098).
+    pub(crate) fn folders_for(&self, thread: ThreadId, token: &str, workspace: &str) -> std::collections::BTreeMap<String, bool> {
+        let granted =
+            crate::folders::granted(&self.data_dir, &thread.to_string(), Some(&crate::folders::run_of_token(token)), now_ms());
+        let policy = silt_workspace::WorkspaceId::new(workspace)
+            .ok()
+            .and_then(|id| self.workspaces().get(&id).cloned())
+            .map(|workspace| self.effective_policy(&workspace));
+        crate::folders::still_allowed(granted, policy.as_ref(), &self.data_dir)
+    }
+}
+
 /// Where an ACP run's sandbox keeps its plan and files.
 fn run_scratch(data_dir: &Path, thread: ThreadId, run: u64) -> PathBuf {
     data_dir.join("runs").join(format!("acp-{}-{run}", thread.short()))

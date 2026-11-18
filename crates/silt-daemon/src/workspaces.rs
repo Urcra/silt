@@ -644,6 +644,10 @@ pub struct RunRules {
     /// local model's flag goes in its environment instead (ADR 0092).
     #[serde(default)]
     pub args: Option<Vec<String>>,
+    /// The rules in effect, an org's with the workspace's, which folders
+    /// granted to the run are checked against at each start (ADR 0098).
+    #[serde(default)]
+    pub policy: Option<Policy>,
 }
 
 async fn mint_run_token(
@@ -735,11 +739,12 @@ pub async fn run_rules(
         return Err(CoreError::Invalid("a local model runs through Silt's daemon; start it with `silt daemon start`".into()));
     }
     let (locks, env, reach) = check_run(data_dir, &all, &workspace, &rules, agent, args)?;
+    let policy = Some(rules.effective());
     let thread = record.as_ref().map_or(silt_types::ThreadId(0), |record| record.id);
     let project =
         record.as_ref().map(|record| record.repo.clone()).or_else(|| here.as_ref().and_then(|repo| repo.project().ok()));
     let token = mint_run_token(&store, thread, &workspace.id, project.as_deref()).await?;
-    Ok(RunRules { workspace, locks, env, token, reach, args: None })
+    Ok(RunRules { workspace, locks, env, token, reach, args: None, policy })
 }
 
 /// What a run is held to: the agent's own locks, the workspace's
@@ -811,6 +816,7 @@ impl Core {
             (None, None) => return Err(CoreError::Invalid("name the thread or the folder the agent runs in".into())),
         };
         let (locks, mut env, reach) = check_run(&self.data_dir, &all, &workspace, &self.rules(&workspace), agent, args)?;
+        let policy = Some(self.effective_policy(&workspace));
         let local =
             match silt_llm::local_model_in_args(args).filter(|_| silt_workspace::agent_key(agent.id()).as_str() == "claude") {
                 Some((model, rest)) => Some((self.models.installed(&model).await?, rest)),
@@ -824,7 +830,7 @@ impl Core {
             }
             None => None,
         };
-        Ok(RunRules { workspace, locks, env, token, reach, args })
+        Ok(RunRules { workspace, locks, env, token, reach, args, policy })
     }
 }
 

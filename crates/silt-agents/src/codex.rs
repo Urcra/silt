@@ -557,13 +557,15 @@ pub(crate) fn bypass_flag(args: &[String]) -> Option<String> {
 /// settings that make it ask before it acts, when its workspace says so.
 pub(crate) fn launch_as(command: &str, plan: &LaunchPlan, asking: &[&str]) -> Launch {
     let mut launch = Launch::new(command);
-    let mut prompt = None;
+    // `codex resume <id> [prompt]`, or `codex [prompt]`: last, after the flags.
+    let mut trailing = Vec::new();
     match &plan.start {
-        Start::Resume { id } => {
+        Start::Resume { id, prompt } => {
             launch.arg("resume");
-            prompt = Some(id.clone());
+            trailing.push(id.clone());
+            trailing.extend(prompt.clone());
         }
-        Start::Primed { prompt: text, .. } => prompt = Some(text.clone()),
+        Start::Primed { prompt: text, .. } => trailing.push(text.clone()),
         Start::New { .. } => {}
     }
     let toml = |value: &Value| value.to_string();
@@ -583,8 +585,8 @@ pub(crate) fn launch_as(command: &str, plan: &LaunchPlan, asking: &[&str]) -> La
     for arg in &plan.args {
         launch.arg(arg);
     }
-    if let Some(prompt) = prompt {
-        launch.arg(prompt);
+    for arg in trailing {
+        launch.arg(arg);
     }
     launch
 }

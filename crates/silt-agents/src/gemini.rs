@@ -577,7 +577,7 @@ impl Agent for Gemini {
                 launch.arg("--session-id").arg(id);
             }
             Start::New { id: None } => {}
-            Start::Resume { id } => {
+            Start::Resume { id, .. } => {
                 launch.arg("--resume").arg(id);
             }
             Start::Primed { id, prompt: text } => {

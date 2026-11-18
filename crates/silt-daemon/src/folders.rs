@@ -126,6 +126,29 @@ pub fn granted(data_dir: &Path, thread: &str, run: Option<&str>, now_ms: i64) ->
     folders
 }
 
+/// `granted` less what the rules in force refuse now: a folder an org's
+/// rule made never since it was granted, or one Silt won't hand over.
+pub fn still_allowed(
+    granted: BTreeMap<String, bool>,
+    policy: Option<&silt_workspace::Policy>,
+    data_dir: &Path,
+) -> BTreeMap<String, bool> {
+    let home = silt_os::home_dir();
+    granted
+        .into_iter()
+        .filter(|(path, writable)| {
+            let dir = crate::sandbox::extra_dir(path, *writable, home.as_deref());
+            if crate::sandbox::folder_refusal(data_dir, &dir).is_some() {
+                return false;
+            }
+            policy.is_none_or(|policy| {
+                let resolve = |root: &str| std::fs::canonicalize(silt_workspace::expand_home(root, home.as_deref())).ok();
+                policy.folder_verdict(Path::new(path), *writable, resolve).answer != silt_workspace::FolderAnswer::Never
+            })
+        })
+        .collect()
+}
+
 /// Every grant the thread has, for its Access tab.
 pub fn grants(data_dir: &Path, thread: &str) -> Vec<FolderGrant> {
     read(data_dir, thread).grants
@@ -234,6 +257,28 @@ mod tests {
         turn_ended(data, "t1", 7).unwrap();
         assert!(take_restart(data, "t1", 6));
         assert!(!take_restart(data, "t1", 6), "taken");
+    }
+
+    #[test]
+    fn a_grant_the_rules_now_refuse_is_dropped_at_the_next_start() {
+        let data = tempfile::tempdir().unwrap();
+        let mine = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(mine.path()).unwrap();
+        let (kept, refused) = (root.join("kept"), root.join("refused"));
+        std::fs::create_dir_all(&kept).unwrap();
+        std::fs::create_dir_all(&refused).unwrap();
+        let granted =
+            BTreeMap::from([(kept.to_string_lossy().into_owned(), false), (refused.to_string_lossy().into_owned(), false)]);
+        let org = silt_workspace::Policy {
+            folders: vec![silt_workspace::FolderRule::parse(&format!("{}:never", refused.display())).unwrap()],
+            ..silt_workspace::Policy::default()
+        };
+        let mine = silt_workspace::Policy::default().stricter(&org);
+        let left = still_allowed(granted.clone(), Some(&mine), data.path());
+        assert_eq!(left.keys().cloned().collect::<Vec<_>>(), [kept.to_string_lossy().into_owned()]);
+        let home = silt_os::home_dir().unwrap().to_string_lossy().into_owned();
+        assert!(still_allowed(BTreeMap::from([(home, false)]), None, data.path()).is_empty(), "never the home folder");
+        assert_eq!(still_allowed(granted, None, data.path()).len(), 2);
     }
 
     #[test]

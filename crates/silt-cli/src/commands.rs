@@ -418,7 +418,11 @@ impl Run<'_> {
         let mut start = start;
         for attempt in 0u32.. {
             let folders = match &self.held.reach {
-                Some(_) => silt_daemon::folders::granted(&data, self.thread, run.as_deref(), epoch_ms()),
+                Some(_) => silt_daemon::folders::still_allowed(
+                    silt_daemon::folders::granted(&data, self.thread, run.as_deref(), epoch_ms()),
+                    self.held.policy.as_ref(),
+                    &data,
+                ),
                 None => Default::default(),
             };
             let reach = self.held.reach.clone().map(|reach| silt_daemon::folders::widened(reach, &folders));
@@ -426,7 +430,7 @@ impl Run<'_> {
             let started = epoch_ms();
             let resumable = match &start {
                 Start::New { id } | Start::Primed { id, .. } => id.clone(),
-                Start::Resume { id } => Some(id.clone()),
+                Start::Resume { id, .. } => Some(id.clone()),
             };
             let thread = self.thread;
             let name = self.agent.display_name();
@@ -448,10 +452,14 @@ impl Run<'_> {
             }
             drop(scratch);
             let Some(id) = resumable.filter(|_| restarted) else { return Ok(status) };
-            let now = silt_daemon::folders::granted(&data, self.thread, run.as_deref(), epoch_ms());
+            let now = silt_daemon::folders::still_allowed(
+                silt_daemon::folders::granted(&data, self.thread, run.as_deref(), epoch_ms()),
+                self.held.policy.as_ref(),
+                &data,
+            );
             let (added, removed) = silt_daemon::folders::difference(&folders, &now);
             eprintln!("\nsilt: restarting {name} in its sandbox: {}", silt_daemon::folders::resume_note(&added, &removed));
-            start = Start::Resume { id };
+            start = Start::Resume { id, prompt: Some(silt_daemon::folders::resume_note(&added, &removed)) };
         }
         unreachable!("the loop returns")
     }
@@ -770,7 +778,7 @@ fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliErro
     };
     let agent = find_agent(&resumed.agent)?;
     let start = match start {
-        AgentStart::Resume { id } => Start::Resume { id },
+        AgentStart::Resume { id } => Start::Resume { id, prompt: None },
         AgentStart::Primed { id, prompt } => {
             eprintln!("silt: starting {} with the conversation so far", agent.display_name());
             Start::Primed { id, prompt }

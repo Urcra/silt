@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use silt_types::ThreadId;
 
 use super::{AcpEvent, AcpRun, send, spawn_agent};
-use crate::core::{Core, CoreError, Event, now_ms};
+use crate::core::{Core, CoreError, Event};
 
 /// How much of a sign-in's output is kept, from its end.
 const KEPT_OUTPUT: usize = 256 * 1024;
@@ -331,9 +331,11 @@ impl Core {
         run.load = load;
         run.state = AgentState::Starting;
         run.queued.clear();
-        let folders = run.sandbox.as_ref().map_or_else(BTreeMap::new, |(_, run_token, _)| {
-            crate::folders::granted(&self.data_dir, &thread.to_string(), Some(&crate::folders::run_of_token(run_token)), now_ms())
-        });
+        let folders = match run.sandbox.clone() {
+            Some((_, run_token, workspace)) => self.folders_for(thread, &run_token, &workspace),
+            None => BTreeMap::new(),
+        };
+        let run = self.acp.get_mut(&thread).expect("caller checked");
         run.folders = folders.clone();
         let sandbox = run.sandbox.clone().map(|(reach, run_token, workspace)| super::AcpSandbox {
             reach: crate::folders::widened(reach, &folders),
@@ -352,7 +354,7 @@ impl Core {
     /// once its session resumes (ADR 0098). Answers whether it did.
     pub(super) async fn restart_for_folders(&mut self, thread: ThreadId) -> bool {
         let Some(run) = self.acp.get(&thread) else { return false };
-        let Some((_, token, _)) = &run.sandbox else { return false };
+        let Some((_, token, workspace)) = &run.sandbox else { return false };
         // The turn's end may have reached Silt as a hook first.
         let thread_id = thread.to_string();
         let asked = crate::folders::take_pending(&self.data_dir, &thread_id)
@@ -360,8 +362,7 @@ impl Core {
         if !asked {
             return false;
         }
-        let now =
-            crate::folders::granted(&self.data_dir, &thread.to_string(), Some(&crate::folders::run_of_token(token)), now_ms());
+        let now = self.folders_for(thread, token, workspace);
         let (added, removed) = crate::folders::difference(&run.folders, &now);
         if added.is_empty() && removed.is_empty() {
             return false;
