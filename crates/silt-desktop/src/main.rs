@@ -11,6 +11,7 @@ mod backends;
 mod daemon;
 #[cfg(target_os = "linux")]
 mod microphone;
+mod theme;
 
 use std::collections::HashMap;
 use std::env;
@@ -23,7 +24,8 @@ use std::time::Duration;
 
 use exn::Exn;
 use tauri::webview::{NewWindowResponse, PageLoadEvent, PermissionKind, PermissionResponse};
-use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::window::Color;
+use tauri::{AppHandle, Manager, Theme, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::backends::{Backend, Target};
 use crate::daemon::{Answer, DesktopError};
@@ -107,7 +109,11 @@ fn backends_script(known: &[Backend]) -> String {
     } else {
         Vec::new()
     };
-    format!("window.__siltBackends = {};", serde_json::Value::Array(backends))
+    format!(
+        "window.__siltBackends = {}; window.__siltDesktop = {};",
+        serde_json::Value::Array(backends),
+        serde_json::json!({ "commit": env!("SILT_BUILD_COMMIT") })
+    )
 }
 
 /// Tells the page which backend it shows, once it has loaded.
@@ -131,15 +137,43 @@ fn open_window(
     let loading = ui.clone();
     let listening = ui.clone();
     let (switching, shown) = (target.clone(), target.clone());
-    let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
+    let relaunching = app.clone();
+    let theme_file = dir.as_ref().map(|dir| dir.join(theme::LAST_THEME));
+    let last_theme = theme_file.as_deref().and_then(theme::last);
+    let themed = app.clone();
+    let mut builder = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
         .title("Silt")
         .inner_size(1440.0, 900.0)
         .min_inner_size(390.0, 600.0)
         .initialization_script(backends_script(&known))
+        .initialization_script(theme::WindowTheme::script(last_theme.as_ref()));
+    if let Some(last) = last_theme {
+        builder = builder.theme(Some(window_theme(&last))).background_color(window_color(&last));
+    }
+    let window = builder
         .on_navigation(move |to| {
+            // The page's way to finish an update that changed this app (ADR 0100).
+            if backends::is_relaunch(to) {
+                relaunching.request_restart();
+                return false;
+            }
             // The page's own way to switch backends: the window goes there itself.
             if let Some(wanted) = backends::target_of(to, &known) {
                 *switching.lock().expect("lock") = wanted;
+                return false;
+            }
+            // And to say which theme it shows, which the window and its next start take (ADR 0099).
+            if let Some(shown) = theme::of_link(to) {
+                let (app, file) = (themed.clone(), theme_file.clone());
+                std::thread::spawn(move || {
+                    if let Some(window) = app.get_webview_window(MAIN) {
+                        let _ = window.set_theme(Some(window_theme(&shown)));
+                        let _ = window.set_background_color(Some(window_color(&shown)));
+                    }
+                    if let Some(file) = file {
+                        theme::keep(&file, &shown);
+                    }
+                });
                 return false;
             }
             let ui = navigating.lock().expect("lock");
@@ -178,6 +212,15 @@ fn open_window(
     #[cfg(target_os = "linux")]
     microphone::enable(&window)?;
     Ok(window)
+}
+
+fn window_theme(shown: &theme::WindowTheme) -> Theme {
+    if shown.dark { Theme::Dark } else { Theme::Light }
+}
+
+fn window_color(shown: &theme::WindowTheme) -> Color {
+    let [r, g, b] = shown.bg;
+    Color(r, g, b, 255)
 }
 
 /// How often to look at the UI the window shows, and how long a look waits.

@@ -10,25 +10,30 @@ import { MainScroll } from '../scroll'
 import { Drawer } from '../shell'
 import { hosted } from '../served'
 import { useActions } from '../shortcuts'
-import { THEMES, applyTheme, storedTheme } from '../theme'
+import { THEMES, useAppearance, useThemeSync } from '../theme'
 import { Dot, Icon, Toaster, cx } from '../ui'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Palette } from './Palette'
 import { Sidebar } from './Sidebar'
 
-/** The theme from the palette; Settings has it too. */
-function useThemeAction() {
-  const [theme, setTheme] = useState(storedTheme)
-  const next = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]
+/**
+ * The themes from the palette (ADR 0098): the next mode, and each theme,
+ * previewed while it's highlighted; Settings › Appearance has them too.
+ */
+function useThemeActions() {
+  useThemeSync()
+  const { catalog, settings, save } = useAppearance()
+  const next = THEMES[(THEMES.indexOf(settings.mode) + 1) % THEMES.length]
+  const themes = Array.isArray(catalog.data?.themes) ? catalog.data.themes : []
   useActions([
-    {
-      id: 'theme',
-      label: `Switch to the ${next} theme`,
-      run: () => {
-        applyTheme(next)
-        setTheme(next)
-      },
-    },
+    { id: 'theme', label: `Switch to the ${next} theme`, run: () => void save({ ...settings, mode: next }) },
+    ...themes.map((theme) => ({
+      id: `theme:${theme.id}`,
+      label: `Theme: ${theme.name}`,
+      hint: theme.appearance,
+      preview: { theme: theme.id, appearance: theme.appearance },
+      run: () => void save(theme.appearance === 'light' ? { ...settings, light: theme.id } : { ...settings, dark: theme.id }),
+    })),
   ])
 }
 
@@ -138,7 +143,7 @@ function Reconnecting() {
  */
 export function Layout() {
   useGlobalActions()
-  useThemeAction()
+  useThemeActions()
   useNotifier()
   const sidebar = useDragWidth('silt-sidebar-width', SIDEBAR, 'right')
   const scroll = useRef<HTMLElement>(null)

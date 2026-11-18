@@ -194,7 +194,7 @@ async fn on_a_shared_port_only_the_runs_own_requests_are_answered() {
     let rules = Rules {
         network: Network::Full,
         hosts: Vec::new(),
-        blocked: Vec::new(),
+        blocked: silt_workspace::subtract(&silt_workspace::ALWAYS_BLOCKED.map(str::to_owned), &[]),
         credentials: Vec::new(),
         graphql: Vec::new(),
         proxy_token: Some("t0k".into()),

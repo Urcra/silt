@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT body FROM themes WHERE user_id = ? ORDER BY name",
+  "describe": {
+    "columns": [
+      {
+        "name": "body",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "themes",
+            "name": "body"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "385d129b8f3ef7083b66e1225cac1cd234071e25f82f69b06a40b7fb84592331"
+}

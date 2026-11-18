@@ -79,6 +79,19 @@ pub enum Request {
     },
     /// Starts downloading llama.cpp's latest build for this machine.
     RuntimePull,
+    /// Whether a newer Silt is out, and how an update is going (ADR 0100),
+    /// for a page in the desktop app built from `desktop`.
+    Update {
+        #[serde(default)]
+        desktop: Option<String>,
+    },
+    /// Checks for a newer Silt now.
+    UpdateCheck,
+    /// Starts updating this machine's Silt.
+    UpdateStart,
+    /// Whether an installed update waits for agents to finish before the
+    /// daemon restarts.
+    UpdateWaiting,
     /// This machine's settings for chats (ADR 0059).
     ChatSettings,
     SetChatSettings {
@@ -459,6 +472,36 @@ pub enum Request {
     DesignSystems {
         #[serde(default)]
         clone: Option<PathBuf>,
+    },
+    /// The themes for Silt's UI and the pick (ADR 0098).
+    Themes,
+    /// One theme's page: its tokens, checks, fonts and radii.
+    ThemeDetail {
+        id: String,
+    },
+    SetAppearance {
+        settings: silt_proto::view::AppearanceSettings,
+    },
+    /// A face a theme of the person's ships, for `/theme-fonts/` (ADR 0099).
+    ThemeFont {
+        id: String,
+        file: String,
+    },
+    /// A VS Code theme or a Zed family the person picked, saved as theirs.
+    ImportTheme {
+        text: String,
+    },
+    /// A copy of a theme saved as the person's, to edit.
+    DuplicateTheme {
+        from: String,
+    },
+    /// The CSS for the pick, or for `light` and `dark` in its place, with
+    /// the pick's mode.
+    ThemeCss {
+        #[serde(default)]
+        light: Option<String>,
+        #[serde(default)]
+        dark: Option<String>,
     },
     /// How this machine's web UI loads artifacts' libraries and fonts.
     ArtifactSettings,
@@ -974,6 +1017,10 @@ pub enum Request {
     /// (ADR 0053).
     NewProject {
         path: PathBuf,
+    },
+    /// The folders in `dir`, for completing a path as it's typed.
+    Subfolders {
+        dir: PathBuf,
     },
     /// Every workspace, the projects each holds and its rules (ADR 0065).
     Workspaces,
@@ -1773,6 +1820,15 @@ pub struct FoundFolder {
     pub last_ms: Option<i64>,
 }
 
+/// A folder in the one a typed path is in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Subfolder {
+    pub name: String,
+    /// Whether it holds a git repository of its own.
+    pub git: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct FoundSessions {
@@ -2327,6 +2383,9 @@ pub enum BusEvent {
     },
     /// Plugin calls waiting for the person changed.
     Approvals,
+    /// The themes or the pick changed: a file in `themes/` was saved, or
+    /// another page picked (ADR 0098).
+    Appearance,
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
 }
@@ -2356,7 +2415,7 @@ impl BusEvent {
             Self::Sample { ask, .. } | Self::SampleTool { ask, .. } => Some(format!("sample:{ask}")),
             Self::Room { .. } => Some("rooms".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
-            Self::Agents | Self::Approvals | Self::Lagged => None,
+            Self::Agents | Self::Approvals | Self::Appearance | Self::Lagged => None,
         }
     }
 }
@@ -2486,6 +2545,18 @@ mod tests {
             crate::connectors::ConnectorTool::decl(&config),
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
+            silt_proto::view::AppearanceMode::decl(&config),
+            silt_proto::view::AppearanceSettings::decl(&config),
+            silt_proto::view::ThemeSource::decl(&config),
+            silt_proto::view::ThemeSummary::decl(&config),
+            silt_proto::view::ThemeProblem::decl(&config),
+            silt_proto::view::ThemeCatalog::decl(&config),
+            silt_proto::view::ThemeColorView::decl(&config),
+            silt_proto::view::ThemeSyntaxView::decl(&config),
+            silt_proto::view::ThemeCheckView::decl(&config),
+            silt_proto::view::ThemeDetail::decl(&config),
+            silt_proto::view::ThemeCss::decl(&config),
+            silt_proto::view::ThemeSaved::decl(&config),
             DesignSystemView::decl(&config),
             DesignComponentView::decl(&config),
             DesignCatalog::decl(&config),
@@ -2564,6 +2635,7 @@ mod tests {
             TurnInfo::decl(&config),
             FoundFolder::decl(&config),
             FoundSessions::decl(&config),
+            Subfolder::decl(&config),
             VoiceDownload::decl(&config),
             VoiceEvent::decl(&config),
             VoiceStatus::decl(&config),
@@ -2578,6 +2650,18 @@ mod tests {
             ModelFit::decl(&config),
             ModelPull::decl(&config),
             ModelFailure::decl(&config),
+            silt_update::UpdateView::decl(&config),
+            silt_update::BuildView::decl(&config),
+            silt_update::Channel::decl(&config),
+            silt_update::Availability::decl(&config),
+            silt_update::NewCommit::decl(&config),
+            silt_update::Commit::decl(&config),
+            silt_update::OffReason::decl(&config),
+            silt_update::RunView::decl(&config),
+            silt_update::StepView::decl(&config),
+            silt_update::StepStatus::decl(&config),
+            silt_update::Phase::decl(&config),
+            silt_update::Outcome::decl(&config),
         ];
         let generated = format!(
             "// The daemon's API types, written by `UPDATE_API_TYPES=1 cargo test -p silt-daemon api_types`\n// from crates/silt-daemon/src/protocol.rs. Don't edit by hand.\n\n{}\n",

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use silt_proto::{ProjectInfo, project_name};
 use silt_types::ThreadId;
@@ -11,7 +11,7 @@ use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::core::{Core, CoreError, Event};
-use crate::protocol::{Project, Request, Response};
+use crate::protocol::{Project, Request, Response, Subfolder};
 
 impl Core {
     /// The projects to show: each server's that answers, with its clone
@@ -392,6 +392,27 @@ fn check_new_folder(path: &Path) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// The folders in `dir`, by name, for completing a typed path. Off the
+/// event loop, as a slow disk shouldn't hold the daemon up.
+pub(crate) async fn subfolders(dir: PathBuf) -> Result<Vec<Subfolder>, CoreError> {
+    if !dir.is_absolute() {
+        return Err(CoreError::Invalid("give the folder an absolute path".into()));
+    }
+    tokio::task::spawn_blocking(move || {
+        let mut folders: Vec<Subfolder> = std::fs::read_dir(&dir)?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir() || (kind.is_symlink() && entry.path().is_dir())))
+            .filter_map(|entry| {
+                let git = entry.path().join(".git").exists();
+                Some(Subfolder { name: entry.file_name().into_string().ok()?, git })
+            })
+            .collect();
+        folders.sort_by_cached_key(|folder| folder.name.to_lowercase());
+        Ok(folders)
+    })
+    .await?
+}
+
 /// Each server's projects, by its URL, with what this machine knows of
 /// each, then the clones of projects no server lists.
 fn merged(servers: Vec<(String, Vec<ProjectInfo>)>, local: Vec<Project>) -> Vec<Project> {
@@ -499,5 +520,19 @@ mod tests {
         assert!(check_clone_target("https://example.com/x.git", &dir.path().join("taken")).is_err());
         std::fs::create_dir(dir.path().join("empty")).expect("mkdir");
         assert!(check_clone_target("https://example.com/x.git", &dir.path().join("empty")).is_ok());
+    }
+
+    #[tokio::test]
+    async fn subfolders_are_the_folders_alone_by_name() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        for folder in ["beta", "Alpha/.git", ".hidden"] {
+            std::fs::create_dir_all(dir.path().join(folder)).expect("mkdir");
+        }
+        std::fs::write(dir.path().join("file"), "x").expect("write");
+        let listed = subfolders(dir.path().to_owned()).await.expect("lists");
+        let said: Vec<(&str, bool)> = listed.iter().map(|folder| (folder.name.as_str(), folder.git)).collect();
+        assert_eq!(said, [(".hidden", false), ("Alpha", true), ("beta", false)]);
+        assert!(subfolders(PathBuf::from("relative")).await.is_err());
+        assert!(subfolders(dir.path().join("missing")).await.is_err());
     }
 }

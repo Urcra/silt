@@ -52,6 +52,16 @@
       <p id="retry" hidden>Trying again in the background.</p>
     </main>
     <script>
+      // The theme Silt last showed, which the app keeps, so this page opens in it.
+      const theme = window.__siltTheme
+      if (theme) {
+        const root = document.documentElement.style
+        root.setProperty('color-scheme', theme.appearance)
+        root.setProperty('--bg', theme.bg)
+        root.setProperty('--fg', theme.fg)
+        root.setProperty('--muted', `color-mix(in oklab, ${theme.fg} 70%, ${theme.bg})`)
+      }
+
       // Called by the app when it can't reach the daemon.
       function showError(message) {
         const status = document.getElementById('status')

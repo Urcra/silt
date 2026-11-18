@@ -238,7 +238,7 @@ export type ChoiceAsked = {
  */
 value: string, label: string, description: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "approvals" } | { "event": "lagged" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "approvals" } | { "event": "appearance" } | { "event": "lagged" };
 
 export type DataClass = "location";
 
@@ -847,6 +847,74 @@ export type ArtifactSettings = {
  * the viewer's browser never contacts a CDN; else from the CDNs.
  */
 proxy: boolean, };
+
+export type AppearanceMode = "system" | "light" | "dark";
+
+export type AppearanceSettings = { mode: AppearanceMode, light: string, dark: string, };
+
+export type ThemeSource = "bundled" | "yours" | "replaces_bundled";
+
+export type ThemeSummary = { id: string, name: string, family: string, 
+/**
+ * `light` or `dark`.
+ */
+appearance: string, source: ThemeSource, 
+/**
+ * bg, surface-1, fg-1, accent, ok and danger.
+ */
+swatch: Array<string>, author?: string | null, license?: string | null, 
+/**
+ * The file it's in, for the person's.
+ */
+file?: string | null, 
+/**
+ * What was wrong in its file, which the rest of it loaded despite.
+ */
+warnings: Array<string>, 
+/**
+ * Text pairs below 4.5:1.
+ */
+failing: number, };
+
+export type ThemeProblem = { file: string, message: string, };
+
+export type ThemeCatalog = { themes: Array<ThemeSummary>, problems: Array<ThemeProblem>, 
+/**
+ * Where the person's themes go; none on the hosted app.
+ */
+folder?: string | null, appearance: AppearanceSettings, };
+
+export type ThemeColorView = { token: string, value: string, derived: boolean, about: string, };
+
+export type ThemeSyntaxView = { tag: string, color: string | null, font_style: string | null, font_weight: number | null, about: string, };
+
+export type ThemeCheckView = { pair: string, fore: string, back: string, ratio: number, needs: number, passes: boolean, 
+/**
+ * An icon or dot rather than text: advice, not a failure.
+ */
+mark: boolean, derived: boolean, };
+
+export type ThemeDetail = { summary: ThemeSummary, colors: Array<ThemeColorView>, syntax: Array<ThemeSyntaxView>, checks: Array<ThemeCheckView>, ui_font: string, mono_font: string, 
+/**
+ * sm, md and lg, in pixels.
+ */
+radii: Array<number>, source_url?: string | null, copyright?: string | null, };
+
+export type ThemeCss = { css: string, };
+
+export type ThemeSaved = { 
+/**
+ * The file written, in the person's themes folder.
+ */
+file: string, 
+/**
+ * The ids of its themes.
+ */
+themes: Array<string>, 
+/**
+ * What Silt left out, guessed or derived, for an import.
+ */
+notes: Array<string>, };
 
 export type DesignSystemView = { 
 /**
@@ -1666,6 +1734,12 @@ sessions: Array<FoundSessions>, last_ms: number | null, };
 
 export type FoundSessions = { agent: string, count: number, };
 
+export type Subfolder = { name: string, 
+/**
+ * Whether it holds a git repository of its own.
+ */
+git: boolean, };
+
 export type VoiceDownload = { done: number, total: number, };
 
 export type VoiceEvent = { "kind": "partial", text: string, } | { "kind": "segment", text: string, } | { "kind": "paused" } | { "kind": "done" } | { "kind": "failed", message: string, };
@@ -1793,3 +1867,64 @@ export type ModelPull = { id: string, done: number,
 total: number, };
 
 export type ModelFailure = { id: string, reason: string, };
+
+export type UpdateView = { build: BuildView, 
+/**
+ * The last check's answer, until the first check ends.
+ */
+availability: Availability | null, checked_ms: number | null, checking: boolean, 
+/**
+ * The update running or last run.
+ */
+run: RunView | null, 
+/**
+ * The run's last lines of output.
+ */
+output: Array<string>, 
+/**
+ * Where all of it is.
+ */
+output_path: string, 
+/**
+ * Whether the desktop app showing this needs a relaunch to run what
+ * the update brings, or has brought.
+ */
+relaunch: boolean, };
+
+export type BuildView = { version: string, channel: Channel, commit: Commit | null, branch: string | null, dirty: boolean, 
+/**
+ * The clone it was built from.
+ */
+source: string | null, };
+
+export type Channel = "stable" | "nightly";
+
+export type Availability = { "kind": "up_to_date" } | { "kind": "behind", target: Commit, ahead: number, commits: Array<NewCommit>, } | { "kind": "off", reason: OffReason, } | { "kind": "release", tag: string, url: string, } | { "kind": "failed", message: string, };
+
+export type NewCommit = { hash: Commit, subject: string, 
+/**
+ * Committed at, in seconds since the epoch.
+ */
+time: number, };
+
+export type Commit = string;
+
+export type OffReason = { "kind": "debug_build" } | { "kind": "no_clone" } | { "kind": "clone_gone", path: string, } | { "kind": "built_off_main", branch: string | null, } | { "kind": "built_with_changes" } | { "kind": "off_main", branch: string | null, } | { "kind": "local_changes" } | { "kind": "no_upstream" } | { "kind": "local_commits", count: number, } | { "kind": "unknown_build" };
+
+export type RunView = { outcome: RunOutcome, from: Commit | null, to: Commit | null, started_ms: number, elapsed_ms: number, 
+/**
+ * How long the whole update should take, once a run has said.
+ */
+expected_ms: number | null, percent: number, steps: Array<StepView>, };
+
+export type StepView = { phase: Phase, label: string, status: StepStatus, took_ms: number | null, compiled: number, 
+/**
+ * What it compiled last time, which a bar fills toward.
+ */
+expected_compiled: number | null, };
+
+export type StepStatus = "done" | "active" | "waiting" | "failed" | "todo" | "skipped";
+
+export type Phase = "fetch" | "web_dependencies" | "web_build" | "cli" | "desktop" | "voice" | "windows" | "restart";
+
+export type RunOutcome = { "kind": "running" } | { "kind": "waiting", agents: number, } | { "kind": "done" } | { "kind": "failed", message: string, };

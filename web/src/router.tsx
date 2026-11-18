@@ -78,6 +78,13 @@ export const router = createRouter({
         if (hosted()) throw redirect({ to: '/settings/$section', params: { section: 'projects' }, replace: true })
       },
     }),
+    // One theme's page (ADR 0098).
+    createRoute({
+      getParentRoute: () => root,
+      path: '/settings/appearance/theme',
+      component: lazyRouteComponent(() => import('./components/Themes'), 'ThemePage'),
+      validateSearch: (search: Record<string, unknown>) => ({ id: typeof search.id === 'string' ? search.id : '' }),
+    }),
     moved('/projects', 'projects'),
     moved('/projects/add', 'add'),
     moved('/orgs', 'orgs'),

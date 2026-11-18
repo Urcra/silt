@@ -205,6 +205,9 @@ export function useBusInvalidation() {
       case 'approvals':
         refetch(['approvals'])
         break
+      case 'appearance':
+        refetch(keys.themes)
+        break
       case 'lagged':
         if (Date.now() - laggedAt.current < LAGGED_MS) break
         laggedAt.current = Date.now()

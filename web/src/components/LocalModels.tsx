@@ -7,7 +7,7 @@ import { Button, EmptyState, Input, cx, toast } from '../ui'
 
 const FIT: Record<ModelFit, { label: string; tone: string }> = {
   fits: { label: 'Fits', tone: 'text-ok' },
-  tight: { label: 'Tight', tone: 'text-warn' },
+  tight: { label: 'Tight', tone: 'text-warn-fg' },
   too_big: { label: 'Too big here', tone: 'text-danger' },
 }
 

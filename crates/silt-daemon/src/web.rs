@@ -194,6 +194,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/projects/new", post(new_project))
         .route("/api/found", get(found_folders))
         .route("/api/found/import", post(import_found))
+        .route("/api/folders", get(subfolders))
         .route("/api/projects/home", axum::routing::put(project_home))
         .route("/api/chats/settings", get(chat_settings).put(set_chat_settings))
         .route("/api/models", get(models))
@@ -201,6 +202,10 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/models/search", get(model_search))
         .route("/api/models/files", get(model_files))
         .route("/api/models/runtime", post(runtime_pull))
+        .route("/api/update", get(update))
+        .route("/api/update/check", post(update_check))
+        .route("/api/update/start", post(update_start))
+        .route("/api/update/restart", post(update_restart))
         .route("/api/models/{id}", delete(model_remove))
         .route("/api/threads/{id}/erase", post(thread_erase))
         .route("/api/workspaces", get(workspaces).put(set_workspaces))
@@ -212,6 +217,12 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/design-systems/keep", post(keep_design_system))
         .route("/api/threads/{id}/design-system", get(thread_design))
         .route("/api/artifact-settings", get(artifact_settings).put(set_artifact_settings))
+        .route("/api/themes", get(themes))
+        .route("/api/themes/detail", get(theme_detail))
+        .route("/api/themes/css", get(theme_css))
+        .route("/api/themes/import", post(import_theme).layer(DefaultBodyLimit::max(THEME_BODY_BYTES)))
+        .route("/api/themes/duplicate", post(duplicate_theme))
+        .route("/api/appearance", put(set_appearance))
         .route("/api/projects/design-systems", get(project_design_systems).put(set_project_design_system))
         .route("/api/workspaces/assign", post(assign_project))
         .route("/api/threads/{id}/make-project", post(make_project))
@@ -275,6 +286,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/vendor/{host}/{*path}", get(vendor_file))
         // A frame has no token either: its key is the whole permission, and
         // serves only its own version (ADR 0074).
+        // A theme's fonts, which its CSS loads with no token (ADR 0099); only
+        // faces of the person's current themes.
+        .route("/theme-fonts/{id}/{file}", get(theme_font))
         .route("/f/{key}/", get(serve_frame))
         .route("/f/{key}/{*path}", get(frame_file))
         .fallback(asset)
@@ -339,12 +353,15 @@ fn same_token(given: &str, expected: &str) -> bool {
     given.len() == expected.len() && std::hint::black_box(difference) == 0
 }
 
-async fn asset(request: HttpRequest) -> HttpResponse {
+async fn asset(State(web): State<Web>, request: HttpRequest) -> HttpResponse {
     let path = request.uri().path().trim_start_matches('/');
     let file = match silt_web::Assets::get(path) {
         Some(file) if !path.is_empty() => file,
         _ => match silt_web::Assets::get("index.html") {
-            Some(file) => file,
+            Some(file) => {
+                let html = String::from_utf8_lossy(&file.data);
+                return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], themed(&web, &html).await).into_response();
+            }
             None => {
                 return (StatusCode::NOT_FOUND, "the web UI was not built; run `pnpm -C web build` and rebuild silt")
                     .into_response();
@@ -353,6 +370,15 @@ async fn asset(request: HttpRequest) -> HttpResponse {
     };
     let mime = file.metadata.mimetype().to_owned();
     ([(header::CONTENT_TYPE, mime)], Body::from(file.data.into_owned())).into_response()
+}
+
+/// The page with the picked theme in it (ADR 0098); as built if the daemon
+/// doesn't answer.
+async fn themed(web: &Web, html: &str) -> String {
+    let Ok(theme) = answer(web, Request::ThemeCss { light: None, dark: None }).await else { return html.to_owned() };
+    let css = theme["css"].as_str().unwrap_or_default();
+    let mode = serde_json::from_value(theme["mode"].clone()).unwrap_or_default();
+    crate::theme::inject(html, css, mode)
 }
 
 /// Sends a request through the daemon's event loop.
@@ -849,6 +875,66 @@ async fn git_text(State(web): State<Web>, Path((thread, oid)): Path<(String, Str
 
 async fn artifact_content(State(web): State<Web>, Path((thread, blob)): Path<(String, String)>) -> HttpResponse {
     ask(&web, Request::ArtifactContent { thread, blob }).await
+}
+
+async fn themes(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::Themes).await
+}
+
+#[derive(Debug, Deserialize)]
+struct ThemeQuery {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    light: Option<String>,
+    #[serde(default)]
+    dark: Option<String>,
+}
+
+async fn theme_detail(State(web): State<Web>, Query(query): Query<ThemeQuery>) -> HttpResponse {
+    ask(&web, Request::ThemeDetail { id: query.id }).await
+}
+
+async fn theme_css(State(web): State<Web>, Query(query): Query<ThemeQuery>) -> HttpResponse {
+    ask(&web, Request::ThemeCss { light: query.light, dark: query.dark }).await
+}
+
+async fn theme_font(State(web): State<Web>, Path((id, file)): Path<(String, String)>) -> HttpResponse {
+    use base64::Engine as _;
+    let Ok(font) = answer(&web, Request::ThemeFont { id, file }).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let media_type = font["media_type"].as_str().unwrap_or("font/woff2").to_owned();
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(font["data"].as_str().unwrap_or_default()) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    // Revalidated each time, as a theme's author may be changing it.
+    ([(header::CONTENT_TYPE, media_type), (header::CACHE_CONTROL, "no-cache".to_owned())], Body::from(bytes)).into_response()
+}
+
+/// A theme file to import: VS Code's are rarely over a few hundred KiB.
+const THEME_BODY_BYTES: usize = 4 << 20;
+
+#[derive(Debug, Deserialize)]
+struct ThemeImport {
+    text: String,
+}
+
+async fn import_theme(State(web): State<Web>, Json(body): Json<ThemeImport>) -> HttpResponse {
+    ask(&web, Request::ImportTheme { text: body.text }).await
+}
+
+#[derive(Debug, Deserialize)]
+struct ThemeDuplicate {
+    from: String,
+}
+
+async fn duplicate_theme(State(web): State<Web>, Json(body): Json<ThemeDuplicate>) -> HttpResponse {
+    ask(&web, Request::DuplicateTheme { from: body.from }).await
+}
+
+async fn set_appearance(State(web): State<Web>, Json(settings): Json<silt_proto::view::AppearanceSettings>) -> HttpResponse {
+    ask(&web, Request::SetAppearance { settings }).await
 }
 
 async fn artifact_settings(State(web): State<Web>) -> HttpResponse {
@@ -1424,6 +1510,37 @@ async fn runtime_pull(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::RuntimePull).await
 }
 
+#[derive(Deserialize)]
+struct UpdateQuery {
+    /// The commit the desktop app showing the page was built from.
+    #[serde(default)]
+    desktop: Option<String>,
+}
+
+async fn update(State(web): State<Web>, Query(query): Query<UpdateQuery>) -> HttpResponse {
+    ask(&web, Request::Update { desktop: query.desktop }).await
+}
+
+async fn update_check(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::UpdateCheck).await
+}
+
+async fn update_start(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::UpdateStart).await
+}
+
+/// Restart now: stops the daemon, ending its agents' turns, for the update
+/// waiting on them to start the new build. Only while one waits, as
+/// nothing else would start the daemon again.
+async fn update_restart(State(web): State<Web>) -> HttpResponse {
+    match answer(&web, Request::UpdateWaiting).await {
+        Ok(serde_json::Value::Bool(true)) => ask(&web, Request::Shutdown).await,
+        Ok(_) => Failed { status: StatusCode::CONFLICT, message: "no update is waiting to restart the daemon".to_owned() }
+            .into_response(),
+        Err(failed) => failed.into_response(),
+    }
+}
+
 async fn model_remove(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
     ask(&web, Request::ModelRemove { model: id }).await
 }
@@ -1664,6 +1781,15 @@ async fn new_project(State(web): State<Web>, Json(body): Json<CloneQuery>) -> Ht
 
 async fn found_folders(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::FoundFolders).await
+}
+
+#[derive(Deserialize)]
+struct FolderQuery {
+    dir: PathBuf,
+}
+
+async fn subfolders(State(web): State<Web>, Query(query): Query<FolderQuery>) -> HttpResponse {
+    ask(&web, Request::Subfolders { dir: query.dir }).await
 }
 
 #[derive(Deserialize)]

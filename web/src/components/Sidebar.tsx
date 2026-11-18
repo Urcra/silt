@@ -5,7 +5,7 @@ import { useAgentStatus } from '../agentStatus'
 import { api, type ThreadSummary } from '../api'
 import { isChat } from '../chats'
 import { useTopic } from '../bus'
-import { switchBackend, useBackends } from '../desktop'
+import { inDesktop, relaunchDesktop, switchBackend, useBackends } from '../desktop'
 import { useNow } from '../now'
 import { openPalette } from '../palette'
 import { projectName, projects } from '../projects'
@@ -16,7 +16,8 @@ import { formatKeys } from '../shortcuts'
 import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
-import { Avatar, Dot, Icon, type IconName, Kbd, Menu, SectionLabel, Skeleton, Tag, cx } from '../ui'
+import { Avatar, Dot, Icon, type IconName, Kbd, Menu, SectionLabel, Skeleton, Spinner, Tag, cx } from '../ui'
+import { pillOf, useUpdate } from '../updates'
 import { useInWorkspace } from '../workspaceFilter'
 import { ThreadMark } from './ThreadMark'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
@@ -286,6 +287,57 @@ function NavItem({
   )
 }
 
+const PILL_TONE = {
+  update: 'bg-accent-tint text-accent-fg',
+  running: 'bg-surface-2 text-fg-2',
+  waiting: 'bg-accent-tint text-accent-fg',
+  relaunch: 'bg-accent-tint text-accent-fg',
+  failed: 'bg-danger-tint text-danger',
+}
+
+/** The sidebar's word on an update (ADR 0100): out, under way, waiting, done but for a relaunch, or failed. */
+function UpdatePill() {
+  const update = useUpdate()
+  const pill = pillOf(update.data)
+  if (!pill) return null
+  const look = cx(
+    'inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-px text-[11px] font-medium max-md:min-h-11',
+    PILL_TONE[pill.kind],
+  )
+  const icon =
+    pill.kind === 'running' ? (
+      <Spinner className="h-2.5 w-2.5" />
+    ) : pill.kind === 'update' ? (
+      <Icon name="arrowUp" className="h-3 w-3" />
+    ) : pill.kind === 'relaunch' ? (
+      <Icon name="reload" className="h-3 w-3" />
+    ) : null
+  if (pill.kind === 'relaunch' && inDesktop()) {
+    return (
+      <button
+        type="button"
+        className={cx(look, 'hover:brightness-95')}
+        onClick={relaunchDesktop}
+        title="Relaunch the desktop app on the new build"
+      >
+        {icon}
+        {pill.text}
+      </button>
+    )
+  }
+  return (
+    <Link
+      to="/settings/$section"
+      params={{ section: 'update' }}
+      className={cx(look, 'hover:brightness-95')}
+      data-testid="update-pill"
+    >
+      {icon}
+      {pill.text}
+    </Link>
+  )
+}
+
 /** This machine at the bottom: its name, how many agents run on it, and Settings. */
 function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
@@ -342,6 +394,7 @@ function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
             {running} running
           </Tag>
         )}
+        {!hosted() && <UpdatePill />}
         <Link
           to="/settings"
           aria-label="Settings"

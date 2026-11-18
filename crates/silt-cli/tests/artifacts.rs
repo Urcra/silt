@@ -401,6 +401,48 @@ fn a_pin_made_on_one_machine_shows_on_another() {
     assert!(eventually(|| pinned_on(home)), "pinned on the other machine too");
 }
 
+/// A person's own themes follow them (ADR 0099): a folder theme with a font,
+/// made on the laptop, reaches the home machine and the hosted app through
+/// the server, and removing it on the home machine removes it on the laptop.
+#[test]
+fn a_persons_themes_follow_them_between_machines() {
+    let world = world();
+    let on = |machine: &Machine| machine.silt_home.join("themes/harbour");
+    fs::create_dir_all(on(&world.laptop).join("fonts")).expect("mkdir");
+    let theme = r##"{ "name": "Harbour", "themes": [{ "id": "harbour", "name": "Harbour", "appearance": "light",
+        "colors": { "bg": "#f7f8f6", "fg-1": "#22302c", "accent": "#2f7d6d" },
+        "fonts": { "ui": ["Harbour Sans", "system-ui"], "faces": [{ "family": "Harbour Sans", "file": "fonts/sans.woff2" }] } }] }"##;
+    fs::write(on(&world.laptop).join("theme.json"), theme).expect("theme");
+    fs::write(on(&world.laptop).join("fonts/sans.woff2"), b"wOF2 a font").expect("font");
+
+    let listed = |machine: &Machine| machine.web("GET", "/api/themes", None).to_string();
+    assert!(listed(&world.laptop).contains(r#""id":"harbour""#), "{}", listed(&world.laptop));
+    assert!(
+        eventually(|| listed(&world.home).contains(r#""id":"harbour""#)),
+        "the home machine has it: {}",
+        world.home.daemon_log()
+    );
+    assert_eq!(fs::read_to_string(on(&world.home).join("theme.json")).expect("theme"), theme);
+    assert_eq!(fs::read(on(&world.home).join("fonts/sans.woff2")).expect("font"), b"wOF2 a font");
+
+    let browser = HostedBrowser::sign_in(&world.server, "owner", world._root.path().join("cookies"));
+    let hosted = browser.call("GET", "/themes", None);
+    let harbour = hosted["themes"].as_array().expect("themes").iter().find(|theme| theme["id"] == "harbour").cloned();
+    assert_eq!(harbour.as_ref().map(|theme| theme["source"].clone()), Some(serde_json::json!("yours")), "{hosted}");
+    let css = browser.call("GET", "/themes/css?light=harbour", None);
+    assert!(css["css"].as_str().expect("css").contains("url(theme-fonts/harbour/sans.woff2)"), "{css}");
+    let font = std::process::Command::new("curl")
+        .args(["-s", "-b"])
+        .arg(&browser.jar)
+        .arg(format!("{}/app/theme-fonts/harbour/sans.woff2", world.server.url))
+        .output()
+        .expect("curl runs");
+    assert_eq!(font.stdout, b"wOF2 a font");
+
+    fs::remove_dir_all(on(&world.home)).expect("remove");
+    assert!(eventually(|| !on(&world.laptop).exists()), "the removal reaches the laptop: {}", world.laptop.daemon_log());
+}
+
 /// The person's browser session on the hosted app, as `curl` keeps it.
 struct HostedBrowser {
     base: String,

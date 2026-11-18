@@ -257,7 +257,7 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
         <span
           className={cx(
             'ml-auto min-w-0 shrink truncate tabular-nums',
-            outcome?.failed ? 'text-danger' : waiting ? 'text-warn' : 'text-fg-2',
+            outcome?.failed ? 'text-danger' : waiting ? 'text-warn-fg' : 'text-fg-2',
           )}
         >
           {waiting ? 'waiting for you' : under ? <Running since={call.time_ms} /> : commandStatus(step)}
@@ -386,7 +386,7 @@ export function AnswerForm({ thread, asked }: { thread: string; asked: QuestionA
             {optional(field) ? (
               <span className="ml-auto shrink-0 text-fg-2">optional</span>
             ) : (
-              <span className="ml-auto shrink-0 text-warn">
+              <span className="ml-auto shrink-0 text-warn-fg">
                 {questions.length > 1 && (
                   <span className="mr-2 font-mono text-fg-2">
                     {questions.indexOf(field) + 1} of {questions.length}

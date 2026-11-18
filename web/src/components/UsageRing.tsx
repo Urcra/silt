@@ -13,7 +13,7 @@ const READ = ['claude', 'codex', 'copilot']
 
 /** How full a limit is, as a colour: ok, then a warning from 75 %, then danger from 90 %. */
 function tone(percent: number): string {
-  return percent >= 90 ? 'text-danger' : percent >= 75 ? 'text-warn' : 'text-ok'
+  return percent >= 90 ? 'text-danger' : percent >= 75 ? 'text-warn-fg' : 'text-ok'
 }
 
 function Ring({ percent }: { percent: number }) {
