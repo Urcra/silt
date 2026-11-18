@@ -4,6 +4,7 @@
 
 use serde_json::{Map, Value, json};
 
+use crate::font::MOST_FACES;
 use crate::model::{MAX_RADIUS, SCHEMA_URL};
 use crate::token::{ColorToken, SyntaxTag};
 
@@ -52,6 +53,21 @@ pub fn schema() -> Value {
                 "items": { "type": "string", "pattern": "^[A-Za-z0-9 _-]{1,64}$" },
                 "description": "Installed fonts by name, first choice first; a generic family such as sans-serif is added if none is given.",
             },
+            "fontFace": {
+                "type": "object",
+                "required": ["family", "file"],
+                "additionalProperties": false,
+                "properties": {
+                    "family": { "type": "string", "pattern": "^[A-Za-z0-9 _-]{1,64}$" },
+                    "file": {
+                        "type": "string",
+                        "pattern": "^fonts/[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}\\.(woff2|woff|ttf|otf)$",
+                        "description": "At most 1 MiB, and 4 MiB for all of a theme's faces.",
+                    },
+                    "weight": { "type": "number", "minimum": 100, "maximum": 900, "default": 400 },
+                    "style": { "enum": ["normal", "italic"], "default": "normal" },
+                },
+            },
             "syntaxStyle": {
                 "type": "object",
                 "additionalProperties": false,
@@ -74,7 +90,16 @@ pub fn schema() -> Value {
                     "fonts": {
                         "type": "object",
                         "additionalProperties": false,
-                        "properties": { "ui": { "$ref": "#/$defs/fontList" }, "mono": { "$ref": "#/$defs/fontList" } },
+                        "properties": {
+                            "ui": { "$ref": "#/$defs/fontList" },
+                            "mono": { "$ref": "#/$defs/fontList" },
+                            "faces": {
+                                "type": "array",
+                                "maxItems": MOST_FACES,
+                                "description": "Fonts the theme ships, in its folder's fonts/. Name their family in ui or mono to use them.",
+                                "items": { "$ref": "#/$defs/fontFace" },
+                            },
+                        },
                     },
                     "radii": {
                         "type": "object",

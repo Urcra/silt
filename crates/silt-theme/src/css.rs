@@ -33,11 +33,32 @@ fn shadows(appearance: Appearance) -> [&'static str; 2] {
 /// and a dark theme.
 pub fn compile(light: &Palette, dark: &Palette) -> String {
     format!(
-        ":root:not([data-theme=dark]){{{}}}\n@media (prefers-color-scheme: dark){{:root:not([data-theme=light]){{{}}}}}\n:root[data-theme=dark]{{{}}}\n",
+        "{}{}:root:not([data-theme=dark]){{{}}}\n@media (prefers-color-scheme: dark){{:root:not([data-theme=light]){{{}}}}}\n:root[data-theme=dark]{{{}}}\n",
+        font_faces(light),
+        font_faces(dark),
         declarations(light),
         declarations(dark),
         declarations(dark),
     )
+}
+
+/// Each face the theme ships, from `theme-fonts/<id>/<file>`, relative to
+/// the page so it resolves under the daemon's `/` and the hosted app's `/app/`.
+fn font_faces(palette: &Palette) -> String {
+    let mut out = String::new();
+    for face in &palette.faces {
+        let _ = writeln!(
+            out,
+            "@font-face{{font-family:\"{}\";src:url(theme-fonts/{}/{}) format(\"{}\");font-weight:{};font-style:{};font-display:swap}}",
+            face.family.as_str(),
+            palette.id,
+            face.file.name(),
+            face.file.format().css(),
+            face.weight,
+            face.style.as_str(),
+        );
+    }
+    out
 }
 
 fn declarations(palette: &Palette) -> String {
@@ -119,5 +140,33 @@ mod tests {
         assert!(css.chars().all(allowed), "{:?}", css.chars().filter(|c| !allowed(*c)).collect::<String>());
         assert!(!css.contains('<') && !css.contains("url(") && !css.contains("@import"));
         assert!(!css.contains("/*"), "a comment would swallow the rest");
+    }
+
+    #[test]
+    fn a_theme_s_faces_load_from_its_own_fonts_route_and_nothing_else() {
+        let json = r##"{ "name": "F", "themes": [
+            { "id": "f-light", "name": "F", "appearance": "light",
+              "colors": { "bg": "#ffffff", "fg-1": "#111111", "accent": "#0055cc" },
+              "fonts": { "ui": ["Harbour Sans", "system-ui"], "faces": [
+                { "family": "Harbour Sans", "file": "fonts/harbour-400.woff2" },
+                { "family": "Harbour Sans", "file": "fonts/harbour-700.woff2", "weight": 700, "style": "italic" },
+                { "family": "x\"}body{", "file": "fonts/x.woff2" },
+                { "family": "Evil", "file": "fonts/../../etc/passwd.woff2" },
+                { "family": "Evil", "file": "fonts/a.svg" }
+              ] } },
+            { "id": "f-dark", "name": "F", "appearance": "dark", "colors": { "bg": "#000000", "fg-1": "#eeeeee", "accent": "#66aaff" } }
+        ] }"##;
+        let (light, dark) = pair(json);
+        let css = compile(&light, &dark);
+        assert!(css.starts_with(
+            "@font-face{font-family:\"Harbour Sans\";src:url(theme-fonts/f-light/harbour-400.woff2) format(\"woff2\");font-weight:400;font-style:normal;font-display:swap}\n"
+        ), "{css}");
+        assert!(css.contains("url(theme-fonts/f-light/harbour-700.woff2) format(\"woff2\");font-weight:700;font-style:italic"));
+        assert_eq!(css.matches("@font-face").count(), 2, "{css}");
+        assert_eq!(css.matches("url(").count(), 2);
+        assert!(css.match_indices("url(").all(|(at, _)| css[at..].starts_with("url(theme-fonts/f-light/")));
+        let allowed = |c: char| c.is_ascii_alphanumeric() || " #%(),.:;{}[]=\"'_-@/\n".contains(c);
+        assert!(css.chars().all(allowed));
+        assert!(!css.contains("..") && !css.contains("passwd") && !css.contains("body{"));
     }
 }

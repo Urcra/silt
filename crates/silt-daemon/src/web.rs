@@ -281,6 +281,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/vendor/{host}/{*path}", get(vendor_file))
         // A frame has no token either: its key is the whole permission, and
         // serves only its own version (ADR 0074).
+        // A theme's fonts, which its CSS loads with no token (ADR 0099); only
+        // faces of the person's current themes.
+        .route("/theme-fonts/{id}/{file}", get(theme_font))
         .route("/f/{key}/", get(serve_frame))
         .route("/f/{key}/{*path}", get(frame_file))
         .fallback(asset)
@@ -889,6 +892,19 @@ async fn theme_detail(State(web): State<Web>, Query(query): Query<ThemeQuery>) -
 
 async fn theme_css(State(web): State<Web>, Query(query): Query<ThemeQuery>) -> HttpResponse {
     ask(&web, Request::ThemeCss { light: query.light, dark: query.dark }).await
+}
+
+async fn theme_font(State(web): State<Web>, Path((id, file)): Path<(String, String)>) -> HttpResponse {
+    use base64::Engine as _;
+    let Ok(font) = answer(&web, Request::ThemeFont { id, file }).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let media_type = font["media_type"].as_str().unwrap_or("font/woff2").to_owned();
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(font["data"].as_str().unwrap_or_default()) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    // Revalidated each time, as a theme's author may be changing it.
+    ([(header::CONTENT_TYPE, media_type), (header::CACHE_CONTROL, "no-cache".to_owned())], Body::from(bytes)).into_response()
 }
 
 /// A theme file to import: VS Code's are rarely over a few hundred KiB.

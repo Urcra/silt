@@ -4,7 +4,7 @@
 // compares the new one with its board.
 
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
 import { teardown } from './fixture'
@@ -131,6 +131,45 @@ test("a theme's file edited while the page is open restyles it (ADR 0098)", asyn
   } finally {
     await pickThemes(page, NOUS)
     rmSync(file, { force: true })
+  }
+})
+
+test('a theme that ships its own font loads it from its folder (ADR 0099)', async ({ page }) => {
+  const root = join(world.work, 'alice', 'silt', 'themes', 'shipped')
+  mkdirSync(join(root, 'fonts'), { recursive: true })
+  copyFileSync(join(import.meta.dirname, '..', 'node_modules', '@fontsource', 'ibm-plex-mono', 'files', 'ibm-plex-mono-latin-100-italic.woff2'), join(root, 'fonts', 'thin.woff2'))
+  writeFileSync(
+    join(root, 'theme.json'),
+    JSON.stringify({
+      name: 'Shipped',
+      themes: [
+        {
+          id: 'shipped',
+          name: 'Shipped',
+          appearance: 'light',
+          colors: { bg: '#fafafa', 'fg-1': '#1b1b1b', accent: '#0055cc' },
+          fonts: { ui: ['Shipped Mono', 'monospace'], faces: [{ family: 'Shipped Mono', file: 'fonts/thin.woff2', style: 'italic', weight: 100 }] },
+        },
+      ],
+    }),
+  )
+  await open(page, '/settings/appearance')
+  await page.emulateMedia({ colorScheme: 'light' })
+  try {
+    await pickThemes(page, { ...NOUS, light: 'shipped' })
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    const loaded = await page.evaluate(async () => {
+      await document.fonts.load('italic 100 16px "Shipped Mono"')
+      return document.fonts.check('italic 100 16px "Shipped Mono"')
+    })
+    expect(loaded).toBe(true)
+    const served = await page.request.get(`${new URL(world.alice).origin}/theme-fonts/shipped/thin.woff2`)
+    expect(served.headers()['content-type']).toBe('font/woff2')
+    expect((await page.request.get(`${new URL(world.alice).origin}/theme-fonts/shipped/..%2Ftheme.json`)).status()).toBe(404)
+  } finally {
+    await pickThemes(page, NOUS)
+    rmSync(root, { recursive: true, force: true })
   }
 })
 

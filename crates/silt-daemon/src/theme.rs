@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use silt_proto::theme::{self as views, ThemeEntry};
 use silt_proto::view::{AppearanceMode, AppearanceSettings, ThemeCatalog, ThemeDetail, ThemeProblem, ThemeSaved, ThemeSource};
+use silt_theme::font::{FACE_BYTES, FontFile, THEME_FONT_BYTES};
 use silt_theme::{Family, ThemeId};
 
 use crate::core::CoreError;
@@ -23,38 +24,169 @@ pub fn themes_dir(data_dir: &Path) -> PathBuf {
     data_dir.join(THEMES_DIR)
 }
 
-/// The person's theme files, in name order.
-pub fn files(data_dir: &Path) -> Vec<PathBuf> {
+/// A theme that ships fonts is a folder holding this and `fonts/` (ADR 0099).
+pub const FOLDER_FILE: &str = "theme.json";
+
+/// One of the person's theme files: `<name>.json`, or a folder
+/// `<name>/theme.json` with its `fonts/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Source {
+    pub name: String,
+    pub json: PathBuf,
+    /// The folder, for a theme that ships fonts.
+    pub root: Option<PathBuf>,
+}
+
+impl Source {
+    /// How Settings names it.
+    pub fn label(&self) -> String {
+        if self.root.is_some() { format!("{}/{FOLDER_FILE}", self.name) } else { format!("{}.json", self.name) }
+    }
+
+    /// A file or folder given by hand, as `silt theme check` takes it.
+    pub fn at(path: &Path) -> Self {
+        let folder = if path.is_dir() {
+            Some(path.to_owned())
+        } else if path.file_name().is_some_and(|name| name == FOLDER_FILE) {
+            path.parent().map(Path::to_owned)
+        } else {
+            None
+        };
+        let name = |path: &Path| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+        match folder {
+            Some(root) => Self { name: name(&root), json: root.join(FOLDER_FILE), root: Some(root) },
+            None => Self { name: name(path), json: path.to_owned(), root: None },
+        }
+    }
+}
+
+/// The person's themes, in name order; a folder hides a file of its name.
+pub fn sources(data_dir: &Path) -> Vec<Source> {
     let Ok(entries) = fs::read_dir(themes_dir(data_dir)) else { return Vec::new() };
-    let mut files: Vec<PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "json") && path.is_file())
-        .collect();
-    files.sort();
-    files.truncate(MOST_FILES);
-    files
+    let mut found = std::collections::BTreeMap::new();
+    for path in entries.flatten().map(|entry| entry.path()) {
+        let Some(name) = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()) else { continue };
+        if name.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() && path.join(FOLDER_FILE).is_file() {
+            found.insert(name.clone(), Source { name, json: path.join(FOLDER_FILE), root: Some(path) });
+        } else if path.extension().is_some_and(|extension| extension == "json") && path.is_file() {
+            found.entry(name.clone()).or_insert(Source { name, json: path, root: None });
+        }
+    }
+    found.into_values().take(MOST_FILES).collect()
+}
+
+/// A face's file under `root/fonts/`, never outside it, however it's named.
+fn font_path(root: &Path, file: &FontFile) -> Option<PathBuf> {
+    let fonts = root.join("fonts").canonicalize().ok()?;
+    let path = fonts.join(file.name()).canonicalize().ok()?;
+    (path.starts_with(&fonts) && path.is_file()).then_some(path)
+}
+
+/// Its first bytes, enough to tell a font's format.
+fn head(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let mut head = vec![0; 4];
+    let read = fs::File::open(path).ok()?.read(&mut head).ok()?;
+    head.truncate(read);
+    Some(head)
+}
+
+/// Leaves out the faces whose files are missing, aren't fonts or are too
+/// large, saying why; a theme that isn't a folder ships none.
+fn check_faces(family: &mut Family, root: Option<&Path>, warnings: &mut Vec<String>) {
+    for theme in &mut family.themes {
+        let mut total = 0;
+        theme.fonts.faces.retain(|face| {
+            let Some(root) = root else {
+                warnings.push(format!(
+                    "{}: a theme ships fonts as a folder, <name>/theme.json beside fonts/; {} left out",
+                    theme.id, face.file
+                ));
+                return false;
+            };
+            let Some(path) = font_path(root, &face.file) else {
+                warnings.push(format!("{}: {} isn't in the theme's fonts/; left out", theme.id, face.file));
+                return false;
+            };
+            let size = fs::metadata(&path).map_or(u64::MAX, |meta| meta.len());
+            let checked = if size > FACE_BYTES {
+                Err(format!("{} is over {} KiB", face.file, FACE_BYTES >> 10))
+            } else if total + size > THEME_FONT_BYTES {
+                Err(format!("{} would take the theme's fonts over {} MiB", face.file, THEME_FONT_BYTES >> 20))
+            } else {
+                head(&path)
+                    .ok_or_else(|| format!("{} can't be read", face.file))
+                    .and_then(|head| face.file.check(&head).map(|_| ()))
+            };
+            match checked {
+                Ok(()) => {
+                    total += size;
+                    true
+                }
+                Err(why) => {
+                    warnings.push(format!("{}: {why}; left out", theme.id));
+                    false
+                }
+            }
+        });
+    }
+}
+
+/// A theme file read, with its faces checked against its folder.
+pub fn read_source(source: &Source) -> Result<(Family, Vec<String>), String> {
+    let json = read_capped(&source.json, FILE_BYTES).ok_or_else(|| format!("unreadable, or over {} KiB", FILE_BYTES >> 10))?;
+    let (mut family, warnings) = silt_theme::parse(&json).map_err(|error| error.to_string())?;
+    let mut warnings: Vec<String> = warnings.iter().map(ToString::to_string).collect();
+    check_faces(&mut family, source.root.as_deref(), &mut warnings);
+    Ok((family, warnings))
 }
 
 /// Every theme, the person's over Silt's, and the files that couldn't be read.
 pub fn entries(data_dir: &Path) -> (Vec<ThemeEntry>, Vec<ThemeProblem>) {
     let mut yours = Vec::new();
     let mut problems = Vec::new();
-    for path in files(data_dir) {
-        let file = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-        let Some(json) = read_capped(&path, FILE_BYTES) else {
-            problems.push(ThemeProblem { file, message: format!("unreadable, or over {} KiB", FILE_BYTES >> 10) });
-            continue;
-        };
-        match silt_theme::parse(&json) {
-            Ok((family, warnings)) => {
-                let warnings: Vec<String> = warnings.iter().map(ToString::to_string).collect();
-                yours.extend(ThemeEntry::of(&family, ThemeSource::Yours, Some(file), &warnings));
-            }
-            Err(error) => problems.push(ThemeProblem { file, message: error.to_string() }),
+    for source in sources(data_dir) {
+        match read_source(&source) {
+            Ok((family, warnings)) => yours.extend(ThemeEntry::of(&family, ThemeSource::Yours, Some(source.label()), &warnings)),
+            Err(message) => problems.push(ThemeProblem { file: source.label(), message }),
         }
     }
     (views::merge(views::bundled_entries(), yours), problems)
+}
+
+/// A face a current theme of the person's ships, read and checked whole,
+/// with its media type; for `/theme-fonts/<id>/<file>`.
+pub fn font(data_dir: &Path, id: &str, file: &str) -> Option<(Vec<u8>, &'static str)> {
+    let file = FontFile::parse(file)?;
+    let (entries, _) = entries(data_dir);
+    let entry = entries.iter().find(|entry| entry.theme.id.as_str() == id && entry.source != ThemeSource::Bundled)?;
+    entry.theme.fonts.faces.iter().find(|face| face.file == file)?;
+    let source = sources(data_dir).into_iter().find(|source| source.label() == entry.file.as_deref().unwrap_or_default())?;
+    let path = font_path(source.root.as_deref()?, &file)?;
+    let bytes = fs::read(path).ok()?;
+    let format = file.check(&bytes).ok()?;
+    Some((bytes, format.media_type()))
+}
+
+/// The file or folder the person's theme `id` is in.
+pub fn source_of(data_dir: &Path, id: &str) -> Option<Source> {
+    sources(data_dir)
+        .into_iter()
+        .find(|source| read_source(source).is_ok_and(|(family, _)| family.themes.iter().any(|theme| theme.id.as_str() == id)))
+}
+
+/// Copies the faces `theme` ships from `from`'s fonts to `to`'s.
+pub fn copy_fonts(from: &Path, to: &Path, faces: &[silt_theme::model::FontFace]) -> Result<(), CoreError> {
+    fs::create_dir_all(to.join("fonts"))?;
+    for face in faces {
+        if let Some(path) = font_path(from, &face.file) {
+            fs::copy(path, to.join("fonts").join(face.file.name()))?;
+        }
+    }
+    Ok(())
 }
 
 pub fn appearance(data_dir: &Path) -> AppearanceSettings {
@@ -145,8 +277,23 @@ pub fn duplicate(data_dir: &Path, from: &str) -> Result<ThemeSaved, CoreError> {
     let mut theme = source.theme.clone();
     theme.id = id.parse().map_err(|error: silt_theme::model::BadThemeId| CoreError::Invalid(error.to_string()))?;
     theme.name = format!("{} (mine)", source.theme.name);
+    let faces = theme.fonts.faces.clone();
     let family = Family::new(theme.name.clone(), vec![theme]);
-    let path = save(data_dir, &id, &family, false)?;
+    let from_root = sources(data_dir)
+        .into_iter()
+        .find(|found| Some(found.label()) == source.file)
+        .and_then(|found| found.root)
+        .filter(|_| !faces.is_empty());
+    let path = match from_root {
+        Some(from) => {
+            let to = themes_dir(data_dir).join(&id);
+            copy_fonts(&from, &to, &faces)?;
+            let path = to.join(FOLDER_FILE);
+            write_atomically(&path, family.to_json().as_bytes())?;
+            path
+        }
+        None => save(data_dir, &id, &family, false)?,
+    };
     Ok(saved(&path, &family, Vec::new()))
 }
 
@@ -221,6 +368,76 @@ mod tests {
         assert_eq!(duplicate(data.path(), "nous-dark").expect("copied again").themes, ["nous-dark-mine-2"]);
         assert!(catalog(data.path()).themes.iter().any(|theme| theme.id == "nous-dark-mine"));
         assert!(duplicate(data.path(), "nope").is_err());
+    }
+
+    const FACED: &str = r##"{ "name": "Harbour", "themes": [
+        { "id": "harbour", "name": "Harbour", "appearance": "light",
+          "colors": { "bg": "#ffffff", "fg-1": "#111111", "accent": "#0055cc" },
+          "fonts": { "ui": ["Harbour Sans", "system-ui"], "faces": [
+            { "family": "Harbour Sans", "file": "fonts/sans.woff2" },
+            { "family": "Harbour Sans", "file": "fonts/fake.woff2", "weight": 700 },
+            { "family": "Harbour Sans", "file": "fonts/gone.woff2", "style": "italic" }
+          ] } }
+    ] }"##;
+
+    fn folder_theme(data: &Path) -> PathBuf {
+        let root = themes_dir(data).join("harbour");
+        fs::create_dir_all(root.join("fonts")).expect("fonts dir");
+        fs::write(root.join(FOLDER_FILE), FACED).expect("theme");
+        fs::write(root.join("fonts/sans.woff2"), b"wOF2 a font").expect("font");
+        fs::write(root.join("fonts/fake.woff2"), b"<svg/>").expect("not a font");
+        fs::write(themes_dir(data).join("secret.txt"), b"wOF2 not yours").expect("outside fonts");
+        root
+    }
+
+    #[test]
+    fn a_folder_theme_ships_the_faces_it_has_and_says_which_it_doesnt() {
+        let data = tempfile::tempdir().expect("temp dir");
+        folder_theme(data.path());
+        let catalog = catalog(data.path());
+        let harbour = catalog.themes.iter().find(|theme| theme.id == "harbour").expect("listed");
+        assert_eq!(harbour.file.as_deref(), Some("harbour/theme.json"));
+        assert_eq!(harbour.warnings.len(), 2, "{:?}", harbour.warnings);
+        assert!(harbour.warnings.iter().any(|warning| warning.contains("fake.woff2 isn't a woff2 font")));
+        assert!(harbour.warnings.iter().any(|warning| warning.contains("gone.woff2 isn't in the theme's fonts/")));
+        let picked = AppearanceSettings { light: "harbour".into(), ..AppearanceSettings::default() };
+        set_appearance(data.path(), &picked).expect("picked");
+        let css = css(data.path(), None, None);
+        assert!(css.contains("url(theme-fonts/harbour/sans.woff2)"), "{css}");
+        assert!(!css.contains("fake.woff2") && !css.contains("gone.woff2"));
+    }
+
+    #[test]
+    fn only_a_shipped_face_is_served() {
+        let data = tempfile::tempdir().expect("temp dir");
+        folder_theme(data.path());
+        assert_eq!(font(data.path(), "harbour", "sans.woff2"), Some((b"wOF2 a font".to_vec(), "font/woff2")));
+        for (id, file) in [
+            ("harbour", "fake.woff2"),
+            ("harbour", "gone.woff2"),
+            ("harbour", "../secret.txt"),
+            ("harbour", "..%2Fsecret.txt"),
+            ("nous-light", "sans.woff2"),
+            ("other", "sans.woff2"),
+        ] {
+            assert_eq!(font(data.path(), id, file), None, "{id}/{file}");
+        }
+    }
+
+    #[test]
+    fn a_theme_that_is_one_file_ships_no_fonts_and_a_copy_keeps_its_faces() {
+        let data = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(themes_dir(data.path())).expect("themes dir");
+        fs::write(themes_dir(data.path()).join("flat.json"), FACED.replace("\"harbour\"", "\"flat\"")).expect("theme");
+        let flat = catalog(data.path()).themes.into_iter().find(|theme| theme.id == "flat").expect("listed");
+        assert_eq!(flat.warnings.len(), 3);
+        assert!(flat.warnings.iter().all(|warning| warning.contains("ships fonts as a folder")));
+
+        folder_theme(data.path());
+        let copy = duplicate(data.path(), "harbour").expect("copied");
+        assert!(copy.file.ends_with("harbour-mine/theme.json"), "{}", copy.file);
+        assert!(themes_dir(data.path()).join("harbour-mine/fonts/sans.woff2").is_file());
+        assert!(font(data.path(), "harbour-mine", "sans.woff2").is_some());
     }
 
     #[test]

@@ -144,8 +144,23 @@ fn new(data: &Path, id: &str, from: &str, name: Option<String>, force: bool) -> 
     let name = name.unwrap_or_else(|| title(id.as_str()));
     theme.id = id.clone();
     theme.name = name.clone();
+    let faces = theme.fonts.faces.clone();
     let family = Family::new(name.clone(), vec![theme]);
-    let path = write_family(data, id.as_str(), &family, force)?;
+    let fonts_from = silt_daemon::theme::source_of(data, from).and_then(|found| found.root).filter(|_| !faces.is_empty());
+    let path = match fonts_from {
+        // A theme with fonts stays a folder, its fonts copied beside it.
+        Some(from_root) => {
+            let root = silt_daemon::theme::themes_dir(data).join(id.as_str());
+            if root.exists() && !force {
+                return Err(fail(format!("{} exists; --force replaces it", root.display())));
+            }
+            silt_daemon::theme::copy_fonts(&from_root, &root, &faces).map_err(|error| fail(error.to_string()))?;
+            let path = root.join(silt_daemon::theme::FOLDER_FILE);
+            fs::write(&path, family.to_json()).map_err(|error| fail(format!("{}: {error}", path.display())))?;
+            path
+        }
+        None => write_family(data, id.as_str(), &family, force)?,
+    };
     println!("Wrote {} ({name}, {}), from {}.", path.display(), source.theme.appearance, source.theme.name);
     println!("Silt shows changes to it as you save, once you pick it in Settings › Appearance.");
     Ok(())
@@ -232,13 +247,18 @@ fn report_failures(family: &Family) -> usize {
     failing
 }
 
-fn check_file(file: &Path, fix_contrast: bool, json: bool) -> Result<(), Exn<CliError>> {
+fn check_file(path: &Path, fix_contrast: bool, json: bool) -> Result<(), Exn<CliError>> {
+    let source = silt_daemon::theme::Source::at(path);
+    let file = source.json.as_path();
     let text = read(file)?;
-    let (mut family, warnings) = silt_theme::parse(&text).map_err(|error| fail(format!("{}: {error}", file.display())))?;
-    let fixes = if fix_contrast { import::fix_contrast(&mut family) } else { Vec::new() };
+    // Fixed as written, with every face, whichever of them the check below leaves out.
+    let (mut written, _) = silt_theme::parse(&text).map_err(|error| fail(format!("{}: {error}", file.display())))?;
+    let fixes = if fix_contrast { import::fix_contrast(&mut written) } else { Vec::new() };
     if !fixes.is_empty() {
-        fs::write(file, family.to_json()).map_err(|error| fail(format!("{}: {error}", file.display())))?;
+        fs::write(file, written.to_json()).map_err(|error| fail(format!("{}: {error}", file.display())))?;
     }
+    let (family, warnings) =
+        silt_daemon::theme::read_source(&source).map_err(|error| fail(format!("{}: {error}", file.display())))?;
     let findings: Vec<_> =
         family.themes.iter().map(|theme| (theme.id.to_string(), silt_theme::check(&silt_theme::derive(theme)))).collect();
     let passed = findings.iter().all(|(_, findings)| silt_theme::passes(findings));

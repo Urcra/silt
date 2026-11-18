@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::color::{Rgba, solve};
-use crate::model::{Appearance, FontName, FontStyle, Radii, SyntaxStyle, Theme};
+use crate::model::{Appearance, FontFace, FontName, FontStyle, Radii, SyntaxStyle, Theme, ThemeId};
 use crate::token::{ColorToken, SyntaxTag};
 
 /// What text needs on its ground (WCAG 2, AA).
@@ -16,12 +16,15 @@ pub const MARK_RATIO: f64 = 3.0;
 /// A theme with every token and tag filled in.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Palette {
+    pub id: ThemeId,
     pub appearance: Appearance,
     pub colors: BTreeMap<ColorToken, Rgba>,
     pub syntax: BTreeMap<SyntaxTag, SyntaxStyle>,
     pub ui_font: Option<Vec<FontName>>,
     pub mono_font: Option<Vec<FontName>>,
     pub radii: Radii,
+    /// The faces it ships, loaded from `theme-fonts/<id>/`.
+    pub faces: Vec<FontFace>,
     /// The tokens the theme left out.
     pub derived: BTreeSet<ColorToken>,
 }
@@ -93,12 +96,14 @@ pub fn derive(theme: &Theme) -> Palette {
     let derived = ColorToken::ALL.iter().copied().filter(|token| !given.contains_key(token)).collect();
     let syntax = syntax(theme, &colors);
     Palette {
+        id: theme.id.clone(),
         appearance: theme.appearance,
         colors,
         syntax,
         ui_font: theme.fonts.ui.clone(),
         mono_font: theme.fonts.mono.clone(),
         radii: theme.radii,
+        faces: theme.fonts.faces.clone(),
         derived,
     }
 }

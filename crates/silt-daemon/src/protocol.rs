@@ -469,6 +469,11 @@ pub enum Request {
     SetAppearance {
         settings: silt_proto::view::AppearanceSettings,
     },
+    /// A face a theme of the person's ships, for `/theme-fonts/` (ADR 0099).
+    ThemeFont {
+        id: String,
+        file: String,
+    },
     /// A VS Code theme or a Zed family the person picked, saved as theirs.
     ImportTheme {
         text: String,

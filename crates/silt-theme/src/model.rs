@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::color::Rgba;
+use crate::font::{FontFile, MOST_FACES};
 use crate::token::{ColorToken, SyntaxTag};
 
 /// Where editors find the format's schema.
@@ -146,12 +147,24 @@ pub struct Fonts {
     pub ui: Option<Vec<FontName>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mono: Option<Vec<FontName>>,
+    /// Faces the theme ships in its folder's `fonts/` (ADR 0099).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<FontFace>,
 }
 
 impl Fonts {
     fn is_empty(&self) -> bool {
-        self.ui.is_none() && self.mono.is_none()
+        self.ui.is_none() && self.mono.is_none() && self.faces.is_empty()
     }
+}
+
+/// One face of a family the theme ships.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FontFace {
+    pub family: FontName,
+    pub file: FontFile,
+    pub weight: u16,
+    pub style: FontStyle,
 }
 
 /// The largest radius a theme may give, in pixels.
@@ -506,8 +519,12 @@ fn fonts(value: Option<&Value>, path: &str, warnings: &mut Vec<Warning>) -> Font
         let slot = match key.as_str() {
             "ui" => &mut fonts.ui,
             "mono" => &mut fonts.mono,
+            "faces" => {
+                fonts.faces = faces(value, &here, warnings);
+                continue;
+            }
             _ => {
-                warn(warnings, here, "isn't one of ui and mono; ignored");
+                warn(warnings, here, "isn't one of ui, mono and faces; ignored");
                 continue;
             }
         };
@@ -531,6 +548,64 @@ fn fonts(value: Option<&Value>, path: &str, warnings: &mut Vec<Warning>) -> Font
         }
     }
     fonts
+}
+
+fn faces(value: &Value, path: &str, warnings: &mut Vec<Warning>) -> Vec<FontFace> {
+    let Some(list) = value.as_array() else {
+        warn(warnings, path.to_owned(), "should be a list of faces; left out");
+        return Vec::new();
+    };
+    let mut faces = Vec::new();
+    for (index, entry) in list.iter().enumerate() {
+        let here = format!("{path}/{index}");
+        if faces.len() == MOST_FACES {
+            warn(warnings, here, format!("a theme has at most {MOST_FACES} faces; the rest left out"));
+            break;
+        }
+        let Some(fields) = entry.as_object() else {
+            warn(warnings, here, "should be an object with family and file; left out");
+            continue;
+        };
+        let Some(family) = fields.get("family").and_then(Value::as_str).and_then(FontName::parse) else {
+            warn(
+                warnings,
+                pointer(&here, "family"),
+                "a face needs a family named with letters, digits, spaces, _ and -; left out",
+            );
+            continue;
+        };
+        let Some(file) = fields.get("file").and_then(Value::as_str).and_then(FontFile::parse) else {
+            warn(
+                warnings,
+                pointer(&here, "file"),
+                "a face needs a file such as fonts/name.woff2 (woff2, woff, ttf or otf); left out",
+            );
+            continue;
+        };
+        let weight = match fields.get("weight") {
+            None => 400,
+            Some(weight) => match weight.as_f64().filter(|weight| (100.0..=900.0).contains(weight)) {
+                Some(weight) => ((weight / 100.0).round() * 100.0) as u16,
+                None => {
+                    warn(warnings, pointer(&here, "weight"), "should be a weight from 100 to 900; 400 used");
+                    400
+                }
+            },
+        };
+        let style = match fields.get("style").and_then(Value::as_str) {
+            None | Some("normal") => FontStyle::Normal,
+            Some("italic") => FontStyle::Italic,
+            Some(_) => {
+                warn(warnings, pointer(&here, "style"), "should be \"normal\" or \"italic\"; normal used");
+                FontStyle::Normal
+            }
+        };
+        for key in fields.keys().filter(|key| !["family", "file", "weight", "style"].contains(&key.as_str())) {
+            warn(warnings, pointer(&here, key), "isn't part of a face; ignored");
+        }
+        faces.push(FontFace { family, file, weight, style });
+    }
+    faces
 }
 
 fn radii(value: Option<&Value>, path: &str, warnings: &mut Vec<Warning>) -> Radii {

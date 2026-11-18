@@ -7,6 +7,7 @@ pub mod check;
 pub mod color;
 pub mod css;
 pub mod derive;
+pub mod font;
 pub mod import;
 pub mod model;
 pub mod schema;

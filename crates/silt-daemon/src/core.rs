@@ -882,6 +882,14 @@ impl Core {
                 }
                 to_response(saved.map(|()| "saved"))
             }
+            Request::ThemeFont { id, file } => match crate::theme::font(&self.data_dir, &id, &file) {
+                Some((bytes, media_type)) => {
+                    use base64::Engine as _;
+                    let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+                    Response::ok(serde_json::json!({ "media_type": media_type, "data": data }))
+                }
+                None => Response::error("no such font"),
+            },
             Request::ImportTheme { text } => to_response(crate::theme::import(&self.data_dir, &text)),
             Request::DuplicateTheme { from } => to_response(crate::theme::duplicate(&self.data_dir, &from)),
             Request::ThemeCss { light, dark } => {
