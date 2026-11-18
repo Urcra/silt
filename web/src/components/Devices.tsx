@@ -17,7 +17,7 @@ const CAPABILITIES: { id: keyof Capabilities; label: string }[] = [
   { id: 'send_prompts', label: 'Send prompts' },
   { id: 'run_agents', label: 'Start and stop agents' },
   { id: 'sample', label: "Ask an agent a page's question" },
-  { id: 'page_tools', label: "Call your page connectors" },
+  { id: 'page_tools', label: 'Call your page connectors' },
   { id: 'review', label: 'Review merge requests' },
 ]
 
@@ -41,104 +41,151 @@ function Device({ device }: { device: DeviceView }) {
   const phone = device.kind === 'phone'
   const rows: [ReactNode, ReactNode][] = phone
     ? [
-        ['Can', CAPABILITIES.filter((capability) => device.capabilities[capability.id]).map((capability) => capability.label.toLowerCase()).join(', ') || 'only read'],
-        ['Last seen', <span key="seen" data-volatile>{ago(Number(device.last_used_ms), now)}</span>],
+        [
+          'Can',
+          CAPABILITIES.filter((capability) => device.capabilities[capability.id])
+            .map((capability) => capability.label.toLowerCase())
+            .join(', ') || 'only read',
+        ],
+        [
+          'Last seen',
+          <span key="seen" data-volatile>
+            {ago(Number(device.last_used_ms), now)}
+          </span>,
+        ],
       ]
     : [
         [
           'Runs',
-          device.agents.length === 0
-            ? 'no agents'
-            : `${device.agents.length} ${device.agents.length === 1 ? 'agent' : 'agents'}`,
+          device.agents.length === 0 ? 'no agents' : `${device.agents.length} ${device.agents.length === 1 ? 'agent' : 'agents'}`,
         ],
-        ...(!device.online ? ([['Last seen', <span key="seen" data-volatile>{ago(Number(device.last_used_ms), now)}</span>]] as [ReactNode, ReactNode][]) : []),
-        ...mockRows<[ReactNode, ReactNode]>('devices.checkouts', [['Checkouts', <Mock key="checkouts" id="devices.checkouts">3</Mock>]]),
-        ...mockRows<[ReactNode, ReactNode]>('devices.version', [['Daemon', <Mock key="daemon" id="devices.version">0.0.1 · synced</Mock>]]),
+        ...(!device.online
+          ? ([
+              [
+                'Last seen',
+                <span key="seen" data-volatile>
+                  {ago(Number(device.last_used_ms), now)}
+                </span>,
+              ],
+            ] as [ReactNode, ReactNode][])
+          : []),
+        ...mockRows<[ReactNode, ReactNode]>('devices.checkouts', [
+          [
+            'Checkouts',
+            <Mock key="checkouts" id="devices.checkouts">
+              3
+            </Mock>,
+          ],
+        ]),
+        ...mockRows<[ReactNode, ReactNode]>('devices.version', [
+          [
+            'Daemon',
+            <Mock key="daemon" id="devices.version">
+              0.0.1 · synced
+            </Mock>,
+          ],
+        ]),
       ]
   return (
-    <section aria-label={device.name} className="grid grid-cols-[20px_minmax(0,1fr)] gap-x-3 border-b border-line-subtle px-4 py-3.5 last:border-b-0">
+    <section
+      aria-label={device.name}
+      className="grid grid-cols-[20px_minmax(0,1fr)] gap-x-3 border-b border-line-subtle px-4 py-3.5 last:border-b-0"
+    >
       <Icon name={phone ? 'phone' : 'laptop'} className="mt-0.5 h-5 w-5 text-fg-2" />
       <div className="flex min-w-0 flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {name === null ? (
-          <button type="button" className="text-sm font-medium hover:text-accent-fg max-md:min-h-11" title="rename" onClick={() => setName(device.name)}>
-            {device.name}
-          </button>
-        ) : (
-          <form
-            className="flex items-center gap-2"
-            onSubmit={(event) => {
-              event.preventDefault()
-              void change(device, { name }, 'Renamed').then(() => setName(null))
-            }}
-          >
-            <Input aria-label="device name" autoFocus value={name} onChange={(event) => setName(event.target.value)} />
-            <Button type="submit" variant="primary" disabled={!name.trim()}>
-              Save
+        <div className="flex flex-wrap items-center gap-2">
+          {name === null ? (
+            <button
+              type="button"
+              className="text-sm font-medium hover:text-accent-fg max-md:min-h-11"
+              title="rename"
+              onClick={() => setName(device.name)}
+            >
+              {device.name}
+            </button>
+          ) : (
+            <form
+              className="flex items-center gap-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void change(device, { name }, 'Renamed').then(() => setName(null))
+              }}
+            >
+              <Input aria-label="device name" autoFocus value={name} onChange={(event) => setName(event.target.value)} />
+              <Button type="submit" variant="primary" disabled={!name.trim()}>
+                Save
+              </Button>
+              <Button onClick={() => setName(null)}>Cancel</Button>
+            </form>
+          )}
+          {device.this && <span className="text-xs text-fg-2">this device</span>}
+          {phone && <span className="text-xs text-fg-2">phone</span>}
+          <span className="ml-auto inline-flex items-center gap-1.5 text-xs">
+            <Dot tone={device.online ? 'ok' : 'idle'} />
+            {device.online ? 'online' : 'offline'}
+          </span>
+          {!device.this && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                void api.revokeDevice(device.id).then(
+                  () => {
+                    toast(`${device.name} is signed out`, 'ok')
+                    return queries.invalidateQueries({ queryKey: keys.devices })
+                  },
+                  (failure: unknown) => toast(message(failure), 'danger'),
+                )
+              }
+            >
+              Sign out
             </Button>
-            <Button onClick={() => setName(null)}>Cancel</Button>
-          </form>
+          )}
+        </div>
+        <KeyValue rows={rows} />
+        {device.agents.length > 0 && (
+          <ul aria-label={`running on ${device.name}`} className="flex flex-col gap-1 text-xs">
+            {device.agents.map((agent) => (
+              <li key={agent.thread} className="flex items-center gap-2">
+                <Link
+                  to="/t/$id"
+                  params={{ id: agent.thread }}
+                  className="truncate text-accent-fg hover:text-fg-1 max-md:inline-flex max-md:min-h-11 max-md:items-center"
+                >
+                  {agent.title ?? 'Untitled thread'}
+                </Link>
+                <span className="font-mono text-2xs text-fg-2">{agent.agent}</span>
+                <Tag tone={STATE_TAG[agent.state].tone}>{STATE_TAG[agent.state].label}</Tag>
+              </li>
+            ))}
+          </ul>
         )}
-        {device.this && <span className="text-xs text-fg-2">this device</span>}
-        {phone && <span className="text-xs text-fg-2">phone</span>}
-        <span className="ml-auto inline-flex items-center gap-1.5 text-xs">
-          <Dot tone={device.online ? 'ok' : 'idle'} />
-          {device.online ? 'online' : 'offline'}
-        </span>
-        {!device.this && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() =>
-              void api.revokeDevice(device.id).then(
-                () => {
-                  toast(`${device.name} is signed out`, 'ok')
-                  return queries.invalidateQueries({ queryKey: keys.devices })
-                },
-                (failure: unknown) => toast(message(failure), 'danger'),
-              )
-            }
-          >
-            Sign out
-          </Button>
-        )}
-      </div>
-      <KeyValue rows={rows} />
-      {device.agents.length > 0 && (
-        <ul aria-label={`running on ${device.name}`} className="flex flex-col gap-1 text-xs">
-          {device.agents.map((agent) => (
-            <li key={agent.thread} className="flex items-center gap-2">
-              <Link to="/t/$id" params={{ id: agent.thread }} className="truncate text-accent-fg hover:text-fg-1 max-md:inline-flex max-md:min-h-11 max-md:items-center">
-                {agent.title ?? 'Untitled thread'}
-              </Link>
-              <span className="font-mono text-2xs text-fg-2">{agent.agent}</span>
-              <Tag tone={STATE_TAG[agent.state].tone}>{STATE_TAG[agent.state].label}</Tag>
-            </li>
-          ))}
-        </ul>
-      )}
-      <details className="group/may text-xs">
-        <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 [&::-webkit-details-marker]:hidden">
-          <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/may:rotate-90" />
-          What it may do on your other devices
-        </summary>
-        <fieldset className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
-          <legend className="sr-only">From this device you may, on your other devices:</legend>
-          {CAPABILITIES.map((capability) => (
-            <label key={capability.id} className="flex items-center gap-1.5 max-md:min-h-11">
-              <input
-                type="checkbox"
-                checked={device.capabilities[capability.id]}
-                className="accent-[var(--accent)]"
-                onChange={(event) =>
-                  void change(device, { capabilities: { ...device.capabilities, [capability.id]: event.target.checked } }, 'Saved')
-                }
-              />
-              {capability.label}
-            </label>
-          ))}
-        </fieldset>
-      </details>
+        <details className="group/may text-xs">
+          <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 [&::-webkit-details-marker]:hidden">
+            <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/may:rotate-90" />
+            What it may do on your other devices
+          </summary>
+          <fieldset className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
+            <legend className="sr-only">From this device you may, on your other devices:</legend>
+            {CAPABILITIES.map((capability) => (
+              <label key={capability.id} className="flex items-center gap-1.5 max-md:min-h-11">
+                <input
+                  type="checkbox"
+                  checked={device.capabilities[capability.id]}
+                  className="accent-[var(--accent)]"
+                  onChange={(event) =>
+                    void change(
+                      device,
+                      { capabilities: { ...device.capabilities, [capability.id]: event.target.checked } },
+                      'Saved',
+                    )
+                  }
+                />
+                {capability.label}
+              </label>
+            ))}
+          </fieldset>
+        </details>
       </div>
     </section>
   )
@@ -172,7 +219,10 @@ function PairPhone() {
           </div>
         )}
         <ol className="flex flex-[1_1_140px] list-decimal flex-col gap-1 pl-4 text-xs leading-normal">
-          <li>Scan with the phone’s camera{pairing && <>, or open {pairing.url.replace(/\/pair\/.*$/, '/pair')} and type the code</>}.</li>
+          <li>
+            Scan with the phone’s camera
+            {pairing && <>, or open {pairing.url.replace(/\/pair\/.*$/, '/pair')} and type the code</>}.
+          </li>
           <li>Sign in on the phone as you do here.</li>
           <li>Check the code matches, then approve.</li>
         </ol>
@@ -225,10 +275,14 @@ export function Devices({ children }: { children?: ReactNode }) {
           <h2 id="your-devices" className={SETTINGS_HEADING}>
             Your devices
           </h2>
-          <p className="text-sm text-fg-2">Threads move between these. A device with a checkout can run agents; a phone can answer and review.</p>
+          <p className="text-sm text-fg-2">
+            Threads move between these. A device with a checkout can run agents; a phone can answer and review.
+          </p>
           {devices.isPending && <Skeleton className="h-24" />}
           {devices.error && <p className="text-danger">{message(devices.error)}</p>}
-          {devices.data?.length === 0 && <EmptyState title="Sign a machine in with `silt auth login`">It shows here, with what runs on it.</EmptyState>}
+          {devices.data?.length === 0 && (
+            <EmptyState title="Sign a machine in with `silt auth login`">It shows here, with what runs on it.</EmptyState>
+          )}
           {devices.data && devices.data.length > 0 && (
             <div className="overflow-hidden rounded-md border border-line bg-elevated">
               {[...devices.data]

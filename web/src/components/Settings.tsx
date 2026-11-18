@@ -5,7 +5,6 @@ import { PRESETS } from '../agentState'
 import { api, type ChatSettings, type PageConnector, type Preset } from '../api'
 import { keys, message } from '../query'
 import { hosted, serverName } from '../served'
-import { THEMES, type Theme, applyTheme, storedTheme } from '../theme'
 import { Button, Dot, EmptyState, Input, cx, toast } from '../ui'
 import { ChipSelect } from './ChipSelect'
 import { Devices } from './Devices'
@@ -15,7 +14,9 @@ import { Orgs } from './Orgs'
 import { InSettings, SETTINGS_HEADING } from '../settingsContext'
 import { Page } from './Page'
 import { DesignSystemsSettings } from './DesignSystems'
+import { ThemeSettings } from './Themes'
 import { AddProjectPage, Projects } from './Projects'
+import { UpdatesSettings } from './Updates'
 import { WorkspacesSettings } from './Workspaces'
 
 const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
@@ -36,6 +37,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
       ...(hosted() ? [] : [{ id: 'models', label: 'Local models' }]),
       { id: 'notifications', label: 'Notifications' },
       { id: 'appearance', label: 'Appearance' },
+      ...(hosted() ? [] : [{ id: 'update', label: 'Updates' }]),
     ],
   },
 ]
@@ -51,13 +53,17 @@ function Sync() {
       <h2 className={SETTINGS_HEADING}>Sync</h2>
       {servers.length === 0 && (
         <EmptyState title="Threads stay on this machine">
-          Sign in to a server to hand threads off and share them: <code className="font-mono">silt auth login --server &lt;url&gt;</code>
+          Sign in to a server to hand threads off and share them:{' '}
+          <code className="font-mono">silt auth login --server &lt;url&gt;</code>
         </EmptyState>
       )}
       {servers.length > 0 && (
         <ul className="overflow-hidden rounded-md border border-line bg-elevated">
           {servers.map((server) => (
-            <li key={server.url} className="flex flex-wrap items-center gap-2 border-b border-line-subtle px-4 py-3 text-sm last:border-b-0">
+            <li
+              key={server.url}
+              className="flex flex-wrap items-center gap-2 border-b border-line-subtle px-4 py-3 text-sm last:border-b-0"
+            >
               <Dot tone={status.data?.sync_error ? 'danger' : 'ok'} />
               <span className="font-medium">{serverName(server.url)}</span>
               <span className="font-mono text-2xs text-fg-2">
@@ -69,8 +75,8 @@ function Sync() {
       )}
       {status.data?.sync_error && <p className="text-xs text-danger">{status.data.sync_error}</p>}
       <p className="text-xs text-fg-2">
-        Another server: <code className="font-mono">silt auth login --server &lt;url&gt;</code>. Threads kept only on this machine go to a server with{' '}
-        <code className="font-mono">silt send</code>.
+        Another server: <code className="font-mono">silt auth login --server &lt;url&gt;</code>. Threads kept only on this machine
+        go to a server with <code className="font-mono">silt send</code>.
       </p>
     </section>
   )
@@ -98,14 +104,16 @@ function Chats() {
     <section aria-label="Chats" className="flex flex-col gap-3">
       <h2 className={SETTINGS_HEADING}>Chats</h2>
       <p className="text-sm text-fg-2">
-        A chat is a thread outside any project, for questions and research. Each one works in a folder of its own, is private to you, and goes to your other
-        devices like any thread.
+        A chat is a thread outside any project, for questions and research. Each one works in a folder of its own, is private to
+        you, and goes to your other devices like any thread.
       </p>
       {current && (
         <>
           <div className="flex flex-col gap-1.5 text-sm">
             <span className="font-medium">Default permissions</span>
-            <span className="text-xs text-fg-2">A chat's folder holds only what its agent wrote there, so chats start with full access.</span>
+            <span className="text-xs text-fg-2">
+              A chat's folder holds only what its agent wrote there, so chats start with full access.
+            </span>
             <span>
               <ChipSelect
                 label="default permissions for chats"
@@ -124,9 +132,17 @@ function Chats() {
             }}
           >
             <span className="font-medium">Folder</span>
-            <span className="text-xs text-fg-2">Where new chats' folders go. Left empty, they stay in Silt's data directory, out of sight.</span>
+            <span className="text-xs text-fg-2">
+              Where new chats' folders go. Left empty, they stay in Silt's data directory, out of sight.
+            </span>
             <span className="flex gap-1.5">
-              <Input aria-label="chats folder" placeholder="~/.local/share/silt/chats" value={shownDir} onChange={(event) => setDir(event.target.value)} className="min-w-0 flex-1 font-mono text-xs" />
+              <Input
+                aria-label="chats folder"
+                placeholder="~/.local/share/silt/chats"
+                value={shownDir}
+                onChange={(event) => setDir(event.target.value)}
+                className="min-w-0 flex-1 font-mono text-xs"
+              />
               <Button type="submit">Save</Button>
             </span>
           </form>
@@ -138,27 +154,9 @@ function Chats() {
 }
 
 function Appearance() {
-  const [theme, setTheme] = useState<Theme>(storedTheme)
   return (
     <section aria-label="Appearance" className="flex flex-col gap-3">
-      <h2 className={SETTINGS_HEADING}>Appearance</h2>
-      <div role="radiogroup" aria-label="theme" className="inline-flex self-start overflow-hidden rounded-sm border border-line text-xs">
-        {THEMES.map((choice) => (
-          <button
-            key={choice}
-            type="button"
-            role="radio"
-            aria-checked={theme === choice}
-            onClick={() => {
-              applyTheme(choice)
-              setTheme(choice)
-            }}
-            className={cx('px-3 py-1 capitalize max-md:min-h-11', theme === choice ? 'bg-accent-tint text-accent-fg' : 'text-fg-2 hover:bg-surface-2')}
-          >
-            {choice}
-          </button>
-        ))}
-      </div>
+      <ThemeSettings />
       {!hosted() && <ArtifactLoading />}
       {!hosted() && <PageConnectors />}
     </section>
@@ -182,8 +180,8 @@ function ArtifactLoading() {
       <span className="flex flex-col gap-0.5">
         Load artifacts' libraries and fonts through Silt
         <span className="text-xs text-fg-2">
-          Silt fetches each file once and keeps it, so opening an artifact never contacts a CDN, and pages you've opened before work offline. Off, the page loads
-          them from the CDNs.
+          Silt fetches each file once and keeps it, so opening an artifact never contacts a CDN, and pages you've opened before
+          work offline. Off, the page loads them from the CDNs.
         </span>
       </span>
     </label>
@@ -209,7 +207,12 @@ function PageConnectors() {
       },
       (failure: unknown) => toast(message(failure), 'danger'),
     )
-  const tools = useQuery({ queryKey: ['page-connectors', open], queryFn: () => api.connectorTools(open!), enabled: open !== null, retry: false })
+  const tools = useQuery({
+    queryKey: ['page-connectors', open],
+    queryFn: () => api.connectorTools(open!),
+    enabled: open !== null,
+    retry: false,
+  })
   const save = (next: PageConnector[]) =>
     api.setPageConnectors(next).then(
       () => void queries.invalidateQueries({ queryKey: key }),
@@ -225,7 +228,8 @@ function PageConnectors() {
     <div className="flex flex-col gap-2 pt-4" data-testid="page-connectors">
       <h3 className="text-sm font-medium text-fg-1">Connectors for pages</h3>
       <p className="text-xs text-fg-2">
-        MCP servers an artifact's page may call on this computer, as you. Each tool is off until you tick it, and a page asks you before every action.
+        MCP servers an artifact's page may call on this computer, as you. Each tool is off until you tick it, and a page asks you
+        before every action.
       </p>
       {connectors.length === 0 && <p className="text-xs text-fg-3">None yet.</p>}
       <ul className="flex flex-col gap-2">
@@ -233,11 +237,17 @@ function PageConnectors() {
           <li key={connector.name} className="rounded-md border border-line p-2 text-sm">
             <div className="flex items-center gap-2">
               <span className="min-w-0 flex-1 truncate font-medium">{connector.name}</span>
-              <code className="truncate text-xs text-fg-3">{connector.url ?? [connector.command, ...connector.args].join(' ')}</code>
+              <code className="truncate text-xs text-fg-3">
+                {connector.url ?? [connector.command, ...connector.args].join(' ')}
+              </code>
               <Button size="sm" variant="ghost" onClick={() => setOpen(open === connector.name ? null : connector.name)}>
                 Tools
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => void save(connectors.filter((other) => other.name !== connector.name))}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void save(connectors.filter((other) => other.name !== connector.name))}
+              >
                 Remove
               </Button>
             </div>
@@ -247,7 +257,12 @@ function PageConnectors() {
                   <span key={header} className="inline-flex items-center gap-1 rounded-sm border border-line px-1.5 py-0.5">
                     <span className="font-mono">{header}</span>
                     <span className="text-fg-3">in the keyring</span>
-                    <button type="button" className="text-fg-2 hover:text-fg-1" aria-label={`forget ${connector.name}'s ${header}`} onClick={() => void keep(connector.name, header, null)}>
+                    <button
+                      type="button"
+                      className="text-fg-2 hover:text-fg-1"
+                      aria-label={`forget ${connector.name}'s ${header}`}
+                      onClick={() => void keep(connector.name, header, null)}
+                    >
                       ×
                     </button>
                   </span>
@@ -281,7 +296,11 @@ function PageConnectors() {
                     </Button>
                   </form>
                 ) : (
-                  <Button size="sm" variant="ghost" onClick={() => setSecret({ name: connector.name, header: 'Authorization', value: '' })}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setSecret({ name: connector.name, header: 'Authorization', value: '' })}
+                  >
                     Add a secret header
                   </Button>
                 )}
@@ -297,11 +316,18 @@ function PageConnectors() {
                       type="checkbox"
                       checked={connector.tools[tool.name] === true}
                       onChange={(event) =>
-                        void save(connectors.map((other) => (other.name === connector.name ? { ...other, tools: { ...other.tools, [tool.name]: event.target.checked } } : other)))
+                        void save(
+                          connectors.map((other) =>
+                            other.name === connector.name
+                              ? { ...other, tools: { ...other.tools, [tool.name]: event.target.checked } }
+                              : other,
+                          ),
+                        )
                       }
                     />
                     <span>
-                      <span className="font-mono text-fg-1">{tool.name}</span> <span className="text-fg-3">{tool.read_only ? 'reads' : 'acts'}</span>
+                      <span className="font-mono text-fg-1">{tool.name}</span>{' '}
+                      <span className="text-fg-3">{tool.read_only ? 'reads' : 'acts'}</span>
                       {tool.description && <span className="block text-fg-2">{tool.description}</span>}
                     </span>
                   </label>
@@ -334,7 +360,12 @@ function Notifications() {
 export function Settings() {
   const { section } = useParams({ strict: false }) as { section?: string }
   // Sync is part of Devices and sync; its old address still lands there.
-  const chosen = section === 'add' ? 'projects' : section === 'sync' ? 'devices' : (SECTIONS.find((candidate) => candidate.id === section)?.id ?? 'projects')
+  const chosen =
+    section === 'add'
+      ? 'projects'
+      : section === 'sync'
+        ? 'devices'
+        : (SECTIONS.find((candidate) => candidate.id === section)?.id ?? 'projects')
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
   const signIn = status.data?.servers?.[0]
   const bodies: Record<string, ReactNode> = {
@@ -346,10 +377,15 @@ export function Settings() {
     models: <LocalModelsSettings />,
     workspaces: <WorkspacesSettings />,
     appearance: <Appearance />,
+    update: <UpdatesSettings />,
     'design-systems': <DesignSystemsSettings />,
   }
   return (
-    <Page title="Settings" meta={signIn ? `${signIn.user} on ${serverName(signIn.url)}` : hosted() ? undefined : 'this machine'} label="settings">
+    <Page
+      title="Settings"
+      meta={signIn ? `${signIn.user} on ${serverName(signIn.url)}` : hosted() ? undefined : 'this machine'}
+      label="settings"
+    >
       <div className="flex flex-col gap-6 md:flex-row md:gap-10">
         <nav aria-label="settings" className="flex flex-col gap-px md:w-[184px] md:shrink-0">
           {GROUPS.map((group) => (
@@ -363,7 +399,9 @@ export function Settings() {
                   aria-current={candidate.id === chosen ? 'page' : undefined}
                   className={cx(
                     'rounded-md px-2.5 py-1.5 max-md:min-h-11',
-                    candidate.id === chosen ? 'bg-accent-tint font-medium text-fg-1 shadow-[inset_2px_0_0_var(--accent)]' : 'text-fg-2 hover:bg-surface-2 hover:text-fg-1',
+                    candidate.id === chosen
+                      ? 'bg-accent-tint font-medium text-fg-1 shadow-[inset_2px_0_0_var(--accent)]'
+                      : 'text-fg-2 hover:bg-surface-2 hover:text-fg-1',
                   )}
                 >
                   {candidate.label}

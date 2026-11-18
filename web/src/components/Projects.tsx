@@ -90,7 +90,12 @@ function ProjectDesignSystem({ project }: { project: Project }) {
   return (
     <label className="flex flex-wrap items-center gap-2 text-xs text-fg-2">
       Artifacts' design system
-      <Select aria-label={`${project.name}'s design system`} value={picks.data[project.repo] ?? ''} onChange={(event) => void choose(event.target.value)} className="text-xs">
+      <Select
+        aria-label={`${project.name}'s design system`}
+        value={picks.data[project.repo] ?? ''}
+        onChange={(event) => void choose(event.target.value)}
+        className="text-xs"
+      >
         <option value="">The repository's, else the workspace's</option>
         {systems.data.map((system) => (
           <option key={system.name} value={system.name}>
@@ -124,7 +129,12 @@ function ProjectWorkspace({ project, views }: { project: Project; views: Workspa
     <span className="flex flex-col gap-1">
       <label className="flex flex-wrap items-center gap-2 text-xs text-fg-2">
         Workspace
-        <Select aria-label={`${project.name}'s workspace`} value={project.workspace ?? ''} onChange={(event) => choose(event.target.value)} className="text-xs">
+        <Select
+          aria-label={`${project.name}'s workspace`}
+          value={project.workspace ?? ''}
+          onChange={(event) => choose(event.target.value)}
+          className="text-xs"
+        >
           {views.map((view) => (
             <option key={view.workspace.id} value={view.workspace.id}>
               {view.workspace.name}
@@ -172,7 +182,13 @@ export function CloneHere({ project, projects }: { project: Project; projects: P
           .finally(() => setCloning(false))
       }}
     >
-      <Input aria-label={`where to clone ${project.name}`} className="min-w-48 flex-1 font-mono text-xs" placeholder="/home/me/src/app" value={path} onChange={(event) => setPath(event.target.value)} />
+      <Input
+        aria-label={`where to clone ${project.name}`}
+        className="min-w-48 flex-1 font-mono text-xs"
+        placeholder="/home/me/src/app"
+        value={path}
+        onChange={(event) => setPath(event.target.value)}
+      />
       <Button type="submit" disabled={!path.trim() || cloning}>
         {cloning ? 'Cloning…' : 'Clone here'}
       </Button>
@@ -214,7 +230,12 @@ function ProjectDefaults({ project }: { project: Project }) {
   const queries = useQueryClient()
   const agents = useQuery({ queryKey: keys.agents, queryFn: api.agents })
   const id = useId()
-  const save = (change: { default_agent?: string | null; default_preset?: string | null; git_notes?: GitNotes; forge_comments?: boolean }) =>
+  const save = (change: {
+    default_agent?: string | null
+    default_preset?: string | null
+    git_notes?: GitNotes
+    forge_comments?: boolean
+  }) =>
     api
       .orgChange({
         change: 'project_settings',
@@ -233,7 +254,11 @@ function ProjectDefaults({ project }: { project: Project }) {
         (failure: unknown) => toast(message(failure), 'danger'),
       )
   return (
-    <div role="group" aria-label={`defaults for ${project.name}`} className="flex flex-col text-xs [&>div:first-child]:border-t-0 [&>span:first-child>div]:border-t-0">
+    <div
+      role="group"
+      aria-label={`defaults for ${project.name}`}
+      className="flex flex-col text-xs [&>div:first-child]:border-t-0 [&>span:first-child>div]:border-t-0"
+    >
       <Mock id="add.visibility">
         <SettingRow id={`${id}-visibility`} label="Visible to" help="Set by the org; an owner can change it.">
           <Select id={`${id}-visibility`} disabled className="w-full text-xs" defaultValue="org">
@@ -242,7 +267,12 @@ function ProjectDefaults({ project }: { project: Project }) {
         </SettingRow>
       </Mock>
       <SettingRow id={`${id}-agent`} label="Default agent" help="New threads start with it; another can be picked each time.">
-        <Select id={`${id}-agent`} className="w-full text-xs" value={project.default_agent ?? ''} onChange={(event) => void save({ default_agent: event.target.value || null })}>
+        <Select
+          id={`${id}-agent`}
+          className="w-full text-xs"
+          value={project.default_agent ?? ''}
+          onChange={(event) => void save({ default_agent: event.target.value || null })}
+        >
           <option value="">None; pick each time</option>
           {(agents.data?.agents ?? []).map((agent) => (
             <option key={agent.id} value={agent.id}>
@@ -252,7 +282,12 @@ function ProjectDefaults({ project }: { project: Project }) {
         </Select>
       </SettingRow>
       <SettingRow id={`${id}-preset`} label="Permissions" help="What new threads' agents may do without asking.">
-        <Select id={`${id}-preset`} className="w-full text-xs" value={project.default_preset ?? ''} onChange={(event) => void save({ default_preset: event.target.value || null })}>
+        <Select
+          id={`${id}-preset`}
+          className="w-full text-xs"
+          value={project.default_preset ?? ''}
+          onChange={(event) => void save({ default_preset: event.target.value || null })}
+        >
           <option value="">Ask before commands (Silt's default)</option>
           {DEFAULT_PRESETS.map((preset) => (
             <option key={preset.id} value={preset.id}>
@@ -262,14 +297,24 @@ function ProjectDefaults({ project }: { project: Project }) {
         </Select>
       </SettingRow>
       <SettingRow id={`${id}-notes`} label="Git notes" help="A note on each commit naming the thread that made it.">
-        <Select id={`${id}-notes`} className="w-full text-xs" value={project.git_notes} onChange={(event) => void save({ git_notes: event.target.value as GitNotes })}>
+        <Select
+          id={`${id}-notes`}
+          className="w-full text-xs"
+          value={project.git_notes}
+          onChange={(event) => void save({ git_notes: event.target.value as GitNotes })}
+        >
           <option value="off">Off</option>
           <option value="local">On each commit, kept in the clone</option>
           <option value="push">On each commit, pushed to origin</option>
         </Select>
       </SettingRow>
       <SettingRow id={`${id}-forge`} label="Pull requests" help="Whether Silt comments on a pull request with its thread.">
-        <Select id={`${id}-forge`} className="w-full text-xs" value={project.forge_comments ? 'on' : 'off'} onChange={(event) => void save({ forge_comments: event.target.value === 'on' })}>
+        <Select
+          id={`${id}-forge`}
+          className="w-full text-xs"
+          value={project.forge_comments ? 'on' : 'off'}
+          onChange={(event) => void save({ forge_comments: event.target.value === 'on' })}
+        >
           <option value="off">No comment from Silt</option>
           <option value="on">One comment naming the thread</option>
         </Select>
@@ -345,11 +390,21 @@ export function AddProjectPage() {
   if (hosted())
     return (
       <Page width="narrow">
-        <EmptyState title="Projects are added from a machine">Open Silt on the machine that has the clone, with `silt open`.</EmptyState>
+        <EmptyState title="Projects are added from a machine">
+          Open Silt on the machine that has the clone, with `silt open`.
+        </EmptyState>
       </Page>
     )
   return (
-    <Page title={`Add a project to ${where}`} width="narrow" actions={<Link to="/settings/$section" params={{ section: 'projects' }} className={buttonClass('ghost')}>Done</Link>}>
+    <Page
+      title={`Add a project to ${where}`}
+      width="narrow"
+      actions={
+        <Link to="/settings/$section" params={{ section: 'projects' }} className={buttonClass('ghost')}>
+          Done
+        </Link>
+      }
+    >
       <section aria-label="add a project" className="flex flex-col gap-6">
         <Section title={`Clones on ${device}`}>
           <div className="overflow-hidden rounded-md border border-line bg-elevated [&>*]:border-b [&>*]:border-line-subtle [&>*:last-child]:border-b-0">
@@ -386,7 +441,13 @@ export function AddProjectPage() {
                 .finally(() => setBusy(null))
             }}
           >
-            <Input aria-label="clone path" className="min-w-48 flex-1 font-mono text-xs" placeholder="/home/me/src/app" value={path} onChange={(event) => setPath(event.target.value)} />
+            <Input
+              aria-label="clone path"
+              className="min-w-48 flex-1 font-mono text-xs"
+              placeholder="/home/me/src/app"
+              value={path}
+              onChange={(event) => setPath(event.target.value)}
+            />
             <Button type="submit" variant="primary" disabled={busy !== null || !path.trim()}>
               {busy === 'path' ? 'Adding…' : 'Add'}
             </Button>
@@ -423,8 +484,20 @@ export function AddProjectPage() {
                 .finally(() => setBusy(null))
             }}
           >
-            <Input aria-label="remote URL" className="min-w-60 flex-1 font-mono text-xs" placeholder="git@github.com:acme/app.git" value={url} onChange={(event) => setUrl(event.target.value)} />
-            <Input aria-label="where to clone it" className="min-w-48 flex-1 font-mono text-xs" placeholder="/home/me/src/app" value={into} onChange={(event) => setInto(event.target.value)} />
+            <Input
+              aria-label="remote URL"
+              className="min-w-60 flex-1 font-mono text-xs"
+              placeholder="git@github.com:acme/app.git"
+              value={url}
+              onChange={(event) => setUrl(event.target.value)}
+            />
+            <Input
+              aria-label="where to clone it"
+              className="min-w-48 flex-1 font-mono text-xs"
+              placeholder="/home/me/src/app"
+              value={into}
+              onChange={(event) => setInto(event.target.value)}
+            />
             <Button type="submit" disabled={busy !== null || !url.trim() || !into.trim()}>
               {busy === 'url' ? 'Cloning…' : 'Clone'}
             </Button>
@@ -453,7 +526,10 @@ export function Projects() {
   const groups: { view?: WorkspaceView; projects: Project[] }[] =
     !hosted() && workspaces.data?.saved
       ? workspaces.data.workspaces
-          .map((view) => ({ view, projects: all.filter((project) => (project.workspace ?? workspaces.data.default) === view.workspace.id) }))
+          .map((view) => ({
+            view,
+            projects: all.filter((project) => (project.workspace ?? workspaces.data.default) === view.workspace.id),
+          }))
           .filter((group) => group.projects.length > 0)
       : [{ projects: all }]
   return (
@@ -477,11 +553,19 @@ export function Projects() {
       {projects.error && <p className="text-sm text-danger">{message(projects.error)}</p>}
       {projects.isSuccess && all.length === 0 && (
         <EmptyState title="Add a clone to start threads in it">
-          From <Link to="/" search={{ pick: 'folder' }} className="text-accent-fg">New thread</Link>, or run <code>silt open</code> in one.
+          From{' '}
+          <Link to="/" search={{ pick: 'folder' }} className="text-accent-fg">
+            New thread
+          </Link>
+          , or run <code>silt open</code> in one.
         </EmptyState>
       )}
       {groups.map((group) => (
-        <section key={group.view?.workspace.id ?? 'all'} aria-label={group.view ? `${group.view.workspace.name} projects` : undefined} className="mb-5 flex flex-col gap-2 last:mb-0">
+        <section
+          key={group.view?.workspace.id ?? 'all'}
+          aria-label={group.view ? `${group.view.workspace.name} projects` : undefined}
+          className="mb-5 flex flex-col gap-2 last:mb-0"
+        >
           {group.view && (
             <div className="flex flex-wrap items-center gap-2">
               <WorkspaceBadge name={group.view.workspace.name} size={20} />
@@ -492,73 +576,84 @@ export function Projects() {
               </span>
             </div>
           )}
-      <ul data-testid="projects" className="overflow-hidden rounded-md border border-line bg-elevated empty:hidden">
-        {group.projects.map((project) => {
-          const own = settable(project)
-          const open = own && (opened[project.repo] ?? project === first)
-          return (
-            <li key={`${project.server ?? ''}:${project.repo}`} aria-label={project.name} className="flex flex-col gap-1.5 border-b border-line-subtle px-4 py-3 text-sm last:border-b-0">
-              <div className="flex flex-wrap items-center gap-2">
-                {own ? (
-                  <button
-                    type="button"
-                    aria-expanded={open}
-                    title={`${open ? 'Hide' : 'Show'} its defaults`}
-                    onClick={() => setOpened((was) => ({ ...was, [project.repo]: !open }))}
-                    className="-ml-1 inline-flex items-center gap-1.5 rounded-sm px-1 hover:bg-surface-2 max-md:min-h-11"
-                  >
-                    <Icon name="chevronRight" className={cx('h-3 w-3 text-fg-2 transition-transform', open && 'rotate-90')} />
-                    <span className="font-mono font-medium">{project.name}</span>
-                  </button>
-                ) : (
-                  <span className="font-mono font-medium">{project.name}</span>
-                )}
-                <span className="min-w-0 truncate font-mono text-2xs text-fg-2" title={project.repo}>
-                  {shortPath(project.repo)}
-                </span>
-                {project.org && <Tag>{project.org}</Tag>}
-                {several && project.server && <Tag>{serverName(project.server)}</Tag>}
-                <span className="ml-auto text-xs text-fg-2">
-                  {project.threads} {project.threads === 1 ? 'thread' : 'threads'}
-                  {project.open_mrs > 0 && ` · ${project.open_mrs} open merge ${project.open_mrs === 1 ? 'request' : 'requests'}`}
-                </span>
-              </div>
-              <div className={cx('flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-fg-2', own && 'md:pl-5')}>
-                {project.clone ? (
-                  <span>
-                    Cloned here at{' '}
-                    <span className="font-mono" title={project.clone}>
-                      {shortPath(project.clone)}
+          <ul data-testid="projects" className="overflow-hidden rounded-md border border-line bg-elevated empty:hidden">
+            {group.projects.map((project) => {
+              const own = settable(project)
+              const open = own && (opened[project.repo] ?? project === first)
+              return (
+                <li
+                  key={`${project.server ?? ''}:${project.repo}`}
+                  aria-label={project.name}
+                  className="flex flex-col gap-1.5 border-b border-line-subtle px-4 py-3 text-sm last:border-b-0"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    {own ? (
+                      <button
+                        type="button"
+                        aria-expanded={open}
+                        title={`${open ? 'Hide' : 'Show'} its defaults`}
+                        onClick={() => setOpened((was) => ({ ...was, [project.repo]: !open }))}
+                        className="-ml-1 inline-flex items-center gap-1.5 rounded-sm px-1 hover:bg-surface-2 max-md:min-h-11"
+                      >
+                        <Icon name="chevronRight" className={cx('h-3 w-3 text-fg-2 transition-transform', open && 'rotate-90')} />
+                        <span className="font-mono font-medium">{project.name}</span>
+                      </button>
+                    ) : (
+                      <span className="font-mono font-medium">{project.name}</span>
+                    )}
+                    <span className="min-w-0 truncate font-mono text-2xs text-fg-2" title={project.repo}>
+                      {shortPath(project.repo)}
                     </span>
-                  </span>
-                ) : (
-                  !hosted() && <CloneHere project={project} projects={all} />
-                )}
-                {!hosted() && project.clone && <ProjectHome project={project} />}
-                {!hosted() && project.clone && <ProjectDesignSystem project={project} />}
-                {!hosted() && workspaces.data?.saved && <ProjectWorkspace project={project} views={workspaces.data.workspaces} />}
-              </div>
-              {open ? (
-                <div className="mt-1 md:pl-5">
-                  <ProjectDefaults project={project} />
-                </div>
-              ) : (
-                (project.default_agent || project.default_preset) && (
-                  <p className={cx('text-xs text-fg-2', own && 'md:pl-5')}>
-                    New threads start with{' '}
-                    {[
-                      project.default_agent && (agents.data?.agents.find((agent) => agent.id === project.default_agent)?.name ?? project.default_agent),
-                      project.default_preset && (PRESETS.find((preset) => preset.id === project.default_preset)?.label.toLowerCase() ?? project.default_preset),
-                    ]
-                      .filter(Boolean)
-                      .join(', ')}
-                  </p>
-                )
-              )}
-            </li>
-          )
-        })}
-      </ul>
+                    {project.org && <Tag>{project.org}</Tag>}
+                    {several && project.server && <Tag>{serverName(project.server)}</Tag>}
+                    <span className="ml-auto text-xs text-fg-2">
+                      {project.threads} {project.threads === 1 ? 'thread' : 'threads'}
+                      {project.open_mrs > 0 &&
+                        ` · ${project.open_mrs} open merge ${project.open_mrs === 1 ? 'request' : 'requests'}`}
+                    </span>
+                  </div>
+                  <div className={cx('flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-fg-2', own && 'md:pl-5')}>
+                    {project.clone ? (
+                      <span>
+                        Cloned here at{' '}
+                        <span className="font-mono" title={project.clone}>
+                          {shortPath(project.clone)}
+                        </span>
+                      </span>
+                    ) : (
+                      !hosted() && <CloneHere project={project} projects={all} />
+                    )}
+                    {!hosted() && project.clone && <ProjectHome project={project} />}
+                    {!hosted() && project.clone && <ProjectDesignSystem project={project} />}
+                    {!hosted() && workspaces.data?.saved && (
+                      <ProjectWorkspace project={project} views={workspaces.data.workspaces} />
+                    )}
+                  </div>
+                  {open ? (
+                    <div className="mt-1 md:pl-5">
+                      <ProjectDefaults project={project} />
+                    </div>
+                  ) : (
+                    (project.default_agent || project.default_preset) && (
+                      <p className={cx('text-xs text-fg-2', own && 'md:pl-5')}>
+                        New threads start with{' '}
+                        {[
+                          project.default_agent &&
+                            (agents.data?.agents.find((agent) => agent.id === project.default_agent)?.name ??
+                              project.default_agent),
+                          project.default_preset &&
+                            (PRESETS.find((preset) => preset.id === project.default_preset)?.label.toLowerCase() ??
+                              project.default_preset),
+                        ]
+                          .filter(Boolean)
+                          .join(', ')}
+                      </p>
+                    )
+                  )}
+                </li>
+              )
+            })}
+          </ul>
         </section>
       ))}
       {all.some(settable) && <p className="mt-2 text-2xs text-fg-2">{CHANGING}</p>}

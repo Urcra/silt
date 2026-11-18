@@ -1,4 +1,13 @@
-import { type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  type ClipboardEvent,
+  type DragEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import type { AgentCommand } from '../api'
 import { filesFrom } from '../attachments'
 import { matching, typedCommand } from '../slashCommands'
@@ -80,7 +89,17 @@ function growWithText(element: HTMLTextAreaElement): () => void {
 }
 
 /** The agent's commands that match the one being typed, over the box; the one picked fills in its name. */
-function CommandMenu({ id, offered, active, onPick }: { id: string; offered: AgentCommand[]; active: number; onPick: (command: AgentCommand) => void }) {
+function CommandMenu({
+  id,
+  offered,
+  active,
+  onPick,
+}: {
+  id: string
+  offered: AgentCommand[]
+  active: number
+  onPick: (command: AgentCommand) => void
+}) {
   useEffect(() => {
     document.getElementById(`${id}-command-${active}`)?.scrollIntoView({ block: 'nearest' })
   }, [id, active])
@@ -100,7 +119,10 @@ function CommandMenu({ id, offered, active, onPick }: { id: string; offered: Age
           // The box keeps the focus, so typing goes on after a click.
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => onPick(command)}
-          className={cx('flex cursor-pointer flex-col rounded-sm px-2.5 py-1.5 max-md:min-h-11', index === active && 'bg-surface-2')}
+          className={cx(
+            'flex cursor-pointer flex-col rounded-sm px-2.5 py-1.5 max-md:min-h-11',
+            index === active && 'bg-surface-2',
+          )}
         >
           <span className="font-mono text-xs text-fg-1">
             /{command.name}
@@ -283,7 +305,12 @@ export function ComposerBox({
         limit: box.current ? growLimit(box.current) : undefined,
       }),
     onText: (words, sendIt) => {
-      const next = insertWords(value, box.current?.selectionStart ?? value.length, box.current?.selectionEnd ?? value.length, words)
+      const next = insertWords(
+        value,
+        box.current?.selectionStart ?? value.length,
+        box.current?.selectionEnd ?? value.length,
+        words,
+      )
       dictatedCaret.current = next.caret
       dictatedToSend.current = sendIt ? next.value : null
       edit(next.value)
@@ -327,7 +354,8 @@ export function ComposerBox({
   const choosing = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const step = { ArrowDown: 1, ArrowUp: offered.length - 1 }[event.key]
     if (step !== undefined) setChosen((active + step) % offered.length)
-    else if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && !event.nativeEvent.isComposing) pick(offered[active]!)
+    else if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && !event.nativeEvent.isComposing)
+      pick(offered[active]!)
     else if (event.key === 'Escape') setDismissed(value)
     else return false
     event.preventDefault()
@@ -357,7 +385,13 @@ export function ComposerBox({
     if (dictation.onKey(event)) return
     // ⏎ sends and shift+⏎ breaks the line, as in a chat; on a touch keyboard, with no shift, ⏎ breaks it and
     // the button sends. Never while an input method is still composing a character.
-    if (event.key === 'Enter' && !event.nativeEvent.isComposing && !event.shiftKey && !event.altKey && (!touch || event.metaKey || event.ctrlKey)) {
+    if (
+      event.key === 'Enter' &&
+      !event.nativeEvent.isComposing &&
+      !event.shiftKey &&
+      !event.altKey &&
+      (!touch || event.metaKey || event.ctrlKey)
+    ) {
       event.preventDefault()
       onSend(event.metaKey || event.ctrlKey)
     }

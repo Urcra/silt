@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { useMatch, useNavigate } from '@tanstack/react-router'
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { api, short } from '../api'
 import { NEW_THREAD_DRAFT, keepDraft } from '../drafts'
 import { useNow } from '../now'
+import { cancelPreview, previewThemeById } from '../theme'
 import { projectName } from '../projects'
 import { keys, message } from '../query'
 import { OPEN_PALETTE, openPalette } from '../palette'
@@ -23,9 +24,9 @@ interface Item {
   dot?: ReactNode
   /** Shown on the right: its keys, or where and when. */
   hint?: ReactNode
+  preview?: { theme: string; appearance: string }
   run: () => void
 }
-
 
 /** ⌘K: start work from what's typed, go to a thread or something said, or do an action. */
 export function Palette() {
@@ -87,7 +88,14 @@ function PaletteList({ close }: { close: () => void }) {
             text: typed,
             label: (
               <>
-                New thread{project && <> in <span className="font-mono">{project}</span></>}: “{typed}”
+                New thread
+                {project && (
+                  <>
+                    {' '}
+                    in <span className="font-mono">{project}</span>
+                  </>
+                )}
+                : “{typed}”
               </>
             ),
             run: () => {
@@ -116,8 +124,7 @@ function PaletteList({ close }: { close: () => void }) {
                   text: typed,
                   label: 'Queue it in this thread',
                   hint: current?.agent_state === 'working' ? 'turn running' : undefined,
-                  run: () =>
-                    void api.enqueue(here, typed).then(() => toast('Queued for the agent', 'ok'), failed),
+                  run: () => void api.enqueue(here, typed).then(() => toast('Queued for the agent', 'ok'), failed),
                 },
               ]
             : []),
@@ -185,7 +192,8 @@ function PaletteList({ close }: { close: () => void }) {
       text: action.label,
       icon: 'chevronRight',
       label: action.label,
-      hint: action.keys ? formatKeys(action.keys) : undefined,
+      hint: action.keys ? formatKeys(action.keys) : action.hint,
+      preview: action.preview,
       run: action.run,
     }))
 
@@ -201,8 +209,23 @@ function PaletteList({ close }: { close: () => void }) {
     ...(wanted ? [] : actions),
   ]
   const shown = Math.min(chosen, Math.max(items.length - 1, 0))
+  // A highlighted theme shows until another is, the palette closes, or it's kept.
+  const previewTheme = items[shown]?.preview?.theme
+  const previewAppearance = items[shown]?.preview?.appearance
+  const ran = useRef(false)
+  useEffect(() => {
+    if (previewTheme && previewAppearance) previewThemeById(previewTheme, previewAppearance)
+    else cancelPreview()
+  }, [previewTheme, previewAppearance])
+  useEffect(
+    () => () => {
+      if (!ran.current) cancelPreview()
+    },
+    [],
+  )
   const run = (item: Item | undefined) => {
     if (!item) return
+    ran.current = item.preview !== undefined
     close()
     item.run()
   }

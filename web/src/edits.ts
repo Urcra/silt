@@ -34,7 +34,12 @@ function readChange(entry: HistoryEntry): Change | null {
   if (name === 'Edit') return { verb: 'Edited', file, removed: lines(input.old_string), added: lines(input.new_string) }
   if (name === 'MultiEdit' && Array.isArray(input.edits)) {
     const edits = input.edits as Record<string, unknown>[]
-    return { verb: 'Edited', file, removed: edits.flatMap((edit) => lines(edit.old_string)), added: edits.flatMap((edit) => lines(edit.new_string)) }
+    return {
+      verb: 'Edited',
+      file,
+      removed: edits.flatMap((edit) => lines(edit.old_string)),
+      added: edits.flatMap((edit) => lines(edit.new_string)),
+    }
   }
   if (name === 'Write') return { verb: 'Wrote', file, removed: [], added: lines(input.content) }
   return null

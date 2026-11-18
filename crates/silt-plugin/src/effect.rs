@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// A channel whose traffic Silt can't check: the card says so.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "EffectChannel"))]
 #[serde(rename_all = "kebab-case")]
 pub enum Channel {
     Sockets,

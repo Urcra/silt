@@ -4,7 +4,9 @@ export type Box = { x: number; y: number; w: number; h: number }
 
 /** Whether `inner` lies wholly within `outer`, as a note in a section does. */
 export function within(inner: Box, outer: Box): boolean {
-  return inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h
+  return (
+    inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h
+  )
 }
 
 /** The middle of `box`. */
@@ -52,7 +54,8 @@ export function crosses(a: Point, b: Point, box: Box): boolean {
 
 function length(points: Point[]): number {
   let total = 0
-  for (let at = 1; at < points.length; at++) total += Math.hypot(points[at][0] - points[at - 1][0], points[at][1] - points[at - 1][1])
+  for (let at = 1; at < points.length; at++)
+    total += Math.hypot(points[at][0] - points[at - 1][0], points[at][1] - points[at - 1][1])
   return total
 }
 
@@ -80,7 +83,9 @@ export function route(from: Box, to: Box, others: Box[], margin = 16): Point[] {
     [box.x + box.w, box.y + box.h],
     [box.x, box.y + box.h],
   ]
-  const waypoints = inTheWay.flatMap(corners).filter(([x, y]) => !others.some((box) => x > box.x && x < box.x + box.w && y > box.y && y < box.y + box.h))
+  const waypoints = inTheWay
+    .flatMap(corners)
+    .filter(([x, y]) => !others.some((box) => x > box.x && x < box.x + box.w && y > box.y && y < box.y + box.h))
   let best: Point[] | null = null
   const consider = (points: Point[]) => {
     const drawn = path(points)
@@ -88,7 +93,6 @@ export function route(from: Box, to: Box, others: Box[], margin = 16): Point[] {
     if (!best || length(drawn) < length(best)) best = drawn
   }
   for (const one of waypoints) consider([start, one, end])
-  if (!best)
-    for (const one of waypoints) for (const two of waypoints) if (one !== two) consider([start, one, two, end])
+  if (!best) for (const one of waypoints) for (const two of waypoints) if (one !== two) consider([start, one, two, end])
   return best ?? straight
 }

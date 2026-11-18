@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO themes (user_id, name, at_ms, deleted, body) VALUES (?, ?, ?, ?, ?)\n         ON CONFLICT (user_id, name) DO UPDATE SET at_ms = excluded.at_ms, deleted = excluded.deleted, body = excluded.body\n         WHERE excluded.at_ms > themes.at_ms",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "414d151e54af51d1639feb2bf2f411ed4bcd0fb2d61cd5c2ba47554722dfe52d"
+}

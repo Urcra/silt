@@ -1,0 +1,172 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Urcra/silt/main/docs/reference/theme.schema.json",
+  "name": "Gruvbox",
+  "author": "Pavel Pertsev",
+  "license": "MIT",
+  "source": "https://github.com/morhetz/gruvbox",
+  "copyright": "Copyright (c) 2012 Pavel Pertsev. Colours at or below WCAG AA's 4.5:1 for text were moved in lightness, keeping their hue.",
+  "themes": [
+    {
+      "id": "gruvbox-light",
+      "name": "Gruvbox Light",
+      "appearance": "light",
+      "colors": {
+        "bg": "#fbf1c7",
+        "bg-elevated": "#f9f5d7",
+        "surface-1": "#f2e5bc",
+        "surface-2": "#ebdbb2",
+        "surface-3": "#d5c4a1",
+        "fg-1": "#3c3836",
+        "fg-2": "#504945",
+        "fg-3": "#786b60",
+        "border": "#d5c4a1",
+        "border-strong": "#bdae93",
+        "accent": "#af3a03",
+        "accent-fg": "#af3a03",
+        "ok": "#757004",
+        "warn": "#b57614",
+        "danger": "#9d0006",
+        "info": "#076678"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#9d0006"
+        },
+        "string": {
+          "color": "#757004"
+        },
+        "string-special": {
+          "color": "#3f7855"
+        },
+        "number": {
+          "color": "#8f3f71"
+        },
+        "constant": {
+          "color": "#8f3f71"
+        },
+        "comment": {
+          "color": "#796a5c",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#9d6000"
+        },
+        "macro": {
+          "color": "#3f7855"
+        },
+        "variable": {
+          "color": "#076678"
+        },
+        "definition": {
+          "color": "#757004",
+          "font_weight": 600
+        },
+        "property": {
+          "color": "#076678"
+        },
+        "operator": {
+          "color": "#af3a03"
+        },
+        "punctuation": {
+          "color": "#786b60"
+        },
+        "meta": {
+          "color": "#3f7855"
+        },
+        "heading": {
+          "color": "#757004",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#076678"
+        }
+      },
+      "radii": {
+        "sm": 2,
+        "md": 4,
+        "lg": 6
+      }
+    },
+    {
+      "id": "gruvbox-dark",
+      "name": "Gruvbox Dark",
+      "appearance": "dark",
+      "colors": {
+        "bg": "#282828",
+        "bg-elevated": "#1d2021",
+        "surface-1": "#32302f",
+        "surface-2": "#3c3836",
+        "surface-3": "#504945",
+        "fg-1": "#ebdbb2",
+        "fg-2": "#d5c4a1",
+        "fg-3": "#a89984",
+        "border": "#504945",
+        "border-strong": "#665c54",
+        "accent": "#fe8019",
+        "accent-fg": "#fe8019",
+        "ok": "#b8bb26",
+        "warn": "#fabd2f",
+        "danger": "#ff4f39",
+        "info": "#83a598"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#ff4f39"
+        },
+        "string": {
+          "color": "#b8bb26"
+        },
+        "string-special": {
+          "color": "#8ec07c"
+        },
+        "number": {
+          "color": "#d3869b"
+        },
+        "constant": {
+          "color": "#d3869b"
+        },
+        "comment": {
+          "color": "#9b8c7d",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#fabd2f"
+        },
+        "macro": {
+          "color": "#8ec07c"
+        },
+        "variable": {
+          "color": "#83a598"
+        },
+        "definition": {
+          "color": "#b8bb26",
+          "font_weight": 600
+        },
+        "property": {
+          "color": "#83a598"
+        },
+        "operator": {
+          "color": "#fe8019"
+        },
+        "punctuation": {
+          "color": "#a89984"
+        },
+        "meta": {
+          "color": "#8ec07c"
+        },
+        "heading": {
+          "color": "#b8bb26",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#83a598"
+        }
+      },
+      "radii": {
+        "sm": 2,
+        "md": 4,
+        "lg": 6
+      }
+    }
+  ]
+}

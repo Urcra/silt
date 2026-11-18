@@ -10,11 +10,26 @@ import { useNow } from '../now'
 import { keys, message } from '../query'
 import { itemOf, linesOf, reviewPrompt } from '../review'
 import { ago } from '../time'
-import { Avatar, Button, Counts, Dot, type DotTone, EmptyState, Icon, Skeleton, Tabs, Textarea, buttonClass, cx, toast } from '../ui'
+import {
+  Avatar,
+  Button,
+  Counts,
+  Dot,
+  type DotTone,
+  EmptyState,
+  Icon,
+  Skeleton,
+  Tabs,
+  Textarea,
+  buttonClass,
+  cx,
+  toast,
+} from '../ui'
 import { CommentThread } from './CommentThread'
 import { Conversation } from './Conversation'
 import { CopyLink } from './CopyLink'
-import { HideGitBox, HideOthersBox, useShared } from './DiffPanel'
+import { useShared } from '../hideGit'
+import { HideGitBox, HideOthersBox } from './DiffPanel'
 import { type Commenting, type DiffLayout, DiffView } from './DiffView'
 import { Markdown } from './Markdown'
 import { ListColumn, Page } from './Page'
@@ -58,12 +73,15 @@ export function MergeRequests() {
   const [tab, setTab] = useState<ListTab>('open')
   const shown = [...(requests.data ?? [])].reverse()
   const inTab = (which: ListTab) =>
-    shown.filter((mr) => (which === 'open' ? mr.status === 'open' : which === 'merged' ? mr.status === 'approved' : mr.status.startsWith('declined')))
+    shown.filter((mr) =>
+      which === 'open' ? mr.status === 'open' : which === 'merged' ? mr.status === 'approved' : mr.status.startsWith('declined'),
+    )
   const open = inTab('open')
   const list = (title: string, items: MrSummary[]) =>
     items.length === 0 ? (
       <p className="px-1 text-sm text-fg-2">
-        No {title.toLowerCase()} merge requests.{title === 'Open' && ' A fork offers its work back with “Offer as merge request” on its page.'}
+        No {title.toLowerCase()} merge requests.
+        {title === 'Open' && ' A fork offers its work back with “Offer as merge request” on its page.'}
       </p>
     ) : (
       <section aria-label={title.toLowerCase()} className="flex flex-col gap-2">
@@ -71,7 +89,10 @@ export function MergeRequests() {
           {items.map((mr) => {
             const state = standing(mr)
             return (
-              <li key={mr.id} className="flex items-center gap-3 border-b border-line-subtle px-3 py-2 last:border-b-0 hover:bg-surface-2 max-md:min-h-14">
+              <li
+                key={mr.id}
+                className="flex items-center gap-3 border-b border-line-subtle px-3 py-2 last:border-b-0 hover:bg-surface-2 max-md:min-h-14"
+              >
                 <Dot tone={state.tone} label={state.label} />
                 <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <Link className="truncate font-medium text-fg-1 hover:text-accent-fg" to="/mr/$id" params={{ id: mr.id }}>
@@ -97,7 +118,8 @@ export function MergeRequests() {
         <div data-testid="merge-requests" className="flex flex-col gap-4">
           {requests.data?.length === 0 && (
             <EmptyState title="Offer a fork's work back to review it here">
-              A fork offers its work with "Offer as merge request" on its page, or <code className="font-mono">silt mr create</code>.
+              A fork offers its work with "Offer as merge request" on its page, or{' '}
+              <code className="font-mono">silt mr create</code>.
             </EmptyState>
           )}
           {(requests.data?.length ?? 0) > 0 && (
@@ -152,7 +174,13 @@ function ChangeGuide({
       <section aria-label="change guide" className="flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-fg-2">
         <Icon name="edit" className="mr-1 h-3.5 w-3.5" />
         No change guide yet.
-        <Button variant="ghost" size="sm" className="text-accent-fg" onClick={ask} title="The agent running in the fork writes it, on this machine">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-accent-fg"
+          onClick={ask}
+          title="The agent running in the fork writes it, on this machine"
+        >
           Ask the fork's agent
         </Button>
         to write one, or
@@ -162,7 +190,10 @@ function ChangeGuide({
       </section>
     )
   return (
-    <section aria-label="change guide" className="flex max-w-[720px] flex-col gap-2 rounded-md border border-line bg-surface-1 px-3.5 py-3">
+    <section
+      aria-label="change guide"
+      className="flex max-w-[720px] flex-col gap-2 rounded-md border border-line bg-surface-1 px-3.5 py-3"
+    >
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Change guide</h2>
         {guide && <span className="text-2xs text-fg-2">written by {guide.by}</span>}
@@ -181,13 +212,21 @@ function ChangeGuide({
         </div>
       ) : (
         <p className="text-xs text-fg-2">
-          {asked ? 'The fork’s agent is writing it…' : 'No guide yet. A guide walks a reviewer through the files in the order to read them.'}
+          {asked
+            ? 'The fork’s agent is writing it…'
+            : 'No guide yet. A guide walks a reviewer through the files in the order to read them.'}
         </p>
       )}
       {guide && files.length > 0 && (
         <p className="flex flex-wrap gap-x-3 gap-y-1 text-2xs">
           {files.map((path) => (
-            <Link key={path} to="/mr/$id" params={{ id }} hash={`file-${path}`} className="font-mono text-accent-fg hover:text-fg-1">
+            <Link
+              key={path}
+              to="/mr/$id"
+              params={{ id }}
+              hash={`file-${path}`}
+              className="font-mono text-accent-fg hover:text-fg-1"
+            >
               {path}
             </Link>
           ))}
@@ -218,7 +257,10 @@ function ChangeGuide({
 function Check({ done, label, detail }: { done: boolean | null; label: string; detail: string }) {
   return (
     <li className="flex items-center gap-2 text-xs">
-      <Icon name={done === false ? 'alert' : done ? 'check' : 'edit'} className={cx('h-3.5 w-3.5', done === false ? 'text-warn' : done ? 'text-ok' : 'text-fg-3')} />
+      <Icon
+        name={done === false ? 'alert' : done ? 'check' : 'edit'}
+        className={cx('h-3.5 w-3.5', done === false ? 'text-warn' : done ? 'text-ok' : 'text-fg-3')}
+      />
       <span className={done === null ? 'text-fg-2' : 'text-fg-1'}>{label}</span>
       <span className="ml-auto text-fg-2">{detail}</span>
     </li>
@@ -271,7 +313,9 @@ function Approval({
     <section aria-label="approval" className="flex w-full flex-col gap-3">
       <div className="flex items-center gap-2">
         <Dot tone={open ? 'warn' : standing(mr).tone} />
-        <span className="text-xs font-medium">{open ? 'Needs 1 approval' : mr.status === 'approved' ? 'Approved and merged' : 'Declined'}</span>
+        <span className="text-xs font-medium">
+          {open ? 'Needs 1 approval' : mr.status === 'approved' ? 'Approved and merged' : 'Declined'}
+        </span>
         {open && <span className="ml-auto text-xs text-fg-2">{canApprove ? 'you can approve' : 'its owner approves'}</span>}
         {!open && mr.decided_ms !== null && (
           <span className="ml-auto text-xs text-fg-2" data-volatile>
@@ -290,10 +334,17 @@ function Approval({
               label={conflicts === 0 ? 'Merges cleanly' : 'Both sides changed the same files'}
               detail={conflicts === 0 ? 'no conflicts' : `${conflicts} ${conflicts === 1 ? 'file' : 'files'}`}
             />
-            <Check done={guided || null} label={guided ? 'Change guide written' : 'No change guide'} detail={guided ? 'above' : 'optional'} />
+            <Check
+              done={guided || null}
+              label={guided ? 'Change guide written' : 'No change guide'}
+              detail={guided ? 'above' : 'optional'}
+            />
           </ul>
           <span className="h-1 overflow-hidden rounded-sm bg-surface-2" aria-hidden="true">
-            <span className={cx('block h-full', ready === checks.length ? 'bg-ok' : 'bg-accent')} style={{ width: `${(100 * ready) / checks.length}%` }} />
+            <span
+              className={cx('block h-full', ready === checks.length ? 'bg-ok' : 'bg-accent')}
+              style={{ width: `${(100 * ready) / checks.length}%` }}
+            />
           </span>
           {/* Approving stays possible before every file is seen; it's only not the obvious next step yet. */}
           <Button
@@ -329,7 +380,12 @@ function Approval({
                 onChange={(event) => setReason(event.target.value)}
               />
               <span className="flex gap-1.5">
-                <Button type="submit" variant="primary" disabled={!reason.trim()} title="Keeps it open and tells the fork what to change">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  disabled={!reason.trim()}
+                  title="Keeps it open and tells the fork what to change"
+                >
                   Send the request
                 </Button>
                 <Button variant="ghost" onClick={() => setAsking(false)}>
@@ -348,7 +404,8 @@ function Approval({
             </div>
           )}
           <p className="text-2xs leading-normal text-fg-2">
-            Merging brings <Counts added={added} removed={removed} /> and the fork’s conversation into {targetName}. History from both sides stays searchable.
+            Merging brings <Counts added={added} removed={removed} /> and the fork’s conversation into {targetName}. History from
+            both sides stays searchable.
           </p>
         </>
       )}
@@ -405,7 +462,13 @@ function PhoneFiles({
                 </>
               )}
             </span>
-            <CopyLink path={`/mr/${id}#file-${file.path}`} thread={target} label="Copy link" name="link" className="-my-2 inline-flex min-h-11 items-center text-accent-fg" />
+            <CopyLink
+              path={`/mr/${id}#file-${file.path}`}
+              thread={target}
+              label="Copy link"
+              name="link"
+              className="-my-2 inline-flex min-h-11 items-center text-accent-fg"
+            />
           </span>
         </span>
         {stats && <Counts added={stats.added} removed={stats.removed} binary={stats.binary} />}
@@ -505,7 +568,10 @@ export function MergeRequest({ id }: { id: string }) {
   const seenCount = files.filter(seenNow).length
   const parsed = parseFiles(diff)
   const counts = new Map(parsed.map((file) => [file.path, file]))
-  const total = [...counts.values()].reduce((sum, file) => ({ added: sum.added + file.added, removed: sum.removed + file.removed }), { added: 0, removed: 0 })
+  const total = [...counts.values()].reduce(
+    (sum, file) => ({ added: sum.added + file.added, removed: sum.removed + file.removed }),
+    { added: 0, removed: 0 },
+  )
   const decision = {
     id,
     mr,
@@ -609,16 +675,26 @@ export function MergeRequest({ id }: { id: string }) {
           </span>
         </p>
         {mr.summary && <Markdown text={mr.summary} className="max-w-[720px]" />}
-        {(open || details.data.guide) && <ChangeGuide id={id} guide={details.data.guide} act={act} files={files.map((file) => file.path)} decided={!open} />}
+        {(open || details.data.guide) && (
+          <ChangeGuide id={id} guide={details.data.guide} act={act} files={files.map((file) => file.path)} decided={!open} />
+        )}
       </div>
       {mr.changes_requested && (
-        <div data-testid="changes-requested" role="note" className="mx-4 mt-4 flex flex-col gap-1 rounded-md bg-warn-tint px-3 py-2.5 text-xs md:mx-6">
+        <div
+          data-testid="changes-requested"
+          role="note"
+          className="mx-4 mt-4 flex flex-col gap-1 rounded-md bg-warn-tint px-3 py-2.5 text-xs md:mx-6"
+        >
           <span className="font-medium">Changes requested{mr.updated_since ? '; the fork has moved on since' : ''}</span>
           <span>{mr.changes_requested}</span>
         </div>
       )}
       {conflicts.length > 0 && (
-        <div data-testid="conflicts" role="note" className="mx-4 mt-4 flex flex-col gap-1 rounded-md bg-warn-tint px-3 py-2.5 text-xs md:mx-6">
+        <div
+          data-testid="conflicts"
+          role="note"
+          className="mx-4 mt-4 flex flex-col gap-1 rounded-md bg-warn-tint px-3 py-2.5 text-xs md:mx-6"
+        >
           <span className="font-medium">The merge keeps both sides in one place. Check these.</span>
           {conflicts.map((conflict) => (
             <span key={conflict} className="font-mono text-2xs">
@@ -633,9 +709,33 @@ export function MergeRequest({ id }: { id: string }) {
           value={tab}
           onChange={setTab}
           tabs={[
-            { id: 'changes', label: <>Changes <span className="font-mono text-fg-2">{files.length} {files.length === 1 ? 'file' : 'files'}</span></> },
-            { id: 'conversation', label: <>The fork’s conversation <span className="font-mono text-fg-2">{messageCount(conversation)}</span></> },
-            { id: 'review', label: <>Review <span className="font-mono text-fg-2">{reviewComments.length}</span></> },
+            {
+              id: 'changes',
+              label: (
+                <>
+                  Changes{' '}
+                  <span className="font-mono text-fg-2">
+                    {files.length} {files.length === 1 ? 'file' : 'files'}
+                  </span>
+                </>
+              ),
+            },
+            {
+              id: 'conversation',
+              label: (
+                <>
+                  The fork’s conversation <span className="font-mono text-fg-2">{messageCount(conversation)}</span>
+                </>
+              ),
+            },
+            {
+              id: 'review',
+              label: (
+                <>
+                  Review <span className="font-mono text-fg-2">{reviewComments.length}</span>
+                </>
+              ),
+            },
           ]}
         />
         {tab === 'changes' && (
@@ -679,13 +779,25 @@ export function MergeRequest({ id }: { id: string }) {
               className="border-b border-line p-3 md:w-64 md:border-r md:border-b-0"
               files={files.map((file) => {
                 const stats = counts.get(file.path)
-                return { path: file.path, added: stats?.added, removed: stats?.removed, binary: stats?.binary, seen: seenNow(file) ? 'yes' : 'no' }
+                return {
+                  path: file.path,
+                  added: stats?.added,
+                  removed: stats?.removed,
+                  binary: stats?.binary,
+                  seen: seenNow(file) ? 'yes' : 'no',
+                }
               })}
               picked={picked}
               onSeen={open ? markSeen : undefined}
               hint="A file you marked seen comes back if the fork changes it again."
               link={(path) => (
-                <Link to="/mr/$id" params={{ id }} hash={`file-${path}`} className="min-w-0 flex-1 truncate text-inherit hover:text-fg-1" title={path}>
+                <Link
+                  to="/mr/$id"
+                  params={{ id }}
+                  hash={`file-${path}`}
+                  className="min-w-0 flex-1 truncate text-inherit hover:text-fg-1"
+                  title={path}
+                >
                   {path}
                 </Link>
               )}
@@ -720,7 +832,9 @@ export function MergeRequest({ id }: { id: string }) {
       {tab === 'review' && (
         <div className="flex max-w-[880px] flex-col gap-3 px-4 py-4 md:px-6">
           {reviewComments.length === 0 && (
-            <EmptyState title="Comment on the changes from their line numbers">Comments go to the fork, and its agent can take them as a prompt.</EmptyState>
+            <EmptyState title="Comment on the changes from their line numbers">
+              Comments go to the fork, and its agent can take them as a prompt.
+            </EmptyState>
           )}
           {reviewComments.map((comment) => {
             const at = linesOf(comment)!
@@ -736,7 +850,11 @@ export function MergeRequest({ id }: { id: string }) {
                     <Button size="sm" icon="handoff" onClick={() => void toFork([comment])}>
                       {comment.sent ? 'Send again' : 'Send to the fork’s agent'}
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => void api.resolveComment(mr.fork, comment.id).then(reloadComments)}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void api.resolveComment(mr.fork, comment.id).then(reloadComments)}
+                    >
                       Resolve
                     </Button>
                   </span>
@@ -745,12 +863,7 @@ export function MergeRequest({ id }: { id: string }) {
             )
           })}
           {unsent.length > 0 && (
-            <Button
-              variant="primary"
-              className="self-start"
-              icon="handoff"
-              onClick={() => void toFork(unsent)}
-            >
+            <Button variant="primary" className="self-start" icon="handoff" onClick={() => void toFork(unsent)}>
               Send all to the fork’s agent
             </Button>
           )}

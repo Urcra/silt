@@ -11,7 +11,10 @@ function reviewOf(review: Review): ReviewState {
   return { review, add: vi.fn(), setAnchor: vi.fn(), edit: vi.fn(), remove: vi.fn(), setNote: vi.fn(), clear: vi.fn() }
 }
 
-const PENDING = reviewOf({ note: '', drafts: [{ id: '1', at: { path: 'src/a.rs', start: 2, end: 4 }, text: 'retry it', quote: ['+send(chunk);'] }] })
+const PENDING = reviewOf({
+  note: '',
+  drafts: [{ id: '1', at: { path: 'src/a.rs', start: 2, end: 4 }, text: 'retry it', quote: ['+send(chunk);'] }],
+})
 
 const props = { thread: THREAD, unsent: [], items: () => null, onSent: async () => undefined }
 
@@ -60,11 +63,20 @@ test("a draft made without other agents' changes is commented on as numbered the
       return new Response(JSON.stringify({ id: 'c1' }))
     }),
   )
-  const draft = { id: '1', at: { path: 'src/a.rs', start: 2, end: 4 }, text: 'retry it', quote: ['+send(chunk);'], hideOthers: true }
+  const draft = {
+    id: '1',
+    at: { path: 'src/a.rs', start: 2, end: 4 },
+    text: 'retry it',
+    quote: ['+send(chunk);'],
+    hideOthers: true,
+  }
   render(<FinishReview {...props} review={reviewOf({ note: '', drafts: [draft] })} />)
   fireEvent.click(screen.getByRole('button', { name: 'Finish review' }))
   fireEvent.click(screen.getByRole('button', { name: 'Copy 1 comment' }))
   await waitFor(() => expect(sent).toHaveLength(1))
-  expect(sent[0]).toMatchObject({ on: { on: 'lines', path: 'src/a.rs', start: 2, end: 4, hide_git: false, hide_others: true }, text: 'retry it' })
+  expect(sent[0]).toMatchObject({
+    on: { on: 'lines', path: 'src/a.rs', start: 2, end: 4, hide_git: false, hide_others: true },
+    text: 'retry it',
+  })
   vi.unstubAllGlobals()
 })

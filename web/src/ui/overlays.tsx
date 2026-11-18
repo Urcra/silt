@@ -67,7 +67,12 @@ export function Tabs<T extends string>({
 }
 
 /** Closes on Escape or a click outside `box`, giving focus back to `trigger`. */
-function useDismiss(open: boolean, close: () => void, box: React.RefObject<HTMLElement | null>, trigger: React.RefObject<HTMLElement | null>) {
+function useDismiss(
+  open: boolean,
+  close: () => void,
+  box: React.RefObject<HTMLElement | null>,
+  trigger: React.RefObject<HTMLElement | null>,
+) {
   useEffect(() => {
     if (!open) return
     const onKey = (event: globalThis.KeyboardEvent) => {
@@ -230,7 +235,12 @@ export function Popover({
     const box = button.current.getBoundingClientRect()
     // A phone's popover spans the screen's width from its left edge, never past its right.
     if (window.innerWidth < 768) setAt({ top: box.bottom + 4, left: 8 })
-    else setAt(align === 'right' ? { top: box.bottom + 4, right: window.innerWidth - box.right } : { top: box.bottom + 4, left: box.left })
+    else
+      setAt(
+        align === 'right'
+          ? { top: box.bottom + 4, right: window.innerWidth - box.right }
+          : { top: box.bottom + 4, left: box.left },
+      )
   }, [align])
   const toggle = () => {
     if (open) close()
@@ -267,7 +277,8 @@ export function Popover({
     let live = true
     const again = () => live && place()
     const observer = new ResizeObserver(again)
-    for (let around: Element | null = button.current.parentElement; around; around = around.parentElement) observer.observe(around)
+    for (let around: Element | null = button.current.parentElement; around; around = around.parentElement)
+      observer.observe(around)
     void document.fonts?.ready.then(again)
     return () => {
       live = false

@@ -61,7 +61,19 @@ const GUTTER = { add: 'text-ok', del: 'text-danger', context: 'text-fg-2' }
 function Tokens({ tokens, text }: { tokens: Token[] | undefined; text: string }) {
   if (!tokens) return <>{text || ' '}</>
   if (tokens.length === 0) return <> </>
-  return <>{tokens.map((token, index) => (token.className ? <span key={index} className={token.className}>{token.text}</span> : token.text))}</>
+  return (
+    <>
+      {tokens.map((token, index) =>
+        token.className ? (
+          <span key={index} className={token.className}>
+            {token.text}
+          </span>
+        ) : (
+          token.text
+        ),
+      )}
+    </>
+  )
 }
 
 const SHEET_BUTTON = 'justify-center max-md:text-sm'
@@ -125,7 +137,12 @@ function LineComment({
         </Button>
         {reviewing ? (
           <>
-            <Button disabled={!text.trim()} onClick={() => save('comment')} title="Keeps it as a comment now, outside the review" className={SHEET_BUTTON}>
+            <Button
+              disabled={!text.trim()}
+              onClick={() => save('comment')}
+              title="Keeps it as a comment now, outside the review"
+              className={SHEET_BUTTON}
+            >
               Add single comment
             </Button>
             <Button
@@ -140,11 +157,22 @@ function LineComment({
           </>
         ) : (
           <>
-            <Button type="submit" variant={agent ? 'secondary' : 'primary'} disabled={!text.trim()} title="Keeps it as a comment on the lines" className={SHEET_BUTTON}>
+            <Button
+              type="submit"
+              variant={agent ? 'secondary' : 'primary'}
+              disabled={!text.trim()}
+              title="Keeps it as a comment on the lines"
+              className={SHEET_BUTTON}
+            >
               Comment
             </Button>
             {agent && (
-              <Button variant="primary" disabled={!text.trim()} onClick={() => save('send')} className={cx(SHEET_BUTTON, 'col-span-2')}>
+              <Button
+                variant="primary"
+                disabled={!text.trim()}
+                onClick={() => save('send')}
+                className={cx(SHEET_BUTTON, 'col-span-2')}
+              >
                 Send to {agent}
               </Button>
             )}
@@ -176,7 +204,14 @@ function PendingComment({ draft, review }: { draft: Draft; review: ReviewState }
               setEditing(false)
             }}
           >
-            <Textarea aria-label="edit pending comment" autoFocus rows={2} className="text-xs" value={text} onChange={(event) => setText(event.target.value)} />
+            <Textarea
+              aria-label="edit pending comment"
+              autoFocus
+              rows={2}
+              className="text-xs"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+            />
             <span className="flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
                 Cancel
@@ -289,7 +324,10 @@ function HunkView({
       <button
         type="button"
         aria-label={`comment on ${file.path} ${side === 'old' ? 'deleted line' : 'line'} ${number}`}
-        className={cx('hover:text-accent-fg', bare ? 'h-full w-full text-right' : 'pointer-coarse:-mx-1.5 pointer-coarse:min-w-11 pointer-coarse:px-1.5')}
+        className={cx(
+          'hover:text-accent-fg',
+          bare ? 'h-full w-full text-right' : 'pointer-coarse:-mx-1.5 pointer-coarse:min-w-11 pointer-coarse:px-1.5',
+        )}
         onClick={(event) => pick(side, number, event.shiftKey)}
       >
         {number}
@@ -329,7 +367,9 @@ function HunkView({
     const side = sideFor(line)
     const number = side && numberOn(line, side)
     if (!commenting || !side || number === null) return null
-    const pending = (review?.review.drafts ?? []).filter((draft) => draft.at.path === file.path && sideOf(draft.at) === side && draft.at.end === number)
+    const pending = (review?.review.drafts ?? []).filter(
+      (draft) => draft.at.path === file.path && sideOf(draft.at) === side && draft.at.end === number,
+    )
     return (
       <>
         {ending(side, number).map((comment) => (
@@ -375,7 +415,10 @@ function HunkView({
       {!bare && (
         <div
           data-hunk={`${file.path}#${index}`}
-          className={cx('flex items-center gap-3 bg-info-tint/50 px-3 font-mono text-2xs leading-6 text-info', current && 'ring-2 ring-accent ring-inset')}
+          className={cx(
+            'flex items-center gap-3 bg-info-tint/50 px-3 font-mono text-2xs leading-6 text-info',
+            current && 'ring-2 ring-accent ring-inset',
+          )}
         >
           <span className="min-w-0 truncate">{hunk.header}</span>
           {note && <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1 font-sans">{note}</span>}
@@ -385,7 +428,13 @@ function HunkView({
       {bare
         ? hunk.lines.map((line, index) => (
             <div key={index}>
-              <div className={cx('grid grid-cols-[32px_minmax(0,1fr)] pointer-coarse:leading-7', ROW[line.kind], picked(line, sideFor(line)) && ring)}>
+              <div
+                className={cx(
+                  'grid grid-cols-[32px_minmax(0,1fr)] pointer-coarse:leading-7',
+                  ROW[line.kind],
+                  picked(line, sideFor(line)) && ring,
+                )}
+              >
                 <Gutter line={line.newLine ?? line.oldLine} kind={line.kind}>
                   {sideFor(line) && numberOf(line, sideFor(line)!)}
                 </Gutter>
@@ -395,53 +444,67 @@ function HunkView({
             </div>
           ))
         : layout === 'unified'
-        ? hunk.lines.map((line, index) => (
-            <div key={index}>
-              <div
-                className={cx('group grid grid-cols-[36px_36px_minmax(0,1fr)]', ROW[line.kind], picked(line, sideFor(line)) && ring, isFresh(line) && freshEdge)}
-                onMouseEnter={() => dragOver(line)}
-              >
-                <Gutter line={line.oldLine} kind={line.kind}>
-                  {line.kind === 'del' ? numberOf(line, 'old') : undefined}
-                </Gutter>
-                <Gutter line={line.newLine} kind={line.kind}>
-                  {numberOf(line, 'new')}
-                </Gutter>
-                {codeCell(line)}
-              </div>
-              {after(line)}
-            </div>
-          ))
-        : splitRows(hunk).map((row, index) => {
-            const left = row.left && row.left.kind !== 'add' ? row.left : null
-            const right = row.right && row.right.kind !== 'del' ? row.right : null
-            return (
+          ? hunk.lines.map((line, index) => (
               <div key={index}>
-                <div className="grid grid-cols-[36px_minmax(0,1fr)_36px_minmax(0,1fr)]">
-                  <Gutter line={row.left?.oldLine ?? null} kind={row.left?.kind === 'del' ? 'del' : 'context'}>
-                    {left?.kind === 'del' ? numberOf(left, 'old') : undefined}
+                <div
+                  className={cx(
+                    'group grid grid-cols-[36px_36px_minmax(0,1fr)]',
+                    ROW[line.kind],
+                    picked(line, sideFor(line)) && ring,
+                    isFresh(line) && freshEdge,
+                  )}
+                  onMouseEnter={() => dragOver(line)}
+                >
+                  <Gutter line={line.oldLine} kind={line.kind}>
+                    {line.kind === 'del' ? numberOf(line, 'old') : undefined}
                   </Gutter>
-                  <span
-                    className={cx('group flex min-w-0 border-r border-line-subtle', left && left.kind !== 'context' && ROW.del, left?.kind === 'del' && picked(left, 'old') && ring)}
-                    onMouseEnter={() => left && dragOver(left)}
-                  >
-                    {codeCell(left, left?.kind === 'del')}
-                  </span>
-                  <Gutter line={row.right?.newLine ?? null} kind={row.right?.kind === 'add' ? 'add' : 'context'}>
-                    {right && numberOf(right, 'new')}
+                  <Gutter line={line.newLine} kind={line.kind}>
+                    {numberOf(line, 'new')}
                   </Gutter>
-                  <span
-                    className={cx('group flex min-w-0', right && right.kind === 'add' && ROW.add, right && picked(right, 'new') && ring, isFresh(right) && freshEdge)}
-                    onMouseEnter={() => right && dragOver(right)}
-                  >
-                    {codeCell(right)}
-                  </span>
+                  {codeCell(line)}
                 </div>
-                {left?.kind === 'del' && after(left)}
-                {right && after(right)}
+                {after(line)}
               </div>
-            )
-          })}
+            ))
+          : splitRows(hunk).map((row, index) => {
+              const left = row.left && row.left.kind !== 'add' ? row.left : null
+              const right = row.right && row.right.kind !== 'del' ? row.right : null
+              return (
+                <div key={index}>
+                  <div className="grid grid-cols-[36px_minmax(0,1fr)_36px_minmax(0,1fr)]">
+                    <Gutter line={row.left?.oldLine ?? null} kind={row.left?.kind === 'del' ? 'del' : 'context'}>
+                      {left?.kind === 'del' ? numberOf(left, 'old') : undefined}
+                    </Gutter>
+                    <span
+                      className={cx(
+                        'group flex min-w-0 border-r border-line-subtle',
+                        left && left.kind !== 'context' && ROW.del,
+                        left?.kind === 'del' && picked(left, 'old') && ring,
+                      )}
+                      onMouseEnter={() => left && dragOver(left)}
+                    >
+                      {codeCell(left, left?.kind === 'del')}
+                    </span>
+                    <Gutter line={row.right?.newLine ?? null} kind={row.right?.kind === 'add' ? 'add' : 'context'}>
+                      {right && numberOf(right, 'new')}
+                    </Gutter>
+                    <span
+                      className={cx(
+                        'group flex min-w-0',
+                        right && right.kind === 'add' && ROW.add,
+                        right && picked(right, 'new') && ring,
+                        isFresh(right) && freshEdge,
+                      )}
+                      onMouseEnter={() => right && dragOver(right)}
+                    >
+                      {codeCell(right)}
+                    </span>
+                  </div>
+                  {left?.kind === 'del' && after(left)}
+                  {right && after(right)}
+                </div>
+              )
+            })}
     </>
   )
 }
@@ -580,7 +643,15 @@ export function DiffView({
         >
           <div className="overflow-x-auto font-mono text-xs leading-5">
             <div className="min-w-fit">
-              <FileHunks file={file} layout={layout} commenting={commenting} note={hunkNote} cursor={cursor} ask={ask} fresh={fresh?.(file.path)} />
+              <FileHunks
+                file={file}
+                layout={layout}
+                commenting={commenting}
+                note={hunkNote}
+                cursor={cursor}
+                ask={ask}
+                fresh={fresh?.(file.path)}
+              />
             </div>
           </div>
         </DiffBlock>

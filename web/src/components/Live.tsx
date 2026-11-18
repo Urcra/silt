@@ -81,7 +81,11 @@ const remoteLines = StateField.define<DecorationSet>({
       const sorted = [...effect.value].filter(([line]) => line >= 1 && line <= doc.lines).sort(([a], [b]) => a - b)
       for (const [line, name] of sorted) {
         // The name is drawn by CSS from the attribute, so it isn't part of the line's text.
-        builder.add(doc.line(line).from, doc.line(line).from, Decoration.line({ class: 'cm-remote-line', attributes: { 'data-who': name } }))
+        builder.add(
+          doc.line(line).from,
+          doc.line(line).from,
+          Decoration.line({ class: 'cm-remote-line', attributes: { 'data-who': name } }),
+        )
       }
       next = builder.finish()
     }
@@ -103,7 +107,13 @@ async function languageFor(path: string): Promise<Extension> {
     case 'js':
     case 'jsx': {
       const language = languageOf(path)
-      return [(await import('@codemirror/lang-javascript')).javascript({ typescript: language === 'ts' || language === 'tsx', jsx: language === 'tsx' || language === 'jsx' }), style]
+      return [
+        (await import('@codemirror/lang-javascript')).javascript({
+          typescript: language === 'ts' || language === 'tsx',
+          jsx: language === 'tsx' || language === 'jsx',
+        }),
+        style,
+      ]
     }
     case 'python':
       return [(await import('@codemirror/lang-python')).python(), style]
@@ -245,7 +255,11 @@ function FileEditor({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {!replica.writable && <p className="border-b border-line px-4 py-1.5 text-xs text-fg-2">Read only: ask the owner to share the thread to edit it.</p>}
+      {!replica.writable && (
+        <p className="border-b border-line px-4 py-1.5 text-xs text-fg-2">
+          Read only: ask the owner to share the thread to edit it.
+        </p>
+      )}
       {error && <p className="border-b border-line px-4 py-1.5 text-xs text-danger">{error}</p>}
       <div ref={host} data-testid="editor" className="min-h-[320px] flex-1 overflow-hidden" />
     </div>
@@ -255,7 +269,8 @@ function FileEditor({
 /** The files among the replica's paths, leaving out the directories that hold them. */
 function filesOf(paths: string[]): string[] {
   const parents = new Set<string>()
-  for (const path of paths) for (let at = path.indexOf('/'); at >= 0; at = path.indexOf('/', at + 1)) parents.add(path.slice(0, at))
+  for (const path of paths)
+    for (let at = path.indexOf('/'); at >= 0; at = path.indexOf('/', at + 1)) parents.add(path.slice(0, at))
   return paths.filter((path) => !parents.has(path))
 }
 
@@ -340,7 +355,10 @@ function LiveSession({ thread, title }: { thread: string; title: string }) {
   const ready = status?.state === 'idle' || status?.state === 'awaiting_input'
   const send = () => {
     setSendError(undefined)
-    api.prompt(thread, draft).then(() => setDraft(''), (failure: unknown) => setSendError(message(failure)))
+    api.prompt(thread, draft).then(
+      () => setDraft(''),
+      (failure: unknown) => setSendError(message(failure)),
+    )
   }
 
   const session = (
@@ -398,7 +416,12 @@ function LiveSession({ thread, title }: { thread: string; title: string }) {
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-fg-2">No agent here.</span>
             <AgentPicker value={agent} onChange={setAgent} />
-            <Button variant="primary" size="sm" disabled={!agent} onClick={() => void api.startAgent(agent, { thread }).catch((failure: unknown) => setSendError(message(failure)))}>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!agent}
+              onClick={() => void api.startAgent(agent, { thread }).catch((failure: unknown) => setSendError(message(failure)))}
+            >
               Start agent
             </Button>
           </div>
@@ -464,7 +487,10 @@ function LiveSession({ thread, title }: { thread: string; title: string }) {
       {!replica && !error && <Skeleton className="m-6 h-40" />}
       {replica && (
         <div className="flex flex-1 flex-col md:min-h-[calc(100dvh-130px)] md:flex-row">
-          <nav aria-label="files" className="flex max-h-60 shrink-0 flex-col gap-0.5 overflow-y-auto border-b border-line p-2 md:max-h-none md:w-60 md:border-r md:border-b-0">
+          <nav
+            aria-label="files"
+            className="flex max-h-60 shrink-0 flex-col gap-0.5 overflow-y-auto border-b border-line p-2 md:max-h-none md:w-60 md:border-r md:border-b-0"
+          >
             <p className="px-2 pb-1.5 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Files in the thread</p>
             {files.slice(0, filesShown).map((path) => {
               const on = people.filter((person) => person.file === path)
@@ -488,7 +514,11 @@ function LiveSession({ thread, title }: { thread: string; title: string }) {
               )
             })}
             {files.length > filesShown && (
-              <button type="button" className="px-2 py-1 text-left text-2xs text-fg-2 hover:text-fg-1" onClick={() => setFilesShown(filesShown + FILES_PAGE)}>
+              <button
+                type="button"
+                className="px-2 py-1 text-left text-2xs text-fg-2 hover:text-fg-1"
+                onClick={() => setFilesShown(filesShown + FILES_PAGE)}
+              >
                 More files ({files.length - filesShown} more)
               </button>
             )}
@@ -517,7 +547,9 @@ function LiveSession({ thread, title }: { thread: string; title: string }) {
                 replica={replica}
                 path={file}
                 changes={live.changes}
-                others={people.filter((person) => person.file === file && person.line !== null).map((person) => [person.line!, person.user])}
+                others={people
+                  .filter((person) => person.file === file && person.line !== null)
+                  .map((person) => [person.line!, person.user])}
                 onCursor={(line, column) => setCursor({ line, column })}
                 reveal={leader && leader.file === file ? leader.line : null}
                 onType={() => setFollowing(null)}

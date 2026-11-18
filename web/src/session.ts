@@ -69,7 +69,10 @@ export function useLive(thread: string, total = 0): Live & { heard: boolean; set
   }, [thread, round])
   useEffect(() => {
     if (live.said === NOTHING_SAID) return
-    const forget = setTimeout(() => setLive((previous) => (previous.said === live.said ? { ...previous, said: NOTHING_SAID } : previous)), SAID_MS)
+    const forget = setTimeout(
+      () => setLive((previous) => (previous.said === live.said ? { ...previous, said: NOTHING_SAID } : previous)),
+      SAID_MS,
+    )
     return () => clearTimeout(forget)
   }, [live.said])
   useTopic(`thread:${thread}`)
@@ -92,7 +95,8 @@ export function useLive(thread: string, total = 0): Live & { heard: boolean; set
         const text = now?.streaming ? '' : before?.streaming || previous.said.text
         const thought = now?.thinking ? '' : before?.thinking || previous.said.thought
         const kept = text === previous.said.text && thought === previous.said.thought
-        const began = !before?.streaming && !before?.thinking && (now?.streaming || now?.thinking) ? entries.current : previous.began
+        const began =
+          !before?.streaming && !before?.thinking && (now?.streaming || now?.thinking) ? entries.current : previous.began
         // Words kept across a change to the others keep where they began, or a later turn's thought would lose their entry.
         const textAfter = text === previous.said.text ? previous.said.textAfter : began
         const thoughtAfter = thought === previous.said.thought ? previous.said.thoughtAfter : began
@@ -151,7 +155,10 @@ export function usePresence(
   }, [thread, enabled])
   useEffect(() => {
     if (!enabled) return
-    void api.presence(thread, { file, line, draft }).then((reply) => setPeople(reply.people), () => undefined)
+    void api.presence(thread, { file, line, draft }).then(
+      (reply) => setPeople(reply.people),
+      () => undefined,
+    )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread, file, line, draft, enabled])
   return people

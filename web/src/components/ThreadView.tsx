@@ -1,8 +1,29 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { type ReactNode, type RefObject, Suspense, lazy, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { AGENTS, api, short, type AgentStatus, type CommentView, type DiffStat, type HistoryEntry, type ThreadSummary, type TurnInfo } from '../api'
+import {
+  type ReactNode,
+  type RefObject,
+  Suspense,
+  lazy,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import {
+  AGENTS,
+  api,
+  short,
+  type AgentStatus,
+  type CommentView,
+  type DiffStat,
+  type HistoryEntry,
+  type ThreadSummary,
+  type TurnInfo,
+} from '../api'
 import { isChat } from '../chats'
 import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
@@ -22,7 +43,26 @@ import { inBackground, threadTone } from '../threadLook'
 import { taskNotification } from '../taskNotification'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
-import { type Piece, type Row, type ToolStep, duration, foldInherited, headline, kindOf, originOf, piecesOf, proposedPlan, rowsOf, runItems, shortCommand, tasked, thoughtTotal, tokens, toolOf, toolSummary } from '../transcript'
+import {
+  type Piece,
+  type Row,
+  type ToolStep,
+  duration,
+  foldInherited,
+  headline,
+  kindOf,
+  originOf,
+  piecesOf,
+  proposedPlan,
+  rowsOf,
+  runItems,
+  shortCommand,
+  tasked,
+  thoughtTotal,
+  tokens,
+  toolOf,
+  toolSummary,
+} from '../transcript'
 import { SessionLive, type Stoppable, StoppableTasks, type TaskState, type Tasks, TasksContext, mayRun, tasksOf } from '../tasks'
 import { RunningStrip, TaskCard } from './Tasks'
 import {
@@ -63,7 +103,19 @@ import { artifactsOf, shownImagesOf } from '../artifacts'
 import { CommandCard, ImageThumb, PlanSteps, ProposedPlan, QuestionCard, StepRow } from './ToolSteps'
 import { LiveQuestions } from '../liveQuestions'
 import { unrecorded } from '../unrecorded'
-import { DETAILS, GROUPINGS, LiveThought, LiveTool, ThoughtsOpen, TranscriptDetail, TranscriptGrouping, useDetailChoice, useGroupingChoice, type Detail, type Grouping } from '../detail'
+import {
+  DETAILS,
+  GROUPINGS,
+  LiveThought,
+  LiveTool,
+  ThoughtsOpen,
+  TranscriptDetail,
+  TranscriptGrouping,
+  useDetailChoice,
+  useGroupingChoice,
+  type Detail,
+  type Grouping,
+} from '../detail'
 import { keepDraft, threadDraft, useDraft } from '../drafts'
 
 // The panel's viewer and list load only once there is an artifact to show.
@@ -179,7 +231,8 @@ interface EntryProps {
 function MessageActions({ entry, thread, turn }: { entry: HistoryEntry; thread: string; turn: number | undefined }) {
   const navigate = useNavigate()
   const [copied, setCopied] = useState(false)
-  const action = 'invisible shrink-0 rounded-sm p-0.5 text-fg-2 group-hover/entry:visible hover:bg-surface-2 hover:text-fg-1 focus:visible max-md:visible'
+  const action =
+    'invisible shrink-0 rounded-sm p-0.5 text-fg-2 group-hover/entry:visible hover:bg-surface-2 hover:text-fg-1 focus:visible max-md:visible'
   const copy = () =>
     void navigator.clipboard?.writeText(entry.text).then(
       () => {
@@ -198,11 +251,23 @@ function MessageActions({ entry, thread, turn }: { entry: HistoryEntry; thread: 
     )
   return (
     <>
-      <button type="button" aria-label={copied ? 'copied' : `copy entry ${entry.index}`} title="Copy" className={action} onClick={copy}>
+      <button
+        type="button"
+        aria-label={copied ? 'copied' : `copy entry ${entry.index}`}
+        title="Copy"
+        className={action}
+        onClick={copy}
+      >
         <Icon name={copied ? 'check' : 'copy'} className="h-3.5 w-3.5" />
       </button>
       {entry.kind === 'user' && turn !== undefined && turn > 1 && !hosted() && !taskNotification(entry.text) && (
-        <button type="button" aria-label={`edit from turn ${turn}`} title="Edit this prompt in a fork from the turn before it" className={action} onClick={() => void edit()}>
+        <button
+          type="button"
+          aria-label={`edit from turn ${turn}`}
+          title="Edit this prompt in a fork from the turn before it"
+          className={action}
+          onClick={() => void edit()}
+        >
           <Icon name="edit" className="h-3.5 w-3.5" />
         </button>
       )}
@@ -211,7 +276,16 @@ function MessageActions({ entry, thread, turn }: { entry: HistoryEntry; thread: 
 }
 
 /** One entry of the history, with its comments and a way to comment on it. */
-function Entry({ entry, children, thread, comments, anchor, onComment, onChanged, turn }: EntryProps & { entry: HistoryEntry; children: ReactNode; turn?: number }) {
+function Entry({
+  entry,
+  children,
+  thread,
+  comments,
+  anchor,
+  onComment,
+  onChanged,
+  turn,
+}: EntryProps & { entry: HistoryEntry; children: ReactNode; turn?: number }) {
   const [commenting, setCommenting] = useState(false)
   const here = comments.filter((comment) => comment.location.at === 'entry' && comment.location.index === entry.index)
   const highlighted = anchor.entry === entry.index
@@ -220,7 +294,11 @@ function Entry({ entry, children, thread, comments, anchor, onComment, onChanged
       data-testid="entry"
       data-rewound={entry.rewound || undefined}
       data-highlighted={highlighted || undefined}
-      className={cx('group/entry relative', entry.rewound && 'opacity-50', highlighted && 'rounded-sm ring-2 ring-accent ring-offset-4 ring-offset-bg')}
+      className={cx(
+        'group/entry relative',
+        entry.rewound && 'opacity-50',
+        highlighted && 'rounded-sm ring-2 ring-accent ring-offset-4 ring-offset-bg',
+      )}
       title={entry.rewound ? 'Rewound by a revert: kept in the history, no longer part of the conversation' : undefined}
     >
       {entry.rewound && entry.kind === 'user' && <p className="text-xs text-fg-2 italic">rewound by a revert</p>}
@@ -249,14 +327,22 @@ function Entry({ entry, children, thread, comments, anchor, onComment, onChanged
         <div className="mt-1.5 flex flex-col gap-2 rounded-md bg-accent-tint px-3 py-2.5">
           {here.map((comment) => (
             <div key={comment.id} id={`comment-${comment.id}`}>
-              <CommentThread thread={thread} comment={comment} onChanged={onChanged} highlighted={anchor.comment === comment.id} />
+              <CommentThread
+                thread={thread}
+                comment={comment}
+                onChanged={onChanged}
+                highlighted={anchor.comment === comment.id}
+              />
             </div>
           ))}
         </div>
       )}
       {commenting && (
         <div className="mt-1.5">
-          <CommentBox onCancel={() => setCommenting(false)} onSave={(text) => onComment(entry.index, text).then(() => setCommenting(false))} />
+          <CommentBox
+            onCancel={() => setCommenting(false)}
+            onSave={(text) => onComment(entry.index, text).then(() => setCommenting(false))}
+          />
         </div>
       )}
     </div>
@@ -267,7 +353,9 @@ function Entry({ entry, children, thread, comments, anchor, onComment, onChanged
 function SendingPrompt({ item }: { item: Sending }) {
   return (
     <div data-testid="sending" className="flex flex-col items-end gap-1" aria-busy="true">
-      <p className="w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap opacity-70">{item.text}</p>
+      <p className="w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap opacity-70">
+        {item.text}
+      </p>
       {item.files.length > 0 && <span className="text-2xs text-fg-2">{item.files.join(', ')}</span>}
     </div>
   )
@@ -282,7 +370,9 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
         <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11">
           <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/task:rotate-90" />
           <span className="min-w-0 truncate">{notification.summary}</span>
-          {notification.status && notification.status !== 'completed' && <span className="text-danger">· {notification.status}</span>}
+          {notification.status && notification.status !== 'completed' && (
+            <span className="text-danger">· {notification.status}</span>
+          )}
         </summary>
         {notification.result && (
           <div className="border-t border-line-subtle px-3 py-2 text-sm">
@@ -292,7 +382,9 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
       </details>
     )
   if (entry.kind === 'user')
-    return <p className="ml-auto w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap">{entry.text}</p>
+    return (
+      <p className="ml-auto w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap">{entry.text}</p>
+    )
   if (entry.kind === 'assistant') return <Markdown text={entry.text} />
   if (entry.kind === 'artifact' && entry.artifact) return <ShownArtifact entry={entry} />
   if (entry.kind === 'merge' || entry.kind === 'pull') {
@@ -319,7 +411,11 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
     return (
       <p className="font-mono text-xs break-all text-fg-1" title={entry.text}>
         <span className="font-medium">{call.name}</span>
-        {call.file ? <span className="text-fg-2"> {call.file}</span> : <span className="text-fg-2"> {entry.text.slice(call.name.length + 1, 160)}</span>}
+        {call.file ? (
+          <span className="text-fg-2"> {call.file}</span>
+        ) : (
+          <span className="text-fg-2"> {entry.text.slice(call.name.length + 1, 160)}</span>
+        )}
       </p>
     )
   }
@@ -331,7 +427,12 @@ function Thought({ entries, took, ...props }: EntryProps & { entries: HistoryEnt
   const verbose = useContext(TranscriptDetail) === 'verbose'
   const thoughts = useContext(ThoughtsOpen)
   return (
-    <details key={`${verbose}-${thoughts.times}`} open={verbose || thoughts.open} data-testid="thought" className="group/think border-l-2 border-line pl-3 text-xs text-fg-2">
+    <details
+      key={`${verbose}-${thoughts.times}`}
+      open={verbose || thoughts.open}
+      data-testid="thought"
+      className="group/think border-l-2 border-line pl-3 text-xs text-fg-2"
+    >
       <summary className="flex cursor-pointer list-none items-center gap-1.5 hover:text-fg-1 max-md:min-h-11">
         <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/think:rotate-90" />
         {took ? `Thought for ${took}` : 'Thought'}
@@ -372,7 +473,11 @@ function SideTranscript({ side, ...props }: EntryProps & { side: string }) {
           </Entry>
         ) : (
           <Entry key={piece.entry.index} entry={piece.entry} {...props}>
-            {piece.entry.kind === 'user' ? <p className="text-xs whitespace-pre-wrap text-fg-2">{piece.entry.text}</p> : <EntryText entry={piece.entry} />}
+            {piece.entry.kind === 'user' ? (
+              <p className="text-xs whitespace-pre-wrap text-fg-2">{piece.entry.text}</p>
+            ) : (
+              <EntryText entry={piece.entry} />
+            )}
           </Entry>
         ),
       )}
@@ -407,7 +512,11 @@ function StepItem({ step, running, ...props }: EntryProps & { step: ToolStep; ru
   const anchor = step.call ?? step.result!
   return (
     <Entry entry={anchor} {...props}>
-      {step.call && kindOf(step.call) === 'execute' ? <CommandCard step={step} running={running} /> : <StepRow step={step} open={verbose} running={running} />}
+      {step.call && kindOf(step.call) === 'execute' ? (
+        <CommandCard step={step} running={running} />
+      ) : (
+        <StepRow step={step} open={verbose} running={running} />
+      )}
     </Entry>
   )
 }
@@ -417,7 +526,12 @@ function StepItem({ step, running, ...props }: EntryProps & { step: ToolStep; ru
  * thought, its thoughts and steps inside in the order taken. `live`: the turn is still running, so the step
  * without its result is under way, and shows below the card's line with the thought that led to it.
  */
-function RunFold({ entries, until, live = false, ...props }: EntryProps & { entries: HistoryEntry[]; until: number | null; live?: boolean }) {
+function RunFold({
+  entries,
+  until,
+  live = false,
+  ...props
+}: EntryProps & { entries: HistoryEntry[]; until: number | null; live?: boolean }) {
   const verbose = useContext(TranscriptDetail) === 'verbose'
   const thoughts = useContext(ThoughtsOpen)
   const items = runItems(entries, until)
@@ -427,14 +541,26 @@ function RunFold({ entries, until, live = false, ...props }: EntryProps & { entr
   if (steps.length === 0) {
     return (
       <>
-        {items.map((item) => item.kind === 'thought' && <Thought key={item.entries[0].index} entries={item.entries} took={item.took} {...props} />)}
+        {items.map(
+          (item) =>
+            item.kind === 'thought' && <Thought key={item.entries[0].index} entries={item.entries} took={item.took} {...props} />,
+        )}
       </>
     )
   }
   const tools = entries.filter((entry) => entry.kind !== 'thinking')
   const failed = failedIn(tools)
   const only = steps.length === 1 && !current ? steps[0] : null
-  const led = current && [...items.slice(0, items.findIndex((item) => item.kind === 'step' && item.step === current))].reverse().find((item) => item.kind === 'thought')
+  const led =
+    current &&
+    [
+      ...items.slice(
+        0,
+        items.findIndex((item) => item.kind === 'step' && item.step === current),
+      ),
+    ]
+      .reverse()
+      .find((item) => item.kind === 'thought')
   const open = verbose || (thoughts.open && items.some((item) => item.kind === 'thought'))
   if (current && steps.length === 1 && !items.some((item) => item.kind === 'thought')) {
     return (
@@ -471,7 +597,9 @@ function RunFold({ entries, until, live = false, ...props }: EntryProps & { entr
       </details>
       {current && (
         <div className="flex flex-col gap-1.5 border-t border-line-subtle px-3 py-2">
-          {led?.kind === 'thought' && <p className="line-clamp-2 text-xs text-fg-2 italic">{headline(led.entries.map((entry) => entry.text).join(' '))}</p>}
+          {led?.kind === 'thought' && (
+            <p className="line-clamp-2 text-xs text-fg-2 italic">{headline(led.entries.map((entry) => entry.text).join(' '))}</p>
+          )}
           <StepItem step={current} running {...props} />
         </div>
       )}
@@ -493,7 +621,12 @@ function ActivityCard({ entries, wrote, ...props }: EntryProps & { entries: Hist
   const current = steps.find((step) => step.call && !step.result)
   const done = steps.filter((step) => step !== current)
   const thought = thoughtTotal(items)
-  const before = current ? items.slice(0, items.findIndex((item) => item.kind === 'step' && item.step === current)) : items
+  const before = current
+    ? items.slice(
+        0,
+        items.findIndex((item) => item.kind === 'step' && item.step === current),
+      )
+    : items
   const led = [...before].reverse().find((item) => item.kind === 'thought')
   const tools = entries.filter((entry) => entry.kind !== 'thinking')
   const failed = failedIn(tools)
@@ -501,14 +634,31 @@ function ActivityCard({ entries, wrote, ...props }: EntryProps & { entries: Hist
   const recent = done.slice(-3)
   const thoughts = items.filter((item) => item.kind === 'thought').length
   // The thought under way is the newest, so it heads the card until it is recorded and becomes the one that led.
-  const said = thinking ? headline(thinking) : led?.kind === 'thought' ? headline(led.entries.map((entry) => entry.text).join(' ')) : null
+  const said = thinking
+    ? headline(thinking)
+    : led?.kind === 'thought'
+      ? headline(led.entries.map((entry) => entry.text).join(' '))
+      : null
   // What the card leaves out: earlier steps, and thoughts other than the headline it shows.
   const hidden = done.length - recent.length + thoughts - (led && !thinking ? 1 : 0)
   return (
-    <section data-testid="activity" aria-label="the agent's work so far" className="flex flex-col gap-2 rounded-md border border-line bg-elevated px-3 py-2 text-xs">
+    <section
+      data-testid="activity"
+      aria-label="the agent's work so far"
+      className="flex flex-col gap-2 rounded-md border border-line bg-elevated px-3 py-2 text-xs"
+    >
       <p className="flex min-w-0 items-center gap-1.5 text-fg-2">
         <span className="shrink-0 font-medium text-fg-1">{wrote ? 'Since it last wrote' : 'So far'}</span>
-        {done.length > 0 && <span className="min-w-0 truncate">· {toolSummary(tools.filter((entry) => !current || (entry !== current.call && entry !== current.result)), false, 3)}</span>}
+        {done.length > 0 && (
+          <span className="min-w-0 truncate">
+            ·{' '}
+            {toolSummary(
+              tools.filter((entry) => !current || (entry !== current.call && entry !== current.result)),
+              false,
+              3,
+            )}
+          </span>
+        )}
         {thought && <span className="shrink-0 text-fg-3">· thought for {thought}</span>}
         {failed > 0 && <span className="shrink-0 text-danger">· {failed} failed</span>}
       </p>
@@ -519,7 +669,12 @@ function ActivityCard({ entries, wrote, ...props }: EntryProps & { entries: Hist
               item.kind === 'thought' ? (
                 <Thought key={item.entries[0].index} entries={item.entries} took={item.took} {...props} />
               ) : (
-                <StepItem key={(item.step.call ?? item.step.result!).index} step={item.step} running={item.step === current} {...props} />
+                <StepItem
+                  key={(item.step.call ?? item.step.result!).index}
+                  step={item.step}
+                  running={item.step === current}
+                  {...props}
+                />
               ),
             )
           : [
@@ -534,7 +689,9 @@ function ActivityCard({ entries, wrote, ...props }: EntryProps & { entries: Hist
       </div>
       {!verbose && hidden > 0 && (
         <button type="button" onClick={() => setAll(!all)} className="w-fit text-accent-fg hover:text-fg-1 max-md:min-h-11">
-          {all ? 'Show only the latest' : `Show everything · ${steps.length} ${steps.length === 1 ? 'step' : 'steps'}${thoughts > 0 ? `, ${thoughts} ${thoughts === 1 ? 'thought' : 'thoughts'}` : ''}`}
+          {all
+            ? 'Show only the latest'
+            : `Show everything · ${steps.length} ${steps.length === 1 ? 'step' : 'steps'}${thoughts > 0 ? `, ${thoughts} ${thoughts === 1 ? 'thought' : 'thoughts'}` : ''}`}
         </button>
       )}
     </section>
@@ -555,19 +712,36 @@ function entriesOfStep(step: ToolStep): HistoryEntry[] {
 
 /** The thread's files this machine leaves off its disk: names its file system can't hold, such as `aux.txt` on Windows, or that differ only in case (ADR 0045). */
 function Unwritten({ thread }: { thread: string }) {
-  const unwritten = useQuery({ queryKey: keys.unwritten(thread), queryFn: () => api.unwritten(thread), enabled: !hosted(), retry: false })
+  const unwritten = useQuery({
+    queryKey: keys.unwritten(thread),
+    queryFn: () => api.unwritten(thread),
+    enabled: !hosted(),
+    retry: false,
+  })
   const paths = unwritten.data ?? []
   if (paths.length === 0) return null
   return (
     <p role="note" className="mb-4 rounded-md border border-line-subtle px-3 py-2 text-xs text-fg-2">
-      {paths.length === 1 ? 'One file' : `${paths.length} files`} of this thread {paths.length === 1 ? "isn't" : "aren't"} written on this machine, as its file system can't hold{' '}
-      {paths.length === 1 ? 'its name' : 'their names'}: <span className="font-mono">{paths.join(', ')}</span>. The thread keeps {paths.length === 1 ? 'it' : 'them'} for machines that can.
+      {paths.length === 1 ? 'One file' : `${paths.length} files`} of this thread {paths.length === 1 ? "isn't" : "aren't"} written
+      on this machine, as its file system can't hold {paths.length === 1 ? 'its name' : 'their names'}:{' '}
+      <span className="font-mono">{paths.join(', ')}</span>. The thread keeps {paths.length === 1 ? 'it' : 'them'} for machines
+      that can.
     </p>
   )
 }
 
 /** Under a turn: what it did, in numbers, and what can be done from it (ADR 0029, 0031). */
-function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInfo; row: Extract<Row, { kind: 'turn' }>; rewound: boolean }) {
+function TurnBar({
+  thread,
+  turn,
+  row,
+  rewound,
+}: {
+  thread: string
+  turn: TurnInfo
+  row: Extract<Row, { kind: 'turn' }>
+  rewound: boolean
+}) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -620,7 +794,10 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
           {files && files.length > 0 && (
             <>
               {' · '}
-              <Counts added={files.reduce((sum, file) => sum + file.added, 0)} removed={files.reduce((sum, file) => sum + file.removed, 0)} />
+              <Counts
+                added={files.reduce((sum, file) => sum + file.added, 0)}
+                removed={files.reduce((sum, file) => sum + file.removed, 0)}
+              />
             </>
           )}
           {took && <> · {took}</>}
@@ -659,18 +836,36 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
                 </Button>
               </span>
             ) : (
-              <button type="button" aria-label={`revert to turn ${turn.number}`} className={ghost} onClick={() => setReverting(true)} title="Take this thread's code and conversation back to this turn">
+              <button
+                type="button"
+                aria-label={`revert to turn ${turn.number}`}
+                className={ghost}
+                onClick={() => setReverting(true)}
+                title="Take this thread's code and conversation back to this turn"
+              >
                 <Icon name="revert" className="h-3.5 w-3.5" />
                 Revert
               </button>
             ))}
           {!hosted() && (
-            <button type="button" aria-label={`fork from turn ${turn.number}`} className={ghost} onClick={() => void forkHere()} title="A fork with the code and conversation as this turn left them">
+            <button
+              type="button"
+              aria-label={`fork from turn ${turn.number}`}
+              className={ghost}
+              onClick={() => void forkHere()}
+              title="A fork with the code and conversation as this turn left them"
+            >
               <Icon name="fork" className="h-3.5 w-3.5" />
               Fork
             </button>
           )}
-          <CopyLink path={`/t/${thread}#turn-${turn.number}`} thread={thread} label="Copy link" name={`link to turn ${turn.number}`} className={ghost} />
+          <CopyLink
+            path={`/t/${thread}#turn-${turn.number}`}
+            thread={thread}
+            label="Copy link"
+            name={`link to turn ${turn.number}`}
+            className={ghost}
+          />
         </span>
       </div>
       {open && whole && diff.data !== undefined && <DiffView text={diff.data} viewFiles={thread} />}
@@ -680,11 +875,25 @@ function TurnBar({ thread, turn, row, rewound }: { thread: string; turn: TurnInf
 }
 
 /** Where the history moves to another thread's part: the source before a fork, or upstream work pulled in. Named by its title, as people know it. */
-function OriginDivider({ origin, thread, folded, onUnfold }: { origin: string; thread: string; folded?: number; onUnfold?: () => void }) {
+function OriginDivider({
+  origin,
+  thread,
+  folded,
+  onUnfold,
+}: {
+  origin: string
+  thread: string
+  folded?: number
+  onUnfold?: () => void
+}) {
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const title = threads.data?.find((candidate) => candidate.id === thread || candidate.id.endsWith(thread))?.title
   return (
-    <div role="separator" aria-label={origin === 'own' ? 'this fork starts here' : `from ${title ?? short(thread)}`} className="flex items-center gap-2.5 py-2 text-xs text-fg-2">
+    <div
+      role="separator"
+      aria-label={origin === 'own' ? 'this fork starts here' : `from ${title ?? short(thread)}`}
+      className="flex items-center gap-2.5 py-2 text-xs text-fg-2"
+    >
       <span className="h-px flex-1 bg-line" />
       {origin === 'own' ? (
         <span className="text-2xs font-medium text-fg-1">This fork starts here</span>
@@ -692,14 +901,24 @@ function OriginDivider({ origin, thread, folded, onUnfold }: { origin: string; t
         <>
           <span className="min-w-0 truncate text-2xs">
             {origin === 'inherited' ? 'From ' : 'Upstream progress from '}
-            <Link to="/t/$id" params={{ id: thread }} className="text-accent-fg hover:underline" title={title ?? thread} data-volatile>
+            <Link
+              to="/t/$id"
+              params={{ id: thread }}
+              className="text-accent-fg hover:underline"
+              title={title ?? thread}
+              data-volatile
+            >
               {title ?? short(thread)}
             </Link>
             {origin === 'inherited' && ', before this fork'}
           </span>
           {/* Outside the cut title, so a long one never hides it. */}
           {folded !== undefined && folded > 0 && (
-            <button type="button" className="shrink-0 text-2xs whitespace-nowrap text-accent-fg hover:underline" onClick={onUnfold}>
+            <button
+              type="button"
+              className="shrink-0 text-2xs whitespace-nowrap text-accent-fg hover:underline"
+              onClick={onUnfold}
+            >
               Show {folded} {folded === 1 ? 'turn' : 'turns'}
             </button>
           )}
@@ -713,7 +932,11 @@ function OriginDivider({ origin, thread, folded, onUnfold }: { origin: string; t
 /** What the person decided, a question they answered or a plan put to them, stays out of the fold, as does what the agent showed them. */
 function decided(piece: Piece): boolean {
   if (piece.kind === 'entry') return piece.entry.kind === 'artifact'
-  return piece.kind === 'step' && Boolean(piece.step.call) && (kindOf(piece.step.call!) === 'question' || Boolean(proposedPlan(piece.step.call!)))
+  return (
+    piece.kind === 'step' &&
+    Boolean(piece.step.call) &&
+    (kindOf(piece.step.call!) === 'question' || Boolean(proposedPlan(piece.step.call!)))
+  )
 }
 
 /** What an agent showed the person where it showed it: an image, or a card opening an artifact beside the conversation. */
@@ -730,36 +953,65 @@ function ShownArtifact({ entry }: { entry: HistoryEntry }) {
 function sinceWrote(pieces: Piece[], tasks: Tasks) {
   const wrote = pieces.findLastIndex((piece) => piece.kind === 'entry' && piece.entry.kind === 'assistant')
   const since = pieces.slice(wrote + 1)
-  const carded = since.filter((piece) => piece.kind === 'tools' || (piece.kind === 'step' && !decided(piece) && !tasked(piece.step, tasks)))
-  const activity = carded.some((piece) => piece.kind === 'step' || (piece.kind === 'tools' && piece.entries.some((entry) => entry.kind !== 'thinking'))) ? carded.flatMap((piece) => (piece.kind === 'tools' ? piece.entries : piece.kind === 'step' ? entriesOfStep(piece.step) : [])).sort((a, b) => a.index - b.index) : []
+  const carded = since.filter(
+    (piece) => piece.kind === 'tools' || (piece.kind === 'step' && !decided(piece) && !tasked(piece.step, tasks)),
+  )
+  const activity = carded.some(
+    (piece) => piece.kind === 'step' || (piece.kind === 'tools' && piece.entries.some((entry) => entry.kind !== 'thinking')),
+  )
+    ? carded
+        .flatMap((piece) => (piece.kind === 'tools' ? piece.entries : piece.kind === 'step' ? entriesOfStep(piece.step) : []))
+        .sort((a, b) => a.index - b.index)
+    : []
   return { wrote, since, carded, activity }
 }
 
 /** `running`: the turn is still under way, so it has no totals or actions yet. `onUnfold` shows what a fork inherited. */
-function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps & { row: Row; running?: boolean; onUnfold?: () => void }) {
+function TranscriptRow({
+  row,
+  running = false,
+  onUnfold,
+  ...props
+}: EntryProps & { row: Row; running?: boolean; onUnfold?: () => void }) {
   const [summary, setSummary] = useState(false)
   const tasks = useContext(TasksContext)
   const grouping = useContext(TranscriptGrouping)
   const verbose = useContext(TranscriptDetail) === 'verbose'
   const thoughts = useContext(ThoughtsOpen)
-  if (row.kind === 'origin') return <OriginDivider origin={row.origin} thread={row.thread} folded={row.folded} onUnfold={onUnfold} />
+  if (row.kind === 'origin')
+    return <OriginDivider origin={row.origin} thread={row.thread} folded={row.folded} onUnfold={onUnfold} />
   if (row.kind === 'compaction') {
     return (
       // A point in time rather than a message, so a line with its label in it.
       <div className="py-2">
-        <div role="separator" data-testid={row.marker ? 'compaction' : undefined} className="flex items-center gap-2.5 text-xs text-fg-2">
+        <div
+          role="separator"
+          data-testid={row.marker ? 'compaction' : undefined}
+          className="flex items-center gap-2.5 text-xs text-fg-2"
+        >
           <span className="h-px flex-1 bg-line" />
           <span className="min-w-0 text-center">
-            {row.marker ? 'Context compacted · earlier messages stay in the history, for you, the agent and search' : 'The agent summarized its context here'}
+            {row.marker
+              ? 'Context compacted · earlier messages stay in the history, for you, the agent and search'
+              : 'The agent summarized its context here'}
           </span>
           {row.summary && (
-            <button type="button" className="shrink-0 text-accent-fg hover:text-fg-1 max-md:min-h-11" aria-expanded={summary} onClick={() => setSummary(!summary)}>
+            <button
+              type="button"
+              className="shrink-0 text-accent-fg hover:text-fg-1 max-md:min-h-11"
+              aria-expanded={summary}
+              onClick={() => setSummary(!summary)}
+            >
               {summary ? 'Hide summary' : 'Show summary'}
             </button>
           )}
           <span className="h-px flex-1 bg-line" />
         </div>
-        {summary && row.summary && <p className="mt-2 rounded-md bg-surface-1 px-3 py-2 text-xs whitespace-pre-wrap text-fg-2">Compaction summary: {row.summary.text}</p>}
+        {summary && row.summary && (
+          <p className="mt-2 rounded-md bg-surface-1 px-3 py-2 text-xs whitespace-pre-wrap text-fg-2">
+            Compaction summary: {row.summary.text}
+          </p>
+        )}
       </div>
     )
   }
@@ -777,25 +1029,26 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
   }
   const work = folded ? pieces.filter((piece, index) => index !== last && !decided(piece) && !runs(piece)) : []
   const reply = folded ? [...pieces.filter((piece) => decided(piece) || runs(piece)), pieces[last]] : []
-  const { wrote, since, carded, activity } = grouping === 'turn' && running ? sinceWrote(pieces, tasks) : { wrote: -1, since: [], carded: [], activity: [] }
+  const { wrote, since, carded, activity } =
+    grouping === 'turn' && running ? sinceWrote(pieces, tasks) : { wrote: -1, since: [], carded: [], activity: [] }
   const final = row.entries[row.entries.length - 1]
   const worked = row.prompt && final ? duration(row.prompt.time_ms, final.time_ms) : null
   const drawn = (piece: Piece) =>
-          piece.kind === 'tools' ? (
-            <RunFold key={piece.entries[0].index} entries={piece.entries} until={piece.until} live={running} {...props} />
-          ) : piece.kind === 'plan' ? (
-            <Entry key={piece.entry.index} entry={piece.entry} {...props}>
-              <PlanSteps entry={piece.entry} />
-            </Entry>
-          ) : piece.kind === 'step' ? (
-            <Entry key={piece.step.call!.index} entry={piece.step.call!} {...props}>
-              <StepCard step={piece.step} {...props} />
-            </Entry>
-          ) : (
-            <Entry key={piece.entry.index} entry={piece.entry} {...props}>
-              <EntryText entry={piece.entry} />
-            </Entry>
-          )
+    piece.kind === 'tools' ? (
+      <RunFold key={piece.entries[0].index} entries={piece.entries} until={piece.until} live={running} {...props} />
+    ) : piece.kind === 'plan' ? (
+      <Entry key={piece.entry.index} entry={piece.entry} {...props}>
+        <PlanSteps entry={piece.entry} />
+      </Entry>
+    ) : piece.kind === 'step' ? (
+      <Entry key={piece.step.call!.index} entry={piece.step.call!} {...props}>
+        <StepCard step={piece.step} {...props} />
+      </Entry>
+    ) : (
+      <Entry key={piece.entry.index} entry={piece.entry} {...props}>
+        <EntryText entry={piece.entry} />
+      </Entry>
+    )
   return (
     <div id={row.turn ? `turn-${row.turn.number}` : undefined} className="group/turn py-3">
       <div className="flex min-w-0 flex-col gap-3.5">
@@ -820,8 +1073,12 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
               className="group/worked text-xs text-fg-2"
             >
               <summary className="cursor-pointer list-none hover:text-fg-1 max-md:min-h-11">
-                <Icon name="chevronRight" className="mr-1.5 inline h-3 w-3 align-[-1px] transition-transform group-open/worked:rotate-90" />
-                <span className="text-fg-1">{worked ? `Worked for ${worked}` : 'Worked'}</span> · {toolSummary(row.entries, false, 2)}
+                <Icon
+                  name="chevronRight"
+                  className="mr-1.5 inline h-3 w-3 align-[-1px] transition-transform group-open/worked:rotate-90"
+                />
+                <span className="text-fg-1">{worked ? `Worked for ${worked}` : 'Worked'}</span> ·{' '}
+                {toolSummary(row.entries, false, 2)}
                 {failedIn(row.entries) > 0 && <span className="text-danger"> · {failedIn(row.entries)} failed on the way</span>}
               </summary>
               <div className="mt-3 flex flex-col gap-3.5 border-l-2 border-line pl-3 text-sm text-fg-1">{work.map(drawn)}</div>
@@ -833,7 +1090,11 @@ function TranscriptRow({ row, running = false, onUnfold, ...props }: EntryProps 
             {pieces.slice(0, wrote + 1).map(drawn)}
             {/* The card stands where its first piece was; what isn't in it keeps its place. */}
             {since.map((piece) =>
-              piece === carded[0] ? <ActivityCard key="activity" entries={activity} wrote={wrote >= 0} {...props} /> : carded.includes(piece) ? null : drawn(piece),
+              piece === carded[0] ? (
+                <ActivityCard key="activity" entries={activity} wrote={wrote >= 0} {...props} />
+              ) : carded.includes(piece) ? null : (
+                drawn(piece)
+              ),
             )}
           </>
         ) : (
@@ -866,7 +1127,13 @@ function OfferForm({ thread, onError }: { thread: string; onError: (failure: unk
         }, onError)
       }}
     >
-      <Input aria-label="merge request title" autoFocus placeholder="What it does" value={title} onChange={(event) => setTitle(event.target.value)} />
+      <Input
+        aria-label="merge request title"
+        autoFocus
+        placeholder="What it does"
+        value={title}
+        onChange={(event) => setTitle(event.target.value)}
+      />
       <Button type="submit" variant="primary" disabled={!title.trim()}>
         Offer
       </Button>
@@ -917,7 +1184,11 @@ function ChangesBar({
     )
   }
   return (
-    <div role="group" aria-label="what the thread changed" className="flex flex-wrap items-center gap-2 rounded-t-xl border-b border-line bg-bg px-3 py-1.5 text-xs">
+    <div
+      role="group"
+      aria-label="what the thread changed"
+      className="flex flex-wrap items-center gap-2 rounded-t-xl border-b border-line bg-bg px-3 py-1.5 text-xs"
+    >
       <Icon name="file" className="h-3.5 w-3.5 text-fg-2" />
       <span>
         {files} {files === 1 ? 'file' : 'files'} changed
@@ -942,7 +1213,11 @@ function ChangesBar({
             icon="external"
             disabled={pushing || Boolean(blocker.data)}
             onClick={createPr}
-            title={blocker.data ? `No pull request yet: ${blocker.data}` : `Pushes the thread's branch to origin and opens ${forge ?? "the forge"}'s page for its pull request`}
+            title={
+              blocker.data
+                ? `No pull request yet: ${blocker.data}`
+                : `Pushes the thread's branch to origin and opens ${forge ?? 'the forge'}'s page for its pull request`
+            }
           >
             {pushing ? 'Pushing…' : forge ? `Create PR on ${forge}` : 'Create PR on the forge'}
           </Button>
@@ -964,7 +1239,12 @@ function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
   ])
   return (
     <>
-      <Button icon="fork" onClick={() => void fork()} aria-label="Fork" title="A copy of the thread, in a checkout of its own, to try something else in">
+      <Button
+        icon="fork"
+        onClick={() => void fork()}
+        aria-label="Fork"
+        title="A copy of the thread, in a checkout of its own, to try something else in"
+      >
         <span className="@max-xl/head:sr-only">Fork</span>
       </Button>
       {forked && (
@@ -1011,7 +1291,10 @@ function ThreadMore({
   onGrouping: (grouping: Grouping) => void
 }) {
   const [agent, setAgent] = useState('')
-  const commands = [`silt resume ${short(thread)}${agent ? ` --agent ${agent}` : ''}`, `silt fork ${short(thread)}${agent ? ` --agent ${agent}` : ''}`]
+  const commands = [
+    `silt resume ${short(thread)}${agent ? ` --agent ${agent}` : ''}`,
+    `silt fork ${short(thread)}${agent ? ` --agent ${agent}` : ''}`,
+  ]
   return (
     <Popover
       label="more for this thread"
@@ -1033,7 +1316,10 @@ function ThreadMore({
                 aria-checked={grouping === choice.id}
                 title={choice.says}
                 onClick={() => onGrouping(choice.id)}
-                className={cx('flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11', grouping === choice.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}
+                className={cx(
+                  'flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11',
+                  grouping === choice.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1',
+                )}
               >
                 {choice.label}
               </button>
@@ -1049,7 +1335,10 @@ function ThreadMore({
                 aria-checked={detail === choice.id}
                 title={choice.says}
                 onClick={() => onDetail(choice.id)}
-                className={cx('flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11', detail === choice.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}
+                className={cx(
+                  'flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11',
+                  detail === choice.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1',
+                )}
               >
                 {choice.label}
               </button>
@@ -1064,7 +1353,9 @@ function ThreadMore({
           )}
           <EraseThread thread={thread} summary={summary} onDone={close} />
           <p className="px-1 pb-0.5 text-2xs text-fg-2">
-            {summary && isChat(summary.repo) ? 'Continue in a terminal, anywhere' : 'Continue in a terminal, in a clone of the repository'}
+            {summary && isChat(summary.repo)
+              ? 'Continue in a terminal, anywhere'
+              : 'Continue in a terminal, in a clone of the repository'}
           </p>
           <label className="flex items-center gap-2 px-1 text-xs text-fg-2">
             with
@@ -1099,7 +1390,11 @@ function ThreadMore({
           ))}
           <div className="my-1 border-t border-line-subtle" />
           {!hosted() && (
-            <Link to="/t/$id/live" params={{ id: thread }} className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}>
+            <Link
+              to="/t/$id/live"
+              params={{ id: thread }}
+              className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
+            >
               <Dot tone={here > 0 ? 'ok' : 'idle'} />
               Join live{here > 0 && ` · ${here} here`}
             </Link>
@@ -1144,7 +1439,8 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const chosen = clone || clones[0]?.path || ''
-  const agent = agents.find((candidate) => candidate.name === summary.agent || candidate.id === summary.agent)?.id ?? agents[0]?.id ?? ''
+  const agent =
+    agents.find((candidate) => candidate.name === summary.agent || candidate.id === summary.agent)?.id ?? agents[0]?.id ?? ''
   const failed = (failure: unknown) => setError(message(failure))
   const makeProject = () => {
     setBusy(true)
@@ -1162,7 +1458,16 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
   const continueIn = () => {
     setBusy(true)
     api
-      .startAgent(agent, { clone: chosen }, { here: true, continues: thread, copy_to: copy ? copyTo.trim() : null, prompt: prompt.trim() || 'Carry on from the chat.' })
+      .startAgent(
+        agent,
+        { clone: chosen },
+        {
+          here: true,
+          continues: thread,
+          copy_to: copy ? copyTo.trim() : null,
+          prompt: prompt.trim() || 'Carry on from the chat.',
+        },
+      )
       .then((started) => {
         void queries.invalidateQueries({ queryKey: keys.threads })
         onDone()
@@ -1174,13 +1479,19 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
     <div className="flex flex-col gap-1.5">
       <p className="px-1 pb-0.5 text-2xs text-fg-2">This chat belongs to no project</p>
       {!making ? (
-        <button type="button" className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')} onClick={() => setMaking(true)}>
+        <button
+          type="button"
+          className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
+          onClick={() => setMaking(true)}
+        >
           <Icon name="folder" />
           Make it a project…
         </button>
       ) : (
         <div className="flex flex-col gap-1.5 rounded-sm border border-line p-2 text-xs">
-          <p className="text-fg-2">Its folder becomes a project of its own, with this chat and its files in it. Add a remote later to share it.</p>
+          <p className="text-fg-2">
+            Its folder becomes a project of its own, with this chat and its files in it. Add a remote later to share it.
+          </p>
           <span className="flex justify-end gap-1.5">
             <Button variant="ghost" onClick={() => setMaking(false)}>
               Cancel
@@ -1192,7 +1503,11 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
         </div>
       )}
       {!continuing ? (
-        <button type="button" className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')} onClick={() => setContinuing(true)}>
+        <button
+          type="button"
+          className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
+          onClick={() => setContinuing(true)}
+        >
           <Icon name="branch" />
           Continue in a project…
         </button>
@@ -1219,8 +1534,20 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
             <input type="checkbox" checked={copy} onChange={(event) => setCopy(event.target.checked)} />
             Copy the chat&apos;s files to
           </label>
-          {copy && <Input aria-label="folder in the project" value={copyTo} onChange={(event) => setCopyTo(event.target.value)} className="font-mono text-xs" />}
-          <Input aria-label="first prompt there" placeholder="Carry on from the chat." value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+          {copy && (
+            <Input
+              aria-label="folder in the project"
+              value={copyTo}
+              onChange={(event) => setCopyTo(event.target.value)}
+              className="font-mono text-xs"
+            />
+          )}
+          <Input
+            aria-label="first prompt there"
+            placeholder="Carry on from the chat."
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+          />
           <p className="text-fg-2">A new thread in your clone, its agent starting from this chat&apos;s conversation.</p>
           <span className="flex justify-end gap-1.5">
             <Button variant="ghost" onClick={() => setContinuing(false)}>
@@ -1300,7 +1627,10 @@ export function ThreadHeader({
             summary && <StatePill summary={summary} />
           )}
           {summary?.local_only && (
-            <span className="shrink-0 max-md:hidden" title="Its project keeps new threads off every server; choose a server on the Projects page to move it">
+            <span
+              className="shrink-0 max-md:hidden"
+              title="Its project keeps new threads off every server; choose a server on the Projects page to move it"
+            >
               <Tag>This machine only</Tag>
             </span>
           )}
@@ -1309,7 +1639,10 @@ export function ThreadHeader({
         <div className="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs leading-tight whitespace-nowrap text-fg-2">
           {summary && <span className="shrink-0 font-mono">{projectName(summary.repo || 'no remote')}</span>}
           {branch && !isChat(summary?.repo) && (
-            <span className="inline-flex min-w-0 shrink items-center gap-1" title={`The branch its latest commit went on: ${branch}`}>
+            <span
+              className="inline-flex min-w-0 shrink items-center gap-1"
+              title={`The branch its latest commit went on: ${branch}`}
+            >
               · <Icon name="branch" className="h-3 w-3 shrink-0" />
               <span className="max-w-[16ch] truncate font-mono">{branch}</span>
             </span>
@@ -1324,7 +1657,13 @@ export function ThreadHeader({
           {summary?.forked_from && !summary.title?.startsWith('Fork of ') && (
             <span className="inline-flex min-w-0 shrink items-center gap-1">
               · fork of
-              <Link className="min-w-0 truncate text-accent-fg" to="/t/$id" params={{ id: summary.forked_from }} title={summary.forked_from} data-volatile>
+              <Link
+                className="min-w-0 truncate text-accent-fg"
+                to="/t/$id"
+                params={{ id: summary.forked_from }}
+                title={summary.forked_from}
+                data-volatile
+              >
                 {source?.title ?? short(summary.forked_from)}
               </Link>
             </span>
@@ -1339,9 +1678,23 @@ export function ThreadHeader({
         <SandboxShield thread={thread} summary={summary} agent={agent} />
         <ForkActions thread={thread} forked={Boolean(summary?.forked_from)} />
         {summary && <ShareDialog thread={summary} />}
-        <ThreadMore thread={thread} summary={summary} here={people.length} onDetails={onDetails} detail={detail} onDetail={onDetail} grouping={grouping} onGrouping={onGrouping} />
+        <ThreadMore
+          thread={thread}
+          summary={summary}
+          here={people.length}
+          onDetails={onDetails}
+          detail={detail}
+          onDetail={onDetail}
+          grouping={grouping}
+          onGrouping={onGrouping}
+        />
         {onExpand && (
-          <Button variant="ghost" aria-label="Expand the review" onClick={onExpand} title="The changes across the page, to review (⇧D)">
+          <Button
+            variant="ghost"
+            aria-label="Expand the review"
+            onClick={onExpand}
+            title="The changes across the page, to review (⇧D)"
+          >
             <Icon name="expand" className="h-4 w-4" />
           </Button>
         )}
@@ -1350,18 +1703,20 @@ export function ThreadHeader({
             Conversation <Kbd>Esc</Kbd>
           </Button>
         ) : (
-        /* The panel's own toggle: its tabs already say Changes, so the header only opens and closes it. */
-        <Button
-          variant="ghost"
-          aria-label="Changes"
-          aria-pressed={panelOpen}
-          onClick={onChanges}
-          title="What the thread changed, beside the conversation (D)"
-          className="aria-pressed:text-accent-fg"
-        >
-          <Icon name="panel" className="h-4 w-4" />
-          {changes && !panelOpen && (changes.added > 0 || changes.removed > 0) && <Counts added={changes.added} removed={changes.removed} />}
-        </Button>
+          /* The panel's own toggle: its tabs already say Changes, so the header only opens and closes it. */
+          <Button
+            variant="ghost"
+            aria-label="Changes"
+            aria-pressed={panelOpen}
+            onClick={onChanges}
+            title="What the thread changed, beside the conversation (D)"
+            className="aria-pressed:text-accent-fg"
+          >
+            <Icon name="panel" className="h-4 w-4" />
+            {changes && !panelOpen && (changes.added > 0 || changes.removed > 0) && (
+              <Counts added={changes.added} removed={changes.removed} />
+            )}
+          </Button>
         )}
       </span>
       {summary && <ThreadStateActions summary={summary} />}
@@ -1402,7 +1757,7 @@ function StatePill({ summary }: { summary: ThreadSummary }) {
 function Lineage({ summary, threads }: { summary: ThreadSummary; threads: ThreadSummary[] }) {
   const mrs = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests })
   const above: ThreadSummary[] = []
-  for (let source = summary.forked_from; source; ) {
+  for (let source = summary.forked_from; source;) {
     const found = threads.find((thread) => thread.id === source)
     if (!found || above.includes(found)) break
     above.unshift(found)
@@ -1422,7 +1777,12 @@ function Lineage({ summary, threads }: { summary: ThreadSummary; threads: Thread
           {short(thread.id)}
         </span>
       ) : (
-        <Link to="/t/$id" params={{ id: thread.id }} className="inline-flex items-center font-mono text-accent-fg max-md:min-h-11" data-volatile>
+        <Link
+          to="/t/$id"
+          params={{ id: thread.id }}
+          className="inline-flex items-center font-mono text-accent-fg max-md:min-h-11"
+          data-volatile
+        >
           {short(thread.id)}
         </Link>
       )}
@@ -1451,7 +1811,17 @@ function Lineage({ summary, threads }: { summary: ThreadSummary; threads: Thread
   )
 }
 
-function InspectorSection({ title, label, aside, children }: { title: string; label?: string; aside?: ReactNode; children: ReactNode }) {
+function InspectorSection({
+  title,
+  label,
+  aside,
+  children,
+}: {
+  title: string
+  label?: string
+  aside?: ReactNode
+  children: ReactNode
+}) {
   return (
     <section aria-label={label ?? title.toLowerCase()} className="flex flex-col gap-2">
       <h2 className="flex items-center font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">
@@ -1518,7 +1888,13 @@ function Details({
   const device = status.data?.servers?.[0]?.name ?? 'this machine'
   const [listed, setListed] = useState(LISTED_FILES)
   const liveOn =
-    summary?.location === 'moved' ? 'another device' : summary?.location === 'remote' ? 'the server only' : hosted() ? 'its machine' : device
+    summary?.location === 'moved'
+      ? 'another device'
+      : summary?.location === 'remote'
+        ? 'the server only'
+        : hosted()
+          ? 'its machine'
+          : device
   return (
     <div className="flex flex-col gap-6 px-5 py-5">
       <InspectorSection title="Handoff">
@@ -1542,10 +1918,21 @@ function Details({
                   ],
                 ] as [ReactNode, ReactNode][])
               : []),
-            ...(summary ? ([['Last moved', <span key="moved" data-volatile>{ago(summary.last_ms, now)}</span>]] as [ReactNode, ReactNode][]) : []),
+            ...(summary
+              ? ([
+                  [
+                    'Last moved',
+                    <span key="moved" data-volatile>
+                      {ago(summary.last_ms, now)}
+                    </span>,
+                  ],
+                ] as [ReactNode, ReactNode][])
+              : []),
           ]}
         />
-        <p className="text-xs leading-normal text-fg-2">Picking it up on another machine moves the agent session there. This one stops writing.</p>
+        <p className="text-xs leading-normal text-fg-2">
+          Picking it up on another machine moves the agent session there. This one stops writing.
+        </p>
       </InspectorSection>
       <InspectorSection title="Files changed">
         {files === null && <Skeleton className="h-10" />}
@@ -1578,7 +1965,10 @@ function Details({
             <li
               key={comment.id}
               id={`comment-${comment.id}`}
-              className={cx('flex flex-col gap-1 rounded-md border border-line bg-elevated px-2.5 py-2', comment.resolved && 'opacity-60')}
+              className={cx(
+                'flex flex-col gap-1 rounded-md border border-line bg-elevated px-2.5 py-2',
+                comment.resolved && 'opacity-60',
+              )}
             >
               <p className="font-mono text-2xs text-fg-2">
                 {comment.location.at === 'lines' ? (
@@ -1595,7 +1985,12 @@ function Details({
                 )}
                 {comment.location.at === 'lines' && comment.location.outdated && ' (outdated)'}
               </p>
-              <CommentThread thread={thread} comment={comment} onChanged={onChanged} highlighted={anchor.comment === comment.id} />
+              <CommentThread
+                thread={thread}
+                comment={comment}
+                onChanged={onChanged}
+                highlighted={anchor.comment === comment.id}
+              />
               {!comment.resolved && (
                 <Button
                   variant="ghost"
@@ -1656,7 +2051,12 @@ function ThreadBody({
   const summary = threads.data?.find((candidate) => candidate.id === thread)
   const [tab, setTab] = useState<InspectorTab>('changes')
   // A thread started to make or change a design system shows it beside the conversation first (ADR 0088).
-  const design = useQuery({ queryKey: keys.threadDesign(thread), queryFn: () => api.threadDesign(thread), enabled: !hosted(), staleTime: 30_000 })
+  const design = useQuery({
+    queryKey: keys.threadDesign(thread),
+    queryFn: () => api.threadDesign(thread),
+    enabled: !hosted(),
+    staleTime: 30_000,
+  })
   const designTitle = design.data?.title ?? null
   const shownDesign = useRef(false)
   useEffect(() => {
@@ -1686,7 +2086,8 @@ function ThreadBody({
   const hash = useRouterState({ select: (state) => state.location.hash })
   // A short id in the address becomes the full one, so the sidebar marks the thread.
   useEffect(() => {
-    if (id !== thread) void navigate({ to: '/t/$id', params: { id: thread }, hash: hash.replace(/^#/, '') || undefined, replace: true })
+    if (id !== thread)
+      void navigate({ to: '/t/$id', params: { id: thread }, hash: hash.replace(/^#/, '') || undefined, replace: true })
   }, [id, thread, hash, navigate])
   const { agent: status, heard, tool, preset, setPreset, said } = useLive(thread, total)
   // What the agent said stays where it was until the history has it, rather than blink out and come back above.
@@ -1712,16 +2113,36 @@ function ThreadBody({
     const before = stateBefore.current
     stateBefore.current = agentState
     if (agentState !== 'error' || before === 'error' || waitingPrompts.length === 0) return
-    dropSending(thread, waitingPrompts.map((item) => item.id))
+    dropSending(
+      thread,
+      waitingPrompts.map((item) => item.id),
+    )
     setDraft((current) => (current.trim() ? current : waitingPrompts.map((item) => item.text).join('\n\n')))
   }, [agentState, thread, waitingPrompts, setDraft])
   useActions([
     { id: 'changes', label: panel ? 'Hide the changes panel' : 'Show changes', keys: 'd', run: () => setPanel(!panel) },
     ...(desktop && !hosted() ? [{ id: 'review', label: 'Expand the review', keys: 'shift+d', run: () => openReview() }] : []),
-    ...DETAILS.filter((choice) => choice.id !== detail).map((choice) => ({ id: `detail:${choice.id}`, label: `Transcript: ${choice.label}`, run: () => setDetail(choice.id) })),
-    ...GROUPINGS.filter((choice) => choice.id !== grouping).map((choice) => ({ id: `grouping:${choice.id}`, label: `Group the work ${choice.label.toLowerCase()}`, run: () => setGrouping(choice.id) })),
+    ...DETAILS.filter((choice) => choice.id !== detail).map((choice) => ({
+      id: `detail:${choice.id}`,
+      label: `Transcript: ${choice.label}`,
+      run: () => setDetail(choice.id),
+    })),
+    ...GROUPINGS.filter((choice) => choice.id !== grouping).map((choice) => ({
+      id: `grouping:${choice.id}`,
+      label: `Group the work ${choice.label.toLowerCase()}`,
+      run: () => setGrouping(choice.id),
+    })),
     { id: 'thoughts', label: thoughts.open ? 'Close every thought' : 'Open every thought', keys: 'shift+t', run: toggleThoughts },
-    ...(opened && desktop ? [{ id: 'artifact-full', label: full ? 'Leave the full view' : 'Full view of the artifact', keys: 'f', run: () => setFull(!full) }] : []),
+    ...(opened && desktop
+      ? [
+          {
+            id: 'artifact-full',
+            label: full ? 'Leave the full view' : 'Full view of the artifact',
+            keys: 'f',
+            run: () => setFull(!full),
+          },
+        ]
+      : []),
   ])
   const groups = useMemo(() => artifactsOf(entries), [entries])
   const images = useMemo(() => shownImagesOf(entries), [entries])
@@ -1762,7 +2183,10 @@ function ThreadBody({
   // Looking at the thread marks it seen, again whenever something new happens in it.
   const unseen = summary !== undefined && (summary.mine.seen_ms === null || summary.last_ms > summary.mine.seen_ms)
   useEffect(() => {
-    if (unseen) void api.setThreadState(thread, { pinned: null, snooze: null, settled: null, seen: true, reviewed_turn: null }).catch(() => undefined)
+    if (unseen)
+      void api
+        .setThreadState(thread, { pinned: null, snooze: null, settled: null, seen: true, reviewed_turn: null })
+        .catch(() => undefined)
   }, [thread, unseen])
 
   // A plan call's own output is the plan again, then the agent's note that it was approved; the plan card shows it once.
@@ -1773,18 +2197,32 @@ function ThreadBody({
   const tasks = useMemo(() => tasksOf(entries), [entries])
   const now = useNow()
   const lastSaid = entries.length > 0 ? entries[entries.length - 1].time_ms : 0
-  const live = mayRun(Math.max(summary?.last_ms ?? 0, lastSaid), agent !== null && agent !== undefined && agent.state !== 'stopped' && agent.state !== 'error', now)
+  const live = mayRun(
+    Math.max(summary?.last_ms ?? 0, lastSaid),
+    agent !== null && agent !== undefined && agent.state !== 'stopped' && agent.state !== 'error',
+    now,
+  )
   // The background commands Stop ends: only while the agent that started them runs here.
   const stoppableCalls = agent?.stoppable
   const stoppable = useMemo<Stoppable>(
-    () => ({ calls: new Set(stoppableCalls ?? []), stop: (call) => void api.stopTask(thread, call).catch((failure: unknown) => toast(message(failure), 'danger')) }),
+    () => ({
+      calls: new Set(stoppableCalls ?? []),
+      stop: (call) => void api.stopTask(thread, call).catch((failure: unknown) => toast(message(failure), 'danger')),
+    }),
     [stoppableCalls, thread],
   )
   // A running task's line names it as its card does.
-  const calls = useMemo(() => new Map(entries.flatMap((entry) => (entry.kind === 'tool_call' && entry.tool ? [[entry.tool.id, entry] as const] : []))), [entries])
+  const calls = useMemo(
+    () =>
+      new Map(entries.flatMap((entry) => (entry.kind === 'tool_call' && entry.tool ? [[entry.tool.id, entry] as const] : []))),
+    [entries],
+  )
   const taskTitle = (task: TaskState) => {
     const call = task.call ? calls.get(task.call) : undefined
-    const said = call?.tool?.kind === 'subagent' || task.kind === 'subagent' ? call?.tool?.subject : (call?.tool?.detail ?? call?.tool?.subject)
+    const said =
+      call?.tool?.kind === 'subagent' || task.kind === 'subagent'
+        ? call?.tool?.subject
+        : (call?.tool?.detail ?? call?.tool?.subject)
     return said?.split('\n')[0] ?? task.summary?.split('\n')[0] ?? task.ids[0] ?? 'A task'
   }
   // A link into the history may name an inherited turn, so it shows them all.
@@ -1833,7 +2271,10 @@ function ThreadBody({
   }, [thread, entries.length, total, rows.length, linked, toEnd, follow])
   const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry' && comment.location.at !== 'doc')
   const files = stats.data ?? null
-  const totals = files && { added: files.reduce((sum, file) => sum + file.added, 0), removed: files.reduce((sum, file) => sum + file.removed, 0) }
+  const totals = files && {
+    added: files.reduce((sum, file) => sum + file.added, 0),
+    removed: files.reduce((sum, file) => sum + file.removed, 0),
+  }
   const entryProps: EntryProps = {
     thread,
     comments: comments.data ?? [],
@@ -1864,231 +2305,301 @@ function ThreadBody({
   }
   const busy = agent?.state === 'working' || agent?.state === 'awaiting_permission' || agent?.state === 'starting'
   // A plan waiting for approval is still that turn's to finish.
-  const turnRunning = agent?.state === 'working' || agent?.state === 'awaiting_permission' || agent?.state === 'awaiting_input' || pending.text !== ''
+  const turnRunning =
+    agent?.state === 'working' ||
+    agent?.state === 'awaiting_permission' ||
+    agent?.state === 'awaiting_input' ||
+    pending.text !== ''
   // The running turn's card shows the thought under way where it will be recorded, so the tail doesn't show it too.
   const lastRow = rows[rows.length - 1]
-  const thoughtCarded = agent?.state === 'working' && grouping === 'turn' && lastRow?.kind === 'turn' && sinceWrote(piecesOf(lastRow.entries, tasks), tasks).activity.length > 0
+  const thoughtCarded =
+    agent?.state === 'working' &&
+    grouping === 'turn' &&
+    lastRow?.kind === 'turn' &&
+    sinceWrote(piecesOf(lastRow.entries, tasks), tasks).activity.length > 0
 
   return (
     <ArtifactActions.Provider value={artifactActions}>
-    <TasksContext.Provider value={tasks}>
-    <StoppableTasks.Provider value={stoppable}>
-    <SessionLive.Provider value={live}>
-    <TranscriptDetail.Provider value={detail}>
-    <TranscriptGrouping.Provider value={grouping}>
-    <ThoughtsOpen.Provider value={thoughts}>
-    <LiveTool.Provider value={tool.id !== null && planCalls.current.has(tool.id) ? { id: null, text: '' } : tool}>
-    <LiveThought.Provider value={thoughtCarded ? agent.thinking : ''}>
-    <LiveQuestions.Provider
-      value={
-        agent
-          ? { thread, agent: agent.agent, questions: agent.questions ?? [], awaiting: agent.permissions.flatMap((asked) => (asked.tool_call ? [asked.tool_call] : [])) }
-          : null
-      }
-    >
-    <Page
-      flush
-      label="thread"
-      inspectorLabel="thread details"
-      inspectorWidth={480}
-      columnRef={column}
-      sheet={{ open: sheet, onClose: () => setSheet(false), bare: tab === 'artifacts' && opened !== null }}
-      full={full && tab === 'artifacts' && opened !== null}
-      inspector={
-        (panel || sheet) &&
-        (tab === 'artifacts' && opened ? (
-          <Suspense fallback={null}>
-          <ArtifactViewer
-            thread={thread}
-            groups={groups}
-            opened={opened}
-            onOpen={openArtifact}
-            onBack={() => {
-              setOpened(null)
-              setFull(false)
-            }}
-            onClose={() => {
-              closeArtifact()
-              setPanel(false)
-            }}
-            full={full}
-            onFull={() => setFull(!full)}
-            comments={comments.data ?? []}
-            onCommentsChanged={reloadComments}
-            phone={!desktop}
-          />
-          </Suspense>
-        ) : (
-        <div className="flex flex-col">
-          <div className="sticky top-0 z-10 flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line-subtle bg-bg px-4 py-1.5">
-            <Tabs
-              label="inspector"
-              tabs={[
-                ...(designTitle ? [{ id: 'design' as const, label: designTitle }] : []),
-                {
-                  id: 'changes',
-                  label: (
-                    <>
-                      {isChat(summary?.repo) ? 'Files' : 'Changes'} {totals && (totals.added > 0 || totals.removed > 0) && <Counts added={totals.added} removed={totals.removed} />}
-                    </>
-                  ),
-                },
-                ...(groups.length > 0 || images.length > 0
-                  ? [{ id: 'artifacts' as const, label: <>Artifacts <span className="font-mono text-2xs text-accent-fg">{groups.length + images.length}</span></> }]
-                  : []),
-                { id: 'details', label: 'Details' },
-                { id: 'lineage', label: 'Lineage' },
-                ...(hosted() ? [] : [{ id: 'access' as const, label: 'Access' }]),
-              ]}
-              value={tab}
-              onChange={setTab}
-            />
-            {tab === 'changes' && <span ref={setDiffControls} className="ml-auto flex items-center gap-2" />}
-          </div>
-          {tab === 'design' ? (
-            <Suspense fallback={null}>
-              <ThreadDesignPanel thread={thread} working={busy} />
-            </Suspense>
-          ) : tab === 'artifacts' ? (
-            <Suspense fallback={null}>
-              <ArtifactList thread={thread} groups={groups} images={images} onOpen={(id) => openArtifact(id)} />
-            </Suspense>
-          ) : tab === 'access' ? (
-            <AccessPanel thread={thread} agent={agent} />
-          ) : tab === 'lineage' ? (
-            <div className="flex flex-col gap-6 px-5 py-5">
-              {summary && (
-                <InspectorSection
-                  title="Lineage"
-                  aside={
-                    <Link to="/graph" className="text-accent-fg hover:text-fg-1">
-                      View graph
-                    </Link>
-                  }
-                >
-                  <Lineage summary={summary} threads={threads.data ?? []} />
-                </InspectorSection>
-              )}
-            </div>
-          ) : tab === 'details' ? (
-            <Details
-              thread={thread}
-              summary={summary}
-              total={total}
-              files={files}
-              codeComments={codeComments}
-              anchor={anchor}
-              onChanged={reloadComments}
-              onCommentLines={() => setTab('changes')}
-            />
-          ) : (
-            <div className="px-4 py-4">
-              <Unwritten thread={thread} />
-              <DiffPanel thread={thread} onCommented={reloadComments} agent={agent?.agent} working={busy} wide controlsIn={diffControls} />
-            </div>
-          )}
-        </div>
-        ))
-      }
-    >
-      <ThreadHeader
-        thread={thread}
-        summary={summary}
-        people={people}
-        changes={totals}
-        panelOpen={panel && desktop}
-        waiting={agent?.state === 'awaiting_input' || agent?.state === 'awaiting_permission'}
-        agent={agent}
-        detail={detail}
-        onDetail={setDetail}
-        grouping={grouping}
-        onGrouping={setGrouping}
-        onChanges={showChanges}
-        onExpand={roomy ? openReview : undefined}
-        onDetails={() => {
-          setTab('details')
-          setPanel(true)
-          setSheet(window.matchMedia('(max-width: 1023px)').matches)
-        }}
-      />
-      <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col px-4 md:px-6">
-        {summary?.cloud && (
-          <div className="pt-3">
-            <CloudSession thread={summary} />
-          </div>
-        )}
-        <div ref={list} className="relative" style={{ height: virtual.getTotalSize() }} data-testid="history">
-          {virtual.getVirtualItems().map((item) => {
-            const row = rows[item.index]
-            return (
-              <div
-                key={row.key}
-                data-index={item.index}
-                ref={virtual.measureElement}
-                // What a fork inherited, once shown, reads as the source's rather than its own.
-                className={cx('absolute left-0 w-full', row.kind !== 'origin' && originOf(row) === 'inherited' && 'opacity-60')}
-                style={{ transform: `translateY(${item.start - virtual.options.scrollMargin}px)` }}
-              >
-                <TranscriptRow
-                  row={row}
-                  running={turnRunning && item.index === rows.length - 1}
-                  onUnfold={() => setUnfolded(thread)}
-                  {...entryProps}
-                />
-              </div>
-            )
-          })}
-        </div>
-        <div ref={below} className="flex flex-col gap-3 pt-2 pb-4">
-          {waitingPrompts.map((item) => (
-            <SendingPrompt key={item.id} item={item} />
-          ))}
-          {agent?.sign_in && <SignInCard thread={thread} asked={agent.sign_in} agent={agent.agent} />}
-          {agent?.permissions.map((asked, index) => (
-            <PermissionCard key={asked.id} thread={thread} asked={asked} agent={agent.agent} first={index === 0} />
-          ))}
-          <Approvals thread={thread} />
-          {agent?.state === 'awaiting_input' && <PlanCard thread={thread} preset={preset} onPreset={setPreset} />}
-          {agent && <AgentTail status={agent} thoughtShown={thoughtCarded} onCancel={() => void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))} />}
-        </div>
-        <div className="sticky bottom-0 z-10 mt-auto bg-bg pt-1 pb-3 before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-6 before:bg-gradient-to-t before:from-bg before:to-transparent md:pb-5">
-          <div className="mb-2 empty:hidden">
-            <RunningStrip titles={taskTitle} />
-          </div>
-          <AgentDock
-            thread={thread}
-            status={agent}
-            heard={heard}
-            preset={preset}
-            onPreset={setPreset}
-            draft={draft}
-            onDraft={setDraft}
-            onSent={() => {
-              following.current = true
-              toEnd()
-            }}
-            onSending={(text, files) => addSending(thread, text, files, total)}
-            people={people}
-            // Docked on the composer's top edge: what the thread changed and what the next prompt adds to it are one object.
-            top={
-              files &&
-              files.length > 0 &&
-              totals &&
-              !busy && <ChangesBar thread={thread} files={files.length} totals={totals} forked={Boolean(summary?.forked_from)} forge={forgeOf(summary?.repo ?? '')} onReview={roomy ? openReview : showChanges} />
-            }
-          />
-        </div>
-      </div>
-    </Page>
-    </LiveQuestions.Provider>
-    </LiveThought.Provider>
-    </LiveTool.Provider>
-    </ThoughtsOpen.Provider>
-    </TranscriptGrouping.Provider>
-    </TranscriptDetail.Provider>
-    </SessionLive.Provider>
-    </StoppableTasks.Provider>
-    </TasksContext.Provider>
+      <TasksContext.Provider value={tasks}>
+        <StoppableTasks.Provider value={stoppable}>
+          <SessionLive.Provider value={live}>
+            <TranscriptDetail.Provider value={detail}>
+              <TranscriptGrouping.Provider value={grouping}>
+                <ThoughtsOpen.Provider value={thoughts}>
+                  <LiveTool.Provider value={tool.id !== null && planCalls.current.has(tool.id) ? { id: null, text: '' } : tool}>
+                    <LiveThought.Provider value={thoughtCarded ? agent.thinking : ''}>
+                      <LiveQuestions.Provider
+                        value={
+                          agent
+                            ? {
+                                thread,
+                                agent: agent.agent,
+                                questions: agent.questions ?? [],
+                                awaiting: agent.permissions.flatMap((asked) => (asked.tool_call ? [asked.tool_call] : [])),
+                              }
+                            : null
+                        }
+                      >
+                        <Page
+                          flush
+                          label="thread"
+                          inspectorLabel="thread details"
+                          inspectorWidth={480}
+                          columnRef={column}
+                          sheet={{ open: sheet, onClose: () => setSheet(false), bare: tab === 'artifacts' && opened !== null }}
+                          full={full && tab === 'artifacts' && opened !== null}
+                          inspector={
+                            (panel || sheet) &&
+                            (tab === 'artifacts' && opened ? (
+                              <Suspense fallback={null}>
+                                <ArtifactViewer
+                                  thread={thread}
+                                  groups={groups}
+                                  opened={opened}
+                                  onOpen={openArtifact}
+                                  onBack={() => {
+                                    setOpened(null)
+                                    setFull(false)
+                                  }}
+                                  onClose={() => {
+                                    closeArtifact()
+                                    setPanel(false)
+                                  }}
+                                  full={full}
+                                  onFull={() => setFull(!full)}
+                                  comments={comments.data ?? []}
+                                  onCommentsChanged={reloadComments}
+                                  phone={!desktop}
+                                />
+                              </Suspense>
+                            ) : (
+                              <div className="flex flex-col">
+                                <div className="sticky top-0 z-10 flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line-subtle bg-bg px-4 py-1.5">
+                                  <Tabs
+                                    label="inspector"
+                                    tabs={[
+                                      ...(designTitle ? [{ id: 'design' as const, label: designTitle }] : []),
+                                      {
+                                        id: 'changes',
+                                        label: (
+                                          <>
+                                            {isChat(summary?.repo) ? 'Files' : 'Changes'}{' '}
+                                            {totals && (totals.added > 0 || totals.removed > 0) && (
+                                              <Counts added={totals.added} removed={totals.removed} />
+                                            )}
+                                          </>
+                                        ),
+                                      },
+                                      ...(groups.length > 0 || images.length > 0
+                                        ? [
+                                            {
+                                              id: 'artifacts' as const,
+                                              label: (
+                                                <>
+                                                  Artifacts{' '}
+                                                  <span className="font-mono text-2xs text-accent-fg">
+                                                    {groups.length + images.length}
+                                                  </span>
+                                                </>
+                                              ),
+                                            },
+                                          ]
+                                        : []),
+                                      { id: 'details', label: 'Details' },
+                                      { id: 'lineage', label: 'Lineage' },
+                                      ...(hosted() ? [] : [{ id: 'access' as const, label: 'Access' }]),
+                                    ]}
+                                    value={tab}
+                                    onChange={setTab}
+                                  />
+                                  {tab === 'changes' && (
+                                    <span ref={setDiffControls} className="ml-auto flex items-center gap-2" />
+                                  )}
+                                </div>
+                                {tab === 'design' ? (
+                                  <Suspense fallback={null}>
+                                    <ThreadDesignPanel thread={thread} working={busy} />
+                                  </Suspense>
+                                ) : tab === 'artifacts' ? (
+                                  <Suspense fallback={null}>
+                                    <ArtifactList
+                                      thread={thread}
+                                      groups={groups}
+                                      images={images}
+                                      onOpen={(id) => openArtifact(id)}
+                                    />
+                                  </Suspense>
+                                ) : tab === 'access' ? (
+                                  <AccessPanel thread={thread} agent={agent} />
+                                ) : tab === 'lineage' ? (
+                                  <div className="flex flex-col gap-6 px-5 py-5">
+                                    {summary && (
+                                      <InspectorSection
+                                        title="Lineage"
+                                        aside={
+                                          <Link to="/graph" className="text-accent-fg hover:text-fg-1">
+                                            View graph
+                                          </Link>
+                                        }
+                                      >
+                                        <Lineage summary={summary} threads={threads.data ?? []} />
+                                      </InspectorSection>
+                                    )}
+                                  </div>
+                                ) : tab === 'details' ? (
+                                  <Details
+                                    thread={thread}
+                                    summary={summary}
+                                    total={total}
+                                    files={files}
+                                    codeComments={codeComments}
+                                    anchor={anchor}
+                                    onChanged={reloadComments}
+                                    onCommentLines={() => setTab('changes')}
+                                  />
+                                ) : (
+                                  <div className="px-4 py-4">
+                                    <Unwritten thread={thread} />
+                                    <DiffPanel
+                                      thread={thread}
+                                      onCommented={reloadComments}
+                                      agent={agent?.agent}
+                                      working={busy}
+                                      wide
+                                      controlsIn={diffControls}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            ))
+                          }
+                        >
+                          <ThreadHeader
+                            thread={thread}
+                            summary={summary}
+                            people={people}
+                            changes={totals}
+                            panelOpen={panel && desktop}
+                            waiting={agent?.state === 'awaiting_input' || agent?.state === 'awaiting_permission'}
+                            agent={agent}
+                            detail={detail}
+                            onDetail={setDetail}
+                            grouping={grouping}
+                            onGrouping={setGrouping}
+                            onChanges={showChanges}
+                            onExpand={roomy ? openReview : undefined}
+                            onDetails={() => {
+                              setTab('details')
+                              setPanel(true)
+                              setSheet(window.matchMedia('(max-width: 1023px)').matches)
+                            }}
+                          />
+                          <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col px-4 md:px-6">
+                            {summary?.cloud && (
+                              <div className="pt-3">
+                                <CloudSession thread={summary} />
+                              </div>
+                            )}
+                            <div ref={list} className="relative" style={{ height: virtual.getTotalSize() }} data-testid="history">
+                              {virtual.getVirtualItems().map((item) => {
+                                const row = rows[item.index]
+                                return (
+                                  <div
+                                    key={row.key}
+                                    data-index={item.index}
+                                    ref={virtual.measureElement}
+                                    // What a fork inherited, once shown, reads as the source's rather than its own.
+                                    className={cx(
+                                      'absolute left-0 w-full',
+                                      row.kind !== 'origin' && originOf(row) === 'inherited' && 'opacity-60',
+                                    )}
+                                    style={{ transform: `translateY(${item.start - virtual.options.scrollMargin}px)` }}
+                                  >
+                                    <TranscriptRow
+                                      row={row}
+                                      running={turnRunning && item.index === rows.length - 1}
+                                      onUnfold={() => setUnfolded(thread)}
+                                      {...entryProps}
+                                    />
+                                  </div>
+                                )
+                              })}
+                            </div>
+                            <div ref={below} className="flex flex-col gap-3 pt-2 pb-4">
+                              {waitingPrompts.map((item) => (
+                                <SendingPrompt key={item.id} item={item} />
+                              ))}
+                              {agent?.sign_in && <SignInCard thread={thread} asked={agent.sign_in} agent={agent.agent} />}
+                              {agent?.permissions.map((asked, index) => (
+                                <PermissionCard
+                                  key={asked.id}
+                                  thread={thread}
+                                  asked={asked}
+                                  agent={agent.agent}
+                                  first={index === 0}
+                                />
+                              ))}
+                              <Approvals thread={thread} />
+                              {agent?.state === 'awaiting_input' && (
+                                <PlanCard thread={thread} preset={preset} onPreset={setPreset} />
+                              )}
+                              {agent && (
+                                <AgentTail
+                                  status={agent}
+                                  thoughtShown={thoughtCarded}
+                                  onCancel={() =>
+                                    void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))
+                                  }
+                                />
+                              )}
+                            </div>
+                            <div className="sticky bottom-0 z-10 mt-auto bg-bg pt-1 pb-3 before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-6 before:bg-gradient-to-t before:from-bg before:to-transparent md:pb-5">
+                              <div className="mb-2 empty:hidden">
+                                <RunningStrip titles={taskTitle} />
+                              </div>
+                              <AgentDock
+                                thread={thread}
+                                status={agent}
+                                heard={heard}
+                                preset={preset}
+                                onPreset={setPreset}
+                                draft={draft}
+                                onDraft={setDraft}
+                                onSent={() => {
+                                  following.current = true
+                                  toEnd()
+                                }}
+                                onSending={(text, files) => addSending(thread, text, files, total)}
+                                people={people}
+                                // Docked on the composer's top edge: what the thread changed and what the next prompt adds to it are one object.
+                                top={
+                                  files &&
+                                  files.length > 0 &&
+                                  totals &&
+                                  !busy && (
+                                    <ChangesBar
+                                      thread={thread}
+                                      files={files.length}
+                                      totals={totals}
+                                      forked={Boolean(summary?.forked_from)}
+                                      forge={forgeOf(summary?.repo ?? '')}
+                                      onReview={roomy ? openReview : showChanges}
+                                    />
+                                  )
+                                }
+                              />
+                            </div>
+                          </div>
+                        </Page>
+                      </LiveQuestions.Provider>
+                    </LiveThought.Provider>
+                  </LiveTool.Provider>
+                </ThoughtsOpen.Provider>
+              </TranscriptGrouping.Provider>
+            </TranscriptDetail.Provider>
+          </SessionLive.Provider>
+        </StoppableTasks.Provider>
+      </TasksContext.Provider>
     </ArtifactActions.Provider>
   )
 }

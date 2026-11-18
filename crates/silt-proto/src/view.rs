@@ -5,6 +5,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::theme::{
+    AppearanceMode, AppearanceSettings, ThemeCatalog, ThemeCheckView, ThemeColorView, ThemeCss, ThemeDetail, ThemeProblem,
+    ThemeSaved, ThemeSource, ThemeSummary, ThemeSyntaxView,
+};
 use crate::{AgentState, Capabilities, InboxAction, Snooze, Startable, ThreadStatus, Visibility};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

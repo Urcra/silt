@@ -19,7 +19,8 @@ export function lineDiff(before: string, after: string): DiffLine[] | null {
   if (a.length + b.length > MAX_LINES) return null
   const longest: Uint32Array[] = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1))
   for (let i = a.length - 1; i >= 0; i--)
-    for (let j = b.length - 1; j >= 0; j--) longest[i][j] = a[i] === b[j] ? longest[i + 1][j + 1] + 1 : Math.max(longest[i + 1][j], longest[i][j + 1])
+    for (let j = b.length - 1; j >= 0; j--)
+      longest[i][j] = a[i] === b[j] ? longest[i + 1][j + 1] + 1 : Math.max(longest[i + 1][j], longest[i][j + 1])
   const middle: DiffLine[] = []
   let i = 0
   let j = 0

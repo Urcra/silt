@@ -7,7 +7,7 @@ import { Button, EmptyState, Input, cx, toast } from '../ui'
 
 const FIT: Record<ModelFit, { label: string; tone: string }> = {
   fits: { label: 'Fits', tone: 'text-ok' },
-  tight: { label: 'Tight', tone: 'text-warn' },
+  tight: { label: 'Tight', tone: 'text-warn-fg' },
   too_big: { label: 'Too big here', tone: 'text-danger' },
 }
 
@@ -66,12 +66,17 @@ function Found({ found, busy, onPull }: { found: FoundModel; busy: boolean; onPu
           {files.data && (
             <>
               <p className="pb-1 text-xs text-fg-2">
-                {[files.data.architecture, files.data.context_length && `trained for ${files.data.context_length.toLocaleString()} tokens of context`]
+                {[
+                  files.data.architecture,
+                  files.data.context_length && `trained for ${files.data.context_length.toLocaleString()} tokens of context`,
+                ]
                   .filter(Boolean)
                   .join(' · ')}
               </p>
               {files.data.quantizations.length === 0 && (
-                <p className="text-xs text-fg-2">No GGUF file here that Silt can check: each needs the SHA-256 Hugging Face keeps for it.</p>
+                <p className="text-xs text-fg-2">
+                  No GGUF file here that Silt can check: each needs the SHA-256 Hugging Face keeps for it.
+                </p>
               )}
               <ul aria-label={`quantizations of ${found.repo}`} className="flex flex-col">
                 {files.data.quantizations.map((quantization) => (
@@ -79,7 +84,8 @@ function Found({ found, busy, onPull }: { found: FoundModel; busy: boolean; onPu
                     <span className="min-w-28 font-mono text-xs">{quantization.label}</span>
                     <span className="flex-1 text-xs text-fg-2">
                       {gigabytes(quantization.size)}
-                      {quantization.parts > 1 && ` in ${quantization.parts} parts`} · {quantization.context.toLocaleString()} tokens of context here
+                      {quantization.parts > 1 && ` in ${quantization.parts} parts`} · {quantization.context.toLocaleString()}{' '}
+                      tokens of context here
                     </span>
                     <Fit fit={quantization.fit} />
                     <Button size="sm" disabled={busy} onClick={() => onPull(quantization.source)}>
@@ -137,8 +143,8 @@ export function LocalModelsSettings() {
     <section aria-label="Local models" className="flex flex-col gap-3">
       <h2 className={SETTINGS_HEADING}>Local models</h2>
       <p className="text-sm text-fg-2">
-        Models Silt runs on this machine with llama.cpp, for Silt's own agent and for Claude Code. What you send them stays here. A model is downloaded only
-        when you ask for it.
+        Models Silt runs on this machine with llama.cpp, for Silt's own agent and for Claude Code. What you send them stays here.
+        A model is downloaded only when you ask for it.
       </p>
       {current && (
         <p className="text-xs text-fg-2">
@@ -156,11 +162,15 @@ export function LocalModelsSettings() {
             </span>
           )}
           {' · '}
-          {current.devices.length > 0 ? current.devices.map((device) => `${device.description} (${gigabytes(device.total)})`).join(', ') : 'no GPU found'}
+          {current.devices.length > 0
+            ? current.devices.map((device) => `${device.description} (${gigabytes(device.total)})`).join(', ')
+            : 'no GPU found'}
           {' · '}room for models: {gigabytes(current.room)}
         </p>
       )}
-      {current && current.models.length === 0 && <EmptyState title="No models here yet">Find one below, or add a GGUF file you have.</EmptyState>}
+      {current && current.models.length === 0 && (
+        <EmptyState title="No models here yet">Find one below, or add a GGUF file you have.</EmptyState>
+      )}
       {current && current.models.length > 0 && (
         <ul aria-label="models here" className="overflow-hidden rounded-md border border-line bg-elevated">
           {current.models.map((model) => (
@@ -197,8 +207,8 @@ export function LocalModelsSettings() {
         <Button type="submit">Search</Button>
       </form>
       <p className="text-xs text-fg-2">
-        {asked ? `GGUF models on Hugging Face matching “${asked}”` : 'The most downloaded GGUF models on Hugging Face'}, the most downloaded first. Open one to
-        see its quantizations and which fit here.
+        {asked ? `GGUF models on Hugging Face matching “${asked}”` : 'The most downloaded GGUF models on Hugging Face'}, the most
+        downloaded first. Open one to see its quantizations and which fit here.
       </p>
       {found.isPending && <p className="text-xs text-fg-2">Asking Hugging Face…</p>}
       {found.error && <p className="text-xs text-danger">{message(found.error)}</p>}
@@ -219,8 +229,8 @@ export function LocalModelsSettings() {
       >
         <span className="font-medium">Another model</span>
         <span className="text-xs text-fg-2">
-          A GGUF on Hugging Face as <code className="font-mono">owner/repo:file.gguf</code>, or the full path of a GGUF file on this machine, which stays where
-          it is.
+          A GGUF on Hugging Face as <code className="font-mono">owner/repo:file.gguf</code>, or the full path of a GGUF file on
+          this machine, which stays where it is.
         </span>
         <span className="flex gap-1.5">
           <Input

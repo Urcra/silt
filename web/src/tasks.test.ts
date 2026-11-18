@@ -4,10 +4,24 @@ import { mayRun, QUIET_MS, running, tasksOf } from './tasks'
 import { piecesOf, rowsOf } from './transcript'
 
 const entry = (index: number, kind: string, text: string, more: Partial<HistoryEntry> = {}): HistoryEntry =>
-  ({ index, thread: 't', origin: 'own', kind, text, time_ms: index * 1000, rewound: false, side: null, task: null, ...more }) as HistoryEntry
+  ({
+    index,
+    thread: 't',
+    origin: 'own',
+    kind,
+    text,
+    time_ms: index * 1000,
+    rewound: false,
+    side: null,
+    task: null,
+    ...more,
+  }) as HistoryEntry
 
 const news = (index: number, task: Partial<TaskView> & { id: string }, side: string | null = null): HistoryEntry =>
-  entry(index, 'task', task.summary ?? '', { side, task: { call: null, kind: null, status: 'running', side: null, summary: null, ...task } })
+  entry(index, 'task', task.summary ?? '', {
+    side,
+    task: { call: null, kind: null, status: 'running', side: null, summary: null, ...task },
+  })
 
 const call = (index: number, id: string, name: string, kind: string, subject: string): HistoryEntry =>
   entry(index, 'tool_call', `${name} {}`, { tool: { id, name, kind, subject, detail: null, questions: [] } })

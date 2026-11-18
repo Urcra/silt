@@ -1,0 +1,32 @@
+{
+  // Written for Silt's tests, in the shape of a VS Code colour theme.
+  "name": "Fixture Night",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#1a1b26",
+    "editor.foreground": "#c0caf5",
+    "editorWidget.background": "#16161e",
+    "sideBar.background": "#16161e",
+    "list.hoverBackground": "#2a2e4a80", /* translucent, as VS Code themes often are */
+    "descriptionForeground": "#a9b1d6",
+    "editorLineNumber.foreground": "#3b4261",
+    "panel.border": "#292e42",
+    "button.background": "#3d59a1",
+    "button.foreground": "#ffffff",
+    "textLink.foreground": "#7aa2f7",
+    "gitDecoration.addedResourceForeground": "#9ece6a",
+    "editorError.foreground": "#f7768e",
+    "minimap.background": "#16161e",
+    "terminal.ansiCyan": "#7dcfff",
+  },
+  "tokenColors": [
+    { "name": "Comment", "scope": ["comment", "punctuation.definition.comment"], "settings": { "foreground": "#565f89", "fontStyle": "italic" } },
+    { "scope": "keyword, storage.type", "settings": { "foreground": "#bb9af7" } },
+    { "scope": "string", "settings": { "foreground": "#9ece6a" } },
+    { "scope": "constant.numeric", "settings": { "foreground": "#ff9e64" } },
+    { "scope": "entity.name.function", "settings": { "foreground": "#7aa2f7" } },
+    { "scope": "entity.name.type", "settings": { "foreground": "#2ac3de" } },
+    { "scope": "keyword.operator", "settings": { "foreground": "#89ddff" } },
+  ],
+  "semanticTokenColors": { "variable": "#c0caf5" },
+}

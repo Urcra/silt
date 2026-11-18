@@ -51,8 +51,19 @@ if ! compgen -G "$prebuilt/*/lib/sherpa-onnx-c-api.lib" >/dev/null; then
     windows 'cargo clean --release --manifest-path crates/silt-voice/Cargo.toml -p sherpa-onnx-sys; exit $LASTEXITCODE'
 fi
 
+# The copy has no `.git`, so the builds are told which clone they come
+# from, for updating from the app (ADR 0100).
+quoted() { printf "'%s'" "${1//\'/\'\'}"; }
+dirty=
+[ -z "$(git -C "$root" status --porcelain --untracked-files=no)" ] || dirty=1
+build_info="\$env:SILT_BUILD_COMMIT=$(quoted "$(git -C "$root" rev-parse HEAD)")
+    \$env:SILT_BUILD_BRANCH=$(quoted "$(git -C "$root" symbolic-ref --quiet --short HEAD || true)")
+    \$env:SILT_BUILD_DIRTY=$(quoted "$dirty")
+    \$env:SILT_BUILD_SOURCE=$(quoted "wsl://${WSL_DISTRO_NAME:-}$root")"
+
 echo "install-windows: building silt.exe, silt-desktop.exe and silt-voice.exe"
-windows 'cargo build --release --locked -p silt-cli; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+windows "$build_info"'
+    cargo build --release --locked -p silt-cli; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     cargo build --release --locked --manifest-path crates/silt-desktop/Cargo.toml --features tauri/custom-protocol; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     cargo build --release --locked --manifest-path crates/silt-voice/Cargo.toml; exit $LASTEXITCODE'
 

@@ -28,6 +28,7 @@
   --color-accent-fg: var(--accent-fg);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
+  --color-warn-fg: var(--warn-fg);
   --color-danger: var(--danger);
   --color-info: var(--info);
   --color-ok-tint: var(--ok-tint);
@@ -39,54 +40,120 @@
   --shadow-overlay: var(--shadow-2);
 }
 
-/* Code, highlighted by Lezer's class highlighter (src/highlight.ts), in
-   Nous's colours: amber keywords, olive strings, slate numbers, quiet comments. */
+/* Code, highlighted by Lezer's class highlighter (src/highlight.ts), in the
+   theme's --syntax-* tokens (ADR 0098); nous.css gives Nous's: amber
+   keywords, olive strings, rust numbers, quiet comments. A tag the theme
+   leaves alone inherits. */
 @layer components {
   .tok-keyword,
   .tok-operatorKeyword,
   .tok-modifier {
-    color: var(--accent-fg);
+    color: var(--syntax-keyword, inherit);
+    font-style: var(--syntax-keyword-style, inherit);
+    font-weight: var(--syntax-keyword-weight, inherit);
   }
-  .tok-string,
+  .tok-string {
+    color: var(--syntax-string, inherit);
+    font-style: var(--syntax-string-style, inherit);
+    font-weight: var(--syntax-string-weight, inherit);
+  }
   .tok-string2,
   .tok-regexp {
-    color: var(--ok);
+    color: var(--syntax-string-special, inherit);
+    font-style: var(--syntax-string-special-style, inherit);
+    font-weight: var(--syntax-string-special-weight, inherit);
   }
-  .tok-number,
+  .tok-number {
+    color: var(--syntax-number, inherit);
+    font-style: var(--syntax-number-style, inherit);
+    font-weight: var(--syntax-number-weight, inherit);
+  }
   .tok-bool,
   .tok-atom,
   .tok-literal {
-    color: var(--danger);
+    color: var(--syntax-constant, inherit);
+    font-style: var(--syntax-constant-style, inherit);
+    font-weight: var(--syntax-constant-weight, inherit);
   }
   .tok-comment {
-    color: var(--fg-3);
-    font-style: italic;
+    color: var(--syntax-comment, inherit);
+    font-style: var(--syntax-comment-style, inherit);
+    font-weight: var(--syntax-comment-weight, inherit);
   }
   .tok-typeName,
   .tok-className,
-  .tok-namespace,
+  .tok-namespace {
+    color: var(--syntax-type, inherit);
+    font-style: var(--syntax-type-style, inherit);
+    font-weight: var(--syntax-type-weight, inherit);
+  }
   .tok-macroName {
-    color: var(--info);
+    color: var(--syntax-macro, inherit);
+    font-style: var(--syntax-macro-style, inherit);
+    font-weight: var(--syntax-macro-weight, inherit);
   }
-  .tok-definition,
-  .tok-function,
-  .tok-heading {
-    font-weight: 500;
+  .tok-variableName,
+  .tok-variableName2 {
+    color: var(--syntax-variable, inherit);
+    font-style: var(--syntax-variable-style, inherit);
+    font-weight: var(--syntax-variable-weight, inherit);
   }
-  .tok-meta,
-  .tok-punctuation,
+  .tok-propertyName {
+    color: var(--syntax-property, inherit);
+    font-style: var(--syntax-property-style, inherit);
+    font-weight: var(--syntax-property-weight, inherit);
+  }
   .tok-operator {
-    color: var(--fg-2);
+    color: var(--syntax-operator, inherit);
+    font-style: var(--syntax-operator-style, inherit);
+    font-weight: var(--syntax-operator-weight, inherit);
+  }
+  .tok-punctuation {
+    color: var(--syntax-punctuation, inherit);
+    font-style: var(--syntax-punctuation-style, inherit);
+    font-weight: var(--syntax-punctuation-weight, inherit);
+  }
+  .tok-meta {
+    color: var(--syntax-meta, inherit);
+    font-style: var(--syntax-meta-style, inherit);
+    font-weight: var(--syntax-meta-weight, inherit);
+  }
+  .tok-link,
+  .tok-url {
+    color: var(--syntax-link, inherit);
+    font-style: var(--syntax-link-style, inherit);
+    font-weight: var(--syntax-link-weight, inherit);
+  }
+  .tok-heading {
+    color: var(--syntax-heading, inherit);
+    font-style: var(--syntax-heading-style, inherit);
+    font-weight: var(--syntax-heading-weight, inherit);
+  }
+  .tok-emphasis {
+    color: var(--syntax-emphasis, inherit);
+    font-style: var(--syntax-emphasis-style, inherit);
+    font-weight: var(--syntax-emphasis-weight, inherit);
+  }
+  .tok-strong {
+    color: var(--syntax-strong, inherit);
+    font-style: var(--syntax-strong-style, inherit);
+    font-weight: var(--syntax-strong-weight, inherit);
+  }
+  /* A definition is always also a variable's or a property's name; what the
+     theme leaves out of the definition comes from that. */
+  .tok-variableName.tok-definition {
+    color: var(--syntax-definition, var(--syntax-variable, inherit));
+    font-style: var(--syntax-definition-style, var(--syntax-variable-style, inherit));
+    font-weight: var(--syntax-definition-weight, var(--syntax-variable-weight, inherit));
+  }
+  .tok-propertyName.tok-definition {
+    color: var(--syntax-definition, var(--syntax-property, inherit));
+    font-style: var(--syntax-definition-style, var(--syntax-property-style, inherit));
+    font-weight: var(--syntax-definition-weight, var(--syntax-property-weight, inherit));
   }
   .tok-link,
   .tok-url {
     text-decoration: underline;
-  }
-  .tok-emphasis {
-    font-style: italic;
-  }
-  .tok-strong {
-    font-weight: 600;
   }
 }
 

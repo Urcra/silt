@@ -1,7 +1,19 @@
 import { Link } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { type ReactNode, useState } from 'react'
-import { api, type AgentStatus, type ApprovalView, type BackendView, type CallView, type Extra, type GrantScope, type Plugin, type Policy, type Reach, type ThreadSummary } from '../api'
+import {
+  api,
+  type AgentStatus,
+  type ApprovalView,
+  type BackendView,
+  type CallView,
+  type Extra,
+  type GrantScope,
+  type Plugin,
+  type Policy,
+  type Reach,
+  type ThreadSummary,
+} from '../api'
 import { keys, message } from '../query'
 import { workspaceOf } from '../rules'
 import { BACKENDS, DEVICE_ORDER, DEVICES, HANDS_OVER, NETWORK_ORDER, NETWORKS, PLANNED_BACKENDS, reachOf } from '../sandbox'
@@ -53,7 +65,15 @@ function Fact({ name, children }: { name: string; children: ReactNode }) {
  * The header's shield (ADR 0093): what the thread's agent reaches, to read rather than change mid-run. A run Silt
  * sandboxed says what it was given; otherwise it says what the workspace's rules give the next one.
  */
-export function SandboxShield({ thread, summary, agent }: { thread: string; summary: ThreadSummary | undefined; agent: AgentStatus | null | undefined }) {
+export function SandboxShield({
+  thread,
+  summary,
+  agent,
+}: {
+  thread: string
+  summary: ThreadSummary | undefined
+  agent: AgentStatus | null | undefined
+}) {
   const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
   const plugins = useQuery({ queryKey: keys.plugins, queryFn: api.plugins, enabled: !hosted() })
   if (hosted() || !summary) return null
@@ -63,7 +83,13 @@ export function SandboxShield({ thread, summary, agent }: { thread: string; summ
   const running = live?.sandbox ?? null
   const reach = running ?? (!live && required && view ? reachOf(view.effective) : null)
   const on = (plugins.data ?? []).filter((plugin) => view && plugin.workspaces.includes(view.workspace.id))
-  const heading = running ? 'Sandboxed' : live ? "Not in Silt's sandbox" : required ? 'The next run is sandboxed' : "Not in Silt's sandbox"
+  const heading = running
+    ? 'Sandboxed'
+    : live
+      ? "Not in Silt's sandbox"
+      : required
+        ? 'The next run is sandboxed'
+        : "Not in Silt's sandbox"
   return (
     <Popover
       label="Sandbox"
@@ -78,7 +104,12 @@ export function SandboxShield({ thread, summary, agent }: { thread: string; summ
           <div className="flex items-center gap-2 border-b border-line-subtle px-3 py-2.5">
             <Icon name="shield" className="h-3.5 w-3.5" />
             <span className="flex-1 text-sm font-medium">{heading}</span>
-            {view && <span className="font-mono text-2xs text-fg-2">{view.workspace.name}{reach ? ` · ${view?.effective.backend ?? reach.backend}` : ''}</span>}
+            {view && (
+              <span className="font-mono text-2xs text-fg-2">
+                {view.workspace.name}
+                {reach ? ` · ${view?.effective.backend ?? reach.backend}` : ''}
+              </span>
+            )}
           </div>
           {reach ? (
             <>
@@ -97,7 +128,11 @@ export function SandboxShield({ thread, summary, agent }: { thread: string; summ
             </p>
           )}
           <div className="flex items-center gap-2 border-t border-line-subtle px-3 py-2">
-            <span className="flex-1 text-2xs text-fg-2">{running ? `Set by ${view?.workspace.name ?? 'its workspace'}'s rules when the run started.` : 'Set by its workspace’s rules.'}</span>
+            <span className="flex-1 text-2xs text-fg-2">
+              {running
+                ? `Set by ${view?.workspace.name ?? 'its workspace'}'s rules when the run started.`
+                : 'Set by its workspace’s rules.'}
+            </span>
             <Link to="/settings/$section" params={{ section: 'workspaces' }} className="text-xs text-accent-fg" onClick={close}>
               Workspace settings
             </Link>
@@ -112,8 +147,16 @@ export function SandboxShield({ thread, summary, agent }: { thread: string; summ
 const GRANTS: { value: string; label: (change: boolean) => string; scope: GrantScope | null }[] = [
   { value: 'once', label: () => 'ask again next time', scope: null },
   { value: 'run', label: (change) => `allow ${change ? 'changes' : 'reads'} like it for this run`, scope: { for: 'run' } },
-  { value: 'hour', label: (change) => `allow ${change ? 'changes' : 'reads'} like it in this thread for an hour`, scope: { for: 'thread', minutes: 60 } },
-  { value: 'day', label: (change) => `allow ${change ? 'changes' : 'reads'} like it in this thread for 8 hours`, scope: { for: 'thread', minutes: 480 } },
+  {
+    value: 'hour',
+    label: (change) => `allow ${change ? 'changes' : 'reads'} like it in this thread for an hour`,
+    scope: { for: 'thread', minutes: 60 },
+  },
+  {
+    value: 'day',
+    label: (change) => `allow ${change ? 'changes' : 'reads'} like it in this thread for 8 hours`,
+    scope: { for: 'thread', minutes: 480 },
+  },
 ]
 
 function remaining(createdMs: number, now: number): string {
@@ -133,7 +176,12 @@ export function ApprovalCard({ approval, first, title }: { approval: ApprovalVie
     setError(undefined)
     setSending(true)
     api
-      .answerApproval(approval.id, approve, approval.hash, approve ? GRANTS.find((choice) => choice.value === grant)?.scope ?? null : null)
+      .answerApproval(
+        approval.id,
+        approve,
+        approval.hash,
+        approve ? (GRANTS.find((choice) => choice.value === grant)?.scope ?? null) : null,
+      )
       .then(() => void queries.invalidateQueries({ queryKey: ['approvals'] }))
       .catch((failure: unknown) => setError(message(failure)))
       .finally(() => setSending(false))
@@ -144,10 +192,15 @@ export function ApprovalCard({ approval, first, title }: { approval: ApprovalVie
   const now = useNow(1000)
   const change = approval.change
   return (
-    <div role="group" aria-label="approval" className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3">
+    <div
+      role="group"
+      aria-label="approval"
+      className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3"
+    >
       <span className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-fg-2">
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" />
-        The agent asks to {change ? 'change' : 'read'} {approval.environment} through <span className="font-medium text-fg-1">{approval.plugin}</span>
+        The agent asks to {change ? 'change' : 'read'} {approval.environment} through{' '}
+        <span className="font-medium text-fg-1">{approval.plugin}</span>
         <Tag tone="warn">{approval.environment}</Tag>
         <Tag>{approval.tool}</Tag>
         {title && <span className="truncate">· {title}</span>}
@@ -157,7 +210,8 @@ export function ApprovalCard({ approval, first, title }: { approval: ApprovalVie
         {approval.shown}
       </pre>
       <span className="font-mono text-2xs text-fg-2">
-        {approval.target} · request {approval.hash.slice(0, 4)}…{approval.hash.slice(-4)} · expires in {remaining(approval.created_ms, now)}
+        {approval.target} · request {approval.hash.slice(0, 4)}…{approval.hash.slice(-4)} · expires in{' '}
+        {remaining(approval.created_ms, now)}
       </span>
       <span className="flex flex-wrap items-center gap-1.5">
         <Button variant="primary" disabled={sending} onClick={() => answer(true)}>
@@ -187,7 +241,8 @@ export function ApprovalCard({ approval, first, title }: { approval: ApprovalVie
         )}
       </span>
       <span className="text-2xs text-fg-2">
-        Shown from Silt's own copy of the request, not the agent's description of it. The agent can't change it now; what you approve is what is sent.
+        Shown from Silt's own copy of the request, not the agent's description of it. The agent can't change it now; what you
+        approve is what is sent.
       </span>
       {error && <span className="text-xs text-danger">{error}</span>}
     </div>
@@ -196,7 +251,12 @@ export function ApprovalCard({ approval, first, title }: { approval: ApprovalVie
 
 /** The thread's plugin calls waiting for the person. */
 export function Approvals({ thread }: { thread: string }) {
-  const approvals = useQuery({ queryKey: keys.approvals(thread), queryFn: () => api.approvals(thread), enabled: !hosted(), refetchInterval: 30_000 })
+  const approvals = useQuery({
+    queryKey: keys.approvals(thread),
+    queryFn: () => api.approvals(thread),
+    enabled: !hosted(),
+    refetchInterval: 30_000,
+  })
   const waiting = (approvals.data ?? []).filter((approval) => approval.state === 'pending')
   return (
     <>
@@ -230,8 +290,18 @@ function Choice<T extends string>({
       {options.map((option, index) => {
         const capped = index > most
         return (
-          <label key={option.value} className={cx('flex cursor-pointer items-start gap-2 text-sm', capped && 'cursor-not-allowed opacity-50')}>
-            <input type="radio" name={name} className="mt-1 accent-[var(--accent)]" checked={value === option.value} disabled={capped} onChange={() => onChange(option.value)} />
+          <label
+            key={option.value}
+            className={cx('flex cursor-pointer items-start gap-2 text-sm', capped && 'cursor-not-allowed opacity-50')}
+          >
+            <input
+              type="radio"
+              name={name}
+              className="mt-1 accent-[var(--accent)]"
+              checked={value === option.value}
+              disabled={capped}
+              onChange={() => onChange(option.value)}
+            />
             <span className="flex flex-col">
               <span>{option.label}</span>
               <span className={SUB}>{option.detail}</span>
@@ -244,7 +314,17 @@ function Choice<T extends string>({
   )
 }
 
-function ListInput({ label, value, placeholder, onChange }: { label: string; value: string[]; placeholder: string; onChange: (value: string[]) => void }) {
+function ListInput({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string
+  value: string[]
+  placeholder: string
+  onChange: (value: string[]) => void
+}) {
   const [text, setText] = useState(value.join(', '))
   return (
     <input
@@ -293,7 +373,14 @@ export function ReachSettings({
   const extra = (key: Extra, label: string, detail: string, on: boolean, change: (on: boolean) => void, more?: ReactNode) => (
     <div className={cx('flex flex-col gap-1', refused.has(key) && 'opacity-50')}>
       <label className="flex items-start gap-2 text-sm">
-        <input type="checkbox" aria-label={label} className="mt-1 accent-[var(--accent)]" checked={on && !refused.has(key)} disabled={refused.has(key)} onChange={(event) => change(event.target.checked)} />
+        <input
+          type="checkbox"
+          aria-label={label}
+          className="mt-1 accent-[var(--accent)]"
+          checked={on && !refused.has(key)}
+          disabled={refused.has(key)}
+          onChange={(event) => change(event.target.checked)}
+        />
         <span className="flex flex-col">
           <span>{label}</span>
           <span className={SUB}>{detail}</span>
@@ -330,7 +417,8 @@ export function ReachSettings({
               <span className="flex flex-col">
                 <span>Run its agents in Silt's sandbox</span>
                 <span className={SUB}>
-                  Every agent Silt starts in {workspace}, from a terminal or here: the thread's checkout, your toolchains read-only, no credentials and none of your sockets.
+                  Every agent Silt starts in {workspace}, from a terminal or here: the thread's checkout, your toolchains
+                  read-only, no credentials and none of your sockets.
                   {orgRequires && org ? ` ${org.name} requires it.` : ''}
                 </span>
               </span>
@@ -339,131 +427,224 @@ export function ReachSettings({
               <p role="alert" className="flex items-start gap-1 text-xs text-danger">
                 <Icon name="alert" className="mt-0.5 h-3 w-3 shrink-0" />
                 <span>
-                  This machine can't make it with {backend}, so agents won't start in {workspace} here: {unavailable}. <code className="font-mono">silt access doctor</code> says more.
+                  This machine can't make it with {backend}, so agents won't start in {workspace} here: {unavailable}.{' '}
+                  <code className="font-mono">silt access doctor</code> says more.
                 </span>
               </p>
             )}
-            {!sandboxed && <p className={SUB}>Off: its agents run as you, held only by their permissions and their own sandbox. What's below applies once it's on.</p>}
+            {!sandboxed && (
+              <p className={SUB}>
+                Off: its agents run as you, held only by their permissions and their own sandbox. What's below applies once it's
+                on.
+              </p>
+            )}
           </div>
         </div>
-        <fieldset disabled={!sandboxed} aria-label="What the sandbox reaches" className={cx('min-w-0', !sandboxed && 'opacity-50')}>
-        <div className={ROW}>
-          <span className="flex flex-col">
-            <span className="text-sm">Isolation</span>
-            <span className={SUB}>What makes the sandbox</span>
-          </span>
-          <div className="flex flex-col gap-2" role="radiogroup" aria-label="Isolation">
-            {BACKENDS.map((option) => {
-              const locked = orgBackend !== null && orgBackend !== option.value
-              const why = backends.find((known) => known.backend === option.value)?.unavailable
-              return (
-                <label key={option.value} className={cx('flex cursor-pointer items-start gap-2 text-sm', locked && 'cursor-not-allowed opacity-50')}>
-                  <input type="radio" name="Isolation" className="mt-1 accent-[var(--accent)]" checked={backend === option.value} disabled={locked} onChange={() => onChange({ backend: option.value })} />
+        <fieldset
+          disabled={!sandboxed}
+          aria-label="What the sandbox reaches"
+          className={cx('min-w-0', !sandboxed && 'opacity-50')}
+        >
+          <div className={ROW}>
+            <span className="flex flex-col">
+              <span className="text-sm">Isolation</span>
+              <span className={SUB}>What makes the sandbox</span>
+            </span>
+            <div className="flex flex-col gap-2" role="radiogroup" aria-label="Isolation">
+              {BACKENDS.map((option) => {
+                const locked = orgBackend !== null && orgBackend !== option.value
+                const why = backends.find((known) => known.backend === option.value)?.unavailable
+                return (
+                  <label
+                    key={option.value}
+                    className={cx('flex cursor-pointer items-start gap-2 text-sm', locked && 'cursor-not-allowed opacity-50')}
+                  >
+                    <input
+                      type="radio"
+                      name="Isolation"
+                      className="mt-1 accent-[var(--accent)]"
+                      checked={backend === option.value}
+                      disabled={locked}
+                      onChange={() => onChange({ backend: option.value })}
+                    />
+                    <span className="flex flex-col">
+                      <span>{option.label}</span>
+                      <span className={SUB}>{option.detail}</span>
+                      {why && <span className="text-2xs text-danger">Not on this machine: {why}</span>}
+                      {orgBackend === option.value && org && <span className="text-2xs text-fg-2">{org.name} chooses it</span>}
+                    </span>
+                  </label>
+                )
+              })}
+              {PLANNED_BACKENDS.map((planned) => (
+                <label key={planned.label} className="flex cursor-not-allowed items-start gap-2 text-sm opacity-50">
+                  <input type="radio" name="Isolation" className="mt-1" checked={false} disabled readOnly />
                   <span className="flex flex-col">
-                    <span>{option.label}</span>
-                    <span className={SUB}>{option.detail}</span>
-                    {why && <span className="text-2xs text-danger">Not on this machine: {why}</span>}
-                    {orgBackend === option.value && org && <span className="text-2xs text-fg-2">{org.name} chooses it</span>}
+                    <span className="inline-flex items-center gap-1.5">
+                      {planned.label} <Tag>Not yet</Tag>
+                    </span>
+                    <span className={SUB}>{planned.detail}</span>
                   </span>
                 </label>
-              )
-            })}
-            {PLANNED_BACKENDS.map((planned) => (
-              <label key={planned.label} className="flex cursor-not-allowed items-start gap-2 text-sm opacity-50">
-                <input type="radio" name="Isolation" className="mt-1" checked={false} disabled readOnly />
-                <span className="flex flex-col">
-                  <span className="inline-flex items-center gap-1.5">
-                    {planned.label} <Tag>Not yet</Tag>
-                  </span>
-                  <span className={SUB}>{planned.detail}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-        </div>
-        <div className={ROW}>
-          <span className="flex flex-col">
-            <span className="text-sm">Network</span>
-            <span className={SUB}>What it can connect to</span>
-          </span>
-          <div className="flex flex-col gap-3">
-            <Choice name="Network" options={NETWORKS} value={policy.network ?? 'full'} most={mostNetwork} orgName={org?.name ?? null} onChange={(network) => onChange({ network })} />
-            {(policy.network ?? 'full') === 'gateway' && (
-              <ListInput label="Hosts it reaches" placeholder="api.github.com, *.npmjs.org; any public host when empty" value={policy.hosts ?? []} onChange={(hosts) => onChange({ hosts: hosts.length ? hosts : null })} />
-            )}
-            <div className="rounded-sm border border-line-subtle bg-bg px-3 py-2 text-xs">
-              <span className="font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase">Always blocked</span>
-              <p className="mt-1 flex flex-wrap gap-1">
-                {['this machine', '127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16 · cloud metadata', '100.64.0.0/10', 'fc00::/7', 'fe80::/10'].map((range) => (
-                  <Tag key={range}>{range}</Tag>
-                ))}
-              </p>
-              <p className={cx(SUB, 'mt-1')}>Hosts on a VPN are in these ranges: reach them through a plugin, or allow a range.</p>
+              ))}
             </div>
           </div>
-        </div>
-        <div className={ROW}>
-          <span className="flex flex-col">
-            <span className="text-sm">Devices</span>
-            <span className={SUB}>USB serial, adb</span>
-          </span>
-          <div className="flex flex-col gap-2">
-            <Choice name="Devices" options={DEVICES} value={policy.devices ?? 'none'} most={mostDevices} orgName={org?.name ?? null} onChange={(devices) => onChange({ devices })} />
-            {policy.devices === 'named' && (
-              <ListInput label="Device nodes" placeholder="/dev/ttyUSB0, /dev/bus/usb/001/004" value={policy.device_nodes ?? []} onChange={(device_nodes) => onChange({ device_nodes })} />
-            )}
-            {policy.devices === 'relayed' && (
-              <ListInput label="Devices to relay" placeholder="/dev/ttyUSB0@115200, adb:R58M30ABCD" value={policy.device_nodes ?? []} onChange={(device_nodes) => onChange({ device_nodes })} />
-            )}
-          </div>
-        </div>
-        <div className={ROW}>
-          <span className="flex flex-col">
-            <span className="text-sm">From this machine</span>
-            <span className={SUB}>Each one hands over something; off unless you turn it on</span>
-          </span>
-          <div className="flex flex-col gap-2.5">
-            {extra('ranges', 'Address ranges', 'Past those always blocked, such as a VPN’s', Boolean(policy.ranges?.length), (on) => onChange({ ranges: on ? ['10.0.0.0/8'] : [] }), (
-              <ListInput label="Address ranges" placeholder="10.20.0.0/16" value={policy.ranges ?? []} onChange={(ranges) => onChange({ ranges })} />
-            ))}
-            {extra('ports', 'Ports on this machine', 'Named ports only, as the sandbox’s own localhost, such as a dev database: 5432', Boolean(policy.ports?.length), (on) => onChange({ ports: on ? [5432] : [] }), (
-              <ListInput
-                label="Ports"
-                placeholder="5432, 6379"
-                value={(policy.ports ?? []).map(String)}
-                onChange={(ports) => onChange({ ports: ports.map(Number).filter((port) => Number.isInteger(port) && port > 0 && port < 65536) })}
-              />
-            ))}
-            {extra('paths', 'More folders', 'Read-only, or writable with :rw after it, beyond the thread’s checkout and your toolchains', Boolean(Object.keys(policy.paths ?? {}).length), (on) => onChange({ paths: on ? { '~/datasets': false } : {} }), (
-              <ListInput
-                label="Folders"
-                placeholder="~/datasets, ~/scratch:rw"
-                value={Object.entries(policy.paths ?? {}).map(([path, writable]) => (writable ? `${path}:rw` : path))}
-                onChange={(paths) => onChange({ paths: Object.fromEntries(paths.map((path) => (path.endsWith(':rw') ? [path.slice(0, -3), true] : [path, false]))) })}
-              />
-            ))}
-            {extra('gpu', 'The GPU', '/dev/dri, /dev/nvidia*', Boolean(policy.gpu), (gpu) => onChange({ gpu }))}
-            {extra('docker', 'Docker', 'This machine’s Docker socket', Boolean(policy.docker), (docker) => onChange({ docker }))}
-            {extra('ssh_agent', 'ssh-agent', 'Your SSH agent’s socket', Boolean(policy.ssh_agent), (ssh_agent) => onChange({ ssh_agent }))}
-          </div>
-        </div>
-        <div className={ROW}>
-          <span className="text-sm">Agents' own sandboxes</span>
-          <label className={cx('flex items-start gap-2 text-sm', org?.policy.no_nested && 'opacity-50')}>
-            <input
-              type="checkbox"
-              aria-label="agents' own sandboxes inside"
-              className="mt-1 accent-[var(--accent)]"
-              checked={!policy.no_nested && !org?.policy.no_nested}
-              disabled={Boolean(org?.policy.no_nested)}
-              onChange={(event) => onChange({ no_nested: !event.target.checked })}
-            />
+          <div className={ROW}>
             <span className="flex flex-col">
-              <span>Allowed inside</span>
-              <span className={SUB}>Codex's and Claude Code's own sandbox run inside Silt's, as a second wall</span>
+              <span className="text-sm">Network</span>
+              <span className={SUB}>What it can connect to</span>
             </span>
-          </label>
-        </div>
+            <div className="flex flex-col gap-3">
+              <Choice
+                name="Network"
+                options={NETWORKS}
+                value={policy.network ?? 'full'}
+                most={mostNetwork}
+                orgName={org?.name ?? null}
+                onChange={(network) => onChange({ network })}
+              />
+              {(policy.network ?? 'full') === 'gateway' && (
+                <ListInput
+                  label="Hosts it reaches"
+                  placeholder="api.github.com, *.npmjs.org; any public host when empty"
+                  value={policy.hosts ?? []}
+                  onChange={(hosts) => onChange({ hosts: hosts.length ? hosts : null })}
+                />
+              )}
+              <div className="rounded-sm border border-line-subtle bg-bg px-3 py-2 text-xs">
+                <span className="font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase">Always blocked</span>
+                <p className="mt-1 flex flex-wrap gap-1">
+                  {[
+                    'this machine',
+                    '127.0.0.0/8',
+                    '10.0.0.0/8',
+                    '172.16.0.0/12',
+                    '192.168.0.0/16',
+                    '169.254.0.0/16 · cloud metadata',
+                    '100.64.0.0/10',
+                    'fc00::/7',
+                    'fe80::/10',
+                  ].map((range) => (
+                    <Tag key={range}>{range}</Tag>
+                  ))}
+                </p>
+                <p className={cx(SUB, 'mt-1')}>
+                  Hosts on a VPN are in these ranges: reach them through a plugin, or allow a range.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className={ROW}>
+            <span className="flex flex-col">
+              <span className="text-sm">Devices</span>
+              <span className={SUB}>USB serial, adb</span>
+            </span>
+            <div className="flex flex-col gap-2">
+              <Choice
+                name="Devices"
+                options={DEVICES}
+                value={policy.devices ?? 'none'}
+                most={mostDevices}
+                orgName={org?.name ?? null}
+                onChange={(devices) => onChange({ devices })}
+              />
+              {policy.devices === 'named' && (
+                <ListInput
+                  label="Device nodes"
+                  placeholder="/dev/ttyUSB0, /dev/bus/usb/001/004"
+                  value={policy.device_nodes ?? []}
+                  onChange={(device_nodes) => onChange({ device_nodes })}
+                />
+              )}
+              {policy.devices === 'relayed' && (
+                <ListInput
+                  label="Devices to relay"
+                  placeholder="/dev/ttyUSB0@115200, adb:R58M30ABCD"
+                  value={policy.device_nodes ?? []}
+                  onChange={(device_nodes) => onChange({ device_nodes })}
+                />
+              )}
+            </div>
+          </div>
+          <div className={ROW}>
+            <span className="flex flex-col">
+              <span className="text-sm">From this machine</span>
+              <span className={SUB}>Each one hands over something; off unless you turn it on</span>
+            </span>
+            <div className="flex flex-col gap-2.5">
+              {extra(
+                'ranges',
+                'Address ranges',
+                'Past those always blocked, such as a VPN’s',
+                Boolean(policy.ranges?.length),
+                (on) => onChange({ ranges: on ? ['10.0.0.0/8'] : [] }),
+                <ListInput
+                  label="Address ranges"
+                  placeholder="10.20.0.0/16"
+                  value={policy.ranges ?? []}
+                  onChange={(ranges) => onChange({ ranges })}
+                />,
+              )}
+              {extra(
+                'ports',
+                'Ports on this machine',
+                'Named ports only, as the sandbox’s own localhost, such as a dev database: 5432',
+                Boolean(policy.ports?.length),
+                (on) => onChange({ ports: on ? [5432] : [] }),
+                <ListInput
+                  label="Ports"
+                  placeholder="5432, 6379"
+                  value={(policy.ports ?? []).map(String)}
+                  onChange={(ports) =>
+                    onChange({ ports: ports.map(Number).filter((port) => Number.isInteger(port) && port > 0 && port < 65536) })
+                  }
+                />,
+              )}
+              {extra(
+                'paths',
+                'More folders',
+                'Read-only, or writable with :rw after it, beyond the thread’s checkout and your toolchains',
+                Boolean(Object.keys(policy.paths ?? {}).length),
+                (on) => onChange({ paths: on ? { '~/datasets': false } : {} }),
+                <ListInput
+                  label="Folders"
+                  placeholder="~/datasets, ~/scratch:rw"
+                  value={Object.entries(policy.paths ?? {}).map(([path, writable]) => (writable ? `${path}:rw` : path))}
+                  onChange={(paths) =>
+                    onChange({
+                      paths: Object.fromEntries(
+                        paths.map((path) => (path.endsWith(':rw') ? [path.slice(0, -3), true] : [path, false])),
+                      ),
+                    })
+                  }
+                />,
+              )}
+              {extra('gpu', 'The GPU', '/dev/dri, /dev/nvidia*', Boolean(policy.gpu), (gpu) => onChange({ gpu }))}
+              {extra('docker', 'Docker', 'This machine’s Docker socket', Boolean(policy.docker), (docker) =>
+                onChange({ docker }),
+              )}
+              {extra('ssh_agent', 'ssh-agent', 'Your SSH agent’s socket', Boolean(policy.ssh_agent), (ssh_agent) =>
+                onChange({ ssh_agent }),
+              )}
+            </div>
+          </div>
+          <div className={ROW}>
+            <span className="text-sm">Agents' own sandboxes</span>
+            <label className={cx('flex items-start gap-2 text-sm', org?.policy.no_nested && 'opacity-50')}>
+              <input
+                type="checkbox"
+                aria-label="agents' own sandboxes inside"
+                className="mt-1 accent-[var(--accent)]"
+                checked={!policy.no_nested && !org?.policy.no_nested}
+                disabled={Boolean(org?.policy.no_nested)}
+                onChange={(event) => onChange({ no_nested: !event.target.checked })}
+              />
+              <span className="flex flex-col">
+                <span>Allowed inside</span>
+                <span className={SUB}>Codex's and Claude Code's own sandbox run inside Silt's, as a second wall</span>
+              </span>
+            </label>
+          </div>
         </fieldset>
       </div>
     </section>
@@ -488,18 +669,33 @@ export function WorkspacePlugins({ workspace, name }: { workspace: string; name:
     <section aria-label="Plugins its agents can use" className="flex flex-col gap-2">
       <h3 className="text-sm font-medium">Plugins its agents can use</h3>
       <p className={SUB}>
-        A sandboxed agent started in {name} gets these plugins' tools and no others, run by Silt outside the sandbox with credentials it never sees. Other workspaces'
-        agents never see them.
+        A sandboxed agent started in {name} gets these plugins' tools and no others, run by Silt outside the sandbox with
+        credentials it never sees. Other workspaces' agents never see them.
       </p>
       <div className="overflow-hidden rounded-md border border-line bg-elevated">
         {(plugins.data ?? []).map((plugin) => {
           const on = plugin.workspaces.includes(workspace)
           const elsewhere = plugin.workspaces.filter((other) => other !== workspace)
           return (
-            <label key={plugin.name} className="flex cursor-pointer items-center gap-2.5 border-b border-line-subtle px-4 py-2.5 text-sm last:border-b-0">
-              <input type="checkbox" aria-label={`${plugin.name} in ${name}`} className="accent-[var(--accent)]" checked={on} onChange={(event) => turn(plugin, event.target.checked)} />
+            <label
+              key={plugin.name}
+              className="flex cursor-pointer items-center gap-2.5 border-b border-line-subtle px-4 py-2.5 text-sm last:border-b-0"
+            >
+              <input
+                type="checkbox"
+                aria-label={`${plugin.name} in ${name}`}
+                className="accent-[var(--accent)]"
+                checked={on}
+                onChange={(event) => turn(plugin, event.target.checked)}
+              />
               <span className="font-medium">{plugin.name}</span>
-              <Tag>{plugin.kind.type === 'graphql' ? 'GraphQL' : plugin.kind.type === 'mcp' ? 'MCP' : (plugin.kind.argv[0] ?? 'command')}</Tag>
+              <Tag>
+                {plugin.kind.type === 'graphql'
+                  ? 'GraphQL'
+                  : plugin.kind.type === 'mcp'
+                    ? 'MCP'
+                    : (plugin.kind.argv[0] ?? 'command')}
+              </Tag>
               {Object.entries(plugin.environments).map(([environment, rules]) => (
                 <Tag key={environment} tone={rules.changes === 'ask' ? 'warn' : 'neutral'}>
                   {environment}
@@ -512,7 +708,8 @@ export function WorkspacePlugins({ workspace, name }: { workspace: string; name:
         })}
         {plugins.data?.length === 0 && (
           <p className="px-4 py-3 text-xs text-fg-2">
-            No plugins on this machine yet. Add one with <code className="font-mono">silt plugin add &lt;file&gt;</code>; the guide shows its JSON.
+            No plugins on this machine yet. Add one with <code className="font-mono">silt plugin add &lt;file&gt;</code>; the
+            guide shows its JSON.
           </p>
         )}
       </div>
@@ -537,7 +734,10 @@ function callSaid(call: CallView): { tone: 'ok' | 'warn' | 'danger' | 'neutral';
   if (!outcome) return { tone: 'neutral', said: call.state }
   switch (outcome.status) {
     case 'done':
-      return { tone: 'ok', said: call.asked ? 'you approved · ran' : call.grant !== null ? 'ran under a grant' : 'ran without asking' }
+      return {
+        tone: 'ok',
+        said: call.asked ? 'you approved · ran' : call.grant !== null ? 'ran under a grant' : 'ran without asking',
+      }
     case 'refused':
       return { tone: 'danger', said: `refused: ${outcome.why}` }
     case 'failed':
@@ -595,7 +795,9 @@ export function AccessPanel({ thread, agent }: { thread: string; agent: AgentSta
             <span className="font-mono">{devicesLine(reach)}</span>
           </div>
         ) : (
-          <p className="text-xs text-fg-2">{agent && agent.state !== 'stopped' ? "Not in Silt's sandbox." : 'No agent runs here now.'}</p>
+          <p className="text-xs text-fg-2">
+            {agent && agent.state !== 'stopped' ? "Not in Silt's sandbox." : 'No agent runs here now.'}
+          </p>
         )}
       </section>
       <section aria-label="granted" className="flex flex-col gap-2">
@@ -690,7 +892,12 @@ export function AccessPanel({ thread, agent }: { thread: string; agent: AgentSta
 
 /** Every plugin call waiting for the person, for Needs you. */
 export function PendingApprovals({ titleOf }: { titleOf: (thread: string) => string }) {
-  const approvals = useQuery({ queryKey: keys.allApprovals, queryFn: () => api.approvals(), enabled: !hosted(), refetchInterval: 30_000 })
+  const approvals = useQuery({
+    queryKey: keys.allApprovals,
+    queryFn: () => api.approvals(),
+    enabled: !hosted(),
+    refetchInterval: 30_000,
+  })
   const waiting = (approvals.data ?? []).filter((approval) => approval.state === 'pending')
   if (waiting.length === 0) return null
   return (

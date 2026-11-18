@@ -17,7 +17,13 @@ function filesIn(diff: string): number {
 
 /** A thread's diff against `base`, with what commenting on it takes: its files first, then its text, read whole or a
  * file at a time when too large; the comments on it; and `review`, as this diff shows it. */
-export function useThreadDiff(thread: string, spec: DiffSpec, review: ReviewState, onCommented: () => Promise<unknown>, agent?: string) {
+export function useThreadDiff(
+  thread: string,
+  spec: DiffSpec,
+  review: ReviewState,
+  onCommented: () => Promise<unknown>,
+  agent?: string,
+) {
   const queries = useQueryClient()
   // A range of turns starts at a prompt, which isn't a version comments on deleted lines are numbered in.
   const commentBase = spec.turn === undefined ? commentBaseOf(spec.base ?? '') : undefined
@@ -73,7 +79,9 @@ export function useThreadDiff(thread: string, spec: DiffSpec, review: ReviewStat
   // made, its deleted lines numbered in the base it was made against, with git's rewrites and other agents' edits or
   // without.
   const asMade = (draft: Draft) =>
-    (sideOf(draft.at) === 'new' || draft.base === commentBase) && Boolean(draft.hideGit) === hidden.hideGit && Boolean(draft.hideOthers) === hidden.hideOthers
+    (sideOf(draft.at) === 'new' || draft.base === commentBase) &&
+    Boolean(draft.hideGit) === hidden.hideGit &&
+    Boolean(draft.hideOthers) === hidden.hideOthers
   const here: ReviewState = {
     ...review,
     review: { ...review.review, drafts: moved.filter((draft) => draft.anchor !== undefined || asMade(draft)) },
@@ -87,7 +95,10 @@ export function useThreadDiff(thread: string, spec: DiffSpec, review: ReviewStat
   // What finishing sends: every draft, where its lines are now, or as lines deleted since.
   const pending: ReviewState = {
     ...review,
-    review: { ...review.review, drafts: [...moved, ...outdated.map((draft) => ({ ...draft, at: { ...draft.at, side: 'old' as const } }))] },
+    review: {
+      ...review.review,
+      drafts: [...moved, ...outdated.map((draft) => ({ ...draft, at: { ...draft.at, side: 'old' as const } }))],
+    },
   }
   const commenting: Commenting = {
     thread,
@@ -98,7 +109,11 @@ export function useThreadDiff(thread: string, spec: DiffSpec, review: ReviewStat
     onChanged: changed,
     onComment: async (at, comment) => {
       const on = sideOf(at) === 'old' ? commentBase : undefined
-      await api.addComment(thread, { on: 'lines', path: at.path, start: at.start, end: at.end, base: on, ...hiddenLines(hidden) }, comment)
+      await api.addComment(
+        thread,
+        { on: 'lines', path: at.path, start: at.start, end: at.end, base: on, ...hiddenLines(hidden) },
+        comment,
+      )
       await changed()
     },
   }

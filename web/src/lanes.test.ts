@@ -43,7 +43,10 @@ test('a fork leaves its source in a lane of its own and merges back', () => {
 test('an open request is dashed, and a declined fork is abandoned', () => {
   const open = layout([row('2', 'fork', 'request', { other: 'main', status: 'open' }), row('1', 'main', 'turn')])
   expect(open.edges[0].dashed).toBe(true)
-  const declined = layout([row('2', 'fork', 'request', { other: 'main', status: 'declined' }), row('1', 'fork', 'fork', { other: 'main' })])
+  const declined = layout([
+    row('2', 'fork', 'request', { other: 'main', status: 'declined' }),
+    row('1', 'fork', 'fork', { other: 'main' }),
+  ])
   expect(declined.threads.get('fork')?.abandoned).toBe(true)
   expect(declined.threads.get('main')?.abandoned).toBe(false)
   const settled = layout([row('1', 'main', 'turn', { settled: true })])
@@ -60,7 +63,12 @@ test('a lane is reused once its thread is past', () => {
 })
 
 test("unrelated projects' threads don't run through each other", () => {
-  const rows = [row('4', 'a', 'turn'), row('3', 'x', 'turn', { family: 'g' }), row('2', 'x', 'turn', { family: 'g' }), row('1', 'a', 'turn')]
+  const rows = [
+    row('4', 'a', 'turn'),
+    row('3', 'x', 'turn', { family: 'g' }),
+    row('2', 'x', 'turn', { family: 'g' }),
+    row('1', 'a', 'turn'),
+  ]
   const grouped = byFamily(rows)
   expect(grouped.map((shown) => shown.id)).toEqual(['4', '1', '3', '2'])
   const { threads } = layout(grouped)
