@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 /// The packages shipped, by the name of their folder in `plugins/`.
-const SHIPPED: [&str; 2] = ["folders", "github"];
+const SHIPPED: [&str; 6] = ["folders", "github", "graphql", "local-mcp", "remote-mcp", "ssh-commands"];
 
 fn main() {
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets it")).join("../../plugins");
@@ -42,8 +42,8 @@ fn main() {
         true
     };
     for name in SHIPPED {
-        let wasm = out.join("target/wasm32-wasip2/release").join(format!("silt_plugin_{name}.wasm"));
-        let embedded = out.join(format!("{name}.wasm"));
+        let wasm = out.join("target/wasm32-wasip2/release").join(format!("silt_plugin_{}.wasm", name.replace('-', "_")));
+        let embedded = out.join(format!("{}.wasm", name.replace('-', "_")));
         if built {
             std::fs::copy(&wasm, &embedded).expect("the built component");
         } else {

@@ -10,7 +10,7 @@ pub struct Shipped {
     pub everywhere: bool,
 }
 
-pub const PLUGINS: [Shipped; 2] = [
+pub const PLUGINS: [Shipped; 6] = [
     Shipped {
         manifest: include_str!("../../../plugins/folders/silt-plugin.toml"),
         readme: include_str!("../../../plugins/folders/README.md"),
@@ -21,6 +21,30 @@ pub const PLUGINS: [Shipped; 2] = [
         manifest: include_str!("../../../plugins/github/silt-plugin.toml"),
         readme: include_str!("../../../plugins/github/README.md"),
         wasm: include_bytes!(concat!(env!("OUT_DIR"), "/github.wasm")),
+        everywhere: false,
+    },
+    Shipped {
+        manifest: include_str!("../../../plugins/graphql/silt-plugin.toml"),
+        readme: include_str!("../../../plugins/graphql/README.md"),
+        wasm: include_bytes!(concat!(env!("OUT_DIR"), "/graphql.wasm")),
+        everywhere: false,
+    },
+    Shipped {
+        manifest: include_str!("../../../plugins/local-mcp/silt-plugin.toml"),
+        readme: include_str!("../../../plugins/local-mcp/README.md"),
+        wasm: include_bytes!(concat!(env!("OUT_DIR"), "/local_mcp.wasm")),
+        everywhere: false,
+    },
+    Shipped {
+        manifest: include_str!("../../../plugins/remote-mcp/silt-plugin.toml"),
+        readme: include_str!("../../../plugins/remote-mcp/README.md"),
+        wasm: include_bytes!(concat!(env!("OUT_DIR"), "/remote_mcp.wasm")),
+        everywhere: false,
+    },
+    Shipped {
+        manifest: include_str!("../../../plugins/ssh-commands/silt-plugin.toml"),
+        readme: include_str!("../../../plugins/ssh-commands/README.md"),
+        wasm: include_bytes!(concat!(env!("OUT_DIR"), "/ssh_commands.wasm")),
         everywhere: false,
     },
 ];

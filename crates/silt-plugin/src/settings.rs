@@ -102,6 +102,28 @@ pub fn resolve_scoped(
     resolve_setting(spec, yours, org)
 }
 
+/// The hosts a setting's value names: each entry a host, a `*.` pattern,
+/// or a URL whose host it is. Anything else is left out.
+pub fn hosts_in(value: &Value) -> Vec<String> {
+    let entries: Vec<&str> = match value {
+        Value::String(one) => vec![one.as_str()],
+        Value::Array(many) => many.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    };
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            let host = match entry.split_once("://") {
+                Some((_, rest)) => rest.split(['/', '?', '#']).next()?.rsplit('@').next()?.split(':').next()?,
+                None => entry,
+            };
+            let host = host.to_ascii_lowercase();
+            crate::manifest::host(&host).then_some(host)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -118,6 +140,13 @@ mod tests {
             default,
             options: options.iter().map(|option| (*option).to_owned()).collect(),
         }
+    }
+
+    #[test]
+    fn a_settings_hosts_are_its_hosts_and_its_urls_hosts() {
+        let value = json!(["api.acme.dev", "https://graph.acme.dev:8443/v1?x=1", "*.fleet.vpn", "not a host", "http://"]);
+        assert_eq!(hosts_in(&value), ["api.acme.dev", "graph.acme.dev", "*.fleet.vpn"]);
+        assert_eq!(hosts_in(&json!("https://user@api.example.com/graphql")), ["api.example.com"]);
     }
 
     #[test]

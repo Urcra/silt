@@ -66,7 +66,8 @@ impl Wasm {
 
     /// The tools `installed` offers, asked once per version.
     fn tools_of(&self, data_dir: &Path, installed: &Installed) -> Result<Vec<Tool>, String> {
-        let version = format!("{}:{:?}", installed.version, installed::built(data_dir, &installed.id));
+        // A plugin's tools may follow its settings, as Local MCP's server's do.
+        let version = format!("{}:{:?}:{:?}", installed.version, installed::built(data_dir, &installed.id), installed.settings);
         if let Some((cached, tools)) = lock(&self.tools).get(&installed.id)
             && *cached == version
         {
@@ -152,7 +153,10 @@ impl Wasm {
             environment: environment.as_ref().map(|(_, _, name)| name.clone()),
             environments: call.installed.environments.clone().into_iter().collect(),
         };
-        let env = call.env(&loaded);
+        // Its settings for the environment picked, from the start.
+        let mut scoped = call.clone();
+        scoped.environment = context.environment.clone();
+        let env = scoped.env(&loaded);
         let prepared = self.host()?.prepare(&loaded, &env, &call.tool, input, &context).map_err(|error| error.to_string())?;
         if let Some((field, value, _)) = &environment
             && prepared.fields.get(field) != Some(value)

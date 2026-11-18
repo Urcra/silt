@@ -50,7 +50,16 @@ impl DaemonCapabilities {
     /// The secret to send to `host`, and how, from the credential the
     /// manifest names for it.
     fn credential_for(&self, scope: &Scope, host: &str) -> Option<(Send, String)> {
-        let spec = self.manifest.credentials.iter().find(|spec| spec.hosts.iter().any(|pattern| host_matches(pattern, host)))?;
+        let set_hosts = |key: &str| {
+            self.setting(scope, key)
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .map(|value| silt_plugin::hosts_in(&value))
+                .unwrap_or_default()
+        };
+        let spec = self.manifest.credentials.iter().find(|spec| {
+            spec.hosts.iter().any(|pattern| host_matches(pattern, host))
+                || spec.hosts_from.as_deref().is_some_and(|key| set_hosts(key).iter().any(|pattern| host_matches(pattern, host)))
+        })?;
         let id = spec.same_as.as_deref().unwrap_or(&spec.id);
         let name = self.installed.credential_for(id, scope.environment.as_deref())?;
         let secret = crate::credentials::secret_named(&self.data_dir, &scope.workspace, name)?;
@@ -59,6 +68,7 @@ impl DaemonCapabilities {
 
     fn mcp_server(&self) -> super::local::Server<'_> {
         super::local::Server {
+            settings: self,
             data_dir: &self.data_dir,
             manifest: &self.manifest,
             installed: &self.installed,

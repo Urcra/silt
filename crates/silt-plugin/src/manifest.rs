@@ -60,14 +60,56 @@ pub enum Build {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "kebab-case", tag = "kind", deny_unknown_fields)]
 pub enum Capability {
-    Http { hosts: Vec<String>, reason: String },
-    Git { hosts: Vec<String>, reason: String },
-    AgentFiles { reason: String },
-    ThreadRead { reason: String },
-    Reach { reason: String },
-    Sockets { hosts: Vec<String>, reason: String },
-    Ssh { hosts: Vec<String>, reason: String },
-    McpProcess { command: Vec<String>, hosts: Vec<String>, reason: String },
+    Http {
+        #[serde(default)]
+        hosts: Vec<String>,
+        /// A setting whose values name more hosts, the person's to set.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hosts_from: Option<String>,
+        reason: String,
+    },
+    Git {
+        #[serde(default)]
+        hosts: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hosts_from: Option<String>,
+        reason: String,
+    },
+    AgentFiles {
+        reason: String,
+    },
+    ThreadRead {
+        reason: String,
+    },
+    Reach {
+        reason: String,
+    },
+    Sockets {
+        #[serde(default)]
+        hosts: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hosts_from: Option<String>,
+        reason: String,
+    },
+    Ssh {
+        #[serde(default)]
+        hosts: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hosts_from: Option<String>,
+        reason: String,
+    },
+    McpProcess {
+        #[serde(default)]
+        command: Vec<String>,
+        /// A setting holding the command instead, the person's to set.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command_from: Option<String>,
+        #[serde(default)]
+        hosts: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hosts_from: Option<String>,
+        reason: String,
+    },
 }
 
 impl Capability {
@@ -106,6 +148,18 @@ impl Capability {
             | Self::Ssh { hosts, .. }
             | Self::McpProcess { hosts, .. } => hosts,
             Self::AgentFiles { .. } | Self::ThreadRead { .. } | Self::Reach { .. } => &[],
+        }
+    }
+
+    /// The setting whose values name more hosts it reaches, if any.
+    pub fn hosts_from(&self) -> Option<&str> {
+        match self {
+            Self::Http { hosts_from, .. }
+            | Self::Git { hosts_from, .. }
+            | Self::Sockets { hosts_from, .. }
+            | Self::Ssh { hosts_from, .. }
+            | Self::McpProcess { hosts_from, .. } => hosts_from.as_deref(),
+            Self::AgentFiles { .. } | Self::ThreadRead { .. } | Self::Reach { .. } => None,
         }
     }
 
@@ -225,7 +279,12 @@ pub struct CredentialSpec {
     pub id: String,
     pub label: String,
     /// The hosts Silt sends it to, and no others.
+    #[serde(default)]
     pub hosts: Vec<String>,
+    /// A setting naming more hosts it's sent to: one a capability takes its
+    /// hosts from too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosts_from: Option<String>,
     pub send: Send,
     /// Markdown: how a person gets one.
     pub how: String,
@@ -357,13 +416,24 @@ impl Manifest {
                 capability,
                 Capability::Http { .. } | Capability::Git { .. } | Capability::Sockets { .. } | Capability::Ssh { .. }
             );
-            if needs_hosts && capability.hosts().is_empty() {
-                return Err(bad(field, "names the hosts it reaches"));
+            if needs_hosts && capability.hosts().is_empty() && capability.hosts_from().is_none() {
+                return Err(bad(field, "names the hosts it reaches, or the setting that names them"));
+            }
+            let from = [
+                capability.hosts_from(),
+                if let Capability::McpProcess { command_from, .. } = capability { command_from.as_deref() } else { None },
+            ];
+            for key in from.into_iter().flatten() {
+                let spec = self.settings.iter().find(|spec| spec.key == key);
+                if !spec.is_some_and(|spec| matches!(spec.kind, SettingKind::List | SettingKind::String)) {
+                    return Err(bad(&field, format!("names {key}, which isn't one of its settings of text or a list")));
+                }
             }
             if let Some(host) = capability.hosts().iter().find(|name| !self::host(name)) {
                 return Err(bad(field, format!("{host:?} isn't a host name (no scheme, port or path; `*.` for subdomains)")));
             }
-            if let Capability::McpProcess { command, .. } = capability
+            if let Capability::McpProcess { command, command_from, .. } = capability
+                && command_from.is_none()
                 && command.first().is_none_or(|program| program.trim().is_empty())
             {
                 return Err(bad(field, "names the command that starts the MCP server"));
@@ -446,8 +516,13 @@ impl Manifest {
             if !word(&credential.id) || !ids.insert(credential.id.as_str()) {
                 return Err(bad(format!("{field}.id"), "is a field name, used once"));
             }
-            if credential.hosts.is_empty() {
-                return Err(bad(format!("{field}.hosts"), "names the hosts it's sent to"));
+            if credential.hosts.is_empty() && credential.hosts_from.is_none() {
+                return Err(bad(format!("{field}.hosts"), "names the hosts it's sent to, or the setting that names them"));
+            }
+            if let Some(key) = &credential.hosts_from
+                && !self.capabilities.iter().any(|capability| capability.hosts_from() == Some(key.as_str()))
+            {
+                return Err(bad(format!("{field}.hosts_from"), format!("{key} names no capability's hosts")));
             }
             for host in &credential.hosts {
                 let declared = reached.iter().any(|pattern| pattern.0 == *host || host_glob(&pattern.0).matches(host));
@@ -664,8 +739,11 @@ per_environment = true
     fn an_update_says_what_it_adds() {
         let old = Manifest::parse(DEPLOYS).unwrap();
         let mut new = old.clone();
-        new.capabilities[0] =
-            Capability::Http { hosts: vec!["deploy.acme.internal".into(), "uploads.acme.internal".into()], reason: "x".into() };
+        new.capabilities[0] = Capability::Http {
+            hosts: vec!["deploy.acme.internal".into(), "uploads.acme.internal".into()],
+            hosts_from: None,
+            reason: "x".into(),
+        };
         new.capabilities.push(Capability::AgentFiles { reason: "Runbooks for agents.".into() });
         new.actions.push(ActionSpec {
             id: "abort".into(),

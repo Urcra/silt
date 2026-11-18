@@ -213,7 +213,7 @@ impl Host {
             return Err(HostError::Answer { plugin, why: format!("{field} isn't a field {} declares", action.id) });
         }
         call.card.check().map_err(|why| HostError::Answer { plugin: plugin.clone(), why })?;
-        capabilities::check_effects(&loaded.manifest, &env.granted, &call.effects)
+        capabilities::check_effects(&loaded.manifest, env, &call.effects)
             .map_err(|declared| HostError::Undeclarable { plugin: plugin.clone(), declared })?;
         Ok(Prepared {
             plugin,

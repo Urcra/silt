@@ -87,18 +87,43 @@ pub(crate) struct Server<'a> {
     /// The thread's checkout, shown read-only with `thread-read`.
     pub(crate) checkout: Option<&'a Path>,
     pub(crate) handle: &'a tokio::runtime::Handle,
+    /// Where the plugin's settings come from, resolved for a scope.
+    pub(crate) settings: &'a dyn silt_plugin_host::Capabilities,
 }
 
 impl Server<'_> {
-    fn command(&self) -> Result<(Vec<String>, Vec<String>), String> {
-        self.manifest
+    /// The server's command and the hosts it reaches: as the manifest
+    /// names them, or the person did in the settings it names.
+    fn command(&self, scope: &Scope) -> Result<(Vec<String>, Vec<String>), String> {
+        let (command, command_from, mut hosts, hosts_from) = self
+            .manifest
             .capabilities
             .iter()
             .find_map(|capability| match capability {
-                Capability::McpProcess { command, hosts, .. } => Some((command.clone(), hosts.clone())),
+                Capability::McpProcess { command, command_from, hosts, hosts_from, .. } => {
+                    Some((command.clone(), command_from.clone(), hosts.clone(), hosts_from.clone()))
+                }
                 _ => None,
             })
-            .ok_or_else(|| "its manifest names no MCP server".to_owned())
+            .ok_or_else(|| "its manifest names no MCP server".to_owned())?;
+        let setting = |key: &str| self.settings.setting(scope, key).and_then(|json| serde_json::from_str::<Value>(&json).ok());
+        let command = match command_from {
+            Some(key) => match setting(&key) {
+                Some(Value::String(line)) => line.split_whitespace().map(str::to_owned).collect(),
+                Some(Value::Array(words)) => words.iter().filter_map(Value::as_str).map(str::to_owned).collect(),
+                _ => Vec::new(),
+            },
+            None => command,
+        };
+        if command.first().is_none_or(|program| program.trim().is_empty()) {
+            return Err(format!("set the command that starts {}'s MCP server in its settings", self.manifest.name));
+        }
+        if let Some(key) = hosts_from
+            && let Some(value) = setting(&key)
+        {
+            hosts.extend(silt_plugin::hosts_in(&value));
+        }
+        Ok((command, hosts))
     }
 
     /// The plugin's own credentials for its server's hosts, as the gateway
@@ -134,7 +159,7 @@ impl Server<'_> {
     /// after MCP's handshake, and answers its result.
     #[cfg(unix)]
     pub(crate) fn ask(&self, scope: &Scope, method: &str, params: Value) -> Result<Value, String> {
-        let (command, hosts) = self.command()?;
+        let (command, hosts) = self.command(scope)?;
         let scratch = Scratch(self.data_dir.join("runs").join(format!("mcp-{}", uuid::Uuid::new_v4().simple())));
         std::fs::create_dir_all(&scratch.0).map_err(|error| error.to_string())?;
         let reach = silt_workspace::Reach {
@@ -186,7 +211,7 @@ impl Server<'_> {
 
     #[cfg(not(unix))]
     pub(crate) fn ask(&self, scope: &Scope, _method: &str, _params: Value) -> Result<Value, String> {
-        let _ = (self.command()?, self.credentials(scope), (self.own, self.checkout, self.handle));
+        let _ = (self.command(scope)?, self.credentials(scope), (self.own, self.checkout, self.handle));
         Err("a local MCP server runs in Silt's sandbox, which this system doesn't have yet".into())
     }
 }

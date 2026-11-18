@@ -11,7 +11,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::Env;
 use crate::bindings::silt::plugin::{git, host, http, mcp, reach, sockets, ssh, thread};
-use crate::capabilities::{ConnectionResource, HttpRequest, declared, host_of};
+use crate::capabilities::{ConnectionResource, HttpRequest, declared, host_matches, host_of};
 
 const RESPONSE_BYTES: usize = 32 << 20;
 
@@ -52,11 +52,17 @@ impl State {
 
     fn reaches(&self, capability: &str, host: &str) -> Result<(), String> {
         self.granted(capability)?;
-        if declared(&self.manifest, capability, host) {
+        if declared(&self.manifest, capability, host)
+            || self.set_hosts(capability).iter().any(|pattern| host_matches(pattern, host))
+        {
             Ok(())
         } else {
             Err(format!("{host} isn't among the hosts {} declares for {capability}", self.manifest.name))
         }
+    }
+
+    fn set_hosts(&self, capability: &str) -> Vec<String> {
+        crate::capabilities::set_hosts(&self.manifest, &self.env, capability)
     }
 
     /// Whether `observed` may happen now: never while describing; only looking

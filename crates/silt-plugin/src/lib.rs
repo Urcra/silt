@@ -23,5 +23,5 @@ pub use manifest::{
 };
 pub use prepared::{Prepared, canonical_json};
 pub use rules::{Decision, Rule, RuleSource, Rules, ScopedRule, decide, environment_for};
-pub use settings::{SettingSource, SettingValue, fits, resolve_scoped, resolve_setting, setting_key};
+pub use settings::{SettingSource, SettingValue, fits, hosts_in, resolve_scoped, resolve_setting, setting_key};
 pub use sha256::sha256_hex;

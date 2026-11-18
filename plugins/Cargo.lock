@@ -345,6 +345,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "silt-plugin-graphql"
+version = "1.0.0"
+dependencies = [
+ "silt-access",
+ "silt-plugin-api",
+]
+
+[[package]]
+name = "silt-plugin-local-mcp"
+version = "1.0.0"
+dependencies = [
+ "silt-plugin-api",
+]
+
+[[package]]
 name = "silt-plugin-probe"
 version = "1.0.0"
 dependencies = [
@@ -353,6 +368,20 @@ dependencies = [
 
 [[package]]
 name = "silt-plugin-probe-local"
+version = "1.0.0"
+dependencies = [
+ "silt-plugin-api",
+]
+
+[[package]]
+name = "silt-plugin-remote-mcp"
+version = "1.0.0"
+dependencies = [
+ "silt-plugin-api",
+]
+
+[[package]]
+name = "silt-plugin-ssh-commands"
 version = "1.0.0"
 dependencies = [
  "silt-plugin-api",

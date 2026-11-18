@@ -3,8 +3,6 @@
 //! read the thread, widen a sandbox, run an SSH command, talk to the MCP
 //! server it wraps.
 
-use std::collections::BTreeSet;
-
 use silt_plugin::{Channel, Effect, Manifest};
 
 /// Whose call this is.
@@ -149,12 +147,26 @@ pub trait Capabilities: Send + Sync {
 /// Whether `host` is among a capability's declared hosts, `*.` patterns
 /// covering subdomains.
 pub(crate) fn declared(manifest: &Manifest, capability: &str, host: &str) -> bool {
-    manifest.capability(capability).is_some_and(|declared| {
-        declared.hosts().iter().any(|pattern| match pattern.strip_prefix("*.") {
-            Some(domain) => host == domain || host.ends_with(&format!(".{domain}")),
-            None => pattern.eq_ignore_ascii_case(host),
-        })
-    })
+    manifest.capability(capability).is_some_and(|declared| declared.hosts().iter().any(|pattern| host_matches(pattern, host)))
+}
+
+/// The hosts the person named in the setting `capability` takes more
+/// hosts from.
+pub(crate) fn set_hosts(manifest: &Manifest, env: &crate::Env, capability: &str) -> Vec<String> {
+    let Some(key) = manifest.capability(capability).and_then(silt_plugin::Capability::hosts_from) else { return Vec::new() };
+    env.capabilities
+        .setting(&env.scope, key)
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .map(|value| silt_plugin::hosts_in(&value))
+        .unwrap_or_default()
+}
+
+/// Whether `host` is `pattern`, or under it for a `*.` pattern.
+pub(crate) fn host_matches(pattern: &str, host: &str) -> bool {
+    match pattern.strip_prefix("*.") {
+        Some(domain) => host == domain || host.ends_with(&format!(".{domain}")),
+        None => pattern.eq_ignore_ascii_case(host),
+    }
 }
 
 /// The host of a URL, or of a git remote's URL.
@@ -164,8 +176,13 @@ pub(crate) fn host_of(url: &str) -> Option<String> {
 
 /// Whether every declared effect is one the plugin's granted capabilities
 /// could cause; the effects named if not.
-pub(crate) fn check_effects(manifest: &Manifest, granted: &BTreeSet<String>, effects: &[Effect]) -> Result<(), String> {
+pub(crate) fn check_effects(manifest: &Manifest, env: &crate::Env, effects: &[Effect]) -> Result<(), String> {
+    let granted = &env.granted;
     let has = |capability: &str| manifest.capability(capability).is_some() && granted.contains(capability);
+    let declared = |manifest: &Manifest, capability: &str, host: &str| {
+        declared(manifest, capability, host)
+            || set_hosts(manifest, env, capability).iter().any(|pattern| host_matches(pattern, host))
+    };
     let bad: Vec<String> = effects
         .iter()
         .filter(|effect| match effect {

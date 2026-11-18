@@ -1502,6 +1502,21 @@ mod tests {
             let Outcome::Done { output } = ask("probe_local_mcp_peek", input).await else { panic!("not called") };
             assert!(output.contains(&format!(": {read}; reached 127.0.0.1:{port}: no")), "{output}");
         }
+        drop(ask);
+
+        // Local MCP runs the command the person set, its server's tools its own, each call asked.
+        installed::update(data.path(), "silt.local-mcp", |installed| {
+            installed.workspaces.push("work".into());
+            installed.settings.insert("command".into(), json!(fake_mcp.to_string_lossy()));
+            Ok(())
+        })
+        .expect("on in work");
+        let waiting = github(&mut core, "local_mcp_peek", json!({"path": "/nowhere", "host": "127.0.0.1", "port": port})).await;
+        let pending = core.approvals_view(None, false).await.expect("approvals");
+        assert_eq!(pending.len(), 1, "a server's tools ask until the person allows them");
+        core.approval_answer(pending[0].id, true, &pending[0].hash, None).await.expect("approves");
+        let Outcome::Done { output } = outcome(waiting.await.expect("answers")) else { panic!("not called") };
+        assert!(output.contains("read /nowhere: no"), "{output}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1555,6 +1570,127 @@ mod tests {
         let request = prepare(parts("silt.folders", "request", no_reach), folder).await.expect("ran").expect("prepared");
         assert_eq!(request.decision.rule, silt_plugin::Rule::Never);
         assert!(request.decision.why.contains("widening"), "{}", request.decision.why);
+    }
+
+    /// A GraphQL API and a remote MCP server, as far as the shipped
+    /// plugins' calls here need them.
+    async fn api_stand_in() -> u16 {
+        use axum::routing::post;
+        let app = axum::Router::new()
+            .route(
+                "/graphql",
+                post(|body: String| async move {
+                    let asked: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+                    let query = asked["query"].as_str().unwrap_or_default().to_owned();
+                    if query.contains("vehicle") {
+                        axum::Json(json!({"data": {"vehicle": {"name": "car-1", "position": {"lat": 55.6, "lng": 12.5}}}}))
+                    } else if query.contains("mutation") {
+                        axum::Json(json!({"data": {"rename": {"ok": true}}}))
+                    } else {
+                        axum::Json(json!({"data": {"cars": [{"name": "car-1"}]}}))
+                    }
+                }),
+            )
+            .route(
+                "/mcp",
+                post(|body: String| async move {
+                    let asked: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+                    let result = match asked["method"].as_str() {
+                        Some("initialize") => json!({"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}}),
+                        Some("tools/list") => json!({"tools": [{"name": "search", "inputSchema": {"type": "object"}}]}),
+                        Some("tools/call") => {
+                            json!({"content": [{"type": "text", "text": format!("found {}", asked["params"]["arguments"]["q"])}]})
+                        }
+                        _ => return (axum::http::StatusCode::ACCEPTED, [("mcp-session-id", "s1")], String::new()),
+                    };
+                    (
+                        axum::http::StatusCode::OK,
+                        [("mcp-session-id", "s1")],
+                        json!({"jsonrpc": "2.0", "id": asked["id"], "result": result}).to_string(),
+                    )
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("binds");
+        let port = listener.local_addr().expect("an address").port();
+        tokio::spawn(async move { axum::serve(listener, app).await.ok() });
+        port
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn graphql_remote_mcp_and_ssh_commands_ship_as_plugins() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let port = api_stand_in().await;
+        let mut core = core(data.path()).await;
+        let base = format!("http://127.0.0.1:{port}");
+        let on = |id: &str, change: &dyn Fn(&mut installed::Installed)| {
+            installed::update(data.path(), id, |installed| {
+                installed.workspaces.push("work".into());
+                change(installed);
+                Ok(())
+            })
+            .expect("on in work");
+        };
+        on("silt.graphql", &|installed| {
+            installed.environments.insert("prod".into(), vec!["prod".into()]);
+            installed.settings.insert("endpoint@prod".into(), json!(format!("{base}/graphql")));
+            installed.settings.insert("data@prod".into(), json!(["location"]));
+        });
+        on("silt.remote-mcp", &|installed| {
+            installed.settings.insert("url".into(), json!(format!("{base}/mcp")));
+        });
+
+        // A query goes; one that selects location is refused before it's sent.
+        let read = github(&mut core, "graphql_query", json!({"environment": "prod", "query": "{ cars { name } }"})).await;
+        let Outcome::Done { output } = outcome(read.await.expect("answers")) else { panic!("not read") };
+        assert!(output.contains("car-1"), "{output}");
+        let located = github(&mut core, "graphql_query", json!({"environment": "prod", "query": "{ cars { lat } }"})).await;
+        let Outcome::Refused { why } = outcome(located.await.expect("answers")) else { panic!("not refused") };
+        assert!(why.contains("keeps location from agents"), "{why}");
+        let carried = github(&mut core, "graphql_query", json!({"environment": "prod", "query": "{ vehicle { name } }"})).await;
+        // Sent, its answer kept: what the API did is unknown here.
+        let (Outcome::Failed { error } | Outcome::Unknown { why: error }) = outcome(carried.await.expect("answers")) else {
+            panic!("not kept")
+        };
+        assert!(error.contains("kept from you"), "{error}");
+        // A mutation can't pass as a query, and asks.
+        let sneaked =
+            github(&mut core, "graphql_query", json!({"environment": "prod", "query": "mutation { rename { ok } }"})).await;
+        assert!(matches!(outcome(sneaked.await.expect("answers")), Outcome::Refused { .. }));
+        let mutated =
+            github(&mut core, "graphql_mutate", json!({"environment": "prod", "query": "mutation { rename { ok } }"})).await;
+        let pending = core.approvals_view(None, false).await.expect("approvals");
+        assert_eq!(pending.len(), 1);
+        core.approval_answer(pending[0].id, true, &pending[0].hash, None).await.expect("approves");
+        assert!(matches!(outcome(mutated.await.expect("answers")), Outcome::Done { .. }));
+
+        // A remote MCP server's tools are listed without asking; a call asks.
+        let listed = github(&mut core, "remote_mcp_tools", json!({})).await;
+        let Outcome::Done { output } = outcome(listed.await.expect("answers")) else { panic!("not listed") };
+        assert!(output.contains("search"), "{output}");
+        let called = github(&mut core, "remote_mcp_call", json!({"tool": "search", "arguments": {"q": "brakes"}})).await;
+        let pending = core.approvals_view(None, false).await.expect("approvals");
+        assert!(pending[0].card.as_ref().is_some_and(|card| card.title == "Call search on the remote MCP server"));
+        core.approval_answer(pending[0].id, true, &pending[0].hash, None).await.expect("approves");
+        assert_eq!(outcome(called.await.expect("answers")), Outcome::Done { output: "found \"brakes\"".into() });
+
+        // SSH commands run only on the hosts set, each asked.
+        if let Some(fake_ssh) = built("silt-fake-ssh") {
+            std::fs::write(data.path().join("plugins/redirect.json"), json!({"ssh": fake_ssh.to_string_lossy()}).to_string())
+                .expect("written");
+            on("silt.ssh-commands", &|installed| {
+                installed.settings.insert("targets".into(), json!(["*.fleet.example.com"]));
+                installed.environments.insert("fleet".into(), vec!["*.fleet.example.com".into()]);
+            });
+            let ran =
+                github(&mut core, "ssh_commands_run", json!({"target": "car-1.fleet.example.com", "command": "uptime"})).await;
+            let pending = core.approvals_view(None, false).await.expect("approvals");
+            assert!(pending[0].effects.iter().any(silt_plugin::Effect::is_opaque));
+            core.approval_answer(pending[0].id, true, &pending[0].hash, None).await.expect("approves");
+            let Outcome::Done { output } = outcome(ran.await.expect("answers")) else { panic!("not run") };
+            assert!(output.starts_with("exit 0\n") && output.contains("car-1.fleet.example.com"), "{output}");
+            let elsewhere = github(&mut core, "ssh_commands_run", json!({"target": "db.acme.dev", "command": "uptime"})).await;
+            assert!(matches!(outcome(elsewhere.await.expect("answers")), Outcome::Refused { .. }), "a host no environment names");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
