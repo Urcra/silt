@@ -102,15 +102,9 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     );
 
     // A plugin on in Work: its runs' calls are kept with their thread (ADR 0093).
-    let plugin = root.path().join("fleet.json");
-    let definition = serde_json::json!({
-        "name": "fleet",
-        "kind": {"type": "command", "argv": ["echo", "ran on {target}"]},
-        "environments": {"lab": {"target": "car-*.fleet.test", "changes": "ask"}}
-    });
-    fs::write(&plugin, definition.to_string()).expect("writes the plugin");
-    assert!(laptop.silt(&["plugin", "add", &plugin.to_string_lossy()]).status.success());
-    assert!(laptop.silt(&["plugin", "enable", "fleet", "--workspace", "work"]).status.success());
+    assert!(laptop.silt(&["plugin", "enable", "silt.ssh-commands", "--workspace", "work"]).status.success());
+    assert!(laptop.silt(&["plugin", "set", "silt.ssh-commands", "targets", r#"["car-*.fleet.test"]"#]).status.success());
+    assert!(laptop.silt(&["plugin", "environment", "silt.ssh-commands", "lab", "car-*.fleet.test"]).status.success());
     let ran = in_work(&["claude"]);
     let said = String::from_utf8_lossy(&ran.stderr).into_owned();
     assert!(ran.status.success(), "{said}");
@@ -171,13 +165,13 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     assert!(forged.contains("this run's token isn't known here"), "{forged}");
 
     // The plugin on in Work waits for the person on a change, and its run hears how they answered (ADR 0093).
-    let arguments = serde_json::json!({"environment": "lab", "target": "car-1.fleet.test", "args": ["now"]});
+    let arguments = serde_json::json!({"target": "car-1.fleet.test", "command": "uptime"});
     let said = std::thread::scope(|scope| {
-        let call = scope.spawn(|| mcp_answer(&laptop, work_id, &token, "fleet_run", arguments.clone()));
+        let call = scope.spawn(|| mcp_answer(&laptop, work_id, &token, "ssh_commands_run", arguments.clone()));
         let mut waiting = None;
         for _ in 0..200 {
             let listed = String::from_utf8_lossy(&laptop.silt(&["approvals"]).stdout).into_owned();
-            if let Some(line) = listed.lines().find(|line| line.contains("fleet fleet_run")) {
+            if let Some(line) = listed.lines().find(|line| line.contains("silt.ssh-commands run in lab")) {
                 waiting = line.split_whitespace().next().map(str::to_owned);
                 break;
             }
@@ -191,5 +185,5 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     // Kept with the run's own thread.
     let run_thread = args.iter().skip_while(|arg| *arg != "--thread").nth(1).cloned().expect("the run's thread");
     let access = String::from_utf8_lossy(&laptop.silt(&["access", "show", &run_thread]).stdout).into_owned();
-    assert!(access.contains("fleet fleet_run in lab  refused"), "{access}");
+    assert!(access.contains("silt.ssh-commands run in lab  refused"), "{access}");
 }

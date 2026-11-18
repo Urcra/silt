@@ -8,9 +8,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use exn::{Exn, ResultExt as _};
 use silt_daemon::paths;
-use silt_daemon::plugins::{
-    self, AccessView, ApprovalState, ApprovalView, GrantScope, Kind, Outcome, Plugin, install, installed,
-};
+use silt_daemon::plugins::{AccessView, ApprovalState, ApprovalView, GrantScope, Outcome, install, installed};
 use silt_daemon::protocol::Request;
 
 use crate::CliError;
@@ -18,7 +16,7 @@ use crate::commands::{call, fail};
 
 #[derive(Debug, Subcommand)]
 pub enum PluginCommand {
-    /// Add a plugin from a git repository (`URL#tag` to pin one), showing everything it gets first; or from a JSON definition of `plugins.json`'s kinds
+    /// Add a plugin from a git repository (`URL#tag` to pin one), showing everything it gets first
     Add {
         source: String,
         /// Turn it on in this workspace too; may be given more than once
@@ -116,15 +114,6 @@ pub enum PluginCommand {
         #[arg(long)]
         workspace: String,
     },
-    /// Fetch a GraphQL environment's schema by introspection, for data rules that see past field names
-    Schema {
-        name: String,
-        #[arg(long)]
-        environment: String,
-        /// The workspace whose credential it's fetched with; the first it's on in by default
-        #[arg(long)]
-        workspace: Option<String>,
-    },
 }
 
 fn core_error(error: silt_daemon::CoreError) -> Exn<CliError> {
@@ -135,18 +124,7 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
     let data = paths::data_dir();
     installed::ensure_shipped(&data).map_err(core_error)?;
     match command {
-        PluginCommand::Add { source, workspace, yes } if !source.ends_with(".json") => {
-            add_from_git(&data, &source, &workspace, yes)?
-        }
-        PluginCommand::Add { source, .. } => {
-            let file = PathBuf::from(source);
-            let bytes = std::fs::read(&file).or_raise(|| CliError(format!("cannot read {}", file.display())))?;
-            let plugin: Plugin = serde_json::from_slice(&bytes)
-                .or_raise(|| CliError(format!("{} isn't a plugin's definition", file.display())))?;
-            let name = plugin.name.clone();
-            plugins::put(&data, plugin).map_err(core_error)?;
-            println!("added {name}; turn it on with `silt plugin enable {name} --workspace <id>`");
-        }
+        PluginCommand::Add { source, workspace, yes } => add_from_git(&data, &source, &workspace, yes)?,
         PluginCommand::Dev { folder, workspace, watch } => {
             let folder = std::fs::canonicalize(&folder).or_raise(|| CliError(format!("no folder {}", folder.display())))?;
             let build = |workspace: &[String]| -> Result<(), Exn<CliError>> {
@@ -274,52 +252,10 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
                     println!("  {name}: {}", patterns.join(", "));
                 }
             }
-            let all = plugins::load(&data);
-            if all.is_empty() && installed::load(&data).is_empty() {
-                println!("no plugins; add one with `silt plugin add <file>`");
-            }
-            for plugin in all {
-                let kind = match &plugin.kind {
-                    Kind::Graphql => "GraphQL".to_owned(),
-                    Kind::Command { argv } => format!("runs {}", argv.join(" ")),
-                    Kind::Mcp { argv } => format!("MCP server {}", argv.join(" ")),
-                };
-                let on = if plugin.workspaces.is_empty() {
-                    "on in no workspace".to_owned()
-                } else {
-                    format!("on in {}", plugin.workspaces.join(", "))
-                };
-                println!("{}  {kind}  {on}", plugin.name);
-                for (name, environment) in &plugin.environments {
-                    let data: Vec<&str> = environment.data.iter().map(|class| class.label()).collect();
-                    let kept = if data.is_empty() { String::new() } else { format!("  keeps {} from agents", data.join(", ")) };
-                    println!(
-                        "  {name}: {}  reads {:?}, changes {:?}{kept}",
-                        environment.target, environment.reads, environment.changes
-                    );
-                }
-            }
-        }
-        PluginCommand::Remove { name } if installed::find(&data, &name).is_some() => {
-            install::remove(&data, &name).map_err(core_error)?;
-            println!("removed {name}");
         }
         PluginCommand::Remove { name } => {
-            plugins::remove(&data, &name).map_err(core_error)?;
+            install::remove(&data, &name).map_err(core_error)?;
             println!("removed {name}");
-        }
-        PluginCommand::Schema { name, environment, workspace } => {
-            let plugin = plugins::load(&data)
-                .into_iter()
-                .find(|plugin| plugin.name == name)
-                .ok_or_else(|| fail(format!("no plugin {name}")))?;
-            let workspace = workspace.or_else(|| plugin.workspaces.first().cloned()).unwrap_or_else(|| "default".to_owned());
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .or_raise(|| CliError("cannot start the async runtime".into()))?;
-            runtime.block_on(plugins::fetch_schema(&data, &plugin, &environment, &workspace)).map_err(fail)?;
-            println!("kept {name}'s {environment} schema; its data rules now walk it");
         }
         PluginCommand::Enable { name, workspace } => turn(&data, &name, &workspace, true)?,
         PluginCommand::Disable { name, workspace } => turn(&data, &name, &workspace, false)?,
@@ -587,39 +523,10 @@ fn set_rule(data: &std::path::Path, id: &str, action: &str, rule: &str, matching
 }
 
 fn turn(data: &std::path::Path, name: &str, workspace: &str, on: bool) -> Result<(), Exn<CliError>> {
-    if installed::find(data, name).is_some() {
-        let every: Vec<String> = silt_daemon::workspaces::load(data)
-            .map(|all| all.workspaces.iter().map(|workspace| workspace.id.as_str().to_owned()).collect())
-            .unwrap_or_else(|| vec!["default".to_owned()]);
-        if let Some(installed::PluginSource::Org { org, .. }) = installed::find(data, name).map(|record| record.source)
-            && !on
-        {
-            return Err(fail(format!("{org}'s policy keeps {name} on in its workspaces")));
-        }
-        installed::update(data, name, |record| {
-            // On everywhere, until it's turned off somewhere.
-            if !on && record.workspaces.iter().any(|other| other == "*") {
-                record.workspaces = every.clone();
-            }
-            record.workspaces.retain(|other| other != workspace);
-            if on {
-                record.workspaces.push(workspace.to_owned());
-                record.workspaces.sort();
-            }
-            Ok(())
-        })
-        .map_err(core_error)?;
-        println!("{name} is {} in {workspace}", if on { "on" } else { "off" });
-        return Ok(());
-    }
-    let mut plugin =
-        plugins::load(data).into_iter().find(|plugin| plugin.name == name).ok_or_else(|| fail(format!("no plugin {name}")))?;
-    plugin.workspaces.retain(|other| other != workspace);
-    if on {
-        plugin.workspaces.push(workspace.to_owned());
-        plugin.workspaces.sort();
-    }
-    plugins::put(data, plugin).map_err(core_error)?;
+    let every: Vec<String> = silt_daemon::workspaces::load(data)
+        .map(|all| all.workspaces.iter().map(|workspace| workspace.id.as_str().to_owned()).collect())
+        .unwrap_or_else(|| vec!["default".to_owned()]);
+    installed::turn(data, name, workspace, on, &every).map_err(core_error)?;
     println!("{name} is {} in {workspace}", if on { "on" } else { "off" });
     Ok(())
 }

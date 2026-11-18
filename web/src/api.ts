@@ -77,7 +77,7 @@ import type {
   AccessView,
   ApprovalView,
   GrantScope,
-  Plugin,
+  Installed,
   VoiceStatus,
   UpdateView,
   Workspaces,
@@ -511,8 +511,9 @@ export const api = {
   access: (thread: string) => request<AccessView>('GET', `/api/threads/${encodeURIComponent(thread)}/access`),
   releaseDevice: (thread: string, device: string) =>
     request<string>('POST', `/api/threads/${encodeURIComponent(thread)}/devices/release`, { device }),
-  plugins: () => request<Plugin[]>('GET', '/api/plugins'),
-  putPlugin: (plugin: Plugin) => request<string>('PUT', `/api/plugins/${encodeURIComponent(plugin.name)}`, plugin),
+  plugins: () => request<Installed[]>('GET', '/api/plugins'),
+  turnPlugin: (id: string, workspace: string, on: boolean) =>
+    request<string>('PUT', `/api/plugins/${encodeURIComponent(id)}/workspaces/${encodeURIComponent(workspace)}`, { on }),
   status: () => request<DaemonStatus>('GET', '/api/status'),
   prompt: (id: string, text: string, plan = false, attachments: PromptAttachment[] = []) =>
     request<string>('POST', `${thread(id)}/agent/prompt`, { text, plan, attachments }),

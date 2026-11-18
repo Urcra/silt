@@ -242,55 +242,6 @@ export type BusEvent = { "event": "threads" } | { "event": "thread", thread: str
 
 export type DataClass = "location";
 
-export type Plugin = { 
-/**
- * Its name, which its tools start with.
- */
-name: string, description: string, kind: Kind, 
-/**
- * The workspaces it's on in, by id.
- */
-workspaces: Array<string>, 
-/**
- * Its environments, such as `staging` and `production`, by name.
- */
-environments: { [key in string]: Environment }, };
-
-export type Kind = { "type": "graphql" } | { "type": "command", argv: Array<string>, } | { "type": "mcp", argv: Array<string>, };
-
-export type Rule = "allow" | "ask";
-
-export type Environment = { 
-/**
- * A GraphQL endpoint's URL, or the targets a command may name, such
- * as `car-*.fleet.vpn`.
- */
-target: string, reads: Rule, changes: Rule, 
-/**
- * What a result may never carry to an agent.
- */
-data: Array<DataClass>, 
-/**
- * A credential of `silt credential` added to its requests, or for a
- * command or MCP server, given to it in `variable`.
- */
-credential: string | null, 
-/**
- * The variable a command or MCP server reads the credential's secret
- * from, such as `FLEET_TOKEN`.
- */
-variable: string | null, 
-/**
- * Each change is approved on its own: no grant covers it.
- */
-once: boolean, 
-/**
- * A GraphQL environment its agents may also query straight through
- * the gateway, which reads each request: reads go, changes only where
- * `changes` allows them, and data rules hold both ways.
- */
-direct: boolean, };
-
 export type Outcome = { "status": "done", output: string, } | { "status": "refused", why: string, } | { "status": "failed", error: string, } | { "status": "unknown", why: string, } | { "status": "pending", approval: number, };
 
 export type ApprovalState = "pending" | "approved" | "rejected" | "expired";
@@ -343,6 +294,18 @@ export type Effect = { "type": "http", method: string, url: string, body_sha256?
 
 export type EffectChannel = "sockets" | "ssh" | "mcp-process";
 
+export type ScopedRule = { action: string, field?: string | null, pattern?: Glob | null, rule: Rule, 
+/**
+ * Each call approved on its own; no grant covers it.
+ */
+once: boolean, source: RuleSource, };
+
+export type Rule = "allow" | "ask" | "never";
+
+export type RuleSource = { "from": "built_in" } | { "from": "org", "name": string } | { "from": "yours" } | { "from": "default" } | { "from": "untrusted" };
+
+export type Glob = string;
+
 export type GrantScope = { "for": "run" } | { "for": "thread", minutes: number, } | { "for": "workspace" };
 
 export type CallView = { id: number, plugin: string, tool: string, environment: string, target: string, shown: string, change: boolean, 
@@ -382,6 +345,40 @@ devices: Array<RelayView>,
  * The folders granted to its agents (ADR 0101).
  */
 folders: Array<FolderView>, };
+
+export type Installed = { id: string, source: PluginSource, version: string, 
+/**
+ * The capabilities the person granted, by name.
+ */
+granted: Array<string>, 
+/**
+ * The workspaces it's on in, by id.
+ */
+workspaces: Array<string>, 
+/**
+ * Its environments, each with the patterns that pick it.
+ */
+environments: { [key in string]: Array<string> }, 
+/**
+ * Which of `silt credential`'s credentials each of its own is: by the
+ * credential's id, or `id@environment` for one per environment.
+ */
+credentials: { [key in string]: string }, 
+/**
+ * The person's values of its settings; never secrets.
+ */
+settings: Record<string, unknown>, 
+/**
+ * The person's rules for its actions.
+ */
+rules: Array<ScopedRule>, 
+/**
+ * What the person agreed to for this version, in the words they saw:
+ * each capability with its hosts, credential and action.
+ */
+consented: Array<string>, };
+
+export type PluginSource = { "type": "shipped" } | { "type": "git", url: string, commit: string, follow?: string | null, } | { "type": "dev", path: string, } | { "type": "marketplace", server: string, } | { "type": "org", org: string, commit?: string | null, };
 
 export type FolderView = { path: string, writable: boolean, 
 /**

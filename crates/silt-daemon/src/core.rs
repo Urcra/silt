@@ -817,9 +817,15 @@ impl Core {
             Request::PluginTools | Request::PluginCall { .. } | Request::PluginWait { .. } => {
                 Response::error("only an agent's run calls plugins, with its token")
             }
-            Request::Plugins => Response::ok(crate::plugins::load(&self.data_dir)),
-            Request::PluginPut { plugin } => to_response(crate::plugins::put(&self.data_dir, *plugin).map(|()| "saved")),
-            Request::PluginRemove { name } => to_response(crate::plugins::remove(&self.data_dir, &name).map(|()| "removed")),
+            Request::Plugins => Response::ok(crate::plugins::installed::load(&self.data_dir)),
+            Request::PluginTurn { id, workspace, on } => {
+                let every: Vec<String> =
+                    self.workspaces().workspaces.iter().map(|workspace| workspace.id.as_str().to_owned()).collect();
+                to_response(crate::plugins::installed::turn(&self.data_dir, &id, &workspace, on, &every).map(|()| "saved"))
+            }
+            Request::PluginRemove { name } => {
+                to_response(crate::plugins::install::remove(&self.data_dir, &name).map(|()| "removed"))
+            }
             Request::Approvals { thread, all } => to_response(self.approvals_view(thread.as_deref(), all).await),
             Request::ApprovalAnswer { id, approve, hash, grant } => to_response(
                 self.approval_answer(id, approve, &hash, grant).await.map(|()| if approve { "approved" } else { "rejected" }),

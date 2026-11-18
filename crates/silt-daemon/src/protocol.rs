@@ -810,9 +810,11 @@ pub enum Request {
     },
     /// This machine's plugins.
     Plugins,
-    /// Adds a plugin, or replaces the one of its name.
-    PluginPut {
-        plugin: Box<crate::plugins::Plugin>,
+    /// Turns a plugin on or off in a workspace.
+    PluginTurn {
+        id: String,
+        workspace: String,
+        on: bool,
     },
     PluginRemove {
         name: String,
@@ -2499,10 +2501,6 @@ mod tests {
             ChoiceAsked::decl(&config),
             BusEvent::decl(&config),
             silt_access::DataClass::decl(&config),
-            crate::plugins::Plugin::decl(&config),
-            crate::plugins::Kind::decl(&config),
-            crate::plugins::Rule::decl(&config),
-            crate::plugins::Environment::decl(&config),
             crate::plugins::Outcome::decl(&config),
             crate::plugins::ApprovalState::decl(&config),
             crate::plugins::ApprovalView::decl(&config),
@@ -2513,10 +2511,16 @@ mod tests {
             silt_plugin::Tone::decl(&config),
             silt_plugin::Effect::decl(&config),
             silt_plugin::Channel::decl(&config),
+            silt_plugin::ScopedRule::decl(&config),
+            silt_plugin::Rule::decl(&config),
+            silt_plugin::RuleSource::decl(&config),
+            silt_plugin::Glob::decl(&config),
             crate::plugins::GrantScope::decl(&config),
             crate::plugins::CallView::decl(&config),
             crate::plugins::GrantView::decl(&config),
             crate::plugins::AccessView::decl(&config),
+            crate::plugins::installed::Installed::decl(&config),
+            crate::plugins::installed::PluginSource::decl(&config),
             crate::plugins::FolderView::decl(&config),
             crate::plugins::NetworkRefusal::decl(&config),
             crate::plugins::RelayView::decl(&config),

@@ -132,6 +132,29 @@ pub fn update(
     Ok(updated)
 }
 
+/// Turns plugin `id` on or off in `workspace`. One on everywhere, turned
+/// off somewhere, is on in each of `every` but that one. An org's stays
+/// on in its workspaces.
+pub fn turn(data_dir: &Path, id: &str, workspace: &str, on: bool, every: &[String]) -> Result<(), CoreError> {
+    if let Some(PluginSource::Org { org, .. }) = find(data_dir, id).map(|record| record.source)
+        && !on
+    {
+        return Err(CoreError::Invalid(format!("{org}'s policy keeps {id} on in its workspaces")));
+    }
+    update(data_dir, id, |record| {
+        if !on && record.workspaces.iter().any(|other| other == "*") {
+            record.workspaces = every.to_vec();
+        }
+        record.workspaces.retain(|other| other != workspace);
+        if on {
+            record.workspaces.push(workspace.to_owned());
+            record.workspaces.sort();
+        }
+        Ok(())
+    })
+    .map(|_| ())
+}
+
 /// A plugin's own folder: its manifest, component, README and data.
 pub fn dir(data_dir: &Path, id: &str) -> PathBuf {
     data_dir.join("plugins").join(id)

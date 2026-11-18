@@ -528,11 +528,9 @@ impl Run<'_> {
         let held = self.held;
         // Only a run whose workspace has plugins calls them, which are kept
         // with its thread.
-        let plugins = silt_daemon::plugins::load(&paths::data_dir());
-        let any_on = plugins.iter().any(|plugin| plugin.workspaces.iter().any(|on| on == held.workspace.id.as_str()))
-            || silt_daemon::plugins::installed::load(&paths::data_dir())
-                .iter()
-                .any(|installed| installed.on_in(held.workspace.id.as_str()));
+        let any_on = silt_daemon::plugins::installed::load(&paths::data_dir())
+            .iter()
+            .any(|installed| installed.on_in(held.workspace.id.as_str()));
         if !held.token.is_empty() && any_on {
             bind_run_token(&held.token, self.thread)?;
         }

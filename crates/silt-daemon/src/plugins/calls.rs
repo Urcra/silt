@@ -5,20 +5,19 @@
 //! of call run without asking, for the run or the thread, until a time.
 //! A call the daemon stopped in the middle of reads as outcome unknown.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use silt_access::Canonical;
 use silt_store::{GrantRecord, PluginCallRecord, Store};
 use silt_types::ThreadId;
 use tokio::sync::{broadcast, oneshot, watch};
 
+use super::Outcome;
 use super::installed::{self, Installed};
 use super::wasm::{CallParts, WasmRequest, asks};
-use super::{Outcome, exec_of, execute, load, prepare, shown_input, tools};
 use crate::CoreError;
 use crate::core::{Core, now_ms, to_response};
 use crate::protocol::{BusEvent, Response};
@@ -171,12 +170,10 @@ pub struct NetworkRefusal {
     pub why: String,
 }
 
-/// Who waits on each call still open, and the tools each MCP plugin's
-/// server offers, as it last listed them.
+/// Who waits on each call still open.
 #[derive(Default)]
 pub struct Approvals {
     waiting: HashMap<i64, Arc<watch::Sender<Option<Outcome>>>>,
-    listed: Arc<std::sync::Mutex<BTreeMap<String, Vec<Value>>>>,
     /// WebAssembly plugins (ADR 0103).
     pub(crate) wasm: Arc<super::wasm::Wasm>,
 }
@@ -195,16 +192,6 @@ fn state_of(call: &PluginCallRecord, now: i64) -> ApprovalState {
         "expired" => ApprovalState::Expired,
         _ => ApprovalState::Approved,
     }
-}
-
-fn canonical_of(call: &PluginCallRecord) -> Canonical {
-    serde_json::from_str(&call.request).unwrap_or_else(|_| Canonical {
-        plugin: String::new(),
-        tool: String::new(),
-        environment: String::new(),
-        target: String::new(),
-        input: Value::Null,
-    })
 }
 
 /// A call as the person sees it, whichever kind of plugin made it.
@@ -243,23 +230,27 @@ fn described(call: &PluginCallRecord) -> Described {
             tool: asked.get("tool").and_then(Value::as_str).unwrap_or_default().to_owned(),
             environment: String::new(),
             target: String::new(),
-            shown: shown_input(asked.get("input").unwrap_or(&Value::Null)),
+            shown: silt_access::shown(
+                &serde_json::to_string_pretty(asked.get("input").unwrap_or(&Value::Null)).unwrap_or_default(),
+            ),
             card: None,
             effects: Vec::new(),
             once: Some(true),
             why: None,
         };
     }
-    let canonical = canonical_of(call);
+    // A call of a kind an earlier Silt ran, kept for the record.
+    let kept: Value = serde_json::from_str(&call.request).unwrap_or(Value::Null);
+    let text = |key: &str| kept.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
     Described {
-        plugin: canonical.plugin,
-        tool: canonical.tool,
-        environment: canonical.environment,
-        target: canonical.target,
-        shown: shown_input(&canonical.input),
+        plugin: text("plugin"),
+        tool: text("tool"),
+        environment: text("environment"),
+        target: text("target"),
+        shown: silt_access::shown(&serde_json::to_string_pretty(kept.get("input").unwrap_or(&Value::Null)).unwrap_or_default()),
         card: None,
         effects: Vec::new(),
-        once: None,
+        once: Some(true),
         why: None,
     }
 }
@@ -315,20 +306,12 @@ impl Core {
                 return;
             }
         };
-        let (data_dir, listed, wasm) = (self.data_dir.clone(), self.approvals.listed.clone(), self.approvals.wasm.clone());
+        let (data_dir, wasm) = (self.data_dir.clone(), self.approvals.wasm.clone());
         let policy = self.workspace_policy(&workspace);
         tokio::spawn(async move {
-            let plugins = load(&data_dir);
-            for plugin in plugins.iter().filter(|plugin| plugin.workspaces.contains(&workspace)) {
-                if let Some(offered) = super::list_mcp(&data_dir, plugin, &workspace).await {
-                    listed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(plugin.name.clone(), offered);
-                }
-            }
-            let known = listed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-            let mut offered = tools(&plugins, &workspace, &known);
-            let wasm_offered =
+            // Listing may run a plugin, as Local MCP's lists its server's tools.
+            let offered =
                 tokio::task::spawn_blocking(move || wasm.tools(&data_dir, &workspace, policy.as_ref())).await.unwrap_or_default();
-            offered.extend(wasm_offered);
             let _ = reply.send(Response::ok(offered));
         });
     }
@@ -371,95 +354,7 @@ impl Core {
         if let Some((installed, plugin_tool)) = found {
             return self.start_wasm_call(thread, workspace, run_hash, installed, plugin_tool.name, input).await;
         }
-        let plugins = load(&self.data_dir);
-        let now = now_ms();
-        let mut call = PluginCallRecord {
-            id: 0,
-            thread,
-            run_hash: run_hash.clone(),
-            workspace: workspace.clone(),
-            request: String::new(),
-            hash: String::new(),
-            change: false,
-            asked: false,
-            state: "running".into(),
-            outcome: None,
-            grant: None,
-            created_ms: now,
-            answered_ms: None,
-            kind: "legacy".into(),
-        };
-        let data_dir = self.data_dir.clone();
-        let schemas = move |plugin: &str, environment: &str| super::schema_of(&data_dir, plugin, environment);
-        let listed = self.approvals.listed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-        let prepared = match prepare(&plugins, &schemas, &listed, &workspace, tool, &input) {
-            Ok(prepared) => prepared,
-            Err(why) => {
-                // Kept too, so the person sees what was refused.
-                let canonical = Canonical {
-                    plugin: String::new(),
-                    tool: tool.to_owned(),
-                    environment: input.get("environment").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                    target: String::new(),
-                    input,
-                };
-                call.request = serde_json::to_string(&canonical).unwrap_or_default();
-                call.hash = canonical.hash();
-                call.state = "ended".into();
-                let outcome = Outcome::Refused { why };
-                call.outcome = Some(serde_json::to_string(&outcome).unwrap_or_default());
-                let id = self.store.add_plugin_call(&call).await?;
-                self.announce(BusEvent::Approvals);
-                let channel = Arc::new(watch::channel(Some(outcome)).0);
-                return Ok((id, channel));
-            }
-        };
-        call.request = serde_json::to_string(&prepared.canonical).unwrap_or_default();
-        call.hash = prepared.canonical.hash();
-        call.change = prepared.change;
-        let mut ask = prepared.ask;
-        if ask && !prepared.once {
-            let grant = self
-                .store
-                .grant_for(
-                    thread,
-                    &run_hash,
-                    &prepared.canonical.plugin,
-                    &prepared.canonical.environment,
-                    prepared.change,
-                    None,
-                    now,
-                )
-                .await?;
-            if let Some(grant) = grant {
-                ask = false;
-                call.grant = Some(grant.id);
-            }
-        }
-        call.asked = ask;
-        if ask {
-            call.state = "pending".into();
-        }
-        let id = self.store.add_plugin_call(&call).await?;
-        let channel = self.approvals.channel(id);
-        self.announce(BusEvent::Approvals);
-        if !ask {
-            self.run_call(id, &workspace, &prepared.canonical, channel.clone());
-        }
-        Ok((id, channel))
-    }
-
-    /// Runs call `id`'s request in the background, as it stands now.
-    fn run_call(&self, id: i64, workspace: &str, canonical: &Canonical, channel: Arc<watch::Sender<Option<Outcome>>>) {
-        let (store, bus) = (self.store.clone(), self.bus.clone());
-        let ready = exec_of(&self.data_dir, &load(&self.data_dir), workspace, canonical);
-        tokio::spawn(async move {
-            let outcome = match ready {
-                Ok((exec, data)) => execute(exec, data).await,
-                Err(why) => Outcome::Refused { why },
-            };
-            end(&store, &bus, &channel, id, outcome).await;
-        });
+        Err(CoreError::Invalid(format!("no plugin on in this workspace offers {tool}")))
     }
 
     /// Waits on a call the run made earlier.
@@ -542,46 +437,7 @@ impl Core {
         if call.kind == "wasm" {
             return self.approve_wasm_call(call, grant, channel, now).await;
         }
-        let canonical = canonical_of(&call);
-        if let Some(scope) = grant {
-            let once = load(&self.data_dir)
-                .iter()
-                .find(|plugin| plugin.name == canonical.plugin)
-                .and_then(|plugin| plugin.environments.get(&canonical.environment))
-                .is_none_or(|environment| environment.once);
-            if once {
-                return Err(CoreError::Invalid(format!(
-                    "{}'s {} allows no grant: each call is approved on its own",
-                    canonical.plugin, canonical.environment
-                )));
-            }
-            let (run_hash, until_ms) = match scope {
-                GrantScope::Run => (Some(call.run_hash.clone()), None),
-                GrantScope::Thread { minutes } => (None, Some(now + i64::from(minutes.clamp(1, 24 * 60)) * 60_000)),
-                GrantScope::Workspace => {
-                    return Err(CoreError::Invalid("only a folder can be granted always in its workspace".into()));
-                }
-            };
-            self.store
-                .add_grant(&GrantRecord {
-                    id: 0,
-                    thread: call.thread,
-                    run_hash,
-                    plugin: canonical.plugin.clone(),
-                    environment: canonical.environment.clone(),
-                    change: call.change,
-                    created_ms: now,
-                    until_ms,
-                    revoked_ms: None,
-                    from_call: id,
-                    action: None,
-                })
-                .await?;
-        }
-        self.store.set_plugin_call(id, "running", None, Some(now)).await?;
-        self.run_call(id, &call.workspace, &canonical, channel);
-        self.announce(BusEvent::Approvals);
-        Ok(())
+        Err(CoreError::Invalid(format!("approval {id} is of a plugin kind this Silt no longer runs")))
     }
 
     /// Takes back the folder `path` from the thread's agents: gone from
@@ -608,20 +464,13 @@ impl Core {
     pub(crate) async fn approvals_view(&self, thread: Option<&str>, all: bool) -> Result<Vec<ApprovalView>, CoreError> {
         let thread = thread.map(|thread| self.find_thread(thread)).transpose()?;
         let calls = self.store.plugin_calls(thread, (!all).then_some("pending"), LISTED).await?;
-        let plugins = load(&self.data_dir);
         let now = now_ms();
         Ok(calls
             .into_iter()
             .filter(|call| call.asked && (all || state_of(call, now) == ApprovalState::Pending))
             .map(|call| {
                 let seen = described(&call);
-                let once = seen.once.unwrap_or_else(|| {
-                    plugins
-                        .iter()
-                        .find(|plugin| plugin.name == seen.plugin)
-                        .and_then(|plugin| plugin.environments.get(&seen.environment))
-                        .is_none_or(|environment| environment.once)
-                });
+                let once = seen.once.unwrap_or(true);
                 ApprovalView {
                     id: id_of(call.id),
                     thread: call.thread.to_string(),
@@ -1003,30 +852,7 @@ mod tests {
     use silt_store::ThreadRecord;
     use silt_types::{ActorId, FamilyId};
 
-    use super::super::{Environment, Kind, Plugin, Rule, put};
     use super::*;
-
-    fn fleet(once: bool) -> Plugin {
-        Plugin {
-            name: "test fleet".into(),
-            description: String::new(),
-            kind: Kind::Command { argv: vec!["echo".into(), "ran on {target}".into()] },
-            workspaces: vec!["work".into(), "personal".into()],
-            environments: BTreeMap::from([(
-                "fleet".to_owned(),
-                Environment {
-                    target: "car-*.fleet.vpn".into(),
-                    reads: Rule::Allow,
-                    changes: Rule::Ask,
-                    data: Vec::new(),
-                    credential: None,
-                    once,
-                    direct: false,
-                    variable: None,
-                },
-            )]),
-        }
-    }
 
     async fn core(data: &std::path::Path) -> Core {
         let store = Store::open(data).await.expect("opens");
@@ -1052,13 +878,6 @@ mod tests {
             Response::Ok { data } => serde_json::from_value(data).expect("an outcome"),
             Response::Error { message } => panic!("{message}"),
         }
-    }
-
-    async fn call(core: &mut Core, token: &str) -> oneshot::Receiver<Response> {
-        let (reply, answer) = oneshot::channel();
-        let input = json!({"environment": "fleet", "target": "car-1.fleet.vpn", "args": ["now"]});
-        core.plugin_call(token, "test_fleet_run", input, reply).await;
-        answer
     }
 
     fn probe_installed(data: &std::path::Path) {
@@ -1714,76 +1533,5 @@ mod tests {
         let Outcome::Refused { why } = outcome(refused.await.expect("answers")) else { panic!("not refused") };
         assert!(why.contains("your rule for Look"), "{why}");
         assert!(!data.path().join("plugins/test.probe/data/note").exists(), "it never ran");
-    }
-
-    #[tokio::test]
-    async fn a_change_runs_once_after_the_person_approves_what_they_saw() {
-        let data = tempfile::tempdir().expect("temp dir");
-        put(data.path(), fleet(false)).expect("saves");
-        let mut core = core(data.path()).await;
-
-        let waiting = call(&mut core, "work-run").await;
-        let pending = core.approvals_view(None, false).await.expect("approvals");
-        assert_eq!(pending.len(), 1);
-        let approval = &pending[0];
-        assert_eq!(approval.shown, "echo 'ran on car-1.fleet.vpn' now");
-        assert!(core.approval_answer(approval.id, true, "not-what-was-shown", None).await.is_err());
-        core.approval_answer(approval.id, true, &approval.hash, None).await.expect("approves");
-        assert!(core.approval_answer(approval.id, true, &approval.hash, None).await.is_err(), "only once");
-        assert_eq!(
-            outcome(waiting.await.expect("answers")),
-            Outcome::Done { output: "exit 0\nran on car-1.fleet.vpn now\n".into() }
-        );
-
-        let (reply, again) = oneshot::channel();
-        core.plugin_wait("other-thread", approval.id, reply).await;
-        assert!(matches!(again.await.expect("answers"), Response::Error { .. }), "another thread's call");
-        let access = core.access_view(&ThreadId(7).to_string()).await.expect("access");
-        assert_eq!(access.calls.len(), 1);
-        assert_eq!(access.calls[0].state, "ended");
-    }
-
-    #[tokio::test]
-    async fn a_grant_lets_the_same_kind_of_call_run_until_revoked_and_never_in_a_fork() {
-        let data = tempfile::tempdir().expect("temp dir");
-        put(data.path(), fleet(false)).expect("saves");
-        let mut core = core(data.path()).await;
-        let first = call(&mut core, "work-run").await;
-        let approval = core.approvals_view(None, false).await.expect("approvals").remove(0);
-        core.approval_answer(approval.id, true, &approval.hash, Some(GrantScope::Thread { minutes: 60 }))
-            .await
-            .expect("approves");
-        assert!(matches!(outcome(first.await.expect("answers")), Outcome::Done { .. }));
-
-        let second = call(&mut core, "work-again").await;
-        assert!(matches!(outcome(second.await.expect("answers")), Outcome::Done { .. }), "covered by the thread's grant");
-        let elsewhere = call(&mut core, "other-thread").await;
-        assert!(core.approvals_view(None, false).await.expect("approvals").len() == 1, "another thread asks");
-        drop(elsewhere);
-
-        let access = core.access_view(&ThreadId(7).to_string()).await.expect("access");
-        let grant = access.grants[0].id;
-        assert!(access.calls[0].grant == Some(grant));
-        core.grant_revoke(grant).await.expect("revokes");
-        let _third = call(&mut core, "work-run").await;
-        assert_eq!(core.approvals_view(Some(&ThreadId(7).to_string()), false).await.expect("approvals").len(), 1, "asks again");
-    }
-
-    #[tokio::test]
-    async fn production_once_allows_no_grant_and_a_call_cut_off_reads_unknown() {
-        let data = tempfile::tempdir().expect("temp dir");
-        put(data.path(), fleet(true)).expect("saves");
-        let mut core = core(data.path()).await;
-        let _waiting = call(&mut core, "work-run").await;
-        let approval = core.approvals_view(None, false).await.expect("approvals").remove(0);
-        assert!(approval.once);
-        let refused = core.approval_answer(approval.id, true, &approval.hash, Some(GrantScope::Run)).await.unwrap_err();
-        assert!(refused.to_string().contains("allows no grant"), "{refused}");
-
-        let id = i64::try_from(approval.id).expect("id");
-        core.store.set_plugin_call(id, "running", None, Some(1)).await.expect("runs");
-        core.recover_plugin_calls().await.expect("recovers");
-        let call = core.store.plugin_call(id).await.expect("reads").expect("kept");
-        assert!(matches!(outcome_of(&call), Some(Outcome::Unknown { .. })));
     }
 }

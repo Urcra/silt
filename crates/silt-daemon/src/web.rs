@@ -253,7 +253,8 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/threads/{id}/access", get(access))
         .route("/api/threads/{id}/devices/release", post(release_device))
         .route("/api/plugins", get(plugins))
-        .route("/api/plugins/{name}", put(plugin_put).delete(plugin_remove))
+        .route("/api/plugins/{name}", delete(plugin_remove))
+        .route("/api/plugins/{id}/workspaces/{workspace}", put(plugin_turn))
         .route("/api/mrs", get(merge_requests))
         .route("/api/mrs/{id}", get(merge_request))
         .route("/api/mrs/{id}/approve", post(approve))
@@ -2046,16 +2047,17 @@ async fn plugins(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::Plugins).await
 }
 
-async fn plugin_put(
+#[derive(Deserialize)]
+struct PluginTurnBody {
+    on: bool,
+}
+
+async fn plugin_turn(
     State(web): State<Web>,
-    Path(name): Path<String>,
-    Json(plugin): Json<crate::plugins::Plugin>,
+    Path((id, workspace)): Path<(String, String)>,
+    Json(body): Json<PluginTurnBody>,
 ) -> HttpResponse {
-    if plugin.name != name {
-        return Failed { status: StatusCode::BAD_REQUEST, message: "the plugin's name isn't the one in its path".into() }
-            .into_response();
-    }
-    ask(&web, Request::PluginPut { plugin: Box::new(plugin) }).await
+    ask(&web, Request::PluginTurn { id, workspace, on: body.on }).await
 }
 
 async fn plugin_remove(State(web): State<Web>, Path(name): Path<String>) -> HttpResponse {

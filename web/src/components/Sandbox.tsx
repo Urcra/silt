@@ -9,7 +9,7 @@ import {
   type CallView,
   type Extra,
   type GrantScope,
-  type Plugin,
+  type Installed,
   type Policy,
   type Reach,
   type ThreadSummary,
@@ -82,7 +82,7 @@ export function SandboxShield({
   const live = agent && agent.state !== 'stopped' ? agent : null
   const running = live?.sandbox ?? null
   const reach = running ?? (!live && required && view ? reachOf(view.effective) : null)
-  const on = (plugins.data ?? []).filter((plugin) => view && plugin.workspaces.includes(view.workspace.id))
+  const on = (plugins.data ?? []).filter((plugin) => view && onIn(plugin, view.workspace.id))
   const heading = running
     ? 'Sandboxed'
     : live
@@ -116,7 +116,7 @@ export function SandboxShield({
               <Fact name="Network">{networkLine(reach)}</Fact>
               {alsoLine(reach) && <Fact name="Also allowed">{alsoLine(reach)}</Fact>}
               <Fact name="Devices">{devicesLine(reach)}</Fact>
-              <Fact name="Plugins">{on.length ? on.map((plugin) => plugin.name).join(', ') : 'None'}</Fact>
+              <Fact name="Plugins">{on.length ? on.map((plugin) => plugin.id).join(', ') : 'None'}</Fact>
               <Fact name="Files">This checkout, your toolchains read-only</Fact>
               <Fact name="Credentials">None inside; Silt adds the workspace's on the way out</Fact>
             </>
@@ -651,16 +651,35 @@ export function ReachSettings({
   )
 }
 
+/** Whether `plugin` is on in `workspace`; `*` is every workspace. */
+function onIn(plugin: Installed, workspace: string): boolean {
+  return plugin.workspaces.includes(workspace) || plugin.workspaces.includes('*')
+}
+
+/** Where a plugin came from, as its tag says it. */
+function sourceLabel(source: Installed['source']): string {
+  switch (source.type) {
+    case 'shipped':
+      return 'Silt'
+    case 'git':
+      return 'git'
+    case 'dev':
+      return 'dev'
+    case 'marketplace':
+      return 'marketplace'
+    case 'org':
+      return source.org
+  }
+}
+
 /** Settings › Workspaces' plugins (ADR 0093): which of this machine's plugins the workspace's agents get. Saved at once. */
 export function WorkspacePlugins({ workspace, name }: { workspace: string; name: string }) {
   const queries = useQueryClient()
   const plugins = useQuery({ queryKey: keys.plugins, queryFn: api.plugins })
   const [error, setError] = useState<string>()
-  const turn = (plugin: Plugin, on: boolean) => {
+  const turn = (plugin: Installed, on: boolean) => {
     setError(undefined)
-    const workspaces = plugin.workspaces.filter((other) => other !== workspace)
-    if (on) workspaces.push(workspace)
-    api.putPlugin({ ...plugin, workspaces: workspaces.sort() }).then(
+    api.turnPlugin(plugin.id, workspace, on).then(
       () => void queries.invalidateQueries({ queryKey: keys.plugins }),
       (failure: unknown) => setError(message(failure)),
     )
@@ -674,42 +693,34 @@ export function WorkspacePlugins({ workspace, name }: { workspace: string; name:
       </p>
       <div className="overflow-hidden rounded-md border border-line bg-elevated">
         {(plugins.data ?? []).map((plugin) => {
-          const on = plugin.workspaces.includes(workspace)
-          const elsewhere = plugin.workspaces.filter((other) => other !== workspace)
+          const on = onIn(plugin, workspace)
+          const everywhere = plugin.workspaces.includes('*')
+          const elsewhere = plugin.workspaces.filter((other) => other !== workspace && other !== '*')
           return (
             <label
-              key={plugin.name}
+              key={plugin.id}
               className="flex cursor-pointer items-center gap-2.5 border-b border-line-subtle px-4 py-2.5 text-sm last:border-b-0"
             >
               <input
                 type="checkbox"
-                aria-label={`${plugin.name} in ${name}`}
+                aria-label={`${plugin.id} in ${name}`}
                 className="accent-[var(--accent)]"
                 checked={on}
                 onChange={(event) => turn(plugin, event.target.checked)}
               />
-              <span className="font-medium">{plugin.name}</span>
-              <Tag>
-                {plugin.kind.type === 'graphql'
-                  ? 'GraphQL'
-                  : plugin.kind.type === 'mcp'
-                    ? 'MCP'
-                    : (plugin.kind.argv[0] ?? 'command')}
-              </Tag>
-              {Object.entries(plugin.environments).map(([environment, rules]) => (
-                <Tag key={environment} tone={rules.changes === 'ask' ? 'warn' : 'neutral'}>
-                  {environment}
-                  {rules.data.length ? ` · ${rules.data.join(', ')} kept` : ''}
-                </Tag>
-              ))}
-              <span className="ml-auto text-xs text-fg-2">{elsewhere.length ? `also in ${elsewhere.join(', ')}` : ''}</span>
+              <span className="font-medium">{plugin.id}</span>
+              <Tag>{sourceLabel(plugin.source)}</Tag>
+              <span className="font-mono text-2xs text-fg-2">{plugin.version}</span>
+              <span className="ml-auto text-xs text-fg-2">
+                {everywhere ? 'in every workspace' : elsewhere.length ? `also in ${elsewhere.join(', ')}` : ''}
+              </span>
             </label>
           )
         })}
         {plugins.data?.length === 0 && (
           <p className="px-4 py-3 text-xs text-fg-2">
-            No plugins on this machine yet. Add one with <code className="font-mono">silt plugin add &lt;file&gt;</code>; the
-            guide shows its JSON.
+            No plugins on this machine yet. Add one from git with{' '}
+            <code className="font-mono">silt plugin add &lt;url&gt;#&lt;tag&gt;</code>.
           </p>
         )}
       </div>

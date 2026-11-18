@@ -28,6 +28,14 @@ type = "list"
 scope = "environment"
 default = []
 
+[[settings]]
+key = "direct"
+label = "Straight from the sandbox"
+description = "Lets the sandbox's own tools send requests to the endpoint through Silt's gateway, read the same way: queries go, mutations only where your rule allows them, and what's kept from agents stays kept."
+type = "boolean"
+scope = "environment"
+default = false
+
 [[credentials]]
 id = "token"
 label = "The API's token"

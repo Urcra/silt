@@ -40,6 +40,22 @@ fn body(input: &Value) -> Result<String, String> {
     Ok(request.to_string())
 }
 
+/// Where the schema `graphql_schema` fetched for `environment` is kept, in
+/// the plugin's own folder, as the gateway reads it too.
+fn schema_file(environment: &str) -> Result<String, String> {
+    if environment.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+        Ok(format!("/data/{environment}.schema.json"))
+    } else {
+        Err(format!("{environment} isn't an environment's name"))
+    }
+}
+
+/// The schema kept for `environment`, if `graphql_schema` fetched one.
+fn schema(environment: &str) -> Option<silt_access::Schema> {
+    let bytes = std::fs::read(schema_file(environment).ok()?).ok()?;
+    silt_access::Schema::from_introspection(&serde_json::from_slice(&bytes).ok()?).ok()
+}
+
 fn tool(name: &str, action: &str, description: &str) -> Tool {
     Tool {
         name: name.into(),
@@ -63,11 +79,39 @@ impl Plugin for Graphql {
         vec![
             tool("query", "query", "Read from a GraphQL API: a document of queries only."),
             tool("mutate", "mutate", "Change something through a GraphQL API: a document with a mutation."),
+            Tool {
+                name: "schema".into(),
+                description: "Fetch and keep an environment's schema, so what's kept from agents is found past field names."
+                    .into(),
+                input_schema: json!({"type": "object", "properties": {"environment": {"type": "string"}}, "required": ["environment"]}),
+                action: "query".into(),
+            },
         ]
     }
 
     fn prepare(tool: &str, input: &Value, _context: &Context) -> Result<Call, String> {
         let environment = need(input, "environment")?;
+        if tool == "schema" {
+            schema_file(environment)?;
+            let url = endpoint(environment)?;
+            let body = json!({"query": silt_access::INTROSPECTION}).to_string();
+            return Ok(Call {
+                action: "query".into(),
+                fields: BTreeMap::from([
+                    ("environment".into(), environment.into()),
+                    ("operation".into(), "introspection".into()),
+                ]),
+                card: Card {
+                    title: format!("Fetch {environment}'s schema"),
+                    blocks: vec![Block::Fields { pairs: vec![("Endpoint".into(), url.clone())] }],
+                },
+                effects: vec![Effect::Http {
+                    method: "POST".into(),
+                    url,
+                    body_sha256: Some(silt_plugin_api::body_sha256(body.as_bytes())),
+                }],
+            });
+        }
         let query = need(input, "query")?;
         let classified = silt_access::classify(query)?;
         let action = match (tool, classified.changes()) {
@@ -76,8 +120,13 @@ impl Plugin for Graphql {
             ("mutate", _) => "mutate",
             (other, _) => return Err(format!("no tool {other}")),
         };
+        let kept_schema = schema(environment);
         for class in kept() {
-            if let Some(finding) = silt_access::graphql_fields(class, &classified.fields) {
+            let by_schema = match &kept_schema {
+                Some(schema) => schema.finding(class, query)?,
+                None => None,
+            };
+            if let Some(finding) = by_schema.or_else(|| silt_access::graphql_fields(class, &classified.fields)) {
                 return Err(format!("{environment} keeps {} from agents, and {}", class.label(), finding.what));
             }
         }
@@ -108,9 +157,9 @@ impl Plugin for Graphql {
         })
     }
 
-    fn run(_tool: &str, input: &Value, call: &Call, _context: &Context) -> Result<Output, String> {
+    fn run(tool: &str, input: &Value, call: &Call, _context: &Context) -> Result<Output, String> {
         let Some(Effect::Http { url, .. }) = call.effects.first() else { return Err("this call names no request".into()) };
-        let body = body(input)?;
+        let body = if tool == "schema" { json!({"query": silt_access::INTROSPECTION}).to_string() } else { body(input)? };
         let answer = send(&Request {
             method: "POST".into(),
             url: url.clone(),
@@ -119,6 +168,12 @@ impl Plugin for Graphql {
         })?;
         let value: Value = serde_json::from_slice(&answer.body)
             .map_err(|_| format!("the API answered {} with something other than JSON", answer.status))?;
+        if tool == "schema" {
+            let environment = need(input, "environment")?;
+            silt_access::Schema::from_introspection(&value)?;
+            std::fs::write(schema_file(environment)?, &answer.body).map_err(|error| error.to_string())?;
+            return Ok(Output::text(format!("{environment}'s schema is kept; what's kept from agents is now found by type too")));
+        }
         for class in kept() {
             if let Some(finding) = silt_access::json(class, &value) {
                 return Err(format!("the answer was kept from you: it carries {} ({})", class.label(), finding.what));
