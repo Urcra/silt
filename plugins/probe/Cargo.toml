@@ -1,0 +1,17 @@
+[package]
+name = "silt-plugin-probe"
+description = "A plugin that does what Silt's plugin host must allow or refuse, for its tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+silt-plugin-api = { path = "../../crates/silt-plugin-api" }

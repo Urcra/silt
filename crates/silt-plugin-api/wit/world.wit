@@ -1,0 +1,171 @@
+/// Silt's plugin world, version 1 (ADR 0100).
+///
+/// A plugin exports `plugin`: what tools it offers, how it prepares a call,
+/// and how it runs one once the call is allowed. Everything else it may do
+/// goes through the interfaces it imports, each one a capability its
+/// manifest declares and the person granted. A plugin that imports one it
+/// wasn't granted doesn't load.
+///
+/// The plugin's own descriptions (tools, calls, outputs) cross as JSON, as
+/// the `silt-plugin` crate defines them; the host checks them before it
+/// draws or runs anything.
+package silt:plugin@1.0.0;
+
+/// Always there: logging, the plugin's settings, and a small store of its
+/// own.
+interface host {
+    enum level { debug, info, warn, error }
+
+    log: func(level: level, message: string);
+
+    /// A setting's value as JSON, as the person, an org or the manifest's
+    /// default set it. Secrets are never here: Silt adds them to requests
+    /// itself.
+    setting: func(key: string) -> option<string>;
+
+    /// A small key-value store kept with the plugin's data.
+    kv-get: func(key: string) -> option<list<u8>>;
+    kv-set: func(key: string, value: list<u8>) -> result<_, string>;
+}
+
+/// HTTP through Silt's gateway, to the hosts the manifest names. Silt adds
+/// the credential for the host; while a call runs, only its approved
+/// requests get through.
+interface http {
+    record request {
+        method: string,
+        url: string,
+        headers: list<tuple<string, string>>,
+        body: option<list<u8>>,
+    }
+
+    record response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    send: func(request: request) -> result<response, string>;
+}
+
+/// git on mirrors Silt keeps for the plugin and the thread, run by Silt on
+/// the host with its own configuration. A mirror is named by a path such as
+/// `acme/api`. Remotes are among the hosts the manifest names.
+interface git {
+    record commit {
+        id: string,
+        subject: string,
+    }
+
+    record file-change {
+        path: string,
+        added: u32,
+        removed: u32,
+    }
+
+    /// Fetches `refspecs` from `remote` into the mirror, making it if new.
+    fetch: func(mirror: string, remote: string, refspecs: list<string>) -> result<_, string>;
+
+    /// Where `reference` is on `remote`, if it's there.
+    remote-head: func(remote: string, reference: string) -> result<option<string>, string>;
+
+    /// Brings the commit `reference` names in the agent's repository at
+    /// `path` (in the thread's checkout or work area) into the mirror, by
+    /// upload-pack alone. Returns the commit.
+    import-commit: func(mirror: string, path: string, reference: string) -> result<string, string>;
+
+    /// The commits after `base` up to `head`, newest first, and the files
+    /// they change.
+    log: func(mirror: string, base: string, head: string) -> result<tuple<list<commit>, list<file-change>>, string>;
+
+    /// Pushes `commit` to `reference` on `remote` only if it's still at
+    /// `old` (empty for a new ref).
+    push: func(mirror: string, remote: string, commit: string, reference: string, old: string) -> result<_, string>;
+}
+
+/// The thread's checkout and work area, read-only, during a call.
+interface thread {
+    /// Paths are relative to the checkout; `work/…` is the work area.
+    read: func(path: string) -> result<list<u8>, string>;
+    list-dir: func(path: string) -> result<list<string>, string>;
+}
+
+/// Asking Silt to widen an agent's sandbox, with the workspace's rules and
+/// Silt's own refusals applied.
+interface reach {
+    record folder {
+        /// The path as asked for.
+        asked: string,
+        /// Where it really is, every link followed.
+        real: string,
+        /// The git repos in it, where it's writable.
+        repos: list<string>,
+    }
+
+    /// Resolves a folder, or says why it's never handed over.
+    resolve: func(path: string, writable: bool) -> result<folder, string>;
+
+    /// Widens the agent's sandbox at its next restart; only as approved.
+    grant: func(real: string, writable: bool) -> result<_, string>;
+}
+
+/// TCP to the hosts and ports the manifest names. Silt can't check what's
+/// sent, so a call using it says so on its card.
+interface sockets {
+    resource connection {
+        send: func(bytes: list<u8>) -> result<_, string>;
+        receive: func(max: u32) -> result<list<u8>, string>;
+    }
+
+    connect: func(host: string, port: u16) -> result<connection, string>;
+}
+
+/// One command over SSH to a host the manifest names, with no terminal,
+/// shell or forwarding, through Silt's own client.
+interface ssh {
+    record output {
+        status: s32,
+        stdout: list<u8>,
+        stderr: list<u8>,
+    }
+
+    exec: func(host: string, command: string, stdin: list<u8>) -> result<output, string>;
+}
+
+/// The local MCP server the manifest names, run by Silt in a sandbox of its
+/// own.
+interface mcp {
+    /// The server's tools, as its `tools/list` answer (JSON).
+    tools: func() -> result<string, string>;
+
+    /// Calls a tool with JSON arguments; its result as JSON.
+    call: func(tool: string, arguments: string) -> result<string, string>;
+}
+
+interface plugin {
+    /// The tools it offers, as JSON: a list of `silt_plugin::Tool`.
+    describe: func() -> string;
+
+    /// Prepares a call of `tool` with the agent's JSON `input`, given the
+    /// JSON `context` (`silt_plugin::Context`). Returns a
+    /// `silt_plugin::Call` as JSON, or why it can't.
+    prepare: func(tool: string, input: string, context: string) -> result<string, string>;
+
+    /// Runs a call as it was prepared and allowed. `call` is the
+    /// `silt_plugin::Call` it returned, `input` the agent's. Returns a
+    /// `silt_plugin::Output` as JSON.
+    run: func(tool: string, input: string, call: string, context: string) -> result<string, string>;
+}
+
+world silt-plugin {
+    import host;
+    import http;
+    import git;
+    import thread;
+    import reach;
+    import sockets;
+    import ssh;
+    import mcp;
+
+    export plugin;
+}
