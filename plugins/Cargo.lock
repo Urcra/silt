@@ -352,6 +352,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "silt-plugin-probe-local"
+version = "1.0.0"
+dependencies = [
+ "silt-plugin-api",
+]
+
+[[package]]
 name = "syn"
 version = "3.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"

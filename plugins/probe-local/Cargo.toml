@@ -1,0 +1,17 @@
+[package]
+name = "silt-plugin-probe-local"
+description = "The probe for the capabilities that reach this machine's network and programs: sockets, ssh and a local MCP server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+silt-plugin-api = { path = "../../crates/silt-plugin-api" }

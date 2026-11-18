@@ -1385,6 +1385,109 @@ mod tests {
         assert!(!marker.exists(), "nothing of the agent's repo's config ran");
     }
 
+    /// A program `cargo test --workspace` builds beside the tests.
+    fn built(name: &str) -> Option<std::path::PathBuf> {
+        let dir = std::env::current_exe().ok()?.parent()?.parent()?.to_owned();
+        let program = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        program.is_file().then_some(program)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tcp_ssh_and_a_local_mcp_server_reach_only_what_the_manifest_names() {
+        let (Some(fake_ssh), Some(fake_mcp), Some(silt)) = (built("silt-fake-ssh"), built("silt-fake-mcp"), built("silt")) else {
+            eprintln!("skipped: build silt and silt-fake-agent first");
+            return;
+        };
+        let data = tempfile::tempdir().expect("temp dir");
+        let manifest_text = silt_plugin_host::testing::probe_local_manifest(&fake_mcp.to_string_lossy());
+        let package = super::super::install::Package {
+            manifest: silt_plugin::Manifest::parse(&manifest_text).expect("the local probe's manifest"),
+            manifest_text,
+            wasm: silt_plugin_host::testing::plugin("silt-plugin-probe-local"),
+            readme: None,
+        };
+        super::super::install::install(
+            data.path(),
+            &package,
+            installed::PluginSource::Dev { path: "plugins/probe-local".into() },
+            &["work".into()],
+            false,
+        )
+        .expect("installs");
+        installed::update(data.path(), "test.probe-local", |installed| {
+            installed.rules.push(silt_plugin::ScopedRule {
+                action: "reach".into(),
+                field: None,
+                pattern: None,
+                rule: silt_plugin::Rule::Allow,
+                once: false,
+                source: silt_plugin::RuleSource::Yours,
+            });
+            Ok(())
+        })
+        .expect("allowed");
+        std::fs::write(
+            data.path().join("plugins/redirect.json"),
+            json!({"ssh": fake_ssh.to_string_lossy(), "silt": silt.to_string_lossy()}).to_string(),
+        )
+        .expect("written");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binds");
+        let port = listener.local_addr().expect("an address").port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut said = [0u8; 4];
+                if std::io::Read::read_exact(&mut stream, &mut said).is_ok() {
+                    let _ = std::io::Write::write_all(&mut stream, b"pong");
+                }
+            }
+        });
+        let mut core = core(data.path()).await;
+        let mut ask = async |tool: &str, input: Value| {
+            let (reply, answer) = oneshot::channel();
+            core.plugin_call("work-run", tool, input, reply).await;
+            outcome(answer.await.expect("answers"))
+        };
+
+        let socket = ask("probe_local_socket", json!({"host": "127.0.0.1", "port": port, "send": "ping"})).await;
+        assert_eq!(socket, Outcome::Done { output: "pong".into() });
+        let elsewhere = ask("probe_local_socket", json!({"host": "10.0.0.1", "port": port, "send": "ping"})).await;
+        assert!(!matches!(elsewhere, Outcome::Done { .. }), "an undeclared host: {elsewhere:?}");
+
+        let Outcome::Done { output } = ask("probe_local_ssh", json!({"host": "fleet.example.com", "command": "uptime"})).await
+        else {
+            panic!("ssh didn't run")
+        };
+        for said in [
+            "0: ",
+            "BatchMode=yes",
+            "ClearAllForwardings=yes",
+            "RequestTTY=no",
+            "\nfleet.example.com\nuptime\n",
+            "stdin: from the plugin",
+        ] {
+            assert!(output.contains(said), "{said:?} in {output}");
+        }
+        let elsewhere = ask("probe_local_ssh", json!({"host": "evil.example.com", "command": "uptime"})).await;
+        assert!(!matches!(elsewhere, Outcome::Done { .. }), "an undeclared host: {elsewhere:?}");
+
+        if crate::sandbox::unavailable(silt_workspace::Backend::Bubblewrap).is_some() {
+            eprintln!("skipped the MCP server: this machine can't make Silt's sandbox");
+            return;
+        }
+        let listed = ask("probe_local_mcp_list", json!({})).await;
+        let Outcome::Done { output } = listed else { panic!("not listed: {listed:?}") };
+        assert!(output.contains("\"peek\""), "{output}");
+        let own = installed::dir(data.path(), "test.probe-local").join("data");
+        std::fs::write(own.join("note"), "mine").expect("written");
+        let secret = data.path().join("plugins/installed.json");
+        for (path, read) in [(own.join("note"), "yes"), (secret, "no")] {
+            let input = json!({"path": path.to_string_lossy(), "host": "127.0.0.1", "port": port});
+            let Outcome::Done { output } = ask("probe_local_mcp_peek", input).await else { panic!("not called") };
+            assert!(output.contains(&format!(": {read}; reached 127.0.0.1:{port}: no")), "{output}");
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_never_rule_refuses_before_the_plugin_runs() {
         let data = tempfile::tempdir().expect("temp dir");

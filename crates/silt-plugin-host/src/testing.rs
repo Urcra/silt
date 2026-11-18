@@ -64,3 +64,43 @@ kind = "change"
 default = "ask"
 fields = ["name"]
 "#;
+
+/// The local probe's manifest, its MCP server started by `mcp`: TCP to
+/// this machine's loopback, SSH to a test fleet, and the server.
+pub fn probe_local_manifest(mcp: &str) -> String {
+    format!(
+        r#"
+id = "test.probe-local"
+name = "Local probe"
+version = "1.0.0"
+publisher = "test"
+description = "Reaches what Silt can't check."
+license = "AGPL-3.0-only"
+world = "silt:plugin@1"
+build = {{ cargo = {{ package = "silt-plugin-probe-local", toolchain = "1.99.1" }} }}
+
+[[capabilities]]
+kind = "sockets"
+hosts = ["127.0.0.1"]
+reason = "Talks to a service on this machine."
+
+[[capabilities]]
+kind = "ssh"
+hosts = ["fleet.example.com"]
+reason = "Runs a command on the fleet."
+
+[[capabilities]]
+kind = "mcp-process"
+command = [{mcp:?}]
+hosts = []
+reason = "Wraps a local MCP server."
+
+[[actions]]
+id = "reach"
+label = "Reach"
+description = "Reaches something Silt can't check."
+kind = "change"
+default = "ask"
+"#
+    )
+}

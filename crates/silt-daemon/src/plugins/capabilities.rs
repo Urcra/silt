@@ -29,6 +29,8 @@ pub(crate) struct DaemonCapabilities {
     /// Who the folders a running call grants go to; `None` outside a call
     /// that runs.
     pub(crate) folders: Option<crate::folders::FolderScope>,
+    /// The plugin's own data folder, which its MCP server writes in.
+    pub(crate) own: PathBuf,
 }
 
 /// Where tests send a plugin's requests instead, as URL prefixes: read
@@ -53,6 +55,17 @@ impl DaemonCapabilities {
         let name = self.installed.credential_for(id, scope.environment.as_deref())?;
         let secret = crate::credentials::secret_named(&self.data_dir, &scope.workspace, name)?;
         Some((spec.send.clone(), secret))
+    }
+
+    fn mcp_server(&self) -> super::local::Server<'_> {
+        super::local::Server {
+            data_dir: &self.data_dir,
+            manifest: &self.manifest,
+            installed: &self.installed,
+            own: &self.own,
+            checkout: self.checkout.as_deref(),
+            handle: &self.handle,
+        }
     }
 
     /// `url`, where a test redirects it.
@@ -313,6 +326,26 @@ impl Capabilities for DaemonCapabilities {
             .collect();
         names.sort();
         Ok(names)
+    }
+
+    fn socket_connect(&self, _scope: &Scope, host: &str, port: u16) -> Result<Box<dyn silt_plugin_host::Connection>, String> {
+        super::local::connect(host, port)
+    }
+
+    fn ssh_exec(&self, _scope: &Scope, host: &str, command: &str, stdin: &[u8]) -> Result<silt_plugin_host::SshOutput, String> {
+        super::local::ssh(&super::local::ssh_program(&self.data_dir), host, command, stdin)
+    }
+
+    fn mcp_tools(&self, scope: &Scope) -> Result<String, String> {
+        let listed = self.mcp_server().ask(scope, "tools/list", serde_json::json!({}))?;
+        Ok(listed.to_string())
+    }
+
+    fn mcp_call(&self, scope: &Scope, tool: &str, arguments: &str) -> Result<String, String> {
+        let arguments: serde_json::Value =
+            serde_json::from_str(arguments).map_err(|error| format!("its arguments aren't JSON: {error}"))?;
+        let called = self.mcp_server().ask(scope, "tools/call", serde_json::json!({"name": tool, "arguments": arguments}))?;
+        Ok(called.to_string())
     }
 
     fn reach_resolve(&self, _scope: &Scope, path: &str, writable: bool) -> Result<Folder, String> {

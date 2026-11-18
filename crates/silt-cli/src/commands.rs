@@ -552,6 +552,7 @@ impl Run<'_> {
                     reach,
                     token: &held.token,
                     read_only: silt_daemon::sandbox::program_paths(&launch.program, &env),
+                    gateway_credentials: None,
                     relayed,
                     env,
                 })

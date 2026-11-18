@@ -143,6 +143,9 @@ pub struct Run<'a> {
     pub read_only: Vec<PathBuf>,
     /// The devices Silt relays to the thread's sandbox.
     pub relayed: Vec<Relayed>,
+    /// What the gateway adds instead of the workspace's credentials, such
+    /// as a plugin's own for the MCP server it wraps (ADR 0100).
+    pub gateway_credentials: Option<Vec<silt_gateway::Credential>>,
 }
 
 impl Run<'_> {
@@ -170,7 +173,7 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
             _ => Vec::new(),
         },
         path_dirs: lookup("PATH").map(|path| std::env::split_paths(&path).map(path_dir).collect()).unwrap_or_default(),
-        silt: std::env::current_exe()?,
+        silt: silt_program(run.data_dir)?,
         read_only: run.read_only.clone(),
         data_dir: Some(run.data_dir.to_owned()),
         real_data_dir: real_if_linked(run.data_dir),
@@ -317,8 +320,10 @@ fn relays(run: &Run<'_>, plan: &mut silt_workspace::SandboxPlan) -> Result<Relay
     let mut relays = Relays::default();
     // Where GitHub's plugin is on, GitHub is reached through it alone.
     let github = crate::plugins::wasm::github_on(run.data_dir, run.workspace);
-    let (mut credentials, mut placeholders, unresolved) =
-        crate::credentials::resolve(run.data_dir, run.workspace, &|host| github && github_host(host));
+    let (mut credentials, mut placeholders, unresolved) = match &run.gateway_credentials {
+        Some(own) => (own.clone(), Vec::new(), Vec::new()),
+        None => crate::credentials::resolve(run.data_dir, run.workspace, &|host| github && github_host(host)),
+    };
     relays.missing = unresolved;
     // The agent's own model key goes on at the gateway too, so the sandbox
     // holds a placeholder rather than the key.
@@ -527,6 +532,17 @@ pub fn extra_dir(path: &str, writable: bool, home: Option<&Path>) -> ExtraDir {
         _ => Some(Vec::new()),
     };
     ExtraDir { path, real, writable, repos }
+}
+
+/// The `silt` a sandbox is launched with and its hooks run: this program,
+/// or in a debug build the one a test names, when the test itself isn't
+/// `silt`.
+fn silt_program(data_dir: &Path) -> std::io::Result<PathBuf> {
+    let named = crate::plugins::capabilities::redirects(data_dir).into_iter().find(|(from, _)| from == "silt");
+    match named {
+        Some((_, path)) => Ok(PathBuf::from(path)),
+        None => std::env::current_exe(),
+    }
 }
 
 /// Why `dir` is never handed to a sandbox, whatever the rules say: the
@@ -743,6 +759,7 @@ mod tests {
                 ("SSH_AUTH_SOCK".into(), "/run/agent".into()),
             ],
             read_only: Vec::new(),
+            gateway_credentials: None,
         };
         let sandboxed = prepare(&run).unwrap();
         let names: Vec<&str> = sandboxed.env.iter().map(|(name, _)| name.as_str()).collect();
@@ -787,6 +804,7 @@ mod tests {
             token: "t",
             env: vec![("PATH".into(), "/usr/bin".into())],
             read_only: Vec::new(),
+            gateway_credentials: None,
             relayed: vec![
                 Relayed::Serial { device: "/dev/cu.usbserial-1".into(), pts: "/dev/ttys012".into() },
                 Relayed::Adb { serial: "R58M".into(), socket: scratch.join("adb.sock") },
@@ -850,6 +868,7 @@ mod tests {
             token: "t",
             env: vec![("PATH".into(), "/usr/bin".into())],
             read_only: Vec::new(),
+            gateway_credentials: None,
             relayed: vec![
                 Relayed::Serial { device: "/dev/ttyUSB0".into(), pts: "/dev/pts/9".into() },
                 Relayed::Adb { serial: "R58M".into(), socket: scratch.join("adb.sock") },
@@ -917,6 +936,7 @@ mod tests {
                 ("COPILOT_GITHUB_TOKEN".into(), "ghp_copilot".into()),
             ],
             read_only: Vec::new(),
+            gateway_credentials: None,
             relayed: Vec::new(),
         };
         let sandboxed = prepare(&run).unwrap();

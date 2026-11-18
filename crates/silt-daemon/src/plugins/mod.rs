@@ -17,9 +17,10 @@ use silt_access::{Canonical, DataClass, Schema};
 use crate::CoreError;
 
 mod calls;
-mod capabilities;
+pub(crate) mod capabilities;
 pub mod install;
 pub mod installed;
+mod local;
 mod mcp;
 pub(crate) mod wasm;
 

@@ -2033,6 +2033,7 @@ fn sandboxed(
         token: &sandbox.token,
         env: std::mem::take(&mut start.env),
         read_only,
+        gateway_credentials: None,
         relayed: sandbox.relayed.clone(),
     })?;
     let all = prepared.command(&start.program, &start.args);

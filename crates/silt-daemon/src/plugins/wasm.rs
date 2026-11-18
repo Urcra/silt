@@ -210,6 +210,7 @@ fn env_for(
         work: (!scope.thread.is_empty() && work.is_dir()).then_some(work),
         handle,
         folders,
+        own: installed::dir(data_dir, &installed.id).join("data"),
     };
     Env {
         capabilities: Arc::new(capabilities),
