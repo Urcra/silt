@@ -52,7 +52,7 @@ pub fn in_their_shell(source: &Source, program: &str, args: &[&str]) -> Command 
         }
     };
     command.args(["-c", IN_THEIR_SHELL, program]).args(args);
-    silt_os::own_group_std(&mut command);
+    silt_os::own_session_std(&mut command);
     command
 }
 
@@ -116,6 +116,22 @@ mod tests {
         let dirs: Vec<_> = std::env::split_paths(&path).collect();
         assert_eq!(dirs.last(), Some(&PathBuf::from("/usr/bin")));
         assert!(dirs.first().is_some_and(|dir| dir.ends_with("bin")));
+    }
+
+    /// A daemon started from a terminal keeps it, and an interactive shell
+    /// in a background group of its session stops on taking it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn their_shell_leads_a_session_of_its_own() {
+        let home = tempfile::tempdir().expect("home");
+        let mut command =
+            in_their_shell(&Source::Local(home.path().to_owned()), "sh", &["-c", "echo $$; cut -d' ' -f6 /proc/$$/stat"]);
+        command.env("HOME", home.path()).env("SHELL", "/bin/sh");
+        let ran = run_within(command, Duration::from_secs(20)).expect("ran");
+        assert!(ran.status.success(), "{ran:?}");
+        let lines: Vec<&str> = ran.stdout.lines().map(str::trim).filter(|line| line.parse::<u32>().is_ok()).collect();
+        assert_eq!(lines.len(), 2, "{ran:?}");
+        assert_eq!(lines[0], lines[1], "the shell's pid is its session's");
     }
 
     #[cfg(unix)]

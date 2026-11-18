@@ -22,7 +22,7 @@ describe('the artifact types', () => {
     ])
     expect(table).toEqual({ columns: ['x', 'p50', 'p95'], rows: [['a', 1, null], ['b', 2, 5]] })
     expect(csvOf(['name', 'note'], [['a, b', 'say "hi"']])).toBe('name,note\n"a, b","say ""hi"""')
-    expect(shown(1234.56789)).toMatch(/1.?234\.568/)
+    expect(shown(1234.56789)).toMatch(/^1.?234[.,]568$/)
   })
 
   it('renders a slide at its stage size in a sealed document', () => {
