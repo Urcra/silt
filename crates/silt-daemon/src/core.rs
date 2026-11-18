@@ -295,6 +295,8 @@ pub struct Core {
     /// The program this daemon started from, and that file as it was then,
     /// to tell when an install replaced it.
     pub(crate) exe: Option<(PathBuf, ExeStamp)>,
+    /// The program to restart this daemon on once no agent works in it.
+    pub(crate) restart_when_idle: Option<PathBuf>,
     /// When this daemon last asked each agent what it offers, by registry
     /// id, so one that doesn't answer isn't asked again on every look.
     pub(crate) asked: HashMap<String, i64>,
@@ -593,6 +595,7 @@ impl Core {
             registry_checked: false,
             asked: HashMap::new(),
             exe: std::env::current_exe().ok().and_then(|exe| ExeStamp::of(&exe).map(|stamp| (exe, stamp))),
+            restart_when_idle: None,
             resident,
             adopted: HashSet::new(),
             samples: HashMap::new(),
@@ -1035,6 +1038,10 @@ impl Core {
             Request::Ping => Response::ok("pong"),
             Request::Compact => to_response(self.compact().await),
             Request::DaemonBuild => Response::ok(self.daemon_build()),
+            Request::RestartWhenIdle { exe } => {
+                self.restart_when_idle = Some(exe);
+                Response::ok(())
+            }
             Request::AgentHomes => {
                 let homes: Vec<(&str, Option<String>)> =
                     silt_agents::HOME_VARIABLES.iter().map(|name| (*name, std::env::var(name).ok())).collect();
@@ -3017,6 +3024,24 @@ impl Core {
         // record them meanwhile and hand them to the next daemon (ADR 0018).
         let working = self.acp.values().filter(|run| run.working()).count();
         crate::protocol::DaemonBuild { exe: self.exe.as_ref().map(|(exe, _)| exe.clone()), replaced, working }
+    }
+
+    /// Hands a restart asked for while agents worked to `silt daemon
+    /// restart` once none does. That stops this daemon and starts the new
+    /// one, or asks again if an agent started meanwhile.
+    pub(crate) fn restart_if_idle(&mut self) {
+        if self.restart_when_idle.is_none() || self.acp.values().any(crate::acp::AcpRun::working) {
+            return;
+        }
+        let Some(exe) = self.restart_when_idle.take() else {
+            return;
+        };
+        let mut command = std::process::Command::new(&exe);
+        command.args(["daemon", "restart"]).current_dir("/").stdin(std::process::Stdio::null());
+        match silt_os::spawn_detached(&mut command) {
+            Ok(()) => tracing::info!(exe = %exe.display(), "no agent works now; restarting on the build asked for"),
+            Err(error) => warn!(%error, exe = %exe.display(), "could not restart the daemon; `silt daemon restart` does"),
+        }
     }
 }
 

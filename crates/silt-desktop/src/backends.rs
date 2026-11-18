@@ -153,6 +153,14 @@ pub fn start_daemon(backend: &Backend, native: &Path, wsl_silt: &str) -> Command
     command
 }
 
+/// The command that restarts the backend's daemon on the build installed
+/// since it started, if one was, once no agent works in it.
+pub fn restart_replaced_daemon(backend: &Backend, native: &Path, wsl_silt: &str) -> Command {
+    let mut command = silt_in(&Target { backend: backend.clone(), project: None }, native, wsl_silt);
+    command.args(["daemon", "restart", "--if-replaced"]);
+    command
+}
+
 fn silt_in(target: &Target, native: &Path, wsl_silt: &str) -> Command {
     let dir = target.project.as_deref().unwrap_or("/");
     match &target.backend {

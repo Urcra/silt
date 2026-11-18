@@ -1,7 +1,8 @@
 //! Silt's desktop app: the local daemon's web UI in a window (ADR 0041).
 //! Recording never depends on it. The daemon runs on its own, and closing
-//! the window leaves it and its agents running. On Windows the window also
-//! shows WSL distributions' daemons (ADR 0045).
+//! the window leaves it and its agents running, but on the build installed
+//! since it started, if one was, once no agent works in it. On Windows the
+//! window also shows WSL distributions' daemons (ADR 0045).
 
 // A console program would open a console window beside the app's own on
 // Windows; debug builds keep it for their logs.
@@ -38,7 +39,7 @@ fn main() {
     let asked = link_in(env::args(), &known);
     let opened_by_link = asked.is_some();
     let target = Arc::new(Mutex::new(asked.unwrap_or_default()));
-    let (linked, linked_known) = (target.clone(), known.clone());
+    let (linked, linked_known, closing_known) = (target.clone(), known.clone(), known.clone());
     tauri::Builder::default()
         // A second launch, a `silt://` link among them, shows the window
         // that's already open.
@@ -59,14 +60,39 @@ fn main() {
             }
             let dir = app.path().app_data_dir().ok();
             let silts = Arc::new(Silts::load(dir.as_ref().map(|dir| dir.join(WSL_SILTS))));
+            app.manage(silts.clone());
             let shown = target.lock().expect("lock").backend.clone();
             let (others, starting) = (known.clone(), silts.clone());
             std::thread::spawn(move || start_the_others(&others, &shown, &native_silt(), &starting));
             open_window(app.handle(), ui, target, known, silts, dir)?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("the desktop app could not start");
+        .build(tauri::generate_context!())
+        .expect("the desktop app could not start")
+        .run(move |app, event| {
+            if let tauri::RunEvent::Exit = event
+                && let Some(silts) = app.try_state::<Arc<Silts>>()
+            {
+                restart_replaced(&closing_known, &native_silt(), &silts);
+            }
+        });
+}
+
+/// Has each backend's daemon restart on the build installed since it
+/// started, if one was, as `just install` leaves one running the old build
+/// while agents work in it. A distribution whose `silt` isn't known yet is
+/// left alone, rather than looked for as the app quits.
+fn restart_replaced(known: &[Backend], program: &Path, silts: &Silts) {
+    for backend in known {
+        let wsl_silt = match backend {
+            Backend::Native => String::new(),
+            Backend::Wsl(distribution) => match silts.paths.lock().expect("lock").get(distribution) {
+                Some(found) => found.clone(),
+                None => continue,
+            },
+        };
+        daemon::spawn(backends::restart_replaced_daemon(backend, program, &wsl_silt));
+    }
 }
 
 /// The file in the app's data dir that keeps the backend last shown.
@@ -461,6 +487,29 @@ mod tests {
         start_the_others(&known, &Backend::Native, &program, &silts);
         assert!(!ran.exists(), "only the shown backend was this computer's");
         assert!(silts.paths.lock().expect("lock").is_empty());
+        fs::remove_dir_all(&dir).expect("cleaned up");
+    }
+
+    /// Quitting has this computer's daemon restart if an install replaced
+    /// it; a distribution whose `silt` isn't known yet is left alone.
+    #[cfg(unix)]
+    #[test]
+    fn quitting_restarts_a_replaced_daemon() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = env::temp_dir().join(format!("silt-desktop-quit-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("a temporary dir");
+        let (program, ran) = (dir.join("silt"), dir.join("ran"));
+        fs::write(&program, format!("#!/bin/sh\necho \"$@\" >> '{}'\n", ran.display())).expect("a stand-in silt");
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("executable");
+        let silts = Silts::load(None);
+
+        restart_replaced(&[Backend::Native, Backend::Wsl("no-such-distribution".into())], &program, &silts);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !ran.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(fs::read_to_string(&ran).expect("silt ran"), "daemon restart --if-replaced\n");
         fs::remove_dir_all(&dir).expect("cleaned up");
     }
 }

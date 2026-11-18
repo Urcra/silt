@@ -19,6 +19,11 @@ pub enum Request {
     AgentHomes,
     /// Whether this daemon's program was replaced since it started.
     DaemonBuild,
+    /// Runs `exe daemon restart` once no agent works in this daemon, as
+    /// stopping it now would end their turns.
+    RestartWhenIdle {
+        exe: PathBuf,
+    },
     /// Starts recording a new agent session in a new thread. Without a
     /// `session_id` the daemon finds the session once the agent writes it.
     StartSession {

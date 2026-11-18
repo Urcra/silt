@@ -34,7 +34,7 @@ build-desktop: check-webkit
 # Install `silt` into ~/.cargo/bin, and restart its daemon on the new build
 install-cli: build-web
     cargo install --locked --path crates/silt-cli
-    "{{bin_dir}}/silt" log > /dev/null
+    "{{bin_dir}}/silt" daemon restart --if-replaced
 
 # Install `silt-desktop` beside `silt`, with a launcher entry for the silt:// links.
 # Wayland matches a window to its entry by file name, and the window's app id is
