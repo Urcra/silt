@@ -36,7 +36,9 @@ test("a message's Markdown renders, and its HTML and scripts don't", () => {
 test("a code block's button copies just what the block holds", async () => {
   const writeText = vi.fn(() => Promise.resolve())
   Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
-  const { container } = render(<Markdown text={['Here it is:', '', '```markdown', '## Why', '', 'Because.', '```', '', '```', 'plain', '```'].join('\n')} />)
+  const { container } = render(
+    <Markdown text={['Here it is:', '', '```markdown', '## Why', '', 'Because.', '```', '', '```', 'plain', '```'].join('\n')} />,
+  )
   const block = within(container)
   const [fenced, plain] = block.getAllByRole('button', { name: 'copy code' })
   fireEvent.click(fenced!)

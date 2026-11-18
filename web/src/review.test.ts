@@ -33,8 +33,14 @@ describe('review', () => {
 
   it('sends the note, then each comment under its lines', () => {
     const files = parseFiles(DIFF)
-    const deleted = itemOf(comment({ at: 'lines', path: 'src/main.rs', start: 2, end: 2, outdated: true, before: { start: 2, end: 2 } }), files)!
-    const prompt = reviewPrompt([deleted, { at: { path: 'src/main.rs', start: 2, end: 2 }, text: 'rename it' }], 'Close, a few things.')
+    const deleted = itemOf(
+      comment({ at: 'lines', path: 'src/main.rs', start: 2, end: 2, outdated: true, before: { start: 2, end: 2 } }),
+      files,
+    )!
+    const prompt = reviewPrompt(
+      [deleted, { at: { path: 'src/main.rs', start: 2, end: 2 }, text: 'rename it' }],
+      'Close, a few things.',
+    )
     expect(prompt).toBe(
       [
         'Close, a few things.',

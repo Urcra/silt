@@ -28,13 +28,23 @@ function transcript(cwd: string, session: string): string {
   const result = 'x'.repeat(15_000)
   for (let round = 0; round < ROUNDS; round++) {
     const tool = `toolu_${round}`
-    lines.push(JSON.stringify({ type: 'user', sessionId: session, cwd, message: { role: 'user', content: `prompt ${round}: look at the module` } }))
+    lines.push(
+      JSON.stringify({
+        type: 'user',
+        sessionId: session,
+        cwd,
+        message: { role: 'user', content: `prompt ${round}: look at the module` },
+      }),
+    )
     lines.push(
       JSON.stringify({
         type: 'assistant',
         sessionId: session,
         cwd,
-        message: { role: 'assistant', content: [{ type: 'tool_use', id: tool, name: 'Read', input: { file_path: `src/f${round}.rs` } }] },
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: tool, name: 'Read', input: { file_path: `src/f${round}.rs` } }],
+        },
       }),
     )
     lines.push(
@@ -114,7 +124,9 @@ test('a 2,000-message thread shows quickly and stays small', async ({ page }) =>
   await cdp.send('HeapProfiler.collectGarbage')
   const { usedSize } = (await cdp.send('Runtime.getHeapUsage')) as { usedSize: number }
   const heapMb = usedSize / 1024 / 1024
-  console.log(`web.thread: shown in ${shown.toFixed(0)} ms (budget ${SHOWN_BUDGET_MS}), heap ${heapMb.toFixed(0)} MB (budget ${HEAP_BUDGET_MB})`)
+  console.log(
+    `web.thread: shown in ${shown.toFixed(0)} ms (budget ${SHOWN_BUDGET_MS}), heap ${heapMb.toFixed(0)} MB (budget ${HEAP_BUDGET_MB})`,
+  )
   if (ENFORCED) {
     expect(shown, 'web.thread: shown').toBeLessThan(SHOWN_BUDGET_MS)
     expect(heapMb, 'web.thread: heap').toBeLessThan(HEAP_BUDGET_MB)

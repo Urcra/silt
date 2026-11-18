@@ -22,7 +22,11 @@ type Sort = 'title' | 'last'
 const working = inProgress
 
 /** A thread's state as a pill, in words; amber only for what waits on the person. */
-function threadState(thread: ThreadSummary, fromIt: MrSummary | undefined, recovered: boolean): { label: string; tone: Tone } | null {
+function threadState(
+  thread: ThreadSummary,
+  fromIt: MrSummary | undefined,
+  recovered: boolean,
+): { label: string; tone: Tone } | null {
   if (recovered) return { label: 'Recovered: review it', tone: 'accent' }
   switch (thread.agent_state) {
     case 'awaiting_permission':
@@ -73,11 +77,22 @@ function ThreadRow({
   const to = recovered ? ('/t/$id/reconcile' as const) : ('/t/$id' as const)
   const mr = into ?? fromIt
   return (
-    <tr className={cx('group relative border-b border-line-subtle hover:bg-surface-1', (into || recovered) && 'bg-accent-tint hover:bg-accent-tint')}>
+    <tr
+      className={cx(
+        'group relative border-b border-line-subtle hover:bg-surface-1',
+        (into || recovered) && 'bg-accent-tint hover:bg-accent-tint',
+      )}
+    >
       <td className="py-1.5 pr-3 pl-3">
         <span className="flex min-w-0 items-center gap-2" style={{ paddingLeft: depth * 18 }}>
-          {depth > 0 && <span aria-hidden="true" className="-mt-3 h-3.5 w-2.5 shrink-0 rounded-bl-sm border-b border-l border-line-strong" />}
-          {thread.forked_from ? <Icon name="fork" label="Fork" className="h-3.5 w-3.5 shrink-0 text-fg-2" /> : <ThreadMark thread={thread} />}
+          {depth > 0 && (
+            <span aria-hidden="true" className="-mt-3 h-3.5 w-2.5 shrink-0 rounded-bl-sm border-b border-l border-line-strong" />
+          )}
+          {thread.forked_from ? (
+            <Icon name="fork" label="Fork" className="h-3.5 w-3.5 shrink-0 text-fg-2" />
+          ) : (
+            <ThreadMark thread={thread} />
+          )}
           <span className="flex min-w-0 flex-col">
             <Link to={to} params={{ id: thread.id }} className="truncate after:absolute after:inset-0">
               {thread.title ?? 'Untitled thread'}
@@ -97,12 +112,23 @@ function ThreadRow({
           </span>
         </span>
       </td>
-      <td className="px-3 whitespace-nowrap">{state ? <Tag tone={state.tone} className="font-sans">{state.label}</Tag> : <span className="text-fg-3">—</span>}</td>
+      <td className="px-3 whitespace-nowrap">
+        {state ? (
+          <Tag tone={state.tone} className="font-sans">
+            {state.label}
+          </Tag>
+        ) : (
+          <span className="text-fg-3">—</span>
+        )}
+      </td>
       <td className="px-3 whitespace-nowrap text-fg-2 max-md:hidden">{thread.agent ?? '—'}</td>
       <td className="px-3 whitespace-nowrap text-fg-2 max-lg:hidden">{machine(thread)}</td>
       <td className="px-3 max-lg:hidden">
         {thread.collaborators.length > 0 ? (
-          <span className="flex items-center gap-1.5 whitespace-nowrap text-fg-2" title={`Shared with ${thread.collaborators.join(', ')}`}>
+          <span
+            className="flex items-center gap-1.5 whitespace-nowrap text-fg-2"
+            title={`Shared with ${thread.collaborators.join(', ')}`}
+          >
             <Avatar name={thread.collaborators[0]!} size={16} />
             {thread.collaborators.join(', ')}
           </span>
@@ -112,7 +138,11 @@ function ThreadRow({
       </td>
       <td className="px-3 max-md:hidden">
         {mr ? (
-          <Link to="/mr/$id" params={{ id: mr.id }} className="relative z-10 flex min-w-0 items-center gap-1.5 text-xs text-fg-2 hover:text-fg-1">
+          <Link
+            to="/mr/$id"
+            params={{ id: mr.id }}
+            className="relative z-10 flex min-w-0 items-center gap-1.5 text-xs text-fg-2 hover:text-fg-1"
+          >
             <Icon name="merge" className="h-3.5 w-3.5 shrink-0" />
             <span className="truncate">{into ? 'into this' : mr.title}</span>
           </Link>
@@ -128,7 +158,10 @@ function ThreadRow({
 }
 
 /** Each fork right after the thread it came from, when that is in the list too, with how deep it sits. */
-function forksUnderSources(threads: ThreadSummary[], order: (a: ThreadSummary, b: ThreadSummary) => number): [ThreadSummary, number][] {
+function forksUnderSources(
+  threads: ThreadSummary[],
+  order: (a: ThreadSummary, b: ThreadSummary) => number,
+): [ThreadSummary, number][] {
   const listed = new Set(threads.map((thread) => thread.id))
   const forksOf = (source: string) => threads.filter((thread) => thread.forked_from === source).sort(order)
   const out: [ThreadSummary, number][] = []
@@ -141,11 +174,29 @@ function forksUnderSources(threads: ThreadSummary[], order: (a: ThreadSummary, b
 }
 
 /** A column heading that sorts the table by it. */
-function SortHeading({ id, sort, descending, onSort, children, className }: { id: Sort; sort: Sort; descending: boolean; onSort: (id: Sort) => void; children: string; className?: string }) {
+function SortHeading({
+  id,
+  sort,
+  descending,
+  onSort,
+  children,
+  className,
+}: {
+  id: Sort
+  sort: Sort
+  descending: boolean
+  onSort: (id: Sort) => void
+  children: string
+  className?: string
+}) {
   const current = sort === id
   return (
     <th scope="col" aria-sort={current ? (descending ? 'descending' : 'ascending') : 'none'} className={className}>
-      <button type="button" onClick={() => onSort(id)} className="inline-flex items-center gap-1 tracking-[0.06em] whitespace-nowrap uppercase hover:text-fg-1">
+      <button
+        type="button"
+        onClick={() => onSort(id)}
+        className="inline-flex items-center gap-1 tracking-[0.06em] whitespace-nowrap uppercase hover:text-fg-1"
+      >
         {children}
         {current && <span aria-hidden="true">{descending ? '↓' : '↑'}</span>}
       </button>
@@ -188,7 +239,11 @@ export function ThreadList() {
     label: (
       <>
         {label}
-        {threads.isSuccess && <span className={cx('font-mono font-normal', accent ? 'text-accent-fg' : 'text-fg-2')}>{all.filter(matches[id]).length}</span>}
+        {threads.isSuccess && (
+          <span className={cx('font-mono font-normal', accent ? 'text-accent-fg' : 'text-fg-2')}>
+            {all.filter(matches[id]).length}
+          </span>
+        )}
       </>
     ),
   })
@@ -202,7 +257,8 @@ export function ThreadList() {
   ]
   const wanted = text.trim().toLowerCase()
   const filtered = all.filter(
-    (thread) => matches[filter](thread) && (!wanted || (thread.title ?? '').toLowerCase().includes(wanted) || thread.id.includes(wanted)),
+    (thread) =>
+      matches[filter](thread) && (!wanted || (thread.title ?? '').toLowerCase().includes(wanted) || thread.id.includes(wanted)),
   )
   const order = (a: ThreadSummary, b: ThreadSummary) => {
     const by = sort === 'title' ? (a.title ?? '').localeCompare(b.title ?? '') : a.last_ms - b.last_ms
@@ -228,7 +284,13 @@ export function ThreadList() {
       }
       actions={
         <>
-          <Input aria-label="filter threads" placeholder="Filter threads" value={text} onChange={(event) => setText(event.target.value)} className="w-48 max-md:hidden" />
+          <Input
+            aria-label="filter threads"
+            placeholder="Filter threads"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            className="w-48 max-md:hidden"
+          />
           <Link to="/graph" className={buttonClass('ghost')}>
             <Icon name="fork" />
             Graph

@@ -13,7 +13,15 @@ export function Code({ code, language, className }: { code: string; language: st
       {lines
         ? lines.map((line, index) => (
             <span key={index}>
-              {line.map((token, at) => (token.className ? <span key={at} className={token.className}>{token.text}</span> : token.text))}
+              {line.map((token, at) =>
+                token.className ? (
+                  <span key={at} className={token.className}>
+                    {token.text}
+                  </span>
+                ) : (
+                  token.text
+                ),
+              )}
               {index < lines.length - 1 && '\n'}
             </span>
           ))
@@ -70,7 +78,9 @@ export function CodeBlock({ text, language }: { text: string; language: string }
  */
 export function Markdown({ text, className }: { text: string; className?: string }) {
   return (
-    <div className={cx('min-w-0 text-sm leading-[1.6] break-words text-fg-1 [&>:first-child]:mt-0 [&>:last-child]:mb-0', className)}>
+    <div
+      className={cx('min-w-0 text-sm leading-[1.6] break-words text-fg-1 [&>:first-child]:mt-0 [&>:last-child]:mb-0', className)}
+    >
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS} skipHtml>
         {text}
       </ReactMarkdown>

@@ -17,7 +17,13 @@ function QueuedItem({ thread, item, index, count }: { thread: string; item: Queu
             void act(api.editQueued(thread, item.id, editing)).then(() => setEditing(null))
           }}
         >
-          <Input aria-label="queued prompt" autoFocus value={editing} onChange={(event) => setEditing(event.target.value)} className="flex-1" />
+          <Input
+            aria-label="queued prompt"
+            autoFocus
+            value={editing}
+            onChange={(event) => setEditing(event.target.value)}
+            className="flex-1"
+          />
           <Button type="submit" variant="primary">
             Save
           </Button>
@@ -48,7 +54,12 @@ function QueuedItem({ thread, item, index, count }: { thread: string; item: Queu
       <Button variant="ghost" size="sm" onClick={() => setEditing(item.text)}>
         Edit
       </Button>
-      <Button variant="ghost" size="sm" aria-label={`send "${item.text}" now`} onClick={() => void act(api.sendQueued(thread, item.id))}>
+      <Button
+        variant="ghost"
+        size="sm"
+        aria-label={`send "${item.text}" now`}
+        onClick={() => void act(api.sendQueued(thread, item.id))}
+      >
         Send now
       </Button>
       <IconButton icon="x" label={`remove "${item.text}"`} onClick={() => void act(api.removeQueued(thread, item.id))} />

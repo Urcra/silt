@@ -1,5 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import { canvasOf, chartColors, chartTable, pointer, runs, stepsOf, toolValue, withLive, xPositions, yDomain, columnName, csvOf, dataPageOf, deckOf, layout, parsed, partDocument, rebaseDraft, shown, slideFromHash, splice, drawnSeries, deckOffline, canvasOffline, pagesOf, onPage } from './typed'
+import {
+  canvasOf,
+  chartColors,
+  chartTable,
+  pointer,
+  runs,
+  stepsOf,
+  toolValue,
+  withLive,
+  xPositions,
+  yDomain,
+  columnName,
+  csvOf,
+  dataPageOf,
+  deckOf,
+  layout,
+  parsed,
+  partDocument,
+  rebaseDraft,
+  shown,
+  slideFromHash,
+  splice,
+  drawnSeries,
+  deckOffline,
+  canvasOffline,
+  pagesOf,
+  onPage,
+} from './typed'
 
 describe('the artifact types', () => {
   it('opens a deck at the slide a link names, within the deck', () => {
@@ -17,10 +44,22 @@ describe('the artifact types', () => {
 
   it('turns a chart into a table and a table into CSV', () => {
     const table = chartTable([
-      { name: 'p50', points: [['a', 1], ['b', 2]] },
+      {
+        name: 'p50',
+        points: [
+          ['a', 1],
+          ['b', 2],
+        ],
+      },
       { name: 'p95', points: [['b', 5]] },
     ])
-    expect(table).toEqual({ columns: ['x', 'p50', 'p95'], rows: [['a', 1, null], ['b', 2, 5]] })
+    expect(table).toEqual({
+      columns: ['x', 'p50', 'p95'],
+      rows: [
+        ['a', 1, null],
+        ['b', 2, 5],
+      ],
+    })
     expect(csvOf(['name', 'note'], [['a, b', 'say "hi"']])).toBe('name,note\n"a, b","say ""hi"""')
     expect(shown(1234.56789)).toMatch(/1.?234\.568/)
   })
@@ -31,7 +70,14 @@ describe('the artifact types', () => {
     expect(doc).toContain("setAttribute('data-theme','dark')")
     expect(doc).toContain('<h1>One</h1>')
     expect(doc).toContain('color-scheme:dark;background:var(--bg,Canvas)')
-    const imported = partDocument('', "h1{color:red}@import url('https://fonts.googleapis.com/css2?family=Inter');", 1280, 720, null, 'light')
+    const imported = partDocument(
+      '',
+      "h1{color:red}@import url('https://fonts.googleapis.com/css2?family=Inter');",
+      1280,
+      720,
+      null,
+      'light',
+    )
     expect(imported.indexOf('@import')).toBeLessThan(imported.indexOf('html,body'))
     expect(parsed('{bad')).toBeNull()
     expect(stepsOf('<li data-step="1">a</li><li data-step=\'3\'>b</li><p>c</p>')).toBe(3)
@@ -46,7 +92,9 @@ describe('the artifact types', () => {
 
 describe("a data page's live numbers", () => {
   it("come from where its blocks point in the tool's answer, or stay as written", () => {
-    const answer = toolValue({ content: [{ type: 'text', text: '{"open": 12, "by": [["mon", 3], ["tue", 5]], "rows": [["a", 1]]}' }] })
+    const answer = toolValue({
+      content: [{ type: 'text', text: '{"open": 12, "by": [["mon", 3], ["tue", 5]], "rows": [["a", 1]]}' }],
+    })
     expect(pointer(answer, '/by/1/1')).toBe(5)
     expect(toolValue({ structuredContent: { open: 1 }, content: [] })).toEqual({ open: 1 })
     const page = {
@@ -62,17 +110,30 @@ describe("a data page's live numbers", () => {
     const shown = withLive(page, { live: answer })
     expect(shown.blocks[0]).toMatchObject({ value: 12 })
     expect(shown.blocks[1]).toMatchObject({ rows: [['a', 1]] })
-    expect(shown.blocks[2]).toMatchObject({ series: [{ points: [['mon', 3], ['tue', 5]] }] })
+    expect(shown.blocks[2]).toMatchObject({
+      series: [
+        {
+          points: [
+            ['mon', 3],
+            ['tue', 5],
+          ],
+        },
+      ],
+    })
     expect(shown.blocks[3]).toMatchObject({ value: 7 })
   })
 })
 
 describe("a deck's offline copy", () => {
   it("holds every slide in one sealed frame, with the controls and each slide's steps outside it", () => {
-    const deck = { aspect: '4:3' as const, transition: 'fade' as const, slides: [
-      { title: 'One "quoted"', html: '<h1>One & "two"</h1>' },
-      { title: '</script>', html: '<li data-step="2">b</li>' },
-    ] }
+    const deck = {
+      aspect: '4:3' as const,
+      transition: 'fade' as const,
+      slides: [
+        { title: 'One "quoted"', html: '<h1>One & "two"</h1>' },
+        { title: '</script>', html: '<li data-step="2">b</li>' },
+      ],
+    }
     const file = deckOffline(deck, 'Review <v2>', null)
     expect(file.match(/<iframe /g)).toHaveLength(1)
     expect(file).toContain('sandbox="allow-scripts"')
@@ -117,7 +178,9 @@ describe("a canvas's offline copy", () => {
   })
   it('heads each page when there are several, and carries the files boards name', () => {
     const board = (id: string, page: string) => ({ id, name: id, width: 10, height: 10, html: '<img src="a.png">', page })
-    const file = canvasOffline({ boards: [board('a', 'Before'), board('b', 'After')] }, 'Pages', null, { 'a.png': { media_type: 'image/png', data: 'iVBORw0KGgo=' } })
+    const file = canvasOffline({ boards: [board('a', 'Before'), board('b', 'After')] }, 'Pages', null, {
+      'a.png': { media_type: 'image/png', data: 'iVBORw0KGgo=' },
+    })
     expect(file).toContain('<h2>Before</h2>')
     expect(file).toContain('<h2>After</h2>')
     expect(file.match(/class="plane"/g)).toHaveLength(2)
@@ -133,7 +196,10 @@ describe("a canvas's notes and pages", () => {
   })
   it('has a page per name, in order, with what names none on the first', () => {
     expect(pagesOf({ boards: [board('a'), board('b')] })).toEqual([])
-    const canvas = { boards: [board('a', 'Screens'), board('b', 'Flows'), board('c')], notes: [{ text: 'n', x: 0, y: 0, page: 'Flows' }] }
+    const canvas = {
+      boards: [board('a', 'Screens'), board('b', 'Flows'), board('c')],
+      notes: [{ text: 'n', x: 0, y: 0, page: 'Flows' }],
+    }
     expect(pagesOf(canvas)).toEqual(['Screens', 'Flows'])
     expect(canvas.boards.filter((one) => onPage(one, 'Screens', pagesOf(canvas))).map((one) => one.id)).toEqual(['a', 'c'])
     expect(pagesOf({ boards: [board('a'), board('b', 'Flows')] })).toEqual(['Flows'])
@@ -141,11 +207,20 @@ describe("a canvas's notes and pages", () => {
 })
 
 describe('a chart past six series', () => {
-  const many = Array.from({ length: 8 }, (_, at) => ({ name: `s${at}`, points: [['mon', at + 1], ['tue', at === 0 ? null : 1]] as [string, number | null][] }))
+  const many = Array.from({ length: 8 }, (_, at) => ({
+    name: `s${at}`,
+    points: [
+      ['mon', at + 1],
+      ['tue', at === 0 ? null : 1],
+    ] as [string, number | null][],
+  }))
   it('folds the smallest into Other where its series add up, keeping the page order', () => {
     const drawn = drawnSeries('bar', many)
     expect(drawn.map((one) => one.name)).toEqual(['s3', 's4', 's5', 's6', 's7', 'Other (3)'])
-    expect(drawn[5].points).toEqual([['mon', 6], ['tue', 2]])
+    expect(drawn[5].points).toEqual([
+      ['mon', 6],
+      ['tue', 2],
+    ])
   })
   it('keeps them all on a line chart, and six or fewer anywhere', () => {
     expect(drawnSeries('line', many)).toHaveLength(8)
@@ -161,7 +236,14 @@ describe("a chart's scales", () => {
     expect(xPositions(['a', 2], 'number')).toEqual([0, 1])
   })
   it('break a line where a value is missing, and start y near the values only when asked', () => {
-    expect(runs([1, 2, null, 4, undefined, null, 6])).toEqual([[[0, 1], [1, 2]], [[3, 4]], [[6, 6]]])
+    expect(runs([1, 2, null, 4, undefined, null, 6])).toEqual([
+      [
+        [0, 1],
+        [1, 2],
+      ],
+      [[3, 4]],
+      [[6, 6]],
+    ])
     expect(yDomain([400, 500], true)).toEqual([0, 500])
     const [low, high] = yDomain([400, 500], false)
     expect(low).toBeGreaterThan(300)
@@ -188,7 +270,22 @@ describe("a peer's typed version", () => {
     expect(canvasOf('{"boards":[{"id":"a","name":"A","width":-1,"height":10,"html":""}]}')).toBeNull()
     const page = { title: 'T', sources: [{ id: 's', name: 'S', kind: 'manual', detail: '', at: 'now' }], blocks: [] as unknown[] }
     expect(dataPageOf(JSON.stringify(page))?.title).toBe('T')
-    page.blocks = [{ type: 'chart', chart: 'line', series: [{ name: 'a', points: [['x', 1], ['y', null]] }], source: 's' }]
+    page.blocks = [
+      {
+        type: 'chart',
+        chart: 'line',
+        series: [
+          {
+            name: 'a',
+            points: [
+              ['x', 1],
+              ['y', null],
+            ],
+          },
+        ],
+        source: 's',
+      },
+    ]
     expect(dataPageOf(JSON.stringify(page))).not.toBeNull()
     page.blocks = [{ type: 'chart', chart: 'line', series: [{ name: 'a', points: [['x', 'one']] }], source: 's' }]
     expect(dataPageOf(JSON.stringify(page))).toBeNull()
@@ -204,9 +301,11 @@ describe('docs and sheets', () => {
     expect(splice('é😀a', 'é😀')).toEqual({ pos: 2, delete: 1, insert: '' })
     expect(splice('same', 'same')).toBeNull()
   })
-  it('moves what was typed during a send onto the text with the agent\'s edits', () => {
+  it("moves what was typed during a send onto the text with the agent's edits", () => {
     // The agent added a line at the top while the person kept typing at the end.
-    expect(rebaseDraft('# Plan\n- ship\n', '# Plan\n- ship\n- demo\n', 'Goals\n# Plan\n- ship\n')).toBe('Goals\n# Plan\n- ship\n- demo\n')
+    expect(rebaseDraft('# Plan\n- ship\n', '# Plan\n- ship\n- demo\n', 'Goals\n# Plan\n- ship\n')).toBe(
+      'Goals\n# Plan\n- ship\n- demo\n',
+    )
     // Typed before what the agent changed: it keeps its place.
     expect(rebaseDraft('a b c', 'a! b c', 'a b C!')).toBe('a! b C!')
     expect(rebaseDraft('same', 'same', 'same, merged')).toBe('same, merged')

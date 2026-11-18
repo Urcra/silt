@@ -51,7 +51,9 @@ export function askedServer(): string | null {
 
 /** The org each project is in, by its server and repository. */
 export function orgsOf(projects: Project[]): Map<string, string | null> {
-  return new Map(projects.filter((project) => project.server).map((project) => [`${project.server}\n${project.repo}`, project.org]))
+  return new Map(
+    projects.filter((project) => project.server).map((project) => [`${project.server}\n${project.repo}`, project.org]),
+  )
 }
 
 export function inWorkspace(thread: ThreadSummary, workspace: Workspace, orgs: Map<string, string | null>): boolean {

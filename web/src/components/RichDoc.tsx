@@ -8,7 +8,13 @@ import { cx } from '../ui'
 import { DocMarkdown } from './DocMarkdown'
 import { docBlocks } from '../docBlocks'
 
-const turndown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced', emDelimiter: '*', strongDelimiter: '**' })
+const turndown = new TurndownService({
+  headingStyle: 'atx',
+  bulletListMarker: '-',
+  codeBlockStyle: 'fenced',
+  emDelimiter: '*',
+  strongDelimiter: '**',
+})
 // Dates and mentions keep the Markdown they came from.
 turndown.addRule('silt-inline', {
   filter: (node) => node instanceof HTMLElement && node.dataset.md !== undefined,
@@ -16,7 +22,7 @@ turndown.addRule('silt-inline', {
 })
 
 /** What a block's edited DOM says, as Markdown. */
-export function blockMarkdown(element: HTMLElement): string {
+function blockMarkdown(element: HTMLElement): string {
   return turndown.turndown(element.innerHTML).trim()
 }
 
@@ -48,7 +54,11 @@ export function RichDoc({ text, onChange, editable }: { text: string; onChange: 
             suppressContentEditableWarning
             onInput={() => edited.current.add(at)}
             onBlur={(event) => commit(at, event.currentTarget)}
-            className={cx('rounded-sm outline-none', open && 'focus:bg-surface-1/60 focus:ring-1 focus:ring-line', !open && 'select-text')}
+            className={cx(
+              'rounded-sm outline-none',
+              open && 'focus:bg-surface-1/60 focus:ring-1 focus:ring-line',
+              !open && 'select-text',
+            )}
             aria-label={open ? 'a paragraph of the doc, editable' : undefined}
           >
             <div data-rich-block>

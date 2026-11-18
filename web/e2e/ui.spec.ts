@@ -46,7 +46,10 @@ test("the sidebar's and the changes panel's edges drag, and their widths are kep
   await expect(page.getByRole('region', { name: 'changes' }).getByTestId('diff')).toBeVisible()
   expect(await width(sidebar)).toBe(sidebarBefore + 64)
   expect(await width(details)).toBe(detailsBefore + 100)
-  await expect(page.getByRole('separator', { name: 'resize projects' })).toHaveAttribute('aria-valuenow', String(sidebarBefore + 64))
+  await expect(page.getByRole('separator', { name: 'resize projects' })).toHaveAttribute(
+    'aria-valuenow',
+    String(sidebarBefore + 64),
+  )
 })
 
 test('lists threads and searches across compaction', async ({ page }) => {

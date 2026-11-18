@@ -30,7 +30,13 @@ interface Group {
 
 /** A workspace's letter on a tile of its own colour, as the boards draw it. */
 export function WorkspaceBadge({ name, local = false, size = 28 }: { name: string; local?: boolean; size?: number }) {
-  const shades = ['bg-[var(--tobacco-500)]', 'bg-[var(--slate-600)]', 'bg-[var(--olive-600)]', 'bg-[var(--amber-700)]', 'bg-[var(--rust-600)]']
+  const shades = [
+    'bg-[var(--tobacco-500)]',
+    'bg-[var(--slate-600)]',
+    'bg-[var(--olive-600)]',
+    'bg-[var(--amber-700)]',
+    'bg-[var(--rust-600)]',
+  ]
   // Not by port, which a server started for a test or a tunnel picks anew.
   const shade = shades[[...name.replace(/:\d+$/, '')].reduce((sum, letter) => sum + letter.charCodeAt(0), 0) % shades.length]
   return (
@@ -68,10 +74,14 @@ function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => numb
   const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects })
   const owned = orgsOf(projects.data ?? [])
   const waiting = (shown: Workspace) =>
-    sections((threads.data ?? []).filter((thread) => inWorkspace(thread, shown, owned)), now).needs_you.length
+    sections(
+      (threads.data ?? []).filter((thread) => inWorkspace(thread, shown, owned)),
+      now,
+    ).needs_you.length
   const projectCount = (server: string | null, org: string | null) =>
-    (projects.data ?? []).filter((project) => (server === null ? !project.server : project.server === server && (org === null || project.org === org)))
-      .length
+    (projects.data ?? []).filter((project) =>
+      server === null ? !project.server : project.server === server && (org === null || project.org === org),
+    ).length
   const orgChoice = (url: string, host: string, org: OrgInfo, offline: boolean): Choice => ({
     name: org.name,
     sub: `${counted(projectCount(url, org.name), 'project', 'projects')} · ${org.role}`,
@@ -122,7 +132,9 @@ function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => numb
         const policy = view.effective
         const chips = [
           ...(view.org_policy ? [`${view.org_policy.org}'s rules`] : []),
-          ...(policy.agents ? [policy.agents.map((key) => KNOWN_AGENTS.find((agent) => agent.key === key)?.name ?? key).join(', ') + ' only'] : []),
+          ...(policy.agents
+            ? [policy.agents.map((key) => KNOWN_AGENTS.find((agent) => agent.key === key)?.name ?? key).join(', ') + ' only']
+            : []),
           ...(policy.max_preset && policy.max_preset !== 'full_access' ? ['asks first'] : []),
           ...(policy.isolated ? ['others hidden'] : policy.sandbox ? ['sandboxed'] : []),
         ]
@@ -132,12 +144,22 @@ function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => numb
           sub: `${serverLine(view)} · ${counted(view.projects.length, 'project', 'projects')}${isDefault ? ' · default' : ''}`,
           long: `the ${view.workspace.name} workspace`,
           workspace: { kind: 'workspace', id: view.workspace.id, server: view.workspace.server?.url ?? null } as Workspace,
-          offline: view.workspace.server ? servers.some((server) => server.url === view.workspace.server?.url && server.sync_error !== null) : false,
+          offline: view.workspace.server
+            ? servers.some((server) => server.url === view.workspace.server?.url && server.sync_error !== null)
+            : false,
           chips,
         }
       }),
     }
-    groups.splice(0, groups.length, { label: 'Everywhere', choices: [{ ...groups[0]!.choices[0]!, name: 'All workspaces', sub: 'for you only: agents never see across workspaces' }] }, own)
+    groups.splice(
+      0,
+      groups.length,
+      {
+        label: 'Everywhere',
+        choices: [{ ...groups[0]!.choices[0]!, name: 'All workspaces', sub: 'for you only: agents never see across workspaces' }],
+      },
+      own,
+    )
   }
   const all = groups.flatMap((group) => group.choices)
   const current = all.find((choice) => workspaceValue(choice.workspace) === workspaceValue(workspace)) ?? all[0]
@@ -167,7 +189,8 @@ export function WorkspaceSwitcher() {
     })),
   )
   const host = current.workspace.kind === 'server' ? serverName(current.workspace.server) : current.sub
-  const workspaceServer = current.workspace.kind === 'workspace' && current.workspace.server ? serverName(current.workspace.server) : undefined
+  const workspaceServer =
+    current.workspace.kind === 'workspace' && current.workspace.server ? serverName(current.workspace.server) : undefined
   const orgServer = current.workspace.kind === 'server' ? host : (workspaceServer ?? groups[1]?.label.match(/^On (.*)/)?.[1])
   return (
     <>
@@ -189,7 +212,11 @@ export function WorkspaceSwitcher() {
         {(close) => (
           <div className="flex flex-col gap-0.5">
             {groups.map((group, groupIndex) => (
-              <section key={group.label} aria-label={group.label} className={cx(groupIndex > 0 && 'mt-1 border-t border-line-subtle pt-1')}>
+              <section
+                key={group.label}
+                aria-label={group.label}
+                className={cx(groupIndex > 0 && 'mt-1 border-t border-line-subtle pt-1')}
+              >
                 <h3 className="px-2.5 pt-1.5 pb-1 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{group.label}</h3>
                 {group.choices.map((choice) => {
                   const chosen = choice === current
@@ -286,7 +313,9 @@ export function WorkspaceSwitcher() {
       </Popover>
       <Dialog open={connecting} onClose={() => setConnecting(false)} title="Connect another server">
         <p className="text-sm">Run this in a terminal on this machine, with the server's address:</p>
-        <pre className="mt-2 rounded-sm bg-surface-2 px-2 py-1 font-mono text-xs">silt auth login --server https://silt.example.com</pre>
+        <pre className="mt-2 rounded-sm bg-surface-2 px-2 py-1 font-mono text-xs">
+          silt auth login --server https://silt.example.com
+        </pre>
         <p className="mt-2 text-sm text-fg-2">
           Each thread then syncs only with its own server; the first one you signed in to takes new projects' threads.
         </p>

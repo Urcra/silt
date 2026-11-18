@@ -9,7 +9,18 @@ export type Deck = {
   style?: string
   slides: { id?: string; title: string; html: string; notes?: string }[]
 }
-export type Board = { id: string; name: string; caption?: string; width: number; height: number; x?: number; y?: number; grow?: boolean; page?: string; html: string }
+export type Board = {
+  id: string
+  name: string
+  caption?: string
+  width: number
+  height: number
+  x?: number
+  y?: number
+  grow?: boolean
+  page?: string
+  html: string
+}
 export type CanvasNote = { id?: string; text: string; x: number; y: number; w?: number; page?: string }
 export type Canvas = { style?: string; boards: Board[]; notes?: CanvasNote[] }
 export type Source = {
@@ -25,7 +36,16 @@ export type Source = {
 export type Series = { name: string; points: [string | number, number | null][]; pick?: string }
 export type Block =
   | { type: 'text'; text: string }
-  | { type: 'stat'; label: string; value: number | string; unit?: string; change?: number; better?: 'up' | 'down'; source: string; pick?: string }
+  | {
+      type: 'stat'
+      label: string
+      value: number | string
+      unit?: string
+      change?: number
+      better?: 'up' | 'down'
+      source: string
+      pick?: string
+    }
   | { type: 'table'; title?: string; columns: string[]; rows: unknown[][]; source: string; pick?: string }
   | {
       type: 'chart'
@@ -86,7 +106,14 @@ export function deckOf(json: string): Deck | null {
     !optional(deck.style, text)
   )
     return null
-  const slides = deck.slides.every((slide) => object(slide) && optional(slide.id, (id) => text(id, 64)) && text(slide.title, 2000) && text(slide.html) && optional(slide.notes, text))
+  const slides = deck.slides.every(
+    (slide) =>
+      object(slide) &&
+      optional(slide.id, (id) => text(id, 64)) &&
+      text(slide.title, 2000) &&
+      text(slide.html) &&
+      optional(slide.notes, text),
+  )
   return slides ? (deck as Deck) : null
 }
 
@@ -135,7 +162,9 @@ export function pagesOf(canvas: Canvas): string[] {
   // What names no page is on the first, which keeps its own name if something on it gives one.
   for (const page of named) if (!pages.includes(page ?? '')) pages.push(page ?? '')
   const first = named.find((page) => page !== undefined) ?? ''
-  return pages[0] === '' ? [first, ...pages.slice(1).filter((page) => page !== first && page !== '')] : pages.filter((page) => page !== '')
+  return pages[0] === ''
+    ? [first, ...pages.slice(1).filter((page) => page !== first && page !== '')]
+    : pages.filter((page) => page !== '')
 }
 
 /** Whether `part` is on page `page` of a canvas whose pages are `pages`: what names none is on the first. */
@@ -195,7 +224,12 @@ export function dataPageOf(json: string): DataPage | null {
           optional(value.stacked, (stacked) => typeof stacked === 'boolean') &&
           list(value.series, 50) &&
           value.series.every(
-            (series) => object(series) && named(series.name) && list(series.points, 10_000) && series.points.every(point) && optional(series.pick, named),
+            (series) =>
+              object(series) &&
+              named(series.name) &&
+              list(series.points, 10_000) &&
+              series.points.every(point) &&
+              optional(series.pick, named),
           ) &&
           named(value.source)
         )
@@ -235,7 +269,15 @@ export function partDocument(
   })
 }
 
-function partPage(html: string, shared: string | undefined, width: number, height: number, theme: FrameTheme, step?: number, grow?: boolean): string {
+function partPage(
+  html: string,
+  shared: string | undefined,
+  width: number,
+  height: number,
+  theme: FrameTheme,
+  step?: number,
+  grow?: boolean,
+): string {
   const imports = (shared ?? '').match(/@import\s[^;]+;/g) ?? []
   const rest = imports.reduce((left, rule) => left.replace(rule, ''), shared ?? '')
   const ground = `color-scheme:${theme};background:var(--bg,Canvas);color:var(--fg,CanvasText)`
@@ -270,7 +312,9 @@ export function deckDocument(
     `.silt-slide{position:absolute;inset:0;overflow:hidden;display:none}.silt-slide.silt-on{display:block}` +
     `.silt-slide [data-step]{visibility:hidden}.silt-slide [data-step].silt-shown{visibility:visible}` +
     `.silt-fade{animation:silt-fade .3s ease-out}@keyframes silt-fade{from{opacity:0}to{opacity:1}}${rest}`
-  const slides = deck.slides.map((slide, at) => `<section class="silt-slide" data-silt-slide="${at}">${slide.html}</section>`).join('')
+  const slides = deck.slides
+    .map((slide, at) => `<section class="silt-slide" data-silt-slide="${at}">${slide.html}</section>`)
+    .join('')
   // Inside the frame: show what the controls say, and hand them its keys and clicks.
   const inner =
     "<script>addEventListener('message',function(e){var d=e.data;if(e.source!==parent||!d||d.silt!=='show')return;" +
@@ -281,7 +325,10 @@ export function deckDocument(
     "addEventListener('keydown',function(e){parent.postMessage({silt:'key',key:e.key},'*')});" +
     "addEventListener('click',function(e){if(!e.target.closest('a,button,input,select,textarea'))parent.postMessage({silt:'key',key:'click'},'*')});</script>"
   const page = `<!doctype html><html><head><meta charset="utf-8"><style>${css.replace(/<\//g, '<\\/')}</style></head><body>${slides}${inner}</body></html>`
-  return sandboxedDocument(withFilesInlined(page, options.files ?? {}), options.offline ? { probe: false, style } : { style, theme, parent: window.location.origin })
+  return sandboxedDocument(
+    withFilesInlined(page, options.files ?? {}),
+    options.offline ? { probe: false, style } : { style, theme, parent: window.location.origin },
+  )
 }
 
 /**
@@ -300,12 +347,12 @@ export function deckOffline(deck: Deck, title: string, style: string | null, fil
     "function fit(){var k=Math.min(stage.clientWidth/W,stage.clientHeight/H);f.style.transform='scale('+k+')'}" +
     "function show(moved){if(!n){where.textContent='No slides';return}f.contentWindow.postMessage({silt:'show',at:at,step:step,fade:fade&&moved},'*');" +
     "where.textContent=(at+1)+' / '+n+(names[at]?' · '+names[at]:'');try{history.replaceState(null,'','#'+(at+1))}catch(x){}}" +
-    "function next(){if(step<steps[at])step++;else if(at<n-1){at++;step=0}else return;show(true)}" +
-    "function prev(){if(step>0)step--;else if(at>0){at--;step=steps[at]}else return;show(true)}" +
-    "function go(to){at=Math.max(0,Math.min(n-1,to));step=0;show(true)}" +
+    'function next(){if(step<steps[at])step++;else if(at<n-1){at++;step=0}else return;show(true)}' +
+    'function prev(){if(step>0)step--;else if(at>0){at--;step=steps[at]}else return;show(true)}' +
+    'function go(to){at=Math.max(0,Math.min(n-1,to));step=0;show(true)}' +
     "function key(k){if(k==='ArrowRight'||k==='ArrowDown'||k===' '||k==='PageDown'||k==='click')next();" +
     "else if(k==='ArrowLeft'||k==='ArrowUp'||k==='PageUp'||k==='Backspace')prev();else if(k==='Home')go(0);else if(k==='End')go(n-1)}" +
-    "var named=/^#(\\d+)$/.exec(location.hash);if(named)at=Math.max(0,Math.min(n-1,Number(named[1])-1));" +
+    'var named=/^#(\\d+)$/.exec(location.hash);if(named)at=Math.max(0,Math.min(n-1,Number(named[1])-1));' +
     "f.addEventListener('load',function(){show(false)});" +
     "addEventListener('message',function(e){if(e.source===f.contentWindow&&e.data&&e.data.silt==='key')key(String(e.data.key))});" +
     "addEventListener('keydown',function(e){if(e.target.tagName!=='BUTTON'||(e.key!==' '&&e.key!=='Enter'))key(e.key)});" +
@@ -345,10 +392,13 @@ export function canvasOffline(canvas: Canvas, title: string, style: string | nul
   const pages = pagesOf(canvas)
   const sections = (pages.length > 0 ? pages : ['']).map((page) => {
     const boards = layout(canvas.boards.filter((board) => onPage(board, page, pages))).map((board) => {
-      const frame = sandboxedDocument(withFilesInlined(partPage(board.html, canvas.style, board.width, board.height, 'light', undefined, board.grow), files), {
-        probe: false,
-        style,
-      })
+      const frame = sandboxedDocument(
+        withFilesInlined(partPage(board.html, canvas.style, board.width, board.height, 'light', undefined, board.grow), files),
+        {
+          probe: false,
+          style,
+        },
+      )
       const label = `${board.width}×${board.height}${board.caption ? ` · ${board.caption}` : ''}`
       return (
         `<figure style="left:${board.x}px;top:${board.y}px;width:${board.width}px">` +
@@ -358,7 +408,10 @@ export function canvasOffline(canvas: Canvas, title: string, style: string | nul
     })
     const notes = (canvas.notes ?? [])
       .filter((note) => onPage(note, page, pages))
-      .map((note) => `<p class="note" style="left:${note.x}px;top:${note.y}px;width:${note.w ?? NOTE_WIDTH}px">${escapeText(note.text)}</p>`)
+      .map(
+        (note) =>
+          `<p class="note" style="left:${note.x}px;top:${note.y}px;width:${note.w ?? NOTE_WIDTH}px">${escapeText(note.text)}</p>`,
+      )
     const heading = pages.length > 1 ? `<h2>${escapeText(page)}</h2>` : ''
     return `<section>${heading}<div class="stage"><div class="plane">${boards.join('')}${notes.join('')}</div></div></section>`
   })
@@ -542,7 +595,8 @@ export function toolValue(result: unknown): unknown {
  * agent wrote.
  */
 export function withLive(page: DataPage, answers: Record<string, unknown>): DataPage {
-  const from = (source: string, pick: string | undefined) => (pick !== undefined && source in answers ? pointer(answers[source], pick) : undefined)
+  const from = (source: string, pick: string | undefined) =>
+    pick !== undefined && source in answers ? pointer(answers[source], pick) : undefined
   const blocks = page.blocks.map((block): Block => {
     if (block.type === 'stat') {
       const value = from(block.source, block.pick)
@@ -550,12 +604,18 @@ export function withLive(page: DataPage, answers: Record<string, unknown>): Data
     }
     if (block.type === 'table') {
       const rows = from(block.source, block.pick)
-      return Array.isArray(rows) && rows.every((row) => Array.isArray(row) && row.length === block.columns.length) ? { ...block, rows: rows as unknown[][] } : block
+      return Array.isArray(rows) && rows.every((row) => Array.isArray(row) && row.length === block.columns.length)
+        ? { ...block, rows: rows as unknown[][] }
+        : block
     }
     if (block.type === 'chart') {
       const series = block.series.map((one) => {
         const points = from(block.source, one.pick)
-        const shaped = Array.isArray(points) && points.every((point) => Array.isArray(point) && point.length === 2 && (typeof point[1] === 'number' || point[1] === null))
+        const shaped =
+          Array.isArray(points) &&
+          points.every(
+            (point) => Array.isArray(point) && point.length === 2 && (typeof point[1] === 'number' || point[1] === null),
+          )
         return shaped ? { ...one, points: points as Series['points'] } : one
       })
       return { ...block, series }

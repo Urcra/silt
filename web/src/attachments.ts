@@ -46,7 +46,10 @@ export function tooLarge(files: { name: string; size: number }[], attached: numb
 export function useAttachments() {
   const [attached, setAttached] = useState<PromptAttachment[]>([])
   const add = async (files: File[], pasted = false) => {
-    const refused = tooLarge(files, attached.reduce((sum, file) => sum + (file.data.length * 3) / 4, 0))
+    const refused = tooLarge(
+      files,
+      attached.reduce((sum, file) => sum + (file.data.length * 3) / 4, 0),
+    )
     if (refused) throw new Error(refused)
     const named = files.map((file, index) => ({ file, name: pasted ? pastedName(file, attached.length + index + 1) : file.name }))
     const read = await Promise.all(named.map(({ file, name }) => readAttachment(file, name)))

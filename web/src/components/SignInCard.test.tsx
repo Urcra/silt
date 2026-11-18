@@ -29,7 +29,13 @@ const methods: SignInAsked['methods'] = [
 
 test('offers each way the agent lists to sign in, and says why the last one failed', async () => {
   const sent = posts()
-  render(<SignInCard thread={THREAD} agent="Claude" asked={{ methods, running: null, failed: 'the sign-in ended without signing Claude in: Invalid code' }} />)
+  render(
+    <SignInCard
+      thread={THREAD}
+      agent="Claude"
+      asked={{ methods, running: null, failed: 'the sign-in ended without signing Claude in: Invalid code' }}
+    />,
+  )
   expect(screen.getByText('Claude needs you to sign in')).toBeInTheDocument()
   expect(screen.getByText(/Invalid code/)).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Anthropic Console' }))
@@ -38,7 +44,14 @@ test('offers each way the agent lists to sign in, and says why the last one fail
 
 test("shows the sign-in's page and takes the code it gives back", async () => {
   const sent = posts()
-  const running = { method: 'claude-ai-login', link: 'https://claude.com/cai/oauth/authorize?state=x', code: null, asks_code: true, code_sent: false, tail: 'Paste code here if prompted >' }
+  const running = {
+    method: 'claude-ai-login',
+    link: 'https://claude.com/cai/oauth/authorize?state=x',
+    code: null,
+    asks_code: true,
+    code_sent: false,
+    tail: 'Paste code here if prompted >',
+  }
   render(<SignInCard thread={THREAD} agent="Claude" asked={{ methods, running, failed: null }} />)
   const page = screen.getByRole('link', { name: 'Open claude.com' })
   expect(page).toHaveAttribute('href', running.link)
@@ -52,11 +65,24 @@ test("shows the sign-in's page and takes the code it gives back", async () => {
 
 test("shows a device flow's code to enter, and offers no link but https", () => {
   posts()
-  const device = { method: 'copilot-login', link: 'https://github.com/login/device', code: 'WDJB-MJH7', asks_code: false, code_sent: false, tail: '' }
+  const device = {
+    method: 'copilot-login',
+    link: 'https://github.com/login/device',
+    code: 'WDJB-MJH7',
+    asks_code: false,
+    code_sent: false,
+    tail: '',
+  }
   const { rerender } = render(<SignInCard thread={THREAD} agent="Copilot" asked={{ methods, running: device, failed: null }} />)
   expect(screen.getByTestId('sign-in-code')).toHaveTextContent('WDJB-MJH7')
   expect(screen.getByText('Waiting for the sign-in to finish')).toBeInTheDocument()
   expect(screen.queryByLabelText('code from the sign-in page')).not.toBeInTheDocument()
-  rerender(<SignInCard thread={THREAD} agent="Copilot" asked={{ methods, running: { ...device, link: 'javascript:alert(1)' }, failed: null }} />)
+  rerender(
+    <SignInCard
+      thread={THREAD}
+      agent="Copilot"
+      asked={{ methods, running: { ...device, link: 'javascript:alert(1)' }, failed: null }}
+    />,
+  )
   expect(screen.queryByRole('link')).not.toBeInTheDocument()
 })

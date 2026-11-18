@@ -1,6 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
 import { type Dispatch, type ReactNode, type SetStateAction, useEffect, useRef, useState } from 'react'
-import { api, type AgentStatus, type PermissionAsked, type Presence, type Preset, type PromptAttachment, type SignInAsked } from '../api'
+import {
+  api,
+  type AgentStatus,
+  type PermissionAsked,
+  type Presence,
+  type Preset,
+  type PromptAttachment,
+  type SignInAsked,
+} from '../api'
 import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, permissionModes, running, startSettings } from '../agentState'
 import { useNow } from '../now'
 import { tokens } from '../transcript'
@@ -19,7 +27,15 @@ import { Markdown } from './Markdown'
 import { PromptQueue } from './Queue'
 import { dropSending } from '../sending'
 
-export function AgentPicker({ value, onChange, className }: { value: string; onChange: (agent: string) => void; className?: string }) {
+export function AgentPicker({
+  value,
+  onChange,
+  className,
+}: {
+  value: string
+  onChange: (agent: string) => void
+  className?: string
+}) {
   const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
   return (
     <select
@@ -48,7 +64,6 @@ function working(status: AgentStatus | null): boolean {
   return status?.state === 'working' || status?.state === 'awaiting_permission'
 }
 
-
 function statePhrase(status: AgentStatus): string {
   if (status.sign_in) return `${status.agent} needs you to sign in`
   const asking = (status.questions?.length ?? 0) > 0 && status.state === 'awaiting_permission'
@@ -56,7 +71,17 @@ function statePhrase(status: AgentStatus): string {
 }
 
 /** A permission the agent asks for, answered in place: ⏎ allows, Esc dismisses (ADR 0022). */
-export function PermissionCard({ thread, asked, agent, first }: { thread: string; asked: PermissionAsked; agent: string; first: boolean }) {
+export function PermissionCard({
+  thread,
+  asked,
+  agent,
+  first,
+}: {
+  thread: string
+  asked: PermissionAsked
+  agent: string
+  first: boolean
+}) {
   const [error, setError] = useState<string>()
   const answer = (option: string | null) => {
     setError(undefined)
@@ -72,7 +97,11 @@ export function PermissionCard({ thread, asked, agent, first }: { thread: string
     if (first && !document.querySelector('dialog[open]')) answer(null)
   })
   return (
-    <div role="group" aria-label={asked.plan ? 'plan' : 'permission'} className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3">
+    <div
+      role="group"
+      aria-label={asked.plan ? 'plan' : 'permission'}
+      className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3"
+    >
       <span className="flex min-w-0 items-center gap-2 text-xs text-fg-2">
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" />
         {asked.plan ? `${agent}'s plan, to approve before it changes anything` : `${agent} asks to run`}
@@ -99,7 +128,11 @@ export function PermissionCard({ thread, asked, agent, first }: { thread: string
               {index === 0 && first && <Kbd onAccent>⏎</Kbd>}
             </Button>
           ))}
-          <Button variant="ghost" title="Answers neither: the agent drops what it asked and ends its turn" onClick={() => answer(null)}>
+          <Button
+            variant="ghost"
+            title="Answers neither: the agent drops what it asked and ends its turn"
+            onClick={() => answer(null)}
+          >
             Stop the turn {first && <Kbd>Esc</Kbd>}
           </Button>
         </span>
@@ -126,7 +159,11 @@ export function SignInCard({ thread, asked, agent }: { thread: string; asked: Si
     act(api.signInCode(thread, code.trim()).then(() => setCode('')))
   }
   return (
-    <div role="group" aria-label="sign in" className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3">
+    <div
+      role="group"
+      aria-label="sign in"
+      className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3"
+    >
       <span className="flex min-w-0 items-center gap-2 text-xs text-fg-2">
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" />
         {agent} needs you to sign in
@@ -140,7 +177,12 @@ export function SignInCard({ thread, asked, agent }: { thread: string; asked: Si
           </p>
           <span className="flex flex-wrap gap-1.5">
             {asked.methods.map((method, index) => (
-              <Button key={method.id} variant={index === 0 ? 'primary' : 'secondary'} title={method.description ?? undefined} onClick={() => act(api.signIn(thread, method.id))}>
+              <Button
+                key={method.id}
+                variant={index === 0 ? 'primary' : 'secondary'}
+                title={method.description ?? undefined}
+                onClick={() => act(api.signIn(thread, method.id))}
+              >
                 {method.name}
               </Button>
             ))}
@@ -154,9 +196,16 @@ export function SignInCard({ thread, asked, agent }: { thread: string; asked: Si
         <>
           {link ? (
             <div className="flex flex-col gap-1.5">
-              <span className="text-sm text-fg-1">{running.code ? 'Open this page and enter the code:' : 'Open this page and sign in:'}</span>
+              <span className="text-sm text-fg-1">
+                {running.code ? 'Open this page and enter the code:' : 'Open this page and sign in:'}
+              </span>
               <span className="flex flex-wrap items-center gap-1.5">
-                <a href={link} target="_blank" rel="noopener noreferrer" className={buttonClass(running.code || running.asks_code ? 'primary' : 'secondary')}>
+                <a
+                  href={link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={buttonClass(running.code || running.asks_code ? 'primary' : 'secondary')}
+                >
                   Open {new URL(link).host}
                 </a>
                 <Button
@@ -170,7 +219,10 @@ export function SignInCard({ thread, asked, agent }: { thread: string; asked: Si
                 </Button>
               </span>
               {running.code && (
-                <code data-testid="sign-in-code" className="self-start rounded-sm border border-line bg-bg px-2.5 py-1 font-mono text-lg tracking-widest text-fg-1 select-all">
+                <code
+                  data-testid="sign-in-code"
+                  className="self-start rounded-sm border border-line bg-bg px-2.5 py-1 font-mono text-lg tracking-widest text-fg-1 select-all"
+                >
                   {running.code}
                 </code>
               )}
@@ -211,7 +263,9 @@ export function SignInCard({ thread, asked, agent }: { thread: string; asked: Si
             {running.tail && (
               <details className="min-w-0 flex-1 text-xs text-fg-2">
                 <summary className="cursor-pointer">What the sign-in shows</summary>
-                <pre className="mt-1.5 max-h-48 overflow-y-auto rounded-sm border border-line bg-bg px-2.5 py-2 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">{running.tail}</pre>
+                <pre className="mt-1.5 max-h-48 overflow-y-auto rounded-sm border border-line bg-bg px-2.5 py-2 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">
+                  {running.tail}
+                </pre>
               </details>
             )}
             <Button variant="ghost" className="ml-auto" onClick={() => act(api.cancelSignIn(thread))}>
@@ -270,7 +324,11 @@ function PlanChoices({
           options={approve.map(([option, preset]) => ({ id: option, name: preset }))}
         />
         {keep && (
-          <Button variant="ghost" onClick={() => answer(KEEP_PLANNING)} title="The agent goes on planning; say what to change in the composer">
+          <Button
+            variant="ghost"
+            onClick={() => answer(KEEP_PLANNING)}
+            title="The agent goes on planning; say what to change in the composer"
+          >
             Keep planning
           </Button>
         )}
@@ -301,7 +359,11 @@ export function PlanCard({ thread, preset, onPreset }: { thread: string; preset:
     moving.then(() => api.prompt(thread, APPROVED)).catch((failure: unknown) => setError(message(failure)))
   }
   return (
-    <section role="group" aria-label="plan" className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3">
+    <section
+      role="group"
+      aria-label="plan"
+      className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3"
+    >
       <span className="flex items-center gap-2 text-xs text-fg-2">
         <span className="h-1.5 w-1.5 rounded-full bg-warn" />
         Plan to approve · nothing is edited until you do; or write what to change below
@@ -348,7 +410,15 @@ function StopKey({ onCancel }: { onCancel: () => void }) {
 
 /** What the agent is doing now, before it is recorded: its thinking, its words, and how long it's been at it. The running
  * tool's output stays in its step, a click away, rather than streaming into the thread (ADR 0049). */
-export function AgentTail({ status, thoughtShown, onCancel }: { status: AgentStatus; thoughtShown: boolean; onCancel: () => void }) {
+export function AgentTail({
+  status,
+  thoughtShown,
+  onCancel,
+}: {
+  status: AgentStatus
+  thoughtShown: boolean
+  onCancel: () => void
+}) {
   const clock = useTurnClock(status)
   if (!working(status) && !status.streaming) return null
   // The daemon records the thought once the agent says something, runs a tool or ends its turn, so one unrecorded is under way.
@@ -402,14 +472,30 @@ function ContinueOn({ thread, act }: { thread: string; act: (action: Promise<unk
   const [agent, setAgent] = useState('')
   const online = (devices.data ?? []).filter((candidate) => candidate.online && candidate.startable.length > 0)
   const chosen = online.find((candidate) => candidate.id === device) ?? online[0]
-  if (!chosen) return <p className="text-xs text-fg-2">No agent runs in this thread, and none of your devices is online to continue it on.</p>
+  if (!chosen)
+    return (
+      <p className="text-xs text-fg-2">No agent runs in this thread, and none of your devices is online to continue it on.</p>
+    )
   const chosenAgent = chosen.startable.find((candidate) => candidate.id === agent) ?? chosen.startable[0]
   return (
     <span className="flex flex-wrap items-center gap-1.5 text-xs">
       <span className="text-fg-2">Continue on</span>
-      <ChipSelect ghost label="device to continue on" icon="laptop" value={chosen.id} onChange={setDevice} options={online.map((candidate) => ({ id: candidate.id, name: candidate.name }))} />
+      <ChipSelect
+        ghost
+        label="device to continue on"
+        icon="laptop"
+        value={chosen.id}
+        onChange={setDevice}
+        options={online.map((candidate) => ({ id: candidate.id, name: candidate.name }))}
+      />
       <span className="text-fg-2">with</span>
-      <ChipSelect ghost label="agent to continue with" value={chosenAgent.id} onChange={setAgent} options={chosen.startable.map((candidate) => ({ id: candidate.id, name: candidate.name }))} />
+      <ChipSelect
+        ghost
+        label="agent to continue with"
+        value={chosenAgent.id}
+        onChange={setAgent}
+        options={chosen.startable.map((candidate) => ({ id: candidate.id, name: candidate.name }))}
+      />
       <Button variant="primary" onClick={() => act(api.continueOn(thread, chosen.id, chosenAgent.id))}>
         Continue there
       </Button>
@@ -460,7 +546,10 @@ export function AgentDock({
   const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
   const summary = threads.data?.find((candidate) => candidate.id === thread)
   const workspace = summary ? workspaceOf(workspaces.data, summary.repo, summary.workspace) : undefined
-  const agent = (chosenAgent && !agentRefused(workspace, chosenAgent) ? chosenAgent : undefined) ?? agents.find((choice) => !agentRefused(workspace, choice.id))?.id ?? ''
+  const agent =
+    (chosenAgent && !agentRefused(workspace, chosenAgent) ? chosenAgent : undefined) ??
+    agents.find((choice) => !agentRefused(workspace, choice.id))?.id ??
+    ''
   const [error, setError] = useState<string>()
   const act = (action: Promise<unknown>, after?: () => void) => {
     setError(undefined)
@@ -492,7 +581,9 @@ export function AgentDock({
   useActions([
     ...(live ? [{ id: 'stop', label: `Stop ${status.agent}`, run: () => act(api.stopAgent(thread)) }] : []),
     ...(turning ? [{ id: 'cancel', label: 'Cancel the turn', run: () => act(api.cancelTurn(thread)) }] : []),
-    ...(status?.state === 'awaiting_input' ? [{ id: 'approve', label: 'Approve the plan', run: () => act(api.prompt(thread, APPROVED)) }] : []),
+    ...(status?.state === 'awaiting_input'
+      ? [{ id: 'approve', label: 'Approve the plan', run: () => act(api.prompt(thread, APPROVED)) }]
+      : []),
   ])
   const sendable = live && draft.trim() !== '' && !(attached.length > 0 && !ready(status))
   const startable = !live && !elsewhere && !hosted() && agent !== ''
@@ -505,7 +596,12 @@ export function AgentDock({
   const optimistic = (action: (text: string, files: PromptAttachment[]) => Promise<unknown>) => {
     const text = draft
     const files = attached
-    const sending = text.trim() ? onSending?.(text, files.map((file) => file.name)) : undefined
+    const sending = text.trim()
+      ? onSending?.(
+          text,
+          files.map((file) => file.name),
+        )
+      : undefined
     setError(undefined)
     onDraft('')
     clear()
@@ -529,7 +625,11 @@ export function AgentDock({
     const settings = seenSettings.map((setting): [string, string] => [setting.id, chosenSettings[setting.id] ?? setting.current])
     const mode = startModes ? (chosenMode ?? null) : null
     optimistic((text, files) => {
-      const started = api.startAgent(agent, { thread }, { preset, mode, settings, prompt: text.trim() ? text : null, attachments: files })
+      const started = api.startAgent(
+        agent,
+        { thread },
+        { preset, mode, settings, prompt: text.trim() ? text : null, attachments: files },
+      )
       starting.current = started
       const failed = () => {
         if (starting.current === started) starting.current = undefined
@@ -633,7 +733,11 @@ export function AgentDock({
         </div>
       )}
       {people.some((person) => person.draft.trim()) && (
-        <ul data-testid="drafts" aria-label="what others here are writing" className="flex flex-col gap-1 border-b border-line-subtle px-4 py-2 text-xs">
+        <ul
+          data-testid="drafts"
+          aria-label="what others here are writing"
+          className="flex flex-col gap-1 border-b border-line-subtle px-4 py-2 text-xs"
+        >
           {people
             .filter((person) => person.draft.trim())
             .map((person) => (
@@ -677,7 +781,12 @@ export function AgentDock({
           settings={status.settings}
           onSetting={(id, value) => act(api.setSetting(thread, id, value))}
           more={
-            <Button variant="ghost" size="sm" title="Stops the agent; the thread keeps everything it did" onClick={() => act(api.stopAgent(thread))}>
+            <Button
+              variant="ghost"
+              size="sm"
+              title="Stops the agent; the thread keeps everything it did"
+              onClick={() => act(api.stopAgent(thread))}
+            >
               Stop agent
             </Button>
           }
@@ -704,7 +813,12 @@ export function AgentDock({
           icon="lock"
           value={preset}
           onChange={(chosen) => choosePreset(chosen as Preset)}
-          options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says, refused: presetRefused(workspace, choice.id) }))}
+          options={PRESETS.map((choice) => ({
+            id: choice.id,
+            name: choice.label,
+            description: choice.says,
+            refused: presetRefused(workspace, choice.id),
+          }))}
         />
       )}
       {(live ? status.agent_id : startable && agent) && <UsageRing agent={live ? status.agent_id : agent} thread={thread} />}
@@ -731,7 +845,12 @@ export function AgentDock({
       : undefined
   const enter = startable ? `start ${startName}` : live && !ready(status) ? 'queue' : 'send'
   const note = turning && draft.trim() && (
-    <Button variant="ghost" size="sm" onClick={steer} title={`Interrupts the agent's turn to tell it your draft (${formatKeys('mod+⏎')})`}>
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={steer}
+      title={`Interrupts the agent's turn to tell it your draft (${formatKeys('mod+⏎')})`}
+    >
       Steer now
       <span className="font-mono text-2xs text-fg-3">{formatKeys('mod+⏎')}</span>
     </Button>
@@ -763,12 +882,12 @@ export function AgentDock({
               : status.sign_in
                 ? 'Sign in above; a prompt waits for it'
                 : (status.questions?.length ?? 0) > 0
-                ? 'Answer above, or steer it'
-                : turning
-                  ? narrow
-                    ? 'Steer, or queue a prompt'
-                    : 'Steer it now, or queue a prompt for when this turn ends'
-                : `Ask ${status.agent}, or attach files for context`
+                  ? 'Answer above, or steer it'
+                  : turning
+                    ? narrow
+                      ? 'Steer, or queue a prompt'
+                      : 'Steer it now, or queue a prompt for when this turn ends'
+                    : `Ask ${status.agent}, or attach files for context`
         }
         top={top}
         above={above}

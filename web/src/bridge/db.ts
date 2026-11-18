@@ -41,7 +41,8 @@ export function dbHandler(thread: string, artifact: ArtifactView): CapabilityHan
     unsubscribe = bus.subscribe(`thread:${thread}`)
     unlisten = bus.listen((event) => {
       const said = event as { event?: string; thread?: string }
-      const ours = said.event === 'lagged' || (said.event === 'thread' && typeof said.thread === 'string' && said.thread.endsWith(thread))
+      const ours =
+        said.event === 'lagged' || (said.event === 'thread' && typeof said.thread === 'string' && said.thread.endsWith(thread))
       if (ours && pending === null) pending = window.setTimeout(refresh, 150)
     })
   }

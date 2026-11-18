@@ -7,7 +7,13 @@ export type Bounds = { min: number; max: number; start: number }
  * on `panel`. `edge` is the side its handle is on: a panel on the right grows as its left edge moves
  * left. While dragged, the width goes straight to the element and is kept once let go: rendering the page again on
  * each move, and the diff or list beside it, made dragging stutter. */
-export function useDragWidth(key: string, bounds: Bounds, edge: 'left' | 'right', name: `--${string}`, panel: RefObject<HTMLElement | null>) {
+export function useDragWidth(
+  key: string,
+  bounds: Bounds,
+  edge: 'left' | 'right',
+  name: `--${string}`,
+  panel: RefObject<HTMLElement | null>,
+) {
   const clamp = (next: number) => Math.min(bounds.max, Math.max(bounds.min, Math.round(next)))
   const [width, setWidth] = useState(() => {
     const kept = stored<number>(key, bounds.start)

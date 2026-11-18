@@ -32,7 +32,13 @@ function AddForm({ label, button, onAdd }: { label: string; button: string; onAd
         void onAdd(value.trim()).then(() => setValue(''))
       }}
     >
-      <Input aria-label={label} placeholder={label} className="w-44 text-xs" value={value} onChange={(event) => setValue(event.target.value)} />
+      <Input
+        aria-label={label}
+        placeholder={label}
+        className="w-44 text-xs"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+      />
       <Button type="submit" disabled={!value.trim()}>
         {button}
       </Button>
@@ -55,11 +61,15 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
     <section aria-label={`${org.name}'s policy`} className="flex flex-col gap-2 rounded-md border border-line-subtle p-3">
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="flex-1 font-mono text-[11px] tracking-wider text-fg-2 uppercase">Policy</h4>
-        {rulesLine(org.policy) ? <span className="text-xs">{rulesLine(org.policy)}</span> : <span className="text-xs text-fg-2">No rules: any agent, up to Full access</span>}
+        {rulesLine(org.policy) ? (
+          <span className="text-xs">{rulesLine(org.policy)}</span>
+        ) : (
+          <span className="text-xs text-fg-2">No rules: any agent, up to Full access</span>
+        )}
       </div>
       <p className="text-xs text-fg-2">
-        Applies to {org.name}'s projects on every member's machine. Members' own rules can add to it but never loosen it. Silt enforces it for every agent it
-        starts; it can't stop an agent someone runs without Silt.
+        Applies to {org.name}'s projects on every member's machine. Members' own rules can add to it but never loosen it. Silt
+        enforces it for every agent it starts; it can't stop an agent someone runs without Silt.
       </p>
       <fieldset disabled={!owns} className="grid grid-cols-1 gap-3 md:grid-cols-[200px_minmax(0,1fr)]">
         <span className="flex flex-col">
@@ -83,22 +93,26 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
             </label>
           ))}
           {!policy.agents && (
-          <label className="inline-flex items-center gap-1 text-xs">
-            <input
-              type="checkbox"
-              aria-label={`${org.name} allows custom agents`}
-              checked={policy.custom_agents !== false}
-              onChange={(event) => set({ custom_agents: event.target.checked ? null : false })}
-            />
-            Custom agents from a machine's <code className="font-mono">agents.json</code>
-          </label>
+            <label className="inline-flex items-center gap-1 text-xs">
+              <input
+                type="checkbox"
+                aria-label={`${org.name} allows custom agents`}
+                checked={policy.custom_agents !== false}
+                onChange={(event) => set({ custom_agents: event.target.checked ? null : false })}
+              />
+              Custom agents from a machine's <code className="font-mono">agents.json</code>
+            </label>
           )}
         </span>
         <span className="flex flex-col">
           <span>Most an agent may do without asking</span>
           <span className="text-2xs text-fg-2">Caps the preset, and the agent's own modes</span>
         </span>
-        <span role="radiogroup" aria-label={`${org.name}'s most permissive preset`} className="inline-flex self-start overflow-hidden rounded-sm border border-line text-xs">
+        <span
+          role="radiogroup"
+          aria-label={`${org.name}'s most permissive preset`}
+          className="inline-flex self-start overflow-hidden rounded-sm border border-line text-xs"
+        >
           {(['ask_for_everything', 'ask_before_commands', 'full_access'] as Preset[]).map((preset) => (
             <button
               key={preset}
@@ -106,7 +120,10 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
               role="radio"
               aria-checked={cap === preset}
               onClick={() => set({ max_preset: preset === 'full_access' ? null : preset })}
-              className={cx('px-3 py-1 max-md:min-h-11', cap === preset ? 'bg-accent-tint text-accent-fg' : 'text-fg-2 hover:bg-surface-2')}
+              className={cx(
+                'px-3 py-1 max-md:min-h-11',
+                cap === preset ? 'bg-accent-tint text-accent-fg' : 'text-fg-2 hover:bg-surface-2',
+              )}
             >
               {PRESET_LABELS[preset]}
             </button>
@@ -121,7 +138,10 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
           aria-label={`${org.name}'s page connectors`}
           defaultValue={(policy.connectors ?? []).join(', ')}
           onBlur={(event) => {
-            const named = event.target.value.split(',').map((name) => name.trim()).filter(Boolean)
+            const named = event.target.value
+              .split(',')
+              .map((name) => name.trim())
+              .filter(Boolean)
             set({ connectors: named.length > 0 ? named : null })
           }}
           placeholder="any"
@@ -131,7 +151,11 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
           [
             ['silt_sandbox', "Silt's sandbox", 'Agents run in it, and don’t start on a machine that can’t make one'],
             ['sandbox', "Agent's own sandbox", 'Agents that can’t sandbox are refused'],
-            ['isolated', "Hide other workspaces' files", "The sandbox also keeps agents out of Silt's data and other workspaces' folders"],
+            [
+              'isolated',
+              "Hide other workspaces' files",
+              "The sandbox also keeps agents out of Silt's data and other workspaces' folders",
+            ],
             ['home_locked', 'Where threads sync', `Only to this server; never this machine only, never another`],
           ] as const
         ).map(([key, name, says]) => (
@@ -141,7 +165,12 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
               <span className="text-2xs text-fg-2">{says}</span>
             </span>
             <span className="inline-flex items-center gap-2 text-xs">
-              <input type="checkbox" aria-label={`${org.name}: ${name}`} checked={Boolean(policy[key])} onChange={(event) => set({ [key]: event.target.checked })} />
+              <input
+                type="checkbox"
+                aria-label={`${org.name}: ${name}`}
+                checked={Boolean(policy[key])}
+                onChange={(event) => set({ [key]: event.target.checked })}
+              />
               {policy[key] ? 'Required' : 'Off'}
             </span>
           </label>
@@ -152,7 +181,12 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
           <Button variant="ghost" onClick={() => setDraft(undefined)}>
             Discard
           </Button>
-          <Button variant="primary" onClick={() => void change({ change: 'policy', org: org.name, policy: draft }, 'Policy saved').then(() => setDraft(undefined))}>
+          <Button
+            variant="primary"
+            onClick={() =>
+              void change({ change: 'policy', org: org.name, policy: draft }, 'Policy saved').then(() => setDraft(undefined))
+            }
+          >
             Save policy
           </Button>
         </div>
@@ -179,22 +213,34 @@ function Org({ org, others }: { org: OrgInfo; others: OrgInfo[] }) {
             className="text-xs"
             disabled={!owns}
             value={org.default_visibility}
-            onChange={(event) => void change({ change: 'default_visibility', org: org.name, visibility: event.target.value }, 'Default changed')}
+            onChange={(event) =>
+              void change({ change: 'default_visibility', org: org.name, visibility: event.target.value }, 'Default changed')
+            }
           >
             {teams.map((visibility) => (
               <option key={visibility} value={visibility}>
-                {visibility === 'private' ? 'only their owner' : visibility === 'org' ? 'the whole org' : `team ${visibility.slice(5)}`}
+                {visibility === 'private'
+                  ? 'only their owner'
+                  : visibility === 'org'
+                    ? 'the whole org'
+                    : `team ${visibility.slice(5)}`}
               </option>
             ))}
           </Select>
         </label>
-        <label className="flex items-center gap-1 text-xs text-fg-2" title="Turned off, every link made until then stops for good">
+        <label
+          className="flex items-center gap-1 text-xs text-fg-2"
+          title="Turned off, every link made until then stops for good"
+        >
           <input
             type="checkbox"
             disabled={!owns}
             checked={org.links}
             onChange={(event) =>
-              void change({ change: 'links', org: org.name, on: event.target.checked }, event.target.checked ? 'Links allowed' : 'Links stopped')
+              void change(
+                { change: 'links', org: org.name, on: event.target.checked },
+                event.target.checked ? 'Links allowed' : 'Links stopped',
+              )
             }
           />
           Read-only links
@@ -214,7 +260,9 @@ function Org({ org, others }: { org: OrgInfo; others: OrgInfo[] }) {
                 <Button
                   variant="ghost"
                   className="ml-auto"
-                  onClick={() => void change({ change: 'remove_member', org: org.name, user: member.user }, `Removed ${member.user}`)}
+                  onClick={() =>
+                    void change({ change: 'remove_member', org: org.name, user: member.user }, `Removed ${member.user}`)
+                  }
                 >
                   Remove
                 </Button>
@@ -250,7 +298,9 @@ function Org({ org, others }: { org: OrgInfo; others: OrgInfo[] }) {
                   <Button
                     variant="ghost"
                     className="ml-auto"
-                    onClick={() => void change({ change: 'remove_team', org: org.name, team: team.name }, `Removed team ${team.name}`)}
+                    onClick={() =>
+                      void change({ change: 'remove_team', org: org.name, team: team.name }, `Removed team ${team.name}`)
+                    }
                   >
                     Remove team
                   </Button>
@@ -264,7 +314,10 @@ function Org({ org, others }: { org: OrgInfo; others: OrgInfo[] }) {
                         key={member.user}
                         className="px-1.5 py-0.5"
                         onClick={() =>
-                          void change({ change: 'remove_from_team', org: org.name, team: team.name, user: member.user }, `${member.user} left ${team.name}`)
+                          void change(
+                            { change: 'remove_from_team', org: org.name, team: team.name, user: member.user },
+                            `${member.user} left ${team.name}`,
+                          )
                         }
                       >
                         − {member.user}
@@ -275,7 +328,10 @@ function Org({ org, others }: { org: OrgInfo; others: OrgInfo[] }) {
                         variant="ghost"
                         className="px-1.5 py-0.5"
                         onClick={() =>
-                          void change({ change: 'add_to_team', org: org.name, team: team.name, user: member.user }, `${member.user} joined ${team.name}`)
+                          void change(
+                            { change: 'add_to_team', org: org.name, team: team.name, user: member.user },
+                            `${member.user} joined ${team.name}`,
+                          )
                         }
                       >
                         + {member.user}
@@ -289,7 +345,11 @@ function Org({ org, others }: { org: OrgInfo; others: OrgInfo[] }) {
         </ul>
         {owns && (
           <div className="mt-2">
-            <AddForm label="team name" button="Create team" onAdd={(team) => change({ change: 'create_team', org: org.name, team }, `Created team ${team}`)} />
+            <AddForm
+              label="team name"
+              button="Create team"
+              onAdd={(team) => change({ change: 'create_team', org: org.name, team }, `Created team ${team}`)}
+            />
           </div>
         )}
       </div>
