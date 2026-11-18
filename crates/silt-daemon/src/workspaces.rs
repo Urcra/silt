@@ -35,6 +35,9 @@ pub fn load(data_dir: &Path) -> Option<Workspaces> {
 
 fn tidied(mut workspaces: Workspaces) -> Workspaces {
     workspaces.tidy();
+    for dropped in workspaces.drop_refused_folders() {
+        tracing::warn!(%dropped, "leaving out a folder of {FILE}");
+    }
     workspaces
 }
 

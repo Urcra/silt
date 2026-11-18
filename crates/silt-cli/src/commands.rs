@@ -474,6 +474,9 @@ impl Run<'_> {
                 for name in &sandboxed.missing {
                     eprintln!("silt: the credential {name} has no secret to add; `silt credential list` says why");
                 }
+                for why in &sandboxed.refused {
+                    eprintln!("silt: a folder the workspace names is left out of the sandbox: {why}");
+                }
                 let handle = recording.handle();
                 for outside in sandboxed.outside.drain(..) {
                     // Served while the agent runs, and dropped with this process.

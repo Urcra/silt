@@ -15,7 +15,10 @@ pub use policy::{
 };
 pub use preset::Preset;
 pub use reach::{Backend, Devices, Extra, Network, Reach};
-pub use sandbox::{ALWAYS_BLOCKED, Cidr, Mount, MountKind, PathDir, Relay, RunPaths, SandboxPlan, plan, subtract};
+pub use sandbox::{
+    ALWAYS_BLOCKED, Cidr, ExtraDir, ExtraRepo, Mount, MountKind, PathDir, Relay, RunPaths, SandboxPlan, expand_home, plan,
+    subtract,
+};
 pub use seatbelt::{SeatbeltPaths, profile as seatbelt_profile};
 pub use workspace::{
     AgentDefaults, BadWorkspaceId, Defaults, InvalidWorkspaces, MatchRule, Resolved, ServerBinding, Why, Workspace, WorkspaceId,

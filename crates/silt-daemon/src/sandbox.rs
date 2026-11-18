@@ -5,9 +5,9 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use silt_workspace::{ExtraDir, ExtraRepo, PathDir, Reach, RunPaths};
 #[cfg(unix)]
 use silt_workspace::{Mount, MountKind, Network};
-use silt_workspace::{PathDir, Reach, RunPaths};
 
 use crate::CoreError;
 
@@ -45,6 +45,9 @@ pub struct Sandboxed {
     pub outside: Vec<Outside>,
     /// Credentials the workspace names whose secret couldn't be had.
     pub missing: Vec<String>,
+    /// Why each folder the workspace names and the sandbox doesn't get
+    /// was left out.
+    pub refused: Vec<String>,
 }
 
 /// What answers a sandbox's relay outside it. There are none where the
@@ -172,7 +175,16 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
         #[cfg(not(unix))]
         run_socket: None,
         ssh_agent_socket: lookup("SSH_AUTH_SOCK").map(PathBuf::from),
+        extra: run.reach.paths.iter().map(|(path, writable)| extra_dir(path, *writable, home.as_deref())).collect(),
     };
+    let refused: Vec<String> = paths.extra.iter().filter_map(|dir| paths.extra_refusal(dir)).collect();
+    // As for the checkout below: a hooks folder made in the sandbox would
+    // be writable there.
+    for dir in paths.extra.iter().filter(|dir| dir.writable && paths.extra_refusal(dir).is_none()) {
+        for repo in dir.repos.iter().flatten().filter(|repo| repo.git_dir.join("objects").is_dir()) {
+            std::fs::create_dir_all(repo.git_dir.join("hooks"))?;
+        }
+    }
     // What's mounted must exist: an agent's home it hasn't made yet would
     // otherwise live in the sandbox alone, out of capture's sight, and a
     // missing hooks folder could be made writable there.
@@ -209,7 +221,7 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     let added: Vec<&str> = extra_env.iter().map(|(name, _)| name.as_str()).collect();
     env.retain(|(name, _)| !added.contains(&name.as_str()));
     env.extend(extra_env);
-    Ok(Sandboxed { launcher, env, outside, missing })
+    Ok(Sandboxed { launcher, env, outside, missing, refused })
 }
 
 /// What the devices relayed to the run add to its plan, and the variables
@@ -470,6 +482,72 @@ fn keeps(name: &str, reach: &Reach) -> bool {
     !CREDENTIAL_VARIABLES.contains(&name) && !CREDENTIAL_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
 }
 
+/// How many entries a writable extra folder is walked through for git
+/// repos; one with more is refused rather than handed over unchecked.
+const EXTRA_WALK_LIMIT: usize = 100_000;
+
+/// A folder as a workspace's rule names it, resolved: where it really is,
+/// and the git repos in it where it's writable.
+pub fn extra_dir(path: &str, writable: bool, home: Option<&Path>) -> ExtraDir {
+    let path = silt_workspace::expand_home(path, home);
+    let real = std::fs::canonicalize(&path).ok().filter(|real| real.is_dir());
+    let repos = match &real {
+        Some(real) if writable => repos_in(real, EXTRA_WALK_LIMIT),
+        _ => Some(Vec::new()),
+    };
+    ExtraDir { path, real, writable, repos }
+}
+
+/// The git dirs under `root`, never following a link; `None` once more
+/// than `limit` entries have been looked at.
+fn repos_in(root: &Path, limit: usize) -> Option<Vec<ExtraRepo>> {
+    let mut repos = Vec::new();
+    let mut seen = 0usize;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if is_git_dir(&dir) {
+            // A bare repo, a submodule's or a worktree's: only what holds
+            // more of them is looked into, not its objects.
+            stack.extend(["modules", "worktrees"].map(|name| dir.join(name)));
+            repos.push(ExtraRepo { git_dir: dir, pointer: None, work_tree: None });
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > limit {
+                return None;
+            }
+            let Ok(kind) = entry.file_type() else { continue };
+            let path = entry.path();
+            if entry.file_name() == ".git" {
+                if kind.is_dir() {
+                    stack.extend(["modules", "worktrees"].map(|name| path.join(name)));
+                    repos.push(ExtraRepo { git_dir: path, pointer: None, work_tree: Some(dir.clone()) });
+                } else {
+                    let git_dir = pointed_at(&path).unwrap_or_else(|| path.clone());
+                    repos.push(ExtraRepo { git_dir, pointer: Some(path), work_tree: Some(dir.clone()) });
+                }
+            } else if kind.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    Some(repos)
+}
+
+fn is_git_dir(dir: &Path) -> bool {
+    dir.join("HEAD").is_file() && (dir.join("objects").is_dir() || dir.join("commondir").is_file())
+}
+
+/// Where a `.git` file points, resolved.
+fn pointed_at(pointer: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(pointer).ok()?;
+    let target = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
+    let target = if target.is_absolute() { target } else { pointer.parent()?.join(target) };
+    Some(std::fs::canonicalize(&target).unwrap_or(target))
+}
+
 /// A checkout's own git dir when it's elsewhere, as a managed checkout's
 /// is, and the objects it borrows through alternates.
 fn git_paths(checkout: &Path) -> (Option<PathBuf>, Vec<PathBuf>) {
@@ -552,6 +630,49 @@ fn bubblewrap_unavailable() -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&status.stderr));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writable_folders_repos_are_found_without_following_links() {
+        let root = tempfile::tempdir().unwrap();
+        let code = std::fs::canonicalize(root.path()).unwrap().join("code");
+        let (app, lib, tree) = (code.join("app"), code.join("nested/lib"), code.join("app-feature"));
+        for dir in [&app, &lib] {
+            std::fs::create_dir_all(dir).unwrap();
+            git(dir, &["init", "-q"]);
+            git(dir, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        }
+        git(&app, &["worktree", "add", "-q", tree.to_str().unwrap()]);
+        git(&app, &["submodule", "add", "-q", lib.to_str().unwrap(), "vendor/lib"]);
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(outside.join("repo")).unwrap();
+        git(&outside.join("repo"), &["init", "-q"]);
+        std::os::unix::fs::symlink(&outside, code.join("link")).unwrap();
+
+        let dir = extra_dir(code.to_str().unwrap(), true, None);
+        let repos = dir.repos.expect("walked");
+        let git_dirs: Vec<&Path> = repos.iter().map(|repo| repo.git_dir.as_path()).collect();
+        assert!(git_dirs.contains(&app.join(".git").as_path()), "{git_dirs:?}");
+        assert!(git_dirs.contains(&lib.join(".git").as_path()));
+        assert!(git_dirs.contains(&app.join(".git/modules/vendor/lib").as_path()), "the submodule's own");
+        assert!(git_dirs.iter().any(|dir| dir.starts_with(app.join(".git/worktrees"))), "the worktree's own");
+        assert!(repos.iter().any(|repo| repo.pointer.as_deref() == Some(tree.join(".git").as_path())));
+        assert!(!git_dirs.iter().any(|dir| dir.starts_with(&outside)), "links aren't followed");
+
+        assert_eq!(repos_in(&code, 3), None, "too much to look through");
+        assert_eq!(extra_dir(code.to_str().unwrap(), false, None).repos, Some(Vec::new()), "read-only isn't walked");
+        assert_eq!(extra_dir("~/nowhere-at-all", false, Some(root.path())).real, None);
+    }
 
     #[cfg(unix)]
     #[test]

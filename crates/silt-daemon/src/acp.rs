@@ -2030,6 +2030,9 @@ fn sandboxed(
     if !prepared.missing.is_empty() {
         tracing::warn!(missing = ?prepared.missing, "credentials the workspace names had no secret to add");
     }
+    if !prepared.refused.is_empty() {
+        tracing::warn!(refused = ?prepared.refused, "folders the workspace names were left out of the sandbox");
+    }
     let handle = tokio::runtime::Handle::current();
     let mut tasks = Vec::new();
     for outside in prepared.outside {

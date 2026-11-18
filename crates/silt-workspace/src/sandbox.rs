@@ -84,6 +84,56 @@ impl From<&str> for PathDir {
     }
 }
 
+/// A folder a rule hands the sandbox, resolved outside, as the plan does
+/// no I/O.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExtraDir {
+    /// As the rule names it, `~/` expanded.
+    pub path: PathBuf,
+    /// Where it really is, every link followed; `None` when it isn't there.
+    pub real: Option<PathBuf>,
+    pub writable: bool,
+    /// The git repos in a writable one, by where they really are; `None`
+    /// when it held too much to look through.
+    pub repos: Option<Vec<ExtraRepo>>,
+}
+
+/// A git dir found in an extra folder.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExtraRepo {
+    pub git_dir: PathBuf,
+    /// The `.git` file pointing at it, for a worktree or a submodule.
+    pub pointer: Option<PathBuf>,
+    /// The folder it's the repo of, whose `.silt/` holds Silt's checkouts.
+    pub work_tree: Option<PathBuf>,
+}
+
+impl ExtraRepo {
+    /// Its mounts: what git or Silt runs or follows from it on the host
+    /// later read-only (B2.3), after its `.git` folder is mounted on itself,
+    /// so it can't be moved aside for another.
+    fn protected(&self) -> Vec<(MountKind, PathBuf)> {
+        let mut mounts = Vec::new();
+        match (&self.pointer, &self.work_tree) {
+            (Some(pointer), _) => mounts.push((MountKind::ReadOnly, pointer.clone())),
+            (None, Some(tree)) => mounts.push((MountKind::ReadWrite, tree.join(".git"))),
+            (None, None) => {}
+        }
+        mounts.extend(["config", "hooks", "commondir"].map(|name| (MountKind::ReadOnly, self.git_dir.join(name))));
+        mounts.extend(self.work_tree.iter().map(|tree| (MountKind::ReadOnly, tree.join(".silt"))));
+        mounts
+    }
+}
+
+/// `path` with a leading `~/` made the home folder.
+pub fn expand_home(path: &str, home: Option<&Path>) -> PathBuf {
+    match (path.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => home.join(rest),
+        _ if path == "~" => home.map_or_else(|| PathBuf::from(path), Path::to_path_buf),
+        _ => PathBuf::from(path),
+    }
+}
+
 /// Where a run's things are on this machine.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunPaths {
@@ -115,6 +165,53 @@ pub struct RunPaths {
     /// The socket that answers for this run only.
     pub run_socket: Option<PathBuf>,
     pub ssh_agent_socket: Option<PathBuf>,
+    /// The folders the workspace's rules hand over, as [`Reach::paths`]
+    /// names them.
+    pub extra: Vec<ExtraDir>,
+}
+
+impl RunPaths {
+    fn homes(&self) -> Vec<&Path> {
+        self.home.as_deref().into_iter().chain(self.real_home.as_deref()).collect()
+    }
+
+    fn data(&self) -> Vec<&Path> {
+        self.data_dir.as_deref().into_iter().chain(self.real_data_dir.as_deref()).collect()
+    }
+
+    /// Why `dir` is never handed to the sandbox, by either of its names.
+    pub fn extra_refusal(&self, dir: &ExtraDir) -> Option<String> {
+        let shown = dir.path.display();
+        let Some(real) = &dir.real else { return Some(format!("{shown} isn't there")) };
+        if dir.writable && dir.repos.is_none() {
+            return Some(format!(
+                "{shown} holds too much to check its git repos; name the repos in it instead, or give it read-only"
+            ));
+        }
+        let homes = self.homes();
+        let data = self.data();
+        for named in [dir.path.as_path(), real] {
+            if !named.is_absolute() {
+                return Some(format!("{shown} isn't a full path"));
+            }
+            if ["/proc", "/sys", "/dev"].iter().any(|system| named.starts_with(system)) {
+                return Some(format!("{shown} is the system's own"));
+            }
+            if homes.iter().chain(&data).any(|private| private.starts_with(named)) {
+                return Some(format!("{shown} holds your home folder or Silt's data"));
+            }
+            if data.iter().any(|data| named.starts_with(data)) {
+                return Some(format!("{shown} is in Silt's data"));
+            }
+            let credentials = homes.iter().flat_map(|home| CREDENTIALS.iter().map(|file| home.join(file)));
+            for credential in credentials {
+                if named.starts_with(&credential) || credential.starts_with(named) {
+                    return Some(format!("{shown} holds credentials ({})", credential.display()));
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Everything the sandbox is made of.
@@ -222,8 +319,8 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
     // Folders the person's PATH names, wherever they are, so the tools the
     // agent calls are there; never one that holds the home folder or Silt's
     // data, by any name.
-    let homes: Vec<&Path> = home.into_iter().chain(paths.real_home.as_deref()).collect();
-    let data: Vec<&Path> = paths.data_dir.as_deref().into_iter().chain(paths.real_data_dir.as_deref()).collect();
+    let homes = paths.homes();
+    let data = paths.data();
     let private: Vec<&Path> = homes.iter().chain(&data).copied().collect();
     let refused =
         |dir: &Path| !dir.is_absolute() || dir.starts_with("/proc") || private.iter().any(|private| private.starts_with(dir));
@@ -250,6 +347,18 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
     for path in &paths.read_only {
         mounts.at(MountKind::ReadOnly, path.clone());
     }
+    // Before what's hidden and what the run writes, so neither can be
+    // undone by a folder that holds them.
+    let extra: Vec<(&ExtraDir, &Path)> = paths
+        .extra
+        .iter()
+        .filter(|dir| paths.extra_refusal(dir).is_none())
+        .filter_map(|dir| dir.real.as_deref().map(|real| (dir, real)))
+        .collect();
+    for (dir, real) in &extra {
+        let kind = if dir.writable { MountKind::ReadWrite } else { MountKind::ReadOnly };
+        mounts.add(Mount { kind, path: dir.path.clone(), source: (dir.path != *real).then(|| real.to_path_buf()) });
+    }
     if let Some(home) = home {
         for dir in CACHES {
             mounts.at(MountKind::ReadWrite, home.join(dir));
@@ -273,14 +382,24 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
         mounts.at(MountKind::ReadWrite, dir.clone());
     }
     mounts.at(MountKind::ReadWrite, paths.scratch.clone());
-    for (path, writable) in &reach.paths {
-        mounts.at(if *writable { MountKind::ReadWrite } else { MountKind::ReadOnly }, PathBuf::from(path));
-    }
     // Run later by git or Silt outside the sandbox, so never writable in it
     // (B2.3, CVE-2026-25725).
-    let git_dir = paths.git_dir.clone().unwrap_or_else(|| paths.checkout.join(".git"));
-    for protected in [git_dir.join("config"), git_dir.join("hooks"), paths.checkout.join(".silt")] {
-        mounts.at(MountKind::ReadOnly, protected);
+    let checkout = match &paths.git_dir {
+        Some(git_dir) => ExtraRepo { git_dir: git_dir.clone(), pointer: Some(paths.checkout.join(".git")), work_tree: None },
+        None => ExtraRepo { git_dir: paths.checkout.join(".git"), pointer: None, work_tree: Some(paths.checkout.clone()) },
+    };
+    for (kind, path) in checkout.protected() {
+        mounts.at(kind, path);
+    }
+    mounts.at(MountKind::ReadOnly, paths.checkout.join(".silt"));
+    for (dir, real) in extra.iter().filter(|(dir, _)| dir.writable) {
+        for (kind, protected) in dir.repos.iter().flatten().flat_map(ExtraRepo::protected) {
+            // Only what the folder shows: a git dir elsewhere isn't mounted.
+            let Ok(inside) = protected.strip_prefix(real) else { continue };
+            let path = dir.path.join(inside);
+            let source = (path != protected).then_some(protected);
+            mounts.add(Mount { kind, path, source });
+        }
     }
     match reach.devices {
         // Silt opens them and mounts what it relays them through.
@@ -391,7 +510,131 @@ mod tests {
             scratch: "/home/ana/.local/share/silt/runs/t1-1".into(),
             run_socket: Some("/home/ana/.local/share/silt/agents.sock".into()),
             ssh_agent_socket: Some("/run/user/1000/ssh-agent.sock".into()),
+            extra: Vec::new(),
         }
+    }
+
+    fn folder(path: &str, writable: bool, repos: Vec<ExtraRepo>) -> ExtraDir {
+        ExtraDir { path: path.into(), real: Some(path.into()), writable, repos: Some(repos) }
+    }
+
+    fn repo(tree: &str) -> ExtraRepo {
+        ExtraRepo { git_dir: format!("{tree}/.git").into(), pointer: None, work_tree: Some(tree.into()) }
+    }
+
+    #[test]
+    fn a_folder_that_holds_or_is_in_something_private_is_never_handed_over() {
+        let base = paths();
+        for (path, why) in [
+            ("/", "holds your home"),
+            ("/home", "holds your home"),
+            ("/home/ana", "holds your home"),
+            ("/home/ana/.local/share", "holds your home folder or Silt's data"),
+            ("/home/ana/.local/share/silt/blobs", "in Silt's data"),
+            ("/home/ana/.config", "holds credentials"),
+            ("/home/ana/.ssh", "holds credentials"),
+            ("/home/ana/.aws/sso", "holds credentials"),
+            ("/proc/self", "the system's own"),
+        ] {
+            let dir = folder(path, false, Vec::new());
+            let refusal = base.extra_refusal(&dir).unwrap_or_else(|| panic!("{path} was handed over"));
+            assert!(refusal.contains(why), "{path}: {refusal}");
+            let plan = plan(&RunPaths { extra: vec![dir], ..paths() }, &Reach::default());
+            let shown = plan.mounts.iter().any(|mount| mount.path == Path::new(path) && mount.kind != MountKind::Hide);
+            assert!(!shown, "{path} is mounted");
+        }
+        let linked = ExtraDir { real: Some("/home/ana/.ssh".into()), ..folder("/home/ana/code/keys", false, Vec::new()) };
+        assert!(base.extra_refusal(&linked).is_some(), "judged where it really is");
+        let missing = ExtraDir { real: None, ..folder("/home/ana/gone", false, Vec::new()) };
+        assert!(base.extra_refusal(&missing).is_some_and(|why| why.contains("isn't there")));
+        let unchecked = ExtraDir { repos: None, ..folder("/home/ana/huge", true, Vec::new()) };
+        assert!(base.extra_refusal(&unchecked).is_some_and(|why| why.contains("too much")));
+    }
+
+    #[test]
+    fn credentials_stay_hidden_under_an_extra_folder() {
+        let extra = vec![folder("/home/ana/work", true, Vec::new())];
+        let plan = plan(&RunPaths { extra, ..paths() }, &Reach::default());
+        assert_eq!(plan.sees(Path::new("/home/ana/work/lib/src/lib.rs")), Some(true));
+        assert_eq!(
+            plan.sees(Path::new("/home/ana/work/api/.silt/checkouts/t1/src/main.rs")),
+            Some(true),
+            "the checkout inside stays writable"
+        );
+        assert_eq!(plan.sees(Path::new("/home/ana/work/api/.silt/checkouts/t1/.silt/prepare")), Some(false));
+        // Read-only around the checkout doesn't make the checkout read-only.
+        let extra = vec![folder("/home/ana/work", false, Vec::new())];
+        let plan = super::plan(&RunPaths { extra, ..paths() }, &Reach::default());
+        assert_eq!(plan.sees(Path::new("/home/ana/work/lib/src/lib.rs")), Some(false));
+        assert_eq!(plan.sees(Path::new("/home/ana/work/api/.silt/checkouts/t1/src/main.rs")), Some(true));
+    }
+
+    #[test]
+    fn every_repo_in_a_writable_folder_keeps_its_git_files_read_only() {
+        let submodule = ExtraRepo {
+            git_dir: "/home/ana/code/app/.git/modules/vendor/ui".into(),
+            pointer: Some("/home/ana/code/app/vendor/ui/.git".into()),
+            work_tree: Some("/home/ana/code/app/vendor/ui".into()),
+        };
+        let elsewhere = ExtraRepo {
+            git_dir: "/srv/git/tool.git".into(),
+            pointer: Some("/home/ana/code/tool/.git".into()),
+            work_tree: Some("/home/ana/code/tool".into()),
+        };
+        let extra = vec![folder("/home/ana/code", true, vec![repo("/home/ana/code/app"), submodule, elsewhere])];
+        let plan = plan(&RunPaths { extra, ..paths() }, &Reach::default());
+        assert_eq!(plan.sees(Path::new("/home/ana/code/app/src/main.rs")), Some(true));
+        assert_eq!(plan.sees(Path::new("/home/ana/code/app/.git/objects/ab/cd")), Some(true), "commits still work");
+        for protected in [
+            "/home/ana/code/app/.git/config",
+            "/home/ana/code/app/.git/hooks/pre-commit",
+            "/home/ana/code/app/.git/commondir",
+            "/home/ana/code/app/.silt/checkouts/t9/x",
+            "/home/ana/code/app/.git/modules/vendor/ui/config",
+            "/home/ana/code/app/vendor/ui/.git",
+            "/home/ana/code/tool/.git",
+        ] {
+            assert_eq!(plan.sees(Path::new(protected)), Some(false), "{protected}");
+        }
+        let pinned = plan.mounts.iter().find(|mount| mount.path == Path::new("/home/ana/code/app/.git"));
+        assert_eq!(pinned.map(|mount| mount.kind), Some(MountKind::ReadWrite), "mounted on itself, so it can't be moved aside");
+        assert!(!plan.mounts.iter().any(|mount| mount.path.starts_with("/srv")), "a git dir outside isn't brought in");
+
+        // Read-only, nothing needs protecting.
+        let extra = vec![folder("/home/ana/code", false, vec![repo("/home/ana/code/app")])];
+        let plan = super::plan(&RunPaths { extra, ..paths() }, &Reach::default());
+        assert!(!plan.mounts.iter().any(|mount| mount.path.starts_with("/home/ana/code/app")));
+    }
+
+    #[test]
+    fn a_linked_folder_is_shown_at_its_name_with_its_repos_protected_there() {
+        let dir = ExtraDir {
+            path: "/home/ana/lib".into(),
+            real: Some("/data/ana/lib".into()),
+            writable: true,
+            repos: Some(vec![repo("/data/ana/lib")]),
+        };
+        let plan = plan(&RunPaths { extra: vec![dir], ..paths() }, &Reach::default());
+        let mount = plan.mounts.iter().find(|mount| mount.path == Path::new("/home/ana/lib")).expect("mounted at its name");
+        assert_eq!((mount.kind, mount.source.as_deref()), (MountKind::ReadWrite, Some(Path::new("/data/ana/lib"))));
+        let config = plan.mounts.iter().find(|mount| mount.path == Path::new("/home/ana/lib/.git/config")).expect("protected");
+        assert_eq!((config.kind, config.source.as_deref()), (MountKind::ReadOnly, Some(Path::new("/data/ana/lib/.git/config"))));
+    }
+
+    #[test]
+    fn a_managed_checkouts_git_pointer_is_read_only() {
+        let plan = plan(&paths(), &Reach::default());
+        assert_eq!(plan.sees(Path::new("/home/ana/work/api/.silt/checkouts/t1/.git")), Some(false));
+        assert_eq!(plan.sees(Path::new("/home/ana/work/api/.git/silt/clones/t1/commondir")), Some(false));
+    }
+
+    #[test]
+    fn home_is_expanded() {
+        let home = Path::new("/home/ana");
+        assert_eq!(expand_home("~/code", Some(home)), Path::new("/home/ana/code"));
+        assert_eq!(expand_home("~", Some(home)), home);
+        assert_eq!(expand_home("/srv/x", Some(home)), Path::new("/srv/x"));
+        assert_eq!(expand_home("~/code", None), Path::new("~/code"));
     }
 
     #[test]
@@ -531,10 +774,11 @@ mod tests {
             devices: Some(Devices::Named),
             device_nodes: ["/dev/ttyUSB0".to_owned()].into(),
             ssh_agent: true,
-            paths: [("/home/ana/notes".to_owned(), false)].into(),
             ..Policy::default()
         };
-        let plan = plan(&paths(), &Reach::of(&policy));
+        // The daemon resolves the rule's folders into the run's paths.
+        let paths = RunPaths { extra: vec![folder("/home/ana/notes", false, Vec::new())], ..paths() };
+        let plan = plan(&paths, &Reach::of(&policy));
         assert_eq!(plan.sees(Path::new("/dev/ttyUSB0")), Some(true));
         assert_eq!(plan.sees(Path::new("/run/user/1000/ssh-agent.sock")), Some(true));
         assert_eq!(plan.sees(Path::new("/home/ana/notes/todo.md")), Some(false));

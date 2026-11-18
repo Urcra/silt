@@ -128,8 +128,12 @@ pub fn bwrap_args(plan: &SandboxPlan, ids: Ids, seccomp: &File, resolv: Option<&
         let path = mount.path.as_os_str();
         if let Some(source) = &mount.source {
             // Something else shown in its place: a relay's terminal for a
-            // device, else read-only.
-            let how = if mount.kind == MountKind::Device { "--dev-bind" } else { "--ro-bind" };
+            // device, else a link's target, read-only or not as it's named.
+            let how = match mount.kind {
+                MountKind::Device => "--dev-bind",
+                MountKind::ReadWrite => "--bind-try",
+                _ => "--ro-bind-try",
+            };
             push(&[how.as_ref(), source.as_os_str(), path]);
             continue;
         }
@@ -390,6 +394,53 @@ mod tests {
         let said = String::from_utf8_lossy(&output.stdout);
         assert!(!said.contains("SEEN") && said.contains("WROTE") && said.contains("LOCKED"), "{said}");
         assert!(checkout.join("made").exists());
+    }
+
+    #[test]
+    fn a_writable_extra_repo_commits_but_keeps_its_git_files() {
+        let Some(tools) = tools(Network::None).ok().filter(|tools| check(tools).is_ok()) else {
+            eprintln!("skipped: bubblewrap can't make a sandbox here");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let lib = root.join("code/lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        let init = std::process::Command::new("git").args(["init", "-q"]).current_dir(&lib).status().unwrap();
+        assert!(init.success());
+        let checkout = root.join("app");
+        std::fs::create_dir_all(&checkout).unwrap();
+        let extra = silt_workspace::ExtraDir {
+            path: root.join("code"),
+            real: Some(root.join("code")),
+            writable: true,
+            repos: Some(vec![silt_workspace::ExtraRepo {
+                git_dir: lib.join(".git"),
+                pointer: None,
+                work_tree: Some(lib.clone()),
+            }]),
+        };
+        let paths =
+            RunPaths { checkout, silt: "/bin/sh".into(), scratch: root.join("run"), extra: vec![extra], ..RunPaths::default() };
+        let plan = plan(&paths, &Reach::of(&Policy { network: Some(Network::None), ..Policy::default() }));
+        std::fs::write(root.join("seccomp.bpf"), seccomp_program().unwrap()).unwrap();
+        let seccomp = File::open(root.join("seccomp.bpf")).unwrap();
+        inherit(&seccomp).unwrap();
+        let script = format!(
+            "cd {} && echo hi > a.txt && git add a.txt && git -c user.name=t -c user.email=t@t commit -qm one && echo COMMITTED; \
+             echo '[core] fsmonitor = evil' >> .git/config 2>/dev/null || echo CONFIG; \
+             echo evil > .git/hooks/post-checkout 2>/dev/null || echo HOOKS; \
+             mv .git .git-aside 2>/dev/null || echo PINNED",
+            lib.display()
+        );
+        let args = bwrap_args(&plan, Ids::here(), &seccomp, None, &["/bin/sh".into(), "-c".into(), script.into()]);
+        let output = std::process::Command::new(&tools.bwrap).args(&args).output().unwrap();
+        let said = String::from_utf8_lossy(&output.stdout);
+        for expected in ["COMMITTED", "CONFIG", "HOOKS", "PINNED"] {
+            assert!(said.contains(expected), "{expected}: {said} {}", String::from_utf8_lossy(&output.stderr));
+        }
+        assert!(lib.join(".git").is_dir() && !lib.join(".git-aside").exists());
+        assert!(!std::fs::read_to_string(lib.join(".git/config")).unwrap().contains("evil"));
     }
 
     #[test]
