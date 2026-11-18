@@ -397,6 +397,7 @@ impl Core {
         core.project_homes =
             core.store.project_homes().await?.into_iter().map(|(repo, home)| (repo, Home::from_stored(home))).collect();
         core.load_workspaces().await?;
+        core.install_org_plugins();
         core.follow_clones_to_their_projects().await;
         core.remember_clones_threads_ran_in().await;
         core.share_workspace_homes();

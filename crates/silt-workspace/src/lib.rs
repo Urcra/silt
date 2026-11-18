@@ -3,6 +3,7 @@
 //! daemon and the CLI read the files and enforce what this decides.
 
 mod folders;
+mod plugins;
 mod policy;
 mod preset;
 mod reach;
@@ -11,6 +12,7 @@ mod seatbelt;
 mod workspace;
 
 pub use folders::{FolderAnswer, FolderRule, FolderVerdict};
+pub use plugins::{OrgPlugin, OrgPluginRule, PluginPolicy};
 pub use policy::{
     AgentChoice, AgentKey, Broken, KNOWN_AGENTS, ModeMeaning, OrgPolicy, Policy, Refusal, Rules, SandboxSupport, Source,
     agent_key, check_move,

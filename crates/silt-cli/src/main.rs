@@ -636,6 +636,7 @@ enum InboxCommand {
     },
 }
 
+#[expect(clippy::large_enum_variant, reason = "parsed once, from the command line")]
 #[derive(Debug, Subcommand)]
 enum OrgCommand {
     /// List your orgs with their members, teams and projects
@@ -704,6 +705,24 @@ enum OrgCommand {
         /// The folders agents may ask for, comma-separated, each `root:allow|ask|never`, with `:rw` where writing may be given; members' own rules only tighten these
         #[arg(long)]
         ask_folders: Option<String>,
+        /// A plugin the org installs and keeps on in its workspaces, as `<id>=<git-url>#<commit>`; give it again for each
+        #[arg(long)]
+        plugin_install: Vec<String>,
+        /// The only plugins that may be on, comma-separated: an id, `publisher:<name>` or `git:<url>`
+        #[arg(long)]
+        plugin_allow: Option<String>,
+        /// The one version a plugin may run at, as `<id>=<version>`; give it again for each
+        #[arg(long)]
+        plugin_pin: Vec<String>,
+        /// An org's rule on a plugin's action, as `<id>:<action>[:<field>=<pattern>]=ask|never`; give it again for each
+        #[arg(long)]
+        plugin_rule: Vec<String>,
+        /// No plugin call may have an effect Silt can't check, such as TCP, SSH or a local MCP server's
+        #[arg(long)]
+        refuse_opaque: bool,
+        /// No plugin may widen an agent's sandbox, as Folders does
+        #[arg(long)]
+        refuse_reach: bool,
     },
 }
 
@@ -1020,8 +1039,22 @@ fn run() -> Result<(), Exn<CliError>> {
                 refuse,
                 no_nested,
                 ask_folders,
+                plugin_install,
+                plugin_allow,
+                plugin_pin,
+                plugin_rule,
+                refuse_opaque,
+                refuse_reach,
             } => {
                 let folders = workspace::folder_rules(ask_folders.as_deref())?;
+                let plugins = plugin::org_policy(
+                    &plugin_install,
+                    plugin_allow.as_deref(),
+                    &plugin_pin,
+                    &plugin_rule,
+                    refuse_opaque,
+                    refuse_reach,
+                )?;
                 let reach = workspace::parse_reach(network.as_deref(), devices.as_deref(), refuse.as_deref())?;
                 let max_preset = match max_preset.as_deref().map(|name| silt_workspace::Preset::parse(name).ok_or(name)) {
                     Some(Err(name)) => return Err(commands::fail(format!("no preset {name}"))),
@@ -1046,6 +1079,7 @@ fn run() -> Result<(), Exn<CliError>> {
                     refuse: reach.refuse,
                     no_nested,
                     folders,
+                    plugins,
                     // A Local only workspace has no server, so no org's policy reaches it.
                     ..silt_workspace::Policy::default()
                 };

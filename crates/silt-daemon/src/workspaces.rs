@@ -352,7 +352,43 @@ impl Core {
         }
         if changed {
             self.announce(crate::protocol::BusEvent::Threads);
+            self.install_org_plugins();
         }
+    }
+
+    /// Installs, in the background, the plugins orgs' policies name for
+    /// their workspaces and this machine lacks at the commit named, on and
+    /// locked in those workspaces (ADR 0103). Built offline in a sandbox,
+    /// as any plugin from git is.
+    pub(crate) fn install_org_plugins(&self) {
+        let mut wanted: Vec<(String, silt_workspace::OrgPlugin, Vec<String>)> = Vec::new();
+        for workspace in &self.workspaces().workspaces {
+            let Some(org) = workspace.server.as_ref().and_then(|binding| binding.org.clone()) else { continue };
+            let Some(Ok(policy)) = self.org_policy(workspace) else { continue };
+            for plugin in &policy.policy.plugins.install {
+                match wanted.iter_mut().find(|(by, kept, _)| *by == org && kept == plugin) {
+                    Some((_, _, workspaces)) => workspaces.push(workspace.id.as_str().to_owned()),
+                    None => wanted.push((org.clone(), plugin.clone(), vec![workspace.id.as_str().to_owned()])),
+                }
+            }
+        }
+        let data_dir = self.data_dir.clone();
+        wanted.retain(|(org, plugin, _)| {
+            !crate::plugins::installed::find(&data_dir, &plugin.id).is_some_and(|installed| {
+                installed.source
+                    == crate::plugins::installed::PluginSource::Org { org: org.clone(), commit: Some(plugin.commit.clone()) }
+            })
+        });
+        if wanted.is_empty() {
+            return;
+        }
+        tokio::spawn(async move {
+            for (org, plugin, workspaces) in wanted {
+                if let Err(error) = crate::plugins::install::install_for_org(&data_dir, &org, &plugin, &workspaces).await {
+                    tracing::warn!(plugin = %plugin.id, %org, %error, "an org's plugin couldn't be installed");
+                }
+            }
+        });
     }
 
     pub(crate) async fn load_workspaces(&mut self) -> Result<(), CoreError> {

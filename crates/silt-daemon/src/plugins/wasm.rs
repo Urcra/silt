@@ -88,9 +88,12 @@ impl Wasm {
     }
 
     /// The tools of the plugins on in `workspace`, as agents see them.
-    pub(crate) fn tools(&self, data_dir: &Path, workspace: &str) -> Vec<PluginTool> {
+    pub(crate) fn tools(&self, data_dir: &Path, workspace: &str, policy: Option<&Policy>) -> Vec<PluginTool> {
         let mut offered = Vec::new();
-        for installed in installed::load(data_dir).into_iter().filter(|installed| installed.on_in(workspace)) {
+        for installed in installed::load(data_dir)
+            .into_iter()
+            .filter(|installed| installed.on_in(workspace) && org_refusal(data_dir, policy, installed).is_none())
+        {
             match self.tools_of(data_dir, &installed) {
                 Ok(tools) => offered.extend(tools.into_iter().map(|tool| PluginTool {
                     name: installed::tool_name(&installed.id, &tool.name),
@@ -105,12 +108,21 @@ impl Wasm {
 
     /// The plugin on in `workspace` that offers `name`, and its own name for
     /// the tool.
-    pub(crate) fn find(&self, data_dir: &Path, workspace: &str, name: &str) -> Option<(Installed, Tool)> {
-        installed::load(data_dir).into_iter().filter(|installed| installed.on_in(workspace)).find_map(|installed| {
-            let tools = self.tools_of(data_dir, &installed).ok()?;
-            let tool = tools.into_iter().find(|tool| installed::tool_name(&installed.id, &tool.name) == name)?;
-            Some((installed, tool))
-        })
+    pub(crate) fn find(
+        &self,
+        data_dir: &Path,
+        workspace: &str,
+        name: &str,
+        policy: Option<&Policy>,
+    ) -> Option<(Installed, Tool)> {
+        installed::load(data_dir)
+            .into_iter()
+            .filter(|installed| installed.on_in(workspace) && org_refusal(data_dir, policy, installed).is_none())
+            .find_map(|installed| {
+                let tools = self.tools_of(data_dir, &installed).ok()?;
+                let tool = tools.into_iter().find(|tool| installed::tool_name(&installed.id, &tool.name) == name)?;
+                Some((installed, tool))
+            })
     }
 
     /// Prepares a call and decides it by the plugin's rules. Blocking: runs
@@ -148,10 +160,25 @@ impl Wasm {
             return Err(format!("{} prepared a call for another {field} than it was asked for", manifest.name));
         }
         let action = manifest.action(&prepared.action).ok_or_else(|| format!("{} isn't one of its actions", prepared.action))?;
+        if let Some(why) = org_refusal(&call.data_dir, call.policy.as_ref(), &call.installed) {
+            return Err(why);
+        }
         let trusted = installed::trusted(&call.data_dir).contains(&manifest.publisher);
-        let rules = Rules(call.installed.rules.clone());
+        let org = call.org.clone().unwrap_or_else(|| "your org".to_owned());
+        let mut rules = Rules(call.installed.rules.clone());
+        if let Some(policy) = &call.policy {
+            rules.0.extend(policy.plugins.rules_for(&call.installed.id).map(|rule| silt_plugin::ScopedRule {
+                action: rule.action.clone(),
+                field: rule.field.clone(),
+                pattern: rule.pattern.as_ref().map(silt_plugin::Glob::new),
+                rule: if rule.rule == "never" { Rule::Never } else { Rule::Ask },
+                once: false,
+                source: RuleSource::Org(org.clone()),
+            }));
+        }
         let decision = decide(action, trusted, &rules, None, &prepared.fields);
         let decision = with_folder_rules(decision, &prepared.effects, call.policy.as_ref(), &call.data_dir);
+        let decision = with_org_refusals(decision, &prepared.effects, call.policy.as_ref(), &org);
         Ok(WasmRequest { prepared, decision, context })
     }
 
@@ -181,6 +208,8 @@ pub(crate) struct CallParts {
     /// The rules in effect in the workspace, for the folders a call hands
     /// over.
     pub(crate) policy: Option<Policy>,
+    /// The org the workspace is bound to, whose rules name it.
+    pub(crate) org: Option<String>,
     /// Who the folders the call grants go to, once it's allowed.
     pub(crate) folders: Option<crate::folders::FolderScope>,
 }
@@ -224,6 +253,38 @@ fn env_for(
         scope,
         data_dir: installed::dir(data_dir, &installed.id).join("data"),
         granted: installed.granted.clone(),
+    }
+}
+
+/// Why an org's policy keeps `installed` off, if it does: not among the
+/// plugins it allows, or not at the version it pins.
+pub(crate) fn org_refusal(data_dir: &Path, policy: Option<&Policy>, installed: &Installed) -> Option<String> {
+    let policy = policy?;
+    if policy.plugins.is_empty() {
+        return None;
+    }
+    let publisher = installed::manifest(data_dir, &installed.id).map(|manifest| manifest.publisher).unwrap_or_default();
+    let git = match &installed.source {
+        installed::PluginSource::Git { url, .. } => Some(url.as_str()),
+        _ => None,
+    };
+    policy.plugins.refusal(&installed.id, &publisher, git, &installed.version)
+}
+
+/// `decision` refused where the org refuses what the call does: an effect
+/// Silt can't check, or widening an agent's sandbox.
+fn with_org_refusals(decision: Decision, effects: &[Effect], policy: Option<&Policy>, org: &str) -> Decision {
+    let Some(policy) = policy else { return decision };
+    let why = if policy.plugins.refuse_opaque && effects.iter().any(Effect::is_opaque) {
+        Some(format!("{org}'s policy refuses calls Silt can't check"))
+    } else if policy.plugins.refuse_reach && effects.iter().any(|effect| matches!(effect, Effect::Reach { .. })) {
+        Some(format!("{org}'s policy refuses widening an agent's sandbox"))
+    } else {
+        None
+    };
+    match why {
+        Some(why) => Decision { rule: Rule::Never, source: RuleSource::Org(org.to_owned()), why, ..decision },
+        None => decision,
     }
 }
 

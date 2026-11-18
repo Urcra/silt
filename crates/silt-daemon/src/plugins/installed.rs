@@ -35,8 +35,13 @@ pub enum PluginSource {
     Dev { path: String },
     /// A marketplace, served by a Silt server (ADR 0104).
     Marketplace { server: String },
-    /// An org's policy, which installs and locks it in its workspaces.
-    Org { org: String },
+    /// An org's policy, which installs and locks it in its workspaces, from
+    /// git at `commit`.
+    Org {
+        org: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

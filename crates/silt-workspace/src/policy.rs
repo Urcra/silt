@@ -170,6 +170,9 @@ pub struct Policy {
     /// own, once policies are combined.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folder_layers: Vec<Vec<crate::FolderRule>>,
+    /// What plugins may be on, and how their calls are held (ADR 0103).
+    #[serde(default, skip_serializing_if = "crate::PluginPolicy::is_empty")]
+    pub plugins: crate::PluginPolicy,
 }
 
 /// Which of a workspace's sandbox rules Silt can hold an agent to.
@@ -251,6 +254,7 @@ impl Policy {
             no_nested: self.no_nested || other.no_nested,
             folders,
             folder_layers,
+            plugins: self.plugins.stricter(&other.plugins),
         }
     }
 

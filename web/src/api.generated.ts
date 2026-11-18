@@ -1515,6 +1515,42 @@ root: string, answer: FolderAnswer,
  */
 writable: boolean, };
 
+export type PluginPolicy = { install?: Array<OrgPlugin>, 
+/**
+ * Only these may be on: `publisher:<name>`, `git:<url>`, or a plugin's
+ * id; any when unset. Silt's own plugins are named by id like others.
+ */
+allow?: Array<string> | null, 
+/**
+ * The one version each named plugin may run at.
+ */
+pinned?: { [key in string]: string }, 
+/**
+ * No call may have an effect Silt can't check (TCP, SSH, a local MCP
+ * server's).
+ */
+refuse_opaque?: boolean, 
+/**
+ * No plugin may widen an agent's sandbox.
+ */
+refuse_reach?: boolean, rules?: Array<OrgPluginRule>, };
+
+export type OrgPlugin = { id: string, git: string, 
+/**
+ * The commit it's built from, and no other.
+ */
+commit: string, };
+
+export type OrgPluginRule = { plugin: string, 
+/**
+ * An action, or `*` for every one.
+ */
+action: string, field?: string | null, pattern?: string | null, 
+/**
+ * `ask` or `never`: an org's allow would loosen its members' rules.
+ */
+rule: string, };
+
 export type FolderAnswer = "allow" | "ask" | "never";
 
 export type Workspaces = { 
@@ -1640,7 +1676,11 @@ folders?: Array<FolderRule>,
  * The folder rules of more than one policy, each set judged on its
  * own, once policies are combined.
  */
-folder_layers?: Array<Array<FolderRule>>, };
+folder_layers?: Array<Array<FolderRule>>, 
+/**
+ * What plugins may be on, and how their calls are held (ADR 0103).
+ */
+plugins?: PluginPolicy, };
 
 export type Network = "none" | "gateway" | "full" | "host";
 

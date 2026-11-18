@@ -316,6 +316,7 @@ impl Core {
             }
         };
         let (data_dir, listed, wasm) = (self.data_dir.clone(), self.approvals.listed.clone(), self.approvals.wasm.clone());
+        let policy = self.workspace_policy(&workspace);
         tokio::spawn(async move {
             let plugins = load(&data_dir);
             for plugin in plugins.iter().filter(|plugin| plugin.workspaces.contains(&workspace)) {
@@ -325,7 +326,8 @@ impl Core {
             }
             let known = listed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
             let mut offered = tools(&plugins, &workspace, &known);
-            let wasm_offered = tokio::task::spawn_blocking(move || wasm.tools(&data_dir, &workspace)).await.unwrap_or_default();
+            let wasm_offered =
+                tokio::task::spawn_blocking(move || wasm.tools(&data_dir, &workspace, policy.as_ref())).await.unwrap_or_default();
             offered.extend(wasm_offered);
             let _ = reply.send(Response::ok(offered));
         });
@@ -363,7 +365,8 @@ impl Core {
         let found = {
             let (wasm, data_dir, workspace, tool) =
                 (self.approvals.wasm.clone(), self.data_dir.clone(), workspace.clone(), tool.to_owned());
-            tokio::task::spawn_blocking(move || wasm.find(&data_dir, &workspace, &tool)).await.ok().flatten()
+            let policy = self.workspace_policy(&workspace);
+            tokio::task::spawn_blocking(move || wasm.find(&data_dir, &workspace, &tool, policy.as_ref())).await.ok().flatten()
         };
         if let Some((installed, plugin_tool)) = found {
             return self.start_wasm_call(thread, workspace, run_hash, installed, plugin_tool.name, input).await;
@@ -734,12 +737,24 @@ impl Core {
             environment,
             checkout,
             handle: tokio::runtime::Handle::current(),
-            policy: silt_workspace::WorkspaceId::new(workspace)
-                .ok()
-                .and_then(|id| self.workspaces().get(&id).cloned())
-                .map(|workspace| self.effective_policy(&workspace)),
+            policy: self.workspace_policy(workspace),
+            org: self.workspace_org(workspace),
             folders: None,
         }
+    }
+
+    /// The rules in effect in `workspace`, by id.
+    pub(crate) fn workspace_policy(&self, workspace: &str) -> Option<silt_workspace::Policy> {
+        silt_workspace::WorkspaceId::new(workspace)
+            .ok()
+            .and_then(|id| self.workspaces().get(&id).cloned())
+            .map(|workspace| self.effective_policy(&workspace))
+    }
+
+    /// The org `workspace` is bound to, if any.
+    fn workspace_org(&self, workspace: &str) -> Option<String> {
+        let id = silt_workspace::WorkspaceId::new(workspace).ok()?;
+        self.workspaces().get(&id)?.server.as_ref()?.org.clone()
     }
 
     /// A WebAssembly plugin's call (ADR 0103): prepared by its plugin,
@@ -1487,6 +1502,59 @@ mod tests {
             let Outcome::Done { output } = ask("probe_local_mcp_peek", input).await else { panic!("not called") };
             assert!(output.contains(&format!(": {read}; reached 127.0.0.1:{port}: no")), "{output}");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_orgs_policy_keeps_plugins_off_and_tightens_their_calls() {
+        let data = tempfile::tempdir().expect("temp dir");
+        probe_installed(data.path());
+        installed::ensure_shipped(data.path()).expect("shipped");
+        installed::set_trusted(data.path(), "test", true).expect("trusts");
+        let wasm = Arc::new(super::super::wasm::Wasm::default());
+        let parts = |id: &str, tool: &str, policy: silt_workspace::Policy| CallParts {
+            data_dir: data.path().to_owned(),
+            installed: installed::find(data.path(), id).expect("installed"),
+            tool: tool.into(),
+            thread: ThreadId(7).to_string(),
+            workspace: "work".into(),
+            environment: None,
+            checkout: None,
+            handle: tokio::runtime::Handle::current(),
+            policy: Some(policy),
+            org: Some("acme".into()),
+            folders: None,
+        };
+        let prepare = |parts: CallParts, input: Value| {
+            let wasm = wasm.clone();
+            tokio::task::spawn_blocking(move || wasm.prepare(&parts, &input))
+        };
+        let org = |plugins: silt_workspace::PluginPolicy| silt_workspace::Policy { plugins, ..silt_workspace::Policy::default() };
+
+        // Its rule tightens the call: never, though the trusted default allows it.
+        let rule = silt_workspace::OrgPluginRule::parse("test.probe:look=never").expect("a rule");
+        let ruled = org(silt_workspace::PluginPolicy { rules: vec![rule], ..Default::default() });
+        let request = prepare(parts("test.probe", "files", ruled), json!({})).await.expect("ran").expect("prepared");
+        assert_eq!(request.decision.rule, silt_plugin::Rule::Never);
+        assert_eq!(request.decision.source, silt_plugin::RuleSource::Org("acme".into()));
+
+        // Not allowed, or not at the version pinned, it's off: no tools, and no calls.
+        let allow_silt =
+            org(silt_workspace::PluginPolicy { allow: Some(["publisher:silt".into()].into()), ..Default::default() });
+        let offered = wasm.tools(data.path(), "work", Some(&allow_silt));
+        assert!(!offered.iter().any(|tool| tool.name.starts_with("probe_")), "{offered:?}");
+        let refused = prepare(parts("test.probe", "look", allow_silt), json!({})).await.expect("ran").unwrap_err();
+        assert!(refused.contains("isn't among the plugins your org allows"), "{refused}");
+        let pinned =
+            org(silt_workspace::PluginPolicy { pinned: [("test.probe".into(), "0.9.0".into())].into(), ..Default::default() });
+        assert!(prepare(parts("test.probe", "look", pinned), json!({})).await.expect("ran").unwrap_err().contains("pins"));
+
+        // Refusing reach, no folder is asked for.
+        let no_reach = org(silt_workspace::PluginPolicy { refuse_reach: true, ..Default::default() });
+        let mine = tempfile::tempdir().expect("temp dir");
+        let folder = json!({"path": mine.path().to_string_lossy(), "reason": "the app"});
+        let request = prepare(parts("silt.folders", "request", no_reach), folder).await.expect("ran").expect("prepared");
+        assert_eq!(request.decision.rule, silt_plugin::Rule::Never);
+        assert!(request.decision.why.contains("widening"), "{}", request.decision.why);
     }
 
     #[tokio::test(flavor = "multi_thread")]

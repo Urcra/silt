@@ -238,6 +238,38 @@ pub fn install(
     Ok(record)
 }
 
+/// Installs `plugin` as org `org`'s policy names it: cloned at its commit
+/// and nothing else, built offline in a sandbox, on and locked in
+/// `workspaces`.
+pub async fn install_for_org(
+    data_dir: &Path,
+    org: &str,
+    plugin: &silt_workspace::OrgPlugin,
+    workspaces: &[String],
+) -> Result<Installed, CoreError> {
+    let checkout = data_dir.join("plugins").join(".org-checkouts").join(uuid::Uuid::new_v4().simple().to_string());
+    let (url, commit) = (plugin.git.clone(), plugin.commit.clone());
+    let into = checkout.clone();
+    let cloned = tokio::task::spawn_blocking(move || clone(&url, Some(&commit), &into))
+        .await
+        .map_err(|error| invalid(error.to_string()))?;
+    let result = async {
+        let at = cloned?;
+        if !at.starts_with(&plugin.commit) && !plugin.commit.starts_with(&at) {
+            return Err(invalid(format!("{} isn't at {}", plugin.git, plugin.commit)));
+        }
+        let package = package(&checkout, false).await?;
+        if package.manifest.id != plugin.id {
+            return Err(invalid(format!("{} holds {}, not {}", plugin.git, package.manifest.id, plugin.id)));
+        }
+        let source = PluginSource::Org { org: org.to_owned(), commit: Some(plugin.commit.clone()) };
+        install(data_dir, &package, source, workspaces, true)
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(&checkout);
+    result
+}
+
 /// Removes plugin `id` and everything it kept. Silt's own can't be removed,
 /// only turned off.
 pub fn remove(data_dir: &Path, id: &str) -> Result<(), CoreError> {
@@ -245,6 +277,9 @@ pub fn remove(data_dir: &Path, id: &str) -> Result<(), CoreError> {
     let found = all.iter().find(|installed| installed.id == id).ok_or_else(|| invalid(format!("no plugin {id}")))?;
     if matches!(found.source, PluginSource::Shipped) {
         return Err(invalid(format!("{id} is shipped with Silt: turn it off in a workspace instead")));
+    }
+    if let PluginSource::Org { org, .. } = &found.source {
+        return Err(invalid(format!("{org}'s policy installs {id}; it goes when the policy no longer names it")));
     }
     all.retain(|installed| installed.id != id);
     installed::save(data_dir, &all)?;

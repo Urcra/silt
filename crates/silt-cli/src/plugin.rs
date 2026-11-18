@@ -258,7 +258,7 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
                     }
                     installed::PluginSource::Dev { path } => format!("dev, from {path}"),
                     installed::PluginSource::Marketplace { server } => format!("from the marketplace at {server}"),
-                    installed::PluginSource::Org { org } => format!("from {org}'s policy"),
+                    installed::PluginSource::Org { org, .. } => format!("from {org}'s policy"),
                 };
                 let on = if record.workspaces.is_empty() {
                     "on in no workspace".to_owned()
@@ -396,6 +396,47 @@ fn secret(
     .map_err(core_error)?;
     println!("{id}'s {credential} is kept; Silt adds it to {id}'s requests to {} alone", spec.hosts.join(", "));
     Ok(())
+}
+
+/// An org's plugin policy from `silt org policy`'s flags.
+pub(crate) fn org_policy(
+    install: &[String],
+    allow: Option<&str>,
+    pin: &[String],
+    rules: &[String],
+    refuse_opaque: bool,
+    refuse_reach: bool,
+) -> Result<silt_workspace::PluginPolicy, Exn<CliError>> {
+    let install = install
+        .iter()
+        .map(|entry| {
+            let shape = || fail(format!("{entry}: give a plugin to install as <id>=<git-url>#<commit>"));
+            let (id, rest) = entry.split_once('=').ok_or_else(shape)?;
+            let (git, commit) = rest.rsplit_once('#').ok_or_else(shape)?;
+            if !commit.chars().all(|c| c.is_ascii_hexdigit()) || commit.len() < 7 {
+                return Err(fail(format!("{entry}: name the commit by its id, so every member builds the same")));
+            }
+            Ok(silt_workspace::OrgPlugin { id: id.to_owned(), git: git.to_owned(), commit: commit.to_owned() })
+        })
+        .collect::<Result<_, _>>()?;
+    let pinned = pin
+        .iter()
+        .map(|entry| {
+            entry
+                .split_once('=')
+                .map(|(id, version)| (id.to_owned(), version.to_owned()))
+                .ok_or_else(|| fail(format!("{entry}: give <id>=<version>")))
+        })
+        .collect::<Result<_, _>>()?;
+    let rules = rules.iter().map(|rule| silt_workspace::OrgPluginRule::parse(rule).map_err(fail)).collect::<Result<_, _>>()?;
+    Ok(silt_workspace::PluginPolicy {
+        install,
+        allow: allow.map(|list| list.split(',').map(str::trim).filter(|entry| !entry.is_empty()).map(str::to_owned).collect()),
+        pinned,
+        refuse_opaque,
+        refuse_reach,
+        rules,
+    })
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime, Exn<CliError>> {
@@ -550,6 +591,11 @@ fn turn(data: &std::path::Path, name: &str, workspace: &str, on: bool) -> Result
         let every: Vec<String> = silt_daemon::workspaces::load(data)
             .map(|all| all.workspaces.iter().map(|workspace| workspace.id.as_str().to_owned()).collect())
             .unwrap_or_else(|| vec!["default".to_owned()]);
+        if let Some(installed::PluginSource::Org { org, .. }) = installed::find(data, name).map(|record| record.source)
+            && !on
+        {
+            return Err(fail(format!("{org}'s policy keeps {name} on in its workspaces")));
+        }
         installed::update(data, name, |record| {
             // On everywhere, until it's turned off somewhere.
             if !on && record.workspaces.iter().any(|other| other == "*") {
