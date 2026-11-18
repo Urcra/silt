@@ -25,6 +25,7 @@ const COLORS: &[(T, &[&str])] = &[
     (T::AccentFg, &["text.accent"]),
     (T::Ok, &["created", "success"]),
     (T::Warn, &["warning", "modified"]),
+    (T::WarnFg, &["warning"]),
     (T::Danger, &["error", "deleted"]),
     (T::Info, &["info", "hint"]),
     (T::OkTint, &["created.background", "success.background"]),

@@ -139,7 +139,11 @@
             },
             "warn": {
               "$ref": "#/$defs/color",
-              "description": "Warnings; used for icons and dots more than text."
+              "description": "Warnings as icons, dots and badges. Must reach 3:1 on bg."
+            },
+            "warn-fg": {
+              "$ref": "#/$defs/color",
+              "description": "Warnings set in words. Must reach 4.5:1 on bg."
             },
             "warn-tint": {
               "$ref": "#/$defs/color",

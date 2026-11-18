@@ -51,6 +51,8 @@
   /* In dark, a step lighter than the design's 500s, which fail 4.5:1 as text. */
   --ok: light-dark(var(--olive-600), #8a9a4c);
   --warn: var(--honey-500);
+  /* Honey reads at only 2.3:1 on paper, so words take a darker one. */
+  --warn-fg: light-dark(#936400, var(--honey-500));
   --danger: light-dark(var(--rust-600), #d97a59);
   --info: light-dark(var(--slate-600), #7b98a8);
   /* Fainter in dark than its siblings: olive on the dark ground reads louder than rust does. */

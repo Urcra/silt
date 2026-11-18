@@ -55,7 +55,7 @@ pub fn check(palette: &Palette) -> Vec<Finding> {
     for back in [T::Bg, T::BgElevated, T::Surface1, T::Surface2] {
         measure(T::Fg1.to_string(), palette.get(T::Fg1), back, Kind::Text, false);
     }
-    for token in [T::Fg2, T::Fg3, T::AccentFg, T::Ok, T::Danger, T::Info] {
+    for token in [T::Fg2, T::Fg3, T::AccentFg, T::WarnFg, T::Ok, T::Danger, T::Info] {
         for back in grounds {
             measure(token.to_string(), palette.get(token), back, Kind::Text, palette.derived.contains(&token));
         }

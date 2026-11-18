@@ -30,6 +30,7 @@ const COLORS: &[(T, &[&str])] = &[
     (T::AccentHover, &["button.hoverBackground"]),
     (T::AccentFg, &["textLink.foreground"]),
     (T::Ok, &["gitDecoration.addedResourceForeground", "terminal.ansiGreen"]),
+    (T::WarnFg, &["editorWarning.foreground", "list.warningForeground"]),
     (T::Warn, &["editorWarning.foreground", "list.warningForeground", "terminal.ansiYellow"]),
     (T::Danger, &["editorError.foreground", "errorForeground", "gitDecoration.deletedResourceForeground", "terminal.ansiRed"]),
     (T::Info, &["editorInfo.foreground", "terminal.ansiBlue"]),

@@ -28,6 +28,7 @@
   --color-accent-fg: var(--accent-fg);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
+  --color-warn-fg: var(--warn-fg);
   --color-danger: var(--danger);
   --color-info: var(--info);
   --color-ok-tint: var(--ok-tint);

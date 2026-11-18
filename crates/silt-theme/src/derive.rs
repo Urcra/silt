@@ -86,6 +86,8 @@ pub fn derive(theme: &Theme) -> Palette {
         let color = *colors.entry(status).or_insert_with(|| solve(nous_status(theme.appearance, status), &grounds, ratio));
         fill(tint, &mut colors, color.with_alpha(pick(0.12, 0.14)));
     }
+    let warn_fg = solve(colors[&T::Warn], &grounds, TEXT_RATIO);
+    fill(T::WarnFg, &mut colors, warn_fg);
     fill(T::Backdrop, &mut colors, Rgba { r: 20, g: 14, b: 8, a: 102 });
 
     let derived = ColorToken::ALL.iter().copied().filter(|token| !given.contains_key(token)).collect();
@@ -165,9 +167,15 @@ mod tests {
         let theme = three("light", "#ffffff", "#222222", "#f6c177");
         let palette = derive(&theme);
         let bg = palette.get(ColorToken::Bg);
-        for token in
-            [ColorToken::Fg2, ColorToken::Fg3, ColorToken::AccentFg, ColorToken::Ok, ColorToken::Danger, ColorToken::Info]
-        {
+        for token in [
+            ColorToken::Fg2,
+            ColorToken::Fg3,
+            ColorToken::AccentFg,
+            ColorToken::WarnFg,
+            ColorToken::Ok,
+            ColorToken::Danger,
+            ColorToken::Info,
+        ] {
             assert!(palette.get(token).contrast_on(bg) >= TEXT_RATIO, "{token} {}", palette.get(token));
         }
         assert!(palette.get(ColorToken::FgOnAccent).contrast_on(palette.get(ColorToken::Accent)) >= TEXT_RATIO);

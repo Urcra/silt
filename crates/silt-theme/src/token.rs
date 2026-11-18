@@ -76,7 +76,8 @@ names! {
         AccentTint = "accent-tint": "Chosen rows and the selection; usually translucent accent.",
         AccentFg = "accent-fg": "Links and accent text. Must reach 4.5:1 on bg.",
         Ok = "ok": "Done, added lines. Must reach 4.5:1 on bg.",
-        Warn = "warn": "Warnings; used for icons and dots more than text.",
+        Warn = "warn": "Warnings as icons, dots and badges. Must reach 3:1 on bg.",
+        WarnFg = "warn-fg": "Warnings set in words. Must reach 4.5:1 on bg.",
         Danger = "danger": "Errors and removed lines. Must reach 4.5:1 on bg.",
         Info = "info": "Information and types. Must reach 4.5:1 on bg.",
         OkTint = "ok-tint": "Behind added lines; usually translucent ok.",
@@ -117,7 +118,15 @@ impl ColorToken {
     pub fn is_text(self) -> bool {
         matches!(
             self,
-            Self::Fg1 | Self::Fg2 | Self::Fg3 | Self::FgOnAccent | Self::AccentFg | Self::Ok | Self::Danger | Self::Info
+            Self::Fg1
+                | Self::Fg2
+                | Self::Fg3
+                | Self::FgOnAccent
+                | Self::AccentFg
+                | Self::WarnFg
+                | Self::Ok
+                | Self::Danger
+                | Self::Info
         )
     }
 
