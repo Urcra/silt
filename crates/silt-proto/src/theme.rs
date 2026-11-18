@@ -288,6 +288,47 @@ impl ThemeEntry {
     }
 }
 
+/// A synced copy's font, its bytes when they are the font its name says.
+fn copy_font(copy: &crate::ThemeCopy, file: &silt_theme::font::FontFile) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(copy.fonts.get(file.name())?).ok()?;
+    file.check(&bytes).ok()?;
+    Some(bytes)
+}
+
+/// The person's themes as a server keeps their copies (ADR 0099), each
+/// face kept only when its copy carries it as a font.
+pub fn copy_entries(copies: &[crate::ThemeCopy]) -> Vec<ThemeEntry> {
+    let mut entries = Vec::new();
+    for copy in copies.iter().filter(|copy| !copy.deleted && copy.valid()) {
+        let Ok((mut family, warnings)) = silt_theme::parse(&copy.json) else { continue };
+        let mut warnings: Vec<String> = warnings.iter().map(ToString::to_string).collect();
+        for theme in &mut family.themes {
+            theme.fonts.faces.retain(|face| {
+                let kept = copy_font(copy, &face.file).is_some();
+                if !kept {
+                    warnings.push(format!("{}: {} isn't among the fonts it ships; left out", theme.id, face.file));
+                }
+                kept
+            });
+        }
+        let label = if copy.fonts.is_empty() { format!("{}.json", copy.name) } else { format!("{}/theme.json", copy.name) };
+        entries.extend(ThemeEntry::of(&family, ThemeSource::Yours, Some(label), &warnings));
+    }
+    entries
+}
+
+/// A face one of the person's synced themes ships, with its media type.
+pub fn synced_font(copies: &[crate::ThemeCopy], id: &str, file: &str) -> Option<(Vec<u8>, &'static str)> {
+    let file = silt_theme::font::FontFile::parse(file)?;
+    copies.iter().filter(|copy| !copy.deleted && copy.valid()).find_map(|copy| {
+        let (family, _) = silt_theme::parse(&copy.json).ok()?;
+        let theme = family.themes.iter().find(|theme| theme.id.as_str() == id)?;
+        theme.fonts.faces.iter().find(|face| face.file == file)?;
+        copy_font(copy, &file).map(|bytes| (bytes, file.format().media_type()))
+    })
+}
+
 /// Silt's own themes.
 pub fn bundled_entries() -> Vec<ThemeEntry> {
     silt_theme::bundled().iter().flat_map(|family| ThemeEntry::of(family, ThemeSource::Bundled, None, &[])).collect()
@@ -385,6 +426,35 @@ mod tests {
         assert!(checked(&all, &wrong).is_err());
         assert!(checked(&all, &AppearanceSettings::default()).is_ok());
         assert!(checked(&all, &AppearanceSettings { light: "Not an id".into(), ..AppearanceSettings::default() }).is_err());
+    }
+
+    #[test]
+    fn synced_copies_are_themes_and_only_their_shipped_fonts_are_served() {
+        use base64::Engine as _;
+        let json = r##"{ "name": "Harbour", "themes": [{ "id": "harbour", "name": "Harbour", "appearance": "light",
+            "colors": { "bg": "#ffffff", "fg-1": "#111111", "accent": "#0055cc" },
+            "fonts": { "ui": ["Harbour Sans"], "faces": [
+              { "family": "Harbour Sans", "file": "fonts/sans.woff2" },
+              { "family": "Harbour Sans", "file": "fonts/missing.woff2" }
+            ] } }] }"##;
+        let mut fonts = std::collections::BTreeMap::new();
+        fonts.insert("sans.woff2".to_owned(), base64::engine::general_purpose::STANDARD.encode(b"wOF2 a font"));
+        let copies = vec![
+            crate::ThemeCopy { name: "harbour".into(), at_ms: 1, deleted: false, json: json.into(), fonts },
+            crate::ThemeCopy { name: "gone".into(), at_ms: 2, deleted: true, json: String::new(), fonts: Default::default() },
+        ];
+        let entries = copy_entries(&copies);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].file.as_deref(), Some("harbour/theme.json"));
+        assert_eq!(entries[0].theme.fonts.faces.len(), 1);
+        assert!(entries[0].warnings.iter().any(|warning| warning.contains("missing.woff2")));
+        let all = merge(bundled_entries(), entries);
+        assert!(all.iter().any(|entry| entry.theme.id.as_str() == "catppuccin-mocha"));
+        assert_eq!(synced_font(&copies, "harbour", "sans.woff2"), Some((b"wOF2 a font".to_vec(), "font/woff2")));
+        assert_eq!(synced_font(&copies, "harbour", "missing.woff2"), None);
+        assert_eq!(synced_font(&copies, "harbour", "../sans.woff2"), None);
+        let settings = AppearanceSettings { light: "harbour".into(), ..AppearanceSettings::default() };
+        assert!(css(&all, &settings).contains("url(theme-fonts/harbour/sans.woff2)"));
     }
 
     #[test]

@@ -184,7 +184,7 @@ export function ThemeSettings() {
       </ul>
       <div className="rounded-md border border-dashed border-line px-3.5 py-3 text-sm text-fg-2">
         {hosted() ? (
-          <>Silt's own themes; your pick is kept in this browser.</>
+          <>Silt's own themes, and yours from your machines; your pick is kept in this browser.</>
         ) : (
           <>
             Themes you save in <code className="font-mono text-xs">{catalog.data?.folder ?? 'themes/'}</code> show here as you save them, and the one in use

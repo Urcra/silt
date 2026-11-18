@@ -31,7 +31,9 @@ pub mod view;
 /// cover and assets (ADR 0088). 18: edits by another agent in the same
 /// clone, or by one of several (`Author::Others`, `Author::Agents`,
 /// ADR 0089). 19: what a workspace's sandboxed agents may reach (ADR 0093).
-pub const PROTOCOL: u32 = 19;
+/// 20: a person's own themes for Silt's UI, synced through each server
+/// they use (ADR 0099).
+pub const PROTOCOL: u32 = 20;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -325,6 +327,44 @@ pub const DESIGN_COMPONENTS_CSS_BYTES: usize = 128 << 10;
 pub const DESIGN_COVER_BYTES: usize = 64 << 10;
 pub const DESIGN_ASSETS: usize = 64;
 pub const DESIGN_ASSET_BYTES: usize = 1 << 20;
+
+/// A person's own theme for Silt's UI, as their devices sync it through each
+/// server they use (ADR 0099): the theme's file and the fonts it ships. The
+/// copy changed last wins; one removed stays as a tombstone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeCopy {
+    /// Its file's name without `.json`, or its folder's name.
+    pub name: String,
+    /// When it last changed on a device.
+    pub at_ms: i64,
+    #[serde(default)]
+    pub deleted: bool,
+    /// Its `theme.json`, or the file itself.
+    #[serde(default)]
+    pub json: String,
+    /// The fonts it ships, by their name under `fonts/`, in base64.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub fonts: std::collections::BTreeMap<String, String>,
+}
+
+/// The most a theme's file may hold, as the daemon reads it.
+pub const THEME_BYTES: usize = 256 << 10;
+
+impl ThemeCopy {
+    /// Whether a device may take it as it is: named as a file, its fonts
+    /// named plainly, and no larger than a theme's file and fonts may be.
+    pub fn valid(&self) -> bool {
+        let named = (1..=64).contains(&self.name.len())
+            && self.name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && !self.name.starts_with('-');
+        let base64_of = |bytes: u64| usize::try_from(bytes.div_ceil(3) * 4).unwrap_or(usize::MAX);
+        let fonts = self.fonts.len() <= silt_theme::font::MOST_FACES
+            && self.fonts.keys().all(|file| silt_theme::font::FontFile::parse(file).is_some_and(|font| font.name() == file))
+            && self.fonts.values().all(|data| data.len() <= base64_of(silt_theme::font::FACE_BYTES))
+            && self.fonts.values().map(String::len).sum::<usize>() <= base64_of(silt_theme::font::THEME_FONT_BYTES);
+        named && fonts && self.json.len() <= THEME_BYTES
+    }
+}
 
 /// A person's marks on one thread's files (ADR 0067).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -703,6 +743,27 @@ mod tests {
     use silt_types::{ActorId, Lamport};
 
     use super::*;
+
+    #[test]
+    fn a_theme_copy_holds_only_what_a_theme_may() {
+        let copy =
+            |name: &str| ThemeCopy { name: name.into(), at_ms: 1, deleted: false, json: "{}".into(), fonts: Default::default() };
+        assert!(copy("harbour-2").valid());
+        for bad in ["", "Harbour", "../x", "-x", "a/b", "x.json"] {
+            assert!(!copy(bad).valid(), "{bad}");
+        }
+        let mut fonted = copy("harbour");
+        fonted.fonts.insert("sans.woff2".into(), "d09GMg==".into());
+        assert!(fonted.valid());
+        for bad in ["../sans.woff2", "fonts/sans.woff2", "sans.svg", ".sans.woff2"] {
+            let mut bad_font = copy("harbour");
+            bad_font.fonts.insert(bad.into(), "d09GMg==".into());
+            assert!(!bad_font.valid(), "{bad}");
+        }
+        let mut big = copy("harbour");
+        big.json = "x".repeat(THEME_BYTES + 1);
+        assert!(!big.valid());
+    }
 
     #[test]
     fn thread_state_keeps_the_newest_of_each_field_whatever_the_order() {

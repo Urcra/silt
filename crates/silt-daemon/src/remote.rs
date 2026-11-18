@@ -293,6 +293,19 @@ impl Remote {
         Ok(())
     }
 
+    /// This person's own themes as the server keeps them (ADR 0099).
+    pub async fn themes(&self) -> Result<Vec<silt_proto::ThemeCopy>, RemoteError> {
+        let response = self.request(reqwest::Method::GET, "/v1/me/themes").send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
+    pub async fn put_theme(&self, copy: &silt_proto::ThemeCopy) -> Result<(), RemoteError> {
+        let path = format!("/v1/me/themes/{}", copy.name);
+        let response = self.request(reqwest::Method::PUT, &path).json(copy).send().await?;
+        checked(response).await?;
+        Ok(())
+    }
+
     pub async fn projects(&self) -> Result<silt_proto::ProjectsReply, RemoteError> {
         let response = self.request(reqwest::Method::GET, "/v1/projects").send().await?;
         Ok(checked(response).await?.json().await?)
