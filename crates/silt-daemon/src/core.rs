@@ -273,6 +273,8 @@ pub struct Core {
     pub(crate) models: std::sync::Arc<crate::models::LocalModelsHere>,
     /// What each agent's plan has used (ADR 0095).
     pub(crate) usage: std::sync::Arc<crate::usage::Usage>,
+    /// Whether a newer Silt is out, and the update installing it (ADR 0100).
+    pub(crate) updates: std::sync::Arc<crate::updates::Updates>,
     /// Each server's last sync error, by URL.
     pub(crate) sync_errors: HashMap<String, String>,
     /// The HEAD commit each checkout was last seen at.
@@ -583,6 +585,7 @@ impl Core {
             notes_settings: crate::notes::NotesSettings::default(),
             models,
             usage: std::sync::Arc::new(crate::usage::Usage::new()),
+            updates: std::sync::Arc::new(crate::updates::Updates::new(data_dir)),
             sync_errors: HashMap::new(),
             heads: HashMap::new(),
             head_stamps: HashMap::new(),
@@ -1100,6 +1103,21 @@ impl Core {
             }
             Request::ModelPull { source } => to_response(self.models.start_pull(&source)),
             Request::RuntimePull => to_response(self.models.start_runtime_pull()),
+            Request::Update { desktop } => {
+                // A page opened before the first tick sees that check under way.
+                self.updates.check_if_due();
+                let updates = self.updates.clone();
+                let desktop = desktop.as_deref().and_then(silt_update::Commit::parse);
+                return answer_later(reply, Ok(async move { Ok::<_, CoreError>(updates.view(desktop).await) }));
+            }
+            Request::UpdateCheck => {
+                self.updates.start_check();
+                to_response(Ok::<_, CoreError>("checking"))
+            }
+            Request::UpdateStart => {
+                to_response(self.updates.start(self.exe.as_ref().map(|(exe, _)| exe.as_path())).map(|()| "started"))
+            }
+            Request::UpdateWaiting => to_response(Ok::<_, CoreError>(self.updates.waiting())),
             Request::ModelSearch { query } => {
                 let models = self.models.clone();
                 return answer_later(reply, Ok(async move { models.search(&query).await }));
@@ -1193,7 +1211,7 @@ impl Core {
                     .map(|thread| thread.id.to_string())
                     .collect(),
                 recovered: self.recoveries.clone(),
-                version: env!("CARGO_PKG_VERSION").to_owned(),
+                version: silt_update::VERSION.to_owned(),
                 recoveries: self.recovered.clone(),
             }),
             Request::Resume { thread, cwd, here, agent } => to_response(self.resume(&thread, &cwd, here, agent.as_deref()).await),
@@ -1424,6 +1442,9 @@ impl Core {
 
     pub async fn tick(&mut self) {
         self.drive_sync();
+        if self.resident {
+            self.updates.check_if_due();
+        }
         self.drive_notes_settings();
         if self.resident {
             self.drive_control().await;

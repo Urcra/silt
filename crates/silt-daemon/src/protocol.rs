@@ -79,6 +79,19 @@ pub enum Request {
     },
     /// Starts downloading llama.cpp's latest build for this machine.
     RuntimePull,
+    /// Whether a newer Silt is out, and how an update is going (ADR 0100),
+    /// for a page in the desktop app built from `desktop`.
+    Update {
+        #[serde(default)]
+        desktop: Option<String>,
+    },
+    /// Checks for a newer Silt now.
+    UpdateCheck,
+    /// Starts updating this machine's Silt.
+    UpdateStart,
+    /// Whether an installed update waits for agents to finish before the
+    /// daemon restarts.
+    UpdateWaiting,
     /// This machine's settings for chats (ADR 0059).
     ChatSettings,
     SetChatSettings {
@@ -2637,6 +2650,18 @@ mod tests {
             ModelFit::decl(&config),
             ModelPull::decl(&config),
             ModelFailure::decl(&config),
+            silt_update::UpdateView::decl(&config),
+            silt_update::BuildView::decl(&config),
+            silt_update::Channel::decl(&config),
+            silt_update::Availability::decl(&config),
+            silt_update::NewCommit::decl(&config),
+            silt_update::Commit::decl(&config),
+            silt_update::OffReason::decl(&config),
+            silt_update::RunView::decl(&config),
+            silt_update::StepView::decl(&config),
+            silt_update::StepStatus::decl(&config),
+            silt_update::Phase::decl(&config),
+            silt_update::Outcome::decl(&config),
         ];
         let generated = format!(
             "// The daemon's API types, written by `UPDATE_API_TYPES=1 cargo test -p silt-daemon api_types`\n// from crates/silt-daemon/src/protocol.rs. Don't edit by hand.\n\n{}\n",

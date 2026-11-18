@@ -13,6 +13,7 @@ mod reference;
 mod render;
 mod sandbox;
 mod theme;
+mod update;
 mod workspace;
 
 use std::path::PathBuf;
@@ -24,7 +25,7 @@ use silt_log::Hide;
 use silt_proto::OrgChange;
 
 #[derive(Debug, Parser)]
-#[command(name = "silt", version, about = "Resume, fork and search your agent sessions")]
+#[command(name = "silt", version = silt_update::VERSION, about = "Resume, fork and search your agent sessions")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -383,6 +384,15 @@ enum Command {
         #[arg(long, required = true)]
         once: bool,
     },
+    /// Update Silt: a build of a clone pulls its `main` and builds it again
+    /// with `just update`, then restarts the daemon once no agent is mid-turn
+    Update {
+        /// Only say whether an update is out
+        #[arg(long)]
+        check: bool,
+        #[command(subcommand)]
+        step: Option<UpdateStep>,
+    },
     /// Manage the background daemon
     Daemon {
         #[command(subcommand)]
@@ -444,6 +454,19 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<std::ffi::OsString>,
     },
+}
+
+/// The steps of an update the daemon starts, run on their own.
+#[derive(Debug, Subcommand)]
+enum UpdateStep {
+    /// Update, writing only to the update's state and output, as the
+    /// daemon runs it detached
+    #[command(hide = true)]
+    Run,
+    /// Restart the daemon on the build just installed, once no agent is
+    /// mid-turn
+    #[command(hide = true)]
+    Restart,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1094,6 +1117,10 @@ fn run() -> Result<(), Exn<CliError>> {
             ServerCommand::Restore { backup, data, replace } => admin::restore(&backup, data, replace),
         },
         Command::Sync { thread, once: _ } => commands::sync_once(thread.as_deref()),
+        Command::Update { check: true, step: None } => update::check(),
+        Command::Update { check: _, step: None } => update::run(true),
+        Command::Update { step: Some(UpdateStep::Run), .. } => update::run(false),
+        Command::Update { step: Some(UpdateStep::Restart), .. } => update::restart(),
         Command::Daemon { command } => match command {
             DaemonCommand::Run => commands::daemon_run(),
             DaemonCommand::Start => commands::ensure_daemon().map(|_| ()),

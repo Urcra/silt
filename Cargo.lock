@@ -5733,6 +5733,7 @@ dependencies = [
  "silt-sheet",
  "silt-theme",
  "silt-types",
+ "silt-update",
  "silt-workspace",
  "tar",
  "tempfile",
@@ -5796,6 +5797,7 @@ dependencies = [
  "silt-sync",
  "silt-theme",
  "silt-types",
+ "silt-update",
  "silt-vendor",
  "silt-web",
  "silt-workspace",
@@ -6092,6 +6094,18 @@ dependencies = [
  "sha2 0.11.1",
  "smallvec 1.16.3",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "silt-update"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "silt-os",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ts-rs",
 ]
 
 [[package]]

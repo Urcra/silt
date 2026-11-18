@@ -16,6 +16,7 @@ import { Page } from './Page'
 import { DesignSystemsSettings } from './DesignSystems'
 import { ThemeSettings } from './Themes'
 import { AddProjectPage, Projects } from './Projects'
+import { UpdatesSettings } from './Updates'
 import { WorkspacesSettings } from './Workspaces'
 
 const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
@@ -36,6 +37,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
       ...(hosted() ? [] : [{ id: 'models', label: 'Local models' }]),
       { id: 'notifications', label: 'Notifications' },
       { id: 'appearance', label: 'Appearance' },
+      ...(hosted() ? [] : [{ id: 'update', label: 'Updates' }]),
     ],
   },
 ]
@@ -328,6 +330,7 @@ export function Settings() {
     models: <LocalModelsSettings />,
     workspaces: <WorkspacesSettings />,
     appearance: <Appearance />,
+    update: <UpdatesSettings />,
     'design-systems': <DesignSystemsSettings />,
   }
   return (

@@ -79,6 +79,7 @@ import type {
   GrantScope,
   Plugin,
   VoiceStatus,
+  UpdateView,
   Workspaces,
   WorkspacesView,
 } from './api.generated'
@@ -244,6 +245,12 @@ export const api = {
   modelFiles: (repo: string) => request<ModelFiles>('GET', `/api/models/files?repo=${encodeURIComponent(repo)}`),
   /** Starts downloading llama.cpp's latest build for this machine. */
   pullRuntime: () => request<string>('POST', '/api/models/runtime'),
+  /** Whether a newer Silt is out and how an update goes (ADR 0100), for the desktop app built from `desktop`; a daemon's only. */
+  update: (desktop?: string) => request<UpdateView>('GET', `/api/update${desktop ? `?desktop=${encodeURIComponent(desktop)}` : ''}`),
+  checkUpdate: () => request<string>('POST', '/api/update/check'),
+  startUpdate: () => request<string>('POST', '/api/update/start'),
+  /** Restarts the daemon on the installed update now, ending agents' turns. */
+  restartForUpdate: () => request<string>('POST', '/api/update/restart'),
   /** Erases a Local only thread and its forks (ADR 0092); unconfirmed, says what would go. */
   eraseThread: (id: string, confirm: boolean) => request<string>('POST', `${thread(id)}/erase`, { confirm }),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),

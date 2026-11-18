@@ -109,7 +109,11 @@ fn backends_script(known: &[Backend]) -> String {
     } else {
         Vec::new()
     };
-    format!("window.__siltBackends = {};", serde_json::Value::Array(backends))
+    format!(
+        "window.__siltBackends = {}; window.__siltDesktop = {};",
+        serde_json::Value::Array(backends),
+        serde_json::json!({ "commit": env!("SILT_BUILD_COMMIT") })
+    )
 }
 
 /// Tells the page which backend it shows, once it has loaded.
@@ -133,6 +137,7 @@ fn open_window(
     let loading = ui.clone();
     let listening = ui.clone();
     let (switching, shown) = (target.clone(), target.clone());
+    let relaunching = app.clone();
     let theme_file = dir.as_ref().map(|dir| dir.join(theme::LAST_THEME));
     let last_theme = theme_file.as_deref().and_then(theme::last);
     let themed = app.clone();
@@ -147,6 +152,11 @@ fn open_window(
     }
     let window = builder
         .on_navigation(move |to| {
+            // The page's way to finish an update that changed this app (ADR 0100).
+            if backends::is_relaunch(to) {
+                relaunching.request_restart();
+                return false;
+            }
             // The page's own way to switch backends: the window goes there itself.
             if let Some(wanted) = backends::target_of(to, &known) {
                 *switching.lock().expect("lock") = wanted;

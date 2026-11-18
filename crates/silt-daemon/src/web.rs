@@ -202,6 +202,10 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/models/search", get(model_search))
         .route("/api/models/files", get(model_files))
         .route("/api/models/runtime", post(runtime_pull))
+        .route("/api/update", get(update))
+        .route("/api/update/check", post(update_check))
+        .route("/api/update/start", post(update_start))
+        .route("/api/update/restart", post(update_restart))
         .route("/api/models/{id}", delete(model_remove))
         .route("/api/threads/{id}/erase", post(thread_erase))
         .route("/api/workspaces", get(workspaces).put(set_workspaces))
@@ -1504,6 +1508,37 @@ async fn model_files(State(web): State<Web>, Query(query): Query<RepoQuery>) -> 
 
 async fn runtime_pull(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::RuntimePull).await
+}
+
+#[derive(Deserialize)]
+struct UpdateQuery {
+    /// The commit the desktop app showing the page was built from.
+    #[serde(default)]
+    desktop: Option<String>,
+}
+
+async fn update(State(web): State<Web>, Query(query): Query<UpdateQuery>) -> HttpResponse {
+    ask(&web, Request::Update { desktop: query.desktop }).await
+}
+
+async fn update_check(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::UpdateCheck).await
+}
+
+async fn update_start(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::UpdateStart).await
+}
+
+/// Restart now: stops the daemon, ending its agents' turns, for the update
+/// waiting on them to start the new build. Only while one waits, as
+/// nothing else would start the daemon again.
+async fn update_restart(State(web): State<Web>) -> HttpResponse {
+    match answer(&web, Request::UpdateWaiting).await {
+        Ok(serde_json::Value::Bool(true)) => ask(&web, Request::Shutdown).await,
+        Ok(_) => Failed { status: StatusCode::CONFLICT, message: "no update is waiting to restart the daemon".to_owned() }
+            .into_response(),
+        Err(failed) => failed.into_response(),
+    }
 }
 
 async fn model_remove(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
