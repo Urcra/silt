@@ -78,6 +78,9 @@ import type {
   ApprovalView,
   GrantScope,
   Installed,
+  PluginView,
+  Preview,
+  Rule,
   VoiceStatus,
   UpdateView,
   Workspaces,
@@ -509,9 +512,22 @@ export const api = {
     request<string>('POST', `/api/approvals/${id}`, { approve, hash, grant }),
   revokeGrant: (id: number) => request<string>('DELETE', `/api/grants/${id}`),
   access: (thread: string) => request<AccessView>('GET', `/api/threads/${encodeURIComponent(thread)}/access`),
+  unfolder: (thread: string, path: string) =>
+    request<string>('DELETE', `/api/threads/${encodeURIComponent(thread)}/folders`, { path }),
   releaseDevice: (thread: string, device: string) =>
     request<string>('POST', `/api/threads/${encodeURIComponent(thread)}/devices/release`, { device }),
-  plugins: () => request<Installed[]>('GET', '/api/plugins'),
+  plugins: () => request<PluginView[]>('GET', '/api/plugins'),
+  setPluginRule: (id: string, action: string, rule: Rule | null, matching: { field: string; pattern: string } | null) =>
+    request<string>('PUT', `/api/plugins/${encodeURIComponent(id)}/rules`, { action, rule, ...matching }),
+  setPluginSetting: (id: string, key: string, value: unknown, environment: string | null, workspace: string | null) =>
+    request<string>('PUT', `/api/plugins/${encodeURIComponent(id)}/settings`, { key, value, environment, workspace }),
+  setPluginEnvironment: (id: string, name: string, patterns: string[]) =>
+    request<string>('PUT', `/api/plugins/${encodeURIComponent(id)}/environments/${encodeURIComponent(name)}`, { patterns }),
+  trustPublisher: (publisher: string, trusted: boolean) =>
+    request<string>('PUT', `/api/publishers/${encodeURIComponent(publisher)}`, { trusted }),
+  previewPlugin: (url: string) => request<Preview>('POST', '/api/plugins/preview', { url }),
+  addPlugin: (url: string, commit: string) => request<Installed>('POST', '/api/plugins/add', { url, commit }),
+  removePlugin: (id: string) => request<string>('DELETE', `/api/plugins/${encodeURIComponent(id)}`),
   turnPlugin: (id: string, workspace: string, on: boolean) =>
     request<string>('PUT', `/api/plugins/${encodeURIComponent(id)}/workspaces/${encodeURIComponent(workspace)}`, { on }),
   status: () => request<DaemonStatus>('GET', '/api/status'),

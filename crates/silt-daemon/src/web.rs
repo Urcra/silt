@@ -255,6 +255,12 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/plugins", get(plugins))
         .route("/api/plugins/{name}", delete(plugin_remove))
         .route("/api/plugins/{id}/workspaces/{workspace}", put(plugin_turn))
+        .route("/api/plugins/{id}/rules", put(plugin_rule))
+        .route("/api/plugins/{id}/settings", put(plugin_set))
+        .route("/api/plugins/{id}/environments/{name}", put(plugin_environment))
+        .route("/api/publishers/{publisher}", put(plugin_trust))
+        .route("/api/plugins/preview", post(plugin_preview))
+        .route("/api/plugins/add", post(plugin_add))
         .route("/api/mrs", get(merge_requests))
         .route("/api/mrs/{id}", get(merge_request))
         .route("/api/mrs/{id}/approve", post(approve))
@@ -2058,6 +2064,89 @@ async fn plugin_turn(
     Json(body): Json<PluginTurnBody>,
 ) -> HttpResponse {
     ask(&web, Request::PluginTurn { id, workspace, on: body.on }).await
+}
+
+#[derive(Deserialize)]
+struct PluginRuleBody {
+    action: String,
+    rule: Option<silt_plugin::Rule>,
+    #[serde(default)]
+    field: Option<String>,
+    #[serde(default)]
+    pattern: Option<String>,
+}
+
+async fn plugin_rule(State(web): State<Web>, Path(id): Path<String>, Json(body): Json<PluginRuleBody>) -> HttpResponse {
+    ask(&web, Request::PluginRule { id, action: body.action, rule: body.rule, field: body.field, pattern: body.pattern }).await
+}
+
+#[derive(Deserialize)]
+struct PluginSetBody {
+    key: String,
+    value: serde_json::Value,
+    #[serde(default)]
+    environment: Option<String>,
+    #[serde(default)]
+    workspace: Option<String>,
+}
+
+async fn plugin_set(State(web): State<Web>, Path(id): Path<String>, Json(body): Json<PluginSetBody>) -> HttpResponse {
+    ask(
+        &web,
+        Request::PluginSet { id, key: body.key, value: body.value, environment: body.environment, workspace: body.workspace },
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+struct PluginEnvironmentBody {
+    patterns: Vec<String>,
+}
+
+async fn plugin_environment(
+    State(web): State<Web>,
+    Path((id, name)): Path<(String, String)>,
+    Json(body): Json<PluginEnvironmentBody>,
+) -> HttpResponse {
+    ask(&web, Request::PluginEnvironment { id, name, patterns: body.patterns }).await
+}
+
+#[derive(Deserialize)]
+struct PluginTrustBody {
+    trusted: bool,
+}
+
+async fn plugin_trust(State(web): State<Web>, Path(publisher): Path<String>, Json(body): Json<PluginTrustBody>) -> HttpResponse {
+    ask(&web, Request::PluginTrust { publisher, trusted: body.trusted }).await
+}
+
+#[derive(Deserialize)]
+struct PluginSourceBody {
+    url: String,
+    /// The commit the person was shown, for an add.
+    #[serde(default)]
+    commit: String,
+    #[serde(default)]
+    workspaces: Vec<String>,
+}
+
+/// What a plugin from git gets, read here, off the core: cloning takes a while.
+async fn plugin_preview(Json(body): Json<PluginSourceBody>) -> HttpResponse {
+    match crate::plugins::install::preview(&crate::paths::data_dir(), &body.url).await {
+        Ok(preview) => Json(preview).into_response(),
+        Err(error) => Failed { status: StatusCode::BAD_REQUEST, message: error.to_string() }.into_response(),
+    }
+}
+
+/// Adds a plugin from git, built here, off the core: building takes a while.
+async fn plugin_add(State(web): State<Web>, Json(body): Json<PluginSourceBody>) -> HttpResponse {
+    match crate::plugins::install::add_from_git(&crate::paths::data_dir(), &body.url, &body.commit, &body.workspaces).await {
+        Ok(installed) => {
+            let _ = web.bus.send(BusEvent::Approvals);
+            Json(installed).into_response()
+        }
+        Err(error) => Failed { status: StatusCode::BAD_REQUEST, message: error.to_string() }.into_response(),
+    }
 }
 
 async fn plugin_remove(State(web): State<Web>, Path(name): Path<String>) -> HttpResponse {

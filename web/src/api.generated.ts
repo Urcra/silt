@@ -306,7 +306,7 @@ export type RuleSource = { "from": "built_in" } | { "from": "org", "name": strin
 
 export type Glob = string;
 
-export type GrantScope = { "for": "run" } | { "for": "thread", minutes: number, } | { "for": "workspace" };
+export type GrantScope = { "for": "run" } | { "for": "thread", minutes: number, } | { "for": "workspace" } | { "for": "always" };
 
 export type CallView = { id: number, plugin: string, tool: string, environment: string, target: string, shown: string, change: boolean, 
 /**
@@ -377,6 +377,122 @@ rules: Array<ScopedRule>,
  * each capability with its hosts, credential and action.
  */
 consented: Array<string>, };
+
+export type PluginView = { installed: Installed, 
+/**
+ * `None` when its files can't be read here.
+ */
+manifest: Manifest | null, readme: string | null, trusted: boolean, 
+/**
+ * Its hosts, those its settings name included.
+ */
+hosts: Array<string>, };
+
+export type Preview = { id: string, commit: string, 
+/**
+ * What adding it agrees to, in words.
+ */
+consent: Array<string>, };
+
+export type Manifest = { 
+/**
+ * `publisher.name`, such as `silt.github` or `acme.deploys`.
+ */
+id: string, name: string, version: string, publisher: string, description: string, license: string, repository?: string | null, 
+/**
+ * The WIT world it was built for, such as `silt:plugin@1`.
+ */
+world: string, build: Build, capabilities: Array<Capability>, actions: Array<ActionSpec>, environments?: Environments | null, settings: Array<SettingSpec>, credentials: Array<CredentialSpec>, docs: Docs, };
+
+export type Build = { "cargo": { package: string, toolchain: string, } } | { "asset": { url: string, sha256: string, } } | "shipped";
+
+export type Capability = { "kind": "http", hosts: Array<string>, 
+/**
+ * A setting whose values name more hosts, the person's to set.
+ */
+hosts_from?: string | null, reason: string, } | { "kind": "git", hosts: Array<string>, hosts_from?: string | null, reason: string, } | { "kind": "agent-files", reason: string, } | { "kind": "thread-read", reason: string, } | { "kind": "reach", reason: string, } | { "kind": "sockets", hosts: Array<string>, hosts_from?: string | null, reason: string, } | { "kind": "ssh", hosts: Array<string>, hosts_from?: string | null, reason: string, } | { "kind": "mcp-process", command: Array<string>, 
+/**
+ * A setting holding the command instead, the person's to set.
+ */
+command_from?: string | null, hosts: Array<string>, hosts_from?: string | null, reason: string, };
+
+export type ActionSpec = { id: string, label: string, 
+/**
+ * Markdown.
+ */
+description: string, kind: ActionKind, 
+/**
+ * What it starts as, once the person trusts the publisher.
+ */
+default: Rule, 
+/**
+ * Each call approved on its own; no grant covers it.
+ */
+once: boolean, 
+/**
+ * The call's fields its rules may match on, such as `branch`.
+ */
+fields: Array<string>, };
+
+export type ActionKind = "read" | "change";
+
+export type Environments = { 
+/**
+ * Such as "repos" for GitHub, or "sites".
+ */
+label: string, 
+/**
+ * The prepared call's field matched against each environment's
+ * patterns, such as `repo`.
+ */
+field: string, };
+
+export type SettingSpec = { key: string, label: string, 
+/**
+ * Markdown.
+ */
+description: string, type: SettingKind, scope: SettingScope, default?: unknown, 
+/**
+ * An enum's choices.
+ */
+options?: Array<string>, };
+
+export type SettingKind = "string" | "number" | "boolean" | "enum" | "path" | "list" | "secret";
+
+export type SettingScope = "plugin" | "environment" | "workspace";
+
+export type CredentialSpec = { id: string, label: string, 
+/**
+ * The hosts Silt sends it to, and no others.
+ */
+hosts: Array<string>, 
+/**
+ * A setting naming more hosts it's sent to: one a capability takes its
+ * hosts from too.
+ */
+hosts_from?: string | null, send: Send, 
+/**
+ * Markdown: how a person gets one.
+ */
+how: string, 
+/**
+ * Each environment has its own.
+ */
+per_environment: boolean, 
+/**
+ * Another credential of this plugin whose secret this sends, another
+ * way or to other hosts, such as a token to an API and to git: the
+ * person sets it once.
+ */
+same_as?: string | null, };
+
+export type Send = { "header": { name: string, scheme: string | null, } } | { "basic": { user: string, } } | { "query": { name: string, } };
+
+export type Docs = { readme: string, 
+/**
+ * Folders of skills teaching agents to use it.
+ */
+skills: Array<string>, };
 
 export type PluginSource = { "type": "shipped" } | { "type": "git", url: string, commit: string, follow?: string | null, } | { "type": "dev", path: string, } | { "type": "marketplace", server: string, } | { "type": "org", org: string, commit?: string | null, };
 

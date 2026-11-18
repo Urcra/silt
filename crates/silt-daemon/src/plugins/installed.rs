@@ -203,6 +203,145 @@ pub fn write_files(data_dir: &Path, manifest_text: &str, wasm: &[u8], readme: Op
     Ok(manifest)
 }
 
+/// A plugin as the web UI shows it: what's installed, its manifest, its
+/// README, whether its publisher is trusted, and what adding it agreed to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct PluginView {
+    pub installed: Installed,
+    /// `None` when its files can't be read here.
+    pub manifest: Option<Manifest>,
+    pub readme: Option<String>,
+    pub trusted: bool,
+    /// Its hosts, those its settings name included.
+    pub hosts: Vec<String>,
+}
+
+/// Every plugin installed here, as the web UI shows them.
+pub fn views(data_dir: &Path) -> Vec<PluginView> {
+    let trusted = trusted(data_dir);
+    load(data_dir)
+        .into_iter()
+        .map(|installed| {
+            let manifest = manifest(data_dir, &installed.id).ok();
+            let mut hosts: Vec<String> =
+                manifest.as_ref().map(|manifest| manifest.hosts().into_iter().map(str::to_owned).collect()).unwrap_or_default();
+            for capability in manifest.iter().flat_map(|manifest| &manifest.capabilities) {
+                let Some(key) = capability.hosts_from() else { continue };
+                for (stored, value) in &installed.settings {
+                    if stored == key || stored.starts_with(&format!("{key}@")) || stored.starts_with(&format!("{key}#")) {
+                        hosts.extend(silt_plugin::hosts_in(value));
+                    }
+                }
+            }
+            hosts.sort();
+            hosts.dedup();
+            PluginView {
+                readme: readme(data_dir, &installed.id),
+                trusted: manifest.as_ref().is_some_and(|manifest| trusted.contains(&manifest.publisher)),
+                manifest,
+                hosts,
+                installed,
+            }
+        })
+        .collect()
+}
+
+/// Sets the person's rule for plugin `id`'s `action`, for calls whose
+/// `field` matches `pattern` when given; `None` takes theirs away.
+pub fn set_rule(
+    data_dir: &Path,
+    id: &str,
+    action: &str,
+    rule: Option<silt_plugin::Rule>,
+    matching: Option<(String, String)>,
+) -> Result<(), CoreError> {
+    let manifest = manifest(data_dir, id)?;
+    let spec = manifest.action(action).ok_or_else(|| CoreError::Invalid(format!("{id} has no action {action}")))?;
+    let (field, pattern) = match matching {
+        Some((field, pattern)) => {
+            if !spec.fields.contains(&field) {
+                return Err(CoreError::Invalid(format!("{action}'s rules can match {}, not {field}", spec.fields.join(", "))));
+            }
+            (Some(field), Some(silt_plugin::Glob::new(pattern)))
+        }
+        None => (None, None),
+    };
+    update(data_dir, id, |record| {
+        record.rules.retain(|existing| {
+            !(existing.action == action
+                && existing.field == field
+                && existing.pattern == pattern
+                && existing.source == silt_plugin::RuleSource::Yours)
+        });
+        if let Some(rule) = rule {
+            record.rules.push(ScopedRule {
+                action: action.to_owned(),
+                field,
+                pattern,
+                rule,
+                once: false,
+                source: silt_plugin::RuleSource::Yours,
+            });
+        }
+        Ok(())
+    })
+    .map(|_| ())
+}
+
+/// Sets plugin `id`'s setting `key`, checked against its manifest, for an
+/// environment or workspace where it's set per one; `null` resets it.
+pub fn set_setting(
+    data_dir: &Path,
+    id: &str,
+    key: &str,
+    value: &Value,
+    environment: Option<&str>,
+    workspace: Option<&str>,
+) -> Result<(), CoreError> {
+    let manifest = manifest(data_dir, id)?;
+    let spec = manifest
+        .settings
+        .iter()
+        .find(|spec| spec.key == key)
+        .ok_or_else(|| CoreError::Invalid(format!("{id} has no setting {key}")))?;
+    if spec.kind == silt_plugin::SettingKind::Secret {
+        return Err(CoreError::Invalid(format!("{key} is a secret: keep it with `silt plugin secret`")));
+    }
+    let stored = silt_plugin::setting_key(spec, environment, workspace).map_err(CoreError::Invalid)?;
+    if !value.is_null() {
+        silt_plugin::fits(spec, value).map_err(|why| CoreError::Invalid(format!("{key} {why}")))?;
+    }
+    update(data_dir, id, |record| {
+        if value.is_null() {
+            record.settings.remove(&stored);
+        } else {
+            record.settings.insert(stored.clone(), value.clone());
+        }
+        Ok(())
+    })
+    .map(|_| ())
+}
+
+/// Sets the patterns that pick plugin `id`'s environment `name`; none
+/// removes it.
+pub fn set_environment(data_dir: &Path, id: &str, name: &str, patterns: &[String]) -> Result<(), CoreError> {
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+        return Err(CoreError::Invalid(format!("{name} isn't an environment's name: letters, digits, `-` and `_`")));
+    }
+    update(data_dir, id, |record| {
+        let patterns: Vec<String> =
+            patterns.iter().map(|pattern| pattern.trim().to_owned()).filter(|pattern| !pattern.is_empty()).collect();
+        if patterns.is_empty() {
+            record.environments.remove(name);
+        } else {
+            record.environments.insert(name.to_owned(), patterns);
+        }
+        Ok(())
+    })
+    .map(|_| ())
+}
+
 /// Puts the plugins shipped with this Silt in place: new ones installed,
 /// on everywhere if they're meant to be; those of another version replaced,
 /// keeping what the person chose for them.

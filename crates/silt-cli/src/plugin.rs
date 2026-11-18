@@ -164,23 +164,10 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
             );
         }
         PluginCommand::Environment { id, name, patterns } => {
-            installed::update(&data, &id, |record| {
-                if patterns == "none" {
-                    record.environments.remove(&name);
-                } else {
-                    record.environments.insert(
-                        name.clone(),
-                        patterns
-                            .split(',')
-                            .map(|pattern| pattern.trim().to_owned())
-                            .filter(|pattern| !pattern.is_empty())
-                            .collect(),
-                    );
-                }
-                Ok(())
-            })
-            .map_err(core_error)?;
-            println!("{id}'s {name}: {patterns}");
+            let patterns: Vec<String> =
+                if patterns == "none" { Vec::new() } else { patterns.split(',').map(str::to_owned).collect() };
+            installed::set_environment(&data, &id, &name, &patterns).map_err(core_error)?;
+            println!("{id}'s {name}: {}", if patterns.is_empty() { "removed".to_owned() } else { patterns.join(", ") });
         }
         PluginCommand::Credential { id, credential, name, environment } => {
             let manifest = installed::manifest(&data, &id).map_err(core_error)?;
@@ -200,31 +187,8 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
             secret(&data, &id, &credential, environment.as_deref(), command.as_deref(), remove)?;
         }
         PluginCommand::Set { id, key, value, environment, workspace } => {
-            let manifest = installed::manifest(&data, &id).map_err(core_error)?;
-            let spec = manifest
-                .settings
-                .iter()
-                .find(|spec| spec.key == key)
-                .ok_or_else(|| fail(format!("{id} has no setting {key}")))?;
-            if spec.kind == silt_plugin::SettingKind::Secret {
-                return Err(fail(format!("{key} is a secret: keep it with `silt plugin secret`")));
-            }
-            let stored = silt_plugin::setting_key(spec, environment.as_deref(), workspace.as_deref()).map_err(fail)?;
             let value: serde_json::Value = serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value));
-            if !value.is_null() {
-                silt_plugin::resolve_setting(spec, Some(&value), None)
-                    .filter(|resolved| resolved.source == silt_plugin::SettingSource::Yours)
-                    .ok_or_else(|| fail(format!("{key} isn't set that way; see its description in `silt plugin list`")))?;
-            }
-            installed::update(&data, &id, |record| {
-                if value.is_null() {
-                    record.settings.remove(&stored);
-                } else {
-                    record.settings.insert(stored.clone(), value.clone());
-                }
-                Ok(())
-            })
-            .map_err(core_error)?;
+            installed::set_setting(&data, &id, &key, &value, environment.as_deref(), workspace.as_deref()).map_err(core_error)?;
             println!("{id}'s {key} is {}", if value.is_null() { "reset" } else { "set" });
         }
         PluginCommand::List => {
@@ -402,25 +366,14 @@ fn agreed(lines: &[String], yes: bool) -> Result<bool, Exn<CliError>> {
 }
 
 fn add_from_git(data: &std::path::Path, source: &str, workspaces: &[String], yes: bool) -> Result<(), Exn<CliError>> {
-    let (url, reference) = match source.rsplit_once('#') {
-        Some((url, reference)) => (url, Some(reference)),
-        None => (source, None),
-    };
-    let checkout = tempfile::tempdir().or_raise(|| CliError("cannot make a folder to clone into".into()))?;
-    let commit = install::clone(url, reference, checkout.path()).map_err(core_error)?;
-    let manifest = std::fs::read_to_string(checkout.path().join("silt-plugin.toml"))
-        .ok()
-        .and_then(|text| silt_plugin::Manifest::parse(&text).ok())
-        .ok_or_else(|| fail(format!("{url} has no valid silt-plugin.toml at its root")))?;
-    if !agreed(&install::consent(&manifest), yes)? {
+    let runtime = runtime()?;
+    let preview = runtime.block_on(install::preview(data, source)).map_err(core_error)?;
+    if !agreed(&preview.consent, yes)? {
         println!("nothing added");
         return Ok(());
     }
-    let package = runtime()?.block_on(install::package(checkout.path(), false)).map_err(core_error)?;
-    let follow = reference.filter(|reference| !reference.chars().all(|c| c.is_ascii_hexdigit())).map(str::to_owned);
-    let source = installed::PluginSource::Git { url: url.to_owned(), commit: commit.clone(), follow };
-    let record = install::install(data, &package, source, workspaces, true).map_err(core_error)?;
-    println!("added {} {} at {}", record.id, record.version, &commit[..commit.len().min(7)]);
+    let record = runtime.block_on(install::add_from_git(data, source, &preview.commit, workspaces)).map_err(core_error)?;
+    println!("added {} {} at {}", record.id, record.version, &preview.commit[..preview.commit.len().min(7)]);
     if record.workspaces.is_empty() {
         println!("turn it on with `silt plugin enable {} --workspace <id>`", record.id);
     }
@@ -483,18 +436,13 @@ fn update(data: &std::path::Path, id: &str, yes: bool) -> Result<(), Exn<CliErro
 }
 
 fn set_rule(data: &std::path::Path, id: &str, action: &str, rule: &str, matching: Option<&str>) -> Result<(), Exn<CliError>> {
-    let manifest = installed::manifest(data, id).map_err(core_error)?;
-    let spec = manifest.action(action).ok_or_else(|| fail(format!("{id} has no action {action}")))?;
-    let (field, pattern) = match matching {
+    let parsed = match matching {
         Some(matching) => {
             let (field, pattern) =
                 matching.split_once('=').ok_or_else(|| fail("--where is `field=pattern`, such as `branch=ada/*`"))?;
-            if !spec.fields.iter().any(|known| known == field) {
-                return Err(fail(format!("{action}'s rules can match {}, not {field}", spec.fields.join(", "))));
-            }
-            (Some(field.to_owned()), Some(silt_plugin::Glob::new(pattern)))
+            Some((field.to_owned(), pattern.to_owned()))
         }
-        None => (None, None),
+        None => None,
     };
     let decided = match rule {
         "allow" => Some(silt_plugin::Rule::Allow),
@@ -503,21 +451,7 @@ fn set_rule(data: &std::path::Path, id: &str, action: &str, rule: &str, matching
         "reset" => None,
         other => return Err(fail(format!("{other} isn't allow, ask, never or reset"))),
     };
-    installed::update(data, id, |record| {
-        record.rules.retain(|existing| !(existing.action == action && existing.field == field && existing.pattern == pattern));
-        if let Some(rule) = decided {
-            record.rules.push(silt_plugin::ScopedRule {
-                action: action.to_owned(),
-                field: field.clone(),
-                pattern: pattern.clone(),
-                rule,
-                once: false,
-                source: silt_plugin::RuleSource::Yours,
-            });
-        }
-        Ok(())
-    })
-    .map_err(core_error)?;
+    installed::set_rule(data, id, action, decided, parsed).map_err(core_error)?;
     println!("{id}'s {action}{}: {rule}", matching.map(|matching| format!(" where {matching}")).unwrap_or_default());
     Ok(())
 }
@@ -568,6 +502,7 @@ pub fn answer(id: u64, reject: bool, grant: Option<&str>, minutes: u32) -> Resul
     let grant = match grant {
         Some("run") => Some(GrantScope::Run),
         Some("workspace") => Some(GrantScope::Workspace),
+        Some("always") => Some(GrantScope::Always),
         Some(_) => Some(GrantScope::Thread { minutes }),
         None => None,
     };
@@ -596,6 +531,9 @@ pub fn answer(id: u64, reject: bool, grant: Option<&str>, minutes: u32) -> Resul
                 print!("Run exactly this, and let the thread make calls like it without asking for {minutes} minutes? [y/N] ");
             }
             Some(GrantScope::Workspace) => print!("Run exactly this, and make its folder one of the workspace's own? [y/N] "),
+            Some(GrantScope::Always) => {
+                print!("Run exactly this, and allow calls like it from now on, by a rule of yours? [y/N] ")
+            }
             None => print!("Run exactly this, once? [y/N] "),
         }
         let _ = std::io::stdout().flush();

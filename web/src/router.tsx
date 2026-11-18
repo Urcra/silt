@@ -78,6 +78,16 @@ export const router = createRouter({
         if (hosted()) throw redirect({ to: '/settings/$section', params: { section: 'projects' }, replace: true })
       },
     }),
+    // One plugin's page (ADR 0103); plugins are this machine's.
+    createRoute({
+      getParentRoute: () => root,
+      path: '/settings/plugins/plugin',
+      component: lazyRouteComponent(() => import('./components/Plugins'), 'PluginPage'),
+      validateSearch: (search: Record<string, unknown>) => ({ id: typeof search.id === 'string' ? search.id : '' }),
+      beforeLoad: () => {
+        if (hosted()) throw redirect({ to: '/settings/$section', params: { section: 'projects' }, replace: true })
+      },
+    }),
     // One theme's page (ADR 0098).
     createRoute({
       getParentRoute: () => root,

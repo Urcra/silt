@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde::{Deserialize, Serialize};
 use silt_plugin::{Build, Manifest};
 
 use super::installed::{self, Installed, PluginSource};
@@ -236,6 +237,76 @@ pub fn install(
     all.sort_by(|one, other| one.id.cmp(&other.id));
     installed::save(data_dir, &all)?;
     Ok(record)
+}
+
+/// What adding a plugin from git would give it, read before anything of it
+/// is built or run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Preview {
+    pub id: String,
+    pub commit: String,
+    /// What adding it agrees to, in words.
+    pub consent: Vec<String>,
+}
+
+/// `url#reference` split, the reference a tag, branch or commit.
+fn source_of(source: &str) -> (&str, Option<&str>) {
+    match source.rsplit_once('#') {
+        Some((url, reference)) => (url, Some(reference)),
+        None => (source, None),
+    }
+}
+
+/// A folder in Silt's data a repository is cloned into for a while.
+fn scratch(data_dir: &Path) -> PathBuf {
+    data_dir.join("plugins").join(".checkouts").join(uuid::Uuid::new_v4().simple().to_string())
+}
+
+/// Clones `source` (`url#tag`) and reads its manifest, building nothing.
+pub async fn preview(data_dir: &Path, source: &str) -> Result<Preview, CoreError> {
+    let (url, reference) = source_of(source);
+    let (url, reference, into) = (url.to_owned(), reference.map(str::to_owned), scratch(data_dir));
+    let checkout = into.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        let commit = clone(&url, reference.as_deref(), &checkout)?;
+        let text = std::fs::read_to_string(checkout.join("silt-plugin.toml"))
+            .map_err(|_| invalid(format!("{url} has no silt-plugin.toml at its root")))?;
+        let manifest = Manifest::parse(&text).map_err(|error| invalid(error.to_string()))?;
+        Ok::<_, CoreError>(Preview { id: manifest.id.clone(), commit, consent: consent(&manifest) })
+    })
+    .await
+    .map_err(|error| invalid(error.to_string()))?;
+    let _ = std::fs::remove_dir_all(&into);
+    read
+}
+
+/// Adds the plugin `source` (`url#tag`) names, built offline in a sandbox,
+/// on in `workspaces`; the person agreed to what [`preview`] showed of
+/// `commit`, and nothing else is added.
+pub async fn add_from_git(data_dir: &Path, source: &str, commit: &str, workspaces: &[String]) -> Result<Installed, CoreError> {
+    let (url, reference) = source_of(source);
+    let into = scratch(data_dir);
+    let (owned_url, owned_reference, checkout) = (url.to_owned(), reference.map(str::to_owned), into.clone());
+    let added = async {
+        let cloned = tokio::task::spawn_blocking(move || clone(&owned_url, owned_reference.as_deref(), &checkout))
+            .await
+            .map_err(|error| invalid(error.to_string()))??;
+        if cloned != commit {
+            return Err(invalid(format!(
+                "{url} moved to {} since you looked at {}; look again",
+                &cloned[..cloned.len().min(7)],
+                &commit[..commit.len().min(7)]
+            )));
+        }
+        let commit = cloned;
+        let package = package(&into, false).await?;
+        let follow = reference.filter(|reference| !reference.chars().all(|c| c.is_ascii_hexdigit())).map(str::to_owned);
+        install(data_dir, &package, PluginSource::Git { url: url.to_owned(), commit, follow }, workspaces, true)
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(&into);
+    added
 }
 
 /// Installs `plugin` as org `org`'s policy names it: cloned at its commit

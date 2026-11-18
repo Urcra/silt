@@ -204,7 +204,7 @@ test("a workspace's sandbox reach and its plugins are set in its settings, and a
 
   const plugins = settings.getByRole('region', { name: 'Plugins its agents can use' })
   // Silt's own plugins are there from the start: Folders on everywhere, GitHub off until turned on.
-  await expect(plugins).toContainText('silt.folders')
+  await expect(plugins).toContainText('Folders')
   await expect(plugins.getByLabel('silt.folders in Personal')).toBeChecked()
   await plugins.getByLabel('silt.github in Personal').click()
   await expect(plugins.getByLabel('silt.github in Personal')).toBeChecked()
@@ -253,4 +253,59 @@ test("a workspace's sandbox reach and its plugins are set in its settings, and a
   await page.getByRole('tab', { name: 'Access' }).click()
   await expect(page.getByRole('region', { name: 'granted' })).toContainText('Nothing beyond each call you approve')
   await expect(page.getByRole('region', { name: 'plugin calls' })).toContainText('None yet')
+})
+
+test("Settings › Plugins lists the plugins here, and a plugin's page sets what runs without asking (ADR 0103)", async ({
+  page,
+}) => {
+  await page.goto(`${new URL(fixture.ada).origin}/settings/plugins${new URL(fixture.ada).hash}`)
+  const plugins = page.getByRole('region', { name: 'Plugins', exact: true })
+  for (const name of ['Folders', 'GitHub', 'GraphQL API', 'SSH commands', 'Local MCP', 'Remote MCP']) {
+    await expect(plugins.getByRole('link', { name, exact: true })).toBeVisible()
+  }
+  await expect(plugins).toContainText("Only Silt's own plugins so far")
+  await shoot(page, '9-plugins', 1100)
+
+  await plugins.getByRole('button', { name: 'Add from git…' }).click()
+  const adding = page.getByRole('dialog', { name: /Add a plugin/ })
+  await adding.getByLabel('repository').fill(`file://${join(fixture.dir, 'nowhere')}#v1.0.0`)
+  await adding.getByRole('button', { name: 'See what it gets' }).click()
+  await expect(adding).toContainText('cloning it failed')
+  await adding.getByRole('button', { name: 'Cancel' }).click()
+
+  await plugins.getByRole('link', { name: 'GitHub', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'How it works' })).toBeVisible()
+  const actions = page.getByRole('region', { name: 'What runs without asking' })
+  const push = actions.getByLabel("Push a branch's rule")
+  await expect(push).toHaveValue('ask')
+  await push.selectOption('allow')
+  await expect(actions).toContainText('your rule')
+  await page.reload()
+  await expect(push).toHaveValue('allow')
+  await shoot(page, '10-plugin-page', 1800)
+  await actions.getByRole('button', { name: 'reset' }).first().click()
+  await expect(push).toHaveValue('ask')
+
+  // A workspace's rules for folders its agents ask for, under the org's.
+  await page.goto(`${new URL(fixture.ada).origin}/settings/workspaces${new URL(fixture.ada).hash}`)
+  const settings = page.getByRole('region', { name: 'Workspaces' })
+  await settings.getByRole('tab', { name: /Personal/ }).click()
+  // Folders are given into Silt's sandbox, so the rules wait for it.
+  await settings.getByRole('region', { name: 'What its agents can reach' }).getByLabel("Run its agents in Silt's sandbox").check()
+  const rules = settings.getByLabel('folder rules')
+  await rules.getByLabel('folder to add a rule for').fill('~/datasets')
+  await rules.getByRole('button', { name: 'Add' }).click()
+  await rules.getByLabel('answer for ~/datasets').selectOption('allow')
+  await rules.getByLabel('folder to add a rule for').fill('~/.aws')
+  await rules.getByRole('button', { name: 'Add' }).click()
+  await rules.getByLabel('answer for ~/.aws').selectOption('never')
+  await settings.getByRole('button', { name: 'Save workspaces' }).click()
+  await expect(page.getByText('Workspaces saved')).toBeVisible()
+  await expect.poll(() => ada(['workspace', 'list'], 'tools')).toContain('Personal')
+  await page.reload()
+  await settings.getByRole('tab', { name: /Personal/ }).click()
+  await expect(rules.getByLabel('answer for ~/datasets')).toHaveValue('allow')
+  await expect(rules.getByLabel('answer for ~/.aws')).toHaveValue('never')
+  await rules.scrollIntoViewIfNeeded()
+  await shoot(page, '11-folder-rules', 1600)
 })

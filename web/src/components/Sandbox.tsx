@@ -10,6 +10,8 @@ import {
   type Extra,
   type GrantScope,
   type Installed,
+  type FolderAnswer,
+  type FolderRule,
   type Policy,
   type Reach,
   type ThreadSummary,
@@ -20,7 +22,8 @@ import { BACKENDS, DEVICE_ORDER, DEVICES, HANDS_OVER, NETWORK_ORDER, NETWORKS, P
 import { useNow } from '../now'
 import { hosted } from '../served'
 import { useShortcut } from '../shortcuts'
-import { Button, Icon, Kbd, Popover, Tag, buttonClass, cx } from '../ui'
+import { Button, Icon, Input, Kbd, Popover, Select, Tag, buttonClass, cx } from '../ui'
+import { PluginCard } from './PluginCard'
 
 function networkLine(reach: Reach): string {
   switch (reach.network) {
@@ -82,7 +85,7 @@ export function SandboxShield({
   const live = agent && agent.state !== 'stopped' ? agent : null
   const running = live?.sandbox ?? null
   const reach = running ?? (!live && required && view ? reachOf(view.effective) : null)
-  const on = (plugins.data ?? []).filter((plugin) => view && onIn(plugin, view.workspace.id))
+  const on = (plugins.data ?? []).map((plugin) => plugin.installed).filter((plugin) => view && onIn(plugin, view.workspace.id))
   const heading = running
     ? 'Sandboxed'
     : live
@@ -146,6 +149,11 @@ export function SandboxShield({
 /** What approving may also allow: nothing more, or calls like it for the run or the thread a while. */
 const GRANTS: { value: string; label: (change: boolean) => string; scope: GrantScope | null }[] = [
   { value: 'once', label: () => 'ask again next time', scope: null },
+  {
+    value: 'always',
+    label: (change) => `always allow ${change ? 'changes' : 'reads'} like it, by a rule of yours`,
+    scope: { for: 'always' },
+  },
   { value: 'run', label: (change) => `allow ${change ? 'changes' : 'reads'} like it for this run`, scope: { for: 'run' } },
   {
     value: 'hour',
@@ -205,10 +213,16 @@ export function ApprovalCard({ approval, first, title }: { approval: ApprovalVie
         <Tag>{approval.tool}</Tag>
         {title && <span className="truncate">· {title}</span>}
       </span>
-      <span className="font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase">Silt will send exactly this, once</span>
-      <pre className="max-h-80 overflow-y-auto rounded-sm border border-line bg-bg px-2.5 py-2 font-mono text-xs whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
-        {approval.shown}
-      </pre>
+      {approval.card ? (
+        <PluginCard card={approval.card} effects={approval.effects} why={approval.why} />
+      ) : (
+        <>
+          <span className="font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase">Silt will send exactly this, once</span>
+          <pre className="max-h-80 overflow-y-auto rounded-sm border border-line bg-bg px-2.5 py-2 font-mono text-xs whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
+            {approval.shown}
+          </pre>
+        </>
+      )}
       <span className="font-mono text-2xs text-fg-2">
         {approval.target} · request {approval.hash.slice(0, 4)}…{approval.hash.slice(-4)} · expires in{' '}
         {remaining(approval.created_ms, now)}
@@ -231,7 +245,7 @@ export function ApprovalCard({ approval, first, title }: { approval: ApprovalVie
               value={grant}
               onChange={(event) => setGrant(event.target.value)}
             >
-              {GRANTS.map((choice) => (
+              {GRANTS.filter((choice) => choice.value !== 'always' || approval.card).map((choice) => (
                 <option key={choice.value} value={choice.value}>
                   {choice.label(change)}
                 </option>
@@ -629,6 +643,17 @@ export function ReachSettings({
             </div>
           </div>
           <div className={ROW}>
+            <span className="flex flex-col">
+              <span className="text-sm">Folders agents ask for</span>
+              <span className={SUB}>With Silt's Folders plugin, beyond what's above</span>
+            </span>
+            <FolderRules
+              rules={policy.folders ?? []}
+              org={org ? { name: org.name, rules: org.policy.folders ?? [] } : null}
+              onChange={(folders) => onChange({ folders })}
+            />
+          </div>
+          <div className={ROW}>
             <span className="text-sm">Agents' own sandboxes</span>
             <label className={cx('flex items-start gap-2 text-sm', org?.policy.no_nested && 'opacity-50')}>
               <input
@@ -648,6 +673,102 @@ export function ReachSettings({
         </fieldset>
       </div>
     </section>
+  )
+}
+
+const FOLDER_ANSWERS: { value: FolderAnswer; label: string }[] = [
+  { value: 'allow', label: 'given' },
+  { value: 'ask', label: 'asked' },
+  { value: 'never', label: 'never' },
+]
+
+/** The person's rules for folders an agent asks for, under their org's, which only tighten (ADR 0101). */
+function FolderRules({
+  rules,
+  org,
+  onChange,
+}: {
+  rules: FolderRule[]
+  org: { name: string; rules: FolderRule[] } | null
+  onChange: (rules: FolderRule[]) => void
+}) {
+  const [root, setRoot] = useState('')
+  const put = (index: number, next: Partial<FolderRule>) =>
+    onChange(rules.map((rule, at) => (at === index ? { ...rule, ...next } : rule)))
+  const add = () => {
+    const trimmed = root.trim()
+    if (!trimmed || rules.some((rule) => rule.root === trimmed)) return
+    onChange([...rules, { root: trimmed, answer: 'ask', writable: false }])
+    setRoot('')
+  }
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5" aria-label="folder rules">
+      {org?.rules.map((rule) => (
+        <div key={`org-${rule.root}`} className="flex min-w-0 items-center gap-2 text-sm opacity-70">
+          <code className="min-w-0 flex-1 truncate font-mono text-xs">{rule.root}</code>
+          <Tag tone={rule.answer === 'never' ? 'danger' : 'neutral'}>
+            {FOLDER_ANSWERS.find((known) => known.value === rule.answer)?.label}
+            {rule.writable ? ', writable' : ''}
+          </Tag>
+          <span className={SUB}>{org.name}</span>
+        </div>
+      ))}
+      {rules.map((rule, index) => (
+        <div key={rule.root} className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+          <code className="min-w-0 flex-1 truncate font-mono text-xs">{rule.root}</code>
+          <Select
+            aria-label={`answer for ${rule.root}`}
+            value={rule.answer}
+            onChange={(event) => put(index, { answer: event.target.value as FolderAnswer })}
+          >
+            {FOLDER_ANSWERS.map((answer) => (
+              <option key={answer.value} value={answer.value}>
+                {answer.label}
+              </option>
+            ))}
+          </Select>
+          <label className={cx('flex items-center gap-1 text-xs', rule.answer === 'never' && 'opacity-50')}>
+            <input
+              type="checkbox"
+              aria-label={`writable ${rule.root}`}
+              className="accent-[var(--accent)]"
+              checked={rule.writable}
+              disabled={rule.answer === 'never'}
+              onChange={(event) => put(index, { writable: event.target.checked })}
+            />
+            writable
+          </label>
+          <Button
+            variant="ghost"
+            aria-label={`remove ${rule.root}`}
+            onClick={() => onChange(rules.filter((_, at) => at !== index))}
+          >
+            Remove
+          </Button>
+        </div>
+      ))}
+      <form
+        className="flex min-w-0 items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault()
+          add()
+        }}
+      >
+        <Input
+          aria-label="folder to add a rule for"
+          placeholder="~/datasets"
+          className="min-w-0 flex-1 font-mono"
+          value={root}
+          onChange={(event) => setRoot(event.target.value)}
+        />
+        <Button type="submit" disabled={!root.trim()}>
+          Add
+        </Button>
+      </form>
+      <span className={SUB}>
+        Folders no rule names are asked. Silt's data, credentials and other workspaces' folders are never given.
+      </span>
+    </div>
   )
 }
 
@@ -692,7 +813,7 @@ export function WorkspacePlugins({ workspace, name }: { workspace: string; name:
         credentials it never sees. Other workspaces' agents never see them.
       </p>
       <div className="overflow-hidden rounded-md border border-line bg-elevated">
-        {(plugins.data ?? []).map((plugin) => {
+        {(plugins.data ?? []).map(({ installed: plugin, manifest }) => {
           const on = onIn(plugin, workspace)
           const everywhere = plugin.workspaces.includes('*')
           const elsewhere = plugin.workspaces.filter((other) => other !== workspace && other !== '*')
@@ -708,7 +829,9 @@ export function WorkspacePlugins({ workspace, name }: { workspace: string; name:
                 checked={on}
                 onChange={(event) => turn(plugin, event.target.checked)}
               />
-              <span className="font-medium">{plugin.id}</span>
+              <Link to="/settings/plugins/plugin" search={{ id: plugin.id }} className="font-medium hover:text-accent-fg">
+                {manifest?.name ?? plugin.id}
+              </Link>
               <Tag>{sourceLabel(plugin.source)}</Tag>
               <span className="font-mono text-2xs text-fg-2">{plugin.version}</span>
               <span className="ml-auto text-xs text-fg-2">
@@ -784,6 +907,13 @@ export function AccessPanel({ thread, agent }: { thread: string; agent: AgentSta
       (failure: unknown) => setError(message(failure)),
     )
   }
+  const unfolder = (path: string) => {
+    setError(undefined)
+    api.unfolder(thread, path).then(
+      () => void queries.invalidateQueries({ queryKey: keys.access(thread) }),
+      (failure: unknown) => setError(message(failure)),
+    )
+  }
   const reach = agent && agent.state !== 'stopped' ? agent.sandbox : null
   const grants = (access.data?.grants ?? []).filter((grant) => grant.active)
   return (
@@ -833,6 +963,30 @@ export function AccessPanel({ thread, agent }: { thread: string; agent: AgentSta
         ))}
         <p className="text-2xs text-fg-2">Grants stay with this thread. A fork starts with none.</p>
       </section>
+      {(access.data?.folders.length ?? 0) > 0 && (
+        <section aria-label="folders" className="flex flex-col gap-2">
+          <Heading>Folders</Heading>
+          {access.data?.folders.map((folder) => (
+            <div key={folder.path} className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-ok" />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate font-mono text-xs">{folder.path}</span>
+                <span className="font-mono text-2xs text-fg-2">
+                  {folder.writable ? 'writable' : 'read-only'} · {folder.run_only ? 'this run' : 'this thread'} · since{' '}
+                  {clock(folder.granted_ms)}
+                  {folder.until_ms !== null ? ` · until ${clock(folder.until_ms)}` : ''}
+                </span>
+              </span>
+              <Button variant="ghost" onClick={() => unfolder(folder.path)} aria-label={`unfolder ${folder.path}`}>
+                Unfolder
+              </Button>
+            </div>
+          ))}
+          <p className="text-2xs text-fg-2">
+            Taken back, a folder leaves the agent's sandbox when its turn ends; it restarts where it was without it.
+          </p>
+        </section>
+      )}
       {(access.data?.devices.length ?? 0) > 0 && (
         <section aria-label="devices and sessions" className="flex flex-col gap-2">
           <Heading>Devices and sessions</Heading>

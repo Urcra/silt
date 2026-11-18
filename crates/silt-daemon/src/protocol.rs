@@ -819,6 +819,37 @@ pub enum Request {
     PluginRemove {
         name: String,
     },
+    /// The person's rule for one of a plugin's actions; `None` takes it away.
+    PluginRule {
+        id: String,
+        action: String,
+        rule: Option<silt_plugin::Rule>,
+        #[serde(default)]
+        field: Option<String>,
+        #[serde(default)]
+        pattern: Option<String>,
+    },
+    /// One of a plugin's settings; `null` resets it.
+    PluginSet {
+        id: String,
+        key: String,
+        value: serde_json::Value,
+        #[serde(default)]
+        environment: Option<String>,
+        #[serde(default)]
+        workspace: Option<String>,
+    },
+    /// The patterns that pick one of a plugin's environments; none removes it.
+    PluginEnvironment {
+        id: String,
+        name: String,
+        patterns: Vec<String>,
+    },
+    /// Trusts a publisher, or stops trusting it.
+    PluginTrust {
+        publisher: String,
+        trusted: bool,
+    },
     /// Plugin calls waiting for the person, a thread's alone when one is
     /// named; with `all`, those answered too.
     Approvals {
@@ -2520,6 +2551,20 @@ mod tests {
             crate::plugins::GrantView::decl(&config),
             crate::plugins::AccessView::decl(&config),
             crate::plugins::installed::Installed::decl(&config),
+            crate::plugins::installed::PluginView::decl(&config),
+            crate::plugins::install::Preview::decl(&config),
+            silt_plugin::Manifest::decl(&config),
+            silt_plugin::Build::decl(&config),
+            silt_plugin::Capability::decl(&config),
+            silt_plugin::ActionSpec::decl(&config),
+            silt_plugin::ActionKind::decl(&config),
+            silt_plugin::Environments::decl(&config),
+            silt_plugin::SettingSpec::decl(&config),
+            silt_plugin::SettingKind::decl(&config),
+            silt_plugin::SettingScope::decl(&config),
+            silt_plugin::CredentialSpec::decl(&config),
+            silt_plugin::Send::decl(&config),
+            silt_plugin::Docs::decl(&config),
             crate::plugins::installed::PluginSource::decl(&config),
             crate::plugins::FolderView::decl(&config),
             crate::plugins::NetworkRefusal::decl(&config),

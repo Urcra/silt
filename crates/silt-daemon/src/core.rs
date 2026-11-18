@@ -817,7 +817,28 @@ impl Core {
             Request::PluginTools | Request::PluginCall { .. } | Request::PluginWait { .. } => {
                 Response::error("only an agent's run calls plugins, with its token")
             }
-            Request::Plugins => Response::ok(crate::plugins::installed::load(&self.data_dir)),
+            Request::Plugins => Response::ok(crate::plugins::installed::views(&self.data_dir)),
+            Request::PluginRule { id, action, rule, field, pattern } => {
+                let matching = field.zip(pattern);
+                to_response(crate::plugins::installed::set_rule(&self.data_dir, &id, &action, rule, matching).map(|()| "saved"))
+            }
+            Request::PluginSet { id, key, value, environment, workspace } => to_response(
+                crate::plugins::installed::set_setting(
+                    &self.data_dir,
+                    &id,
+                    &key,
+                    &value,
+                    environment.as_deref(),
+                    workspace.as_deref(),
+                )
+                .map(|()| "saved"),
+            ),
+            Request::PluginEnvironment { id, name, patterns } => {
+                to_response(crate::plugins::installed::set_environment(&self.data_dir, &id, &name, &patterns).map(|()| "saved"))
+            }
+            Request::PluginTrust { publisher, trusted } => {
+                to_response(crate::plugins::installed::set_trusted(&self.data_dir, &publisher, trusted).map(|()| "saved"))
+            }
             Request::PluginTurn { id, workspace, on } => {
                 let every: Vec<String> =
                     self.workspaces().workspaces.iter().map(|workspace| workspace.id.as_str().to_owned()).collect();

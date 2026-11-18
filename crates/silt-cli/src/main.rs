@@ -225,8 +225,8 @@ enum Command {
         id: u64,
         #[arg(long)]
         reject: bool,
-        /// Also let calls like it run without asking: for the rest of this `run`, or the `thread`; or, for a folder, make it the `workspace`'s own
-        #[arg(long, value_parser = ["run", "thread", "workspace"])]
+        /// Also let calls like it run without asking: for the rest of this `run`, the `thread` a while, or `always`, by a rule of yours; or, for a folder, make it the `workspace`'s own
+        #[arg(long, value_parser = ["run", "thread", "always", "workspace"])]
         grant: Option<String>,
         /// How long a thread's grant lasts, in minutes
         #[arg(long, default_value_t = 60)]

@@ -80,6 +80,9 @@ pub enum GrantScope {
     /// The workspace from now on: a folder asked for becomes one of its own
     /// (ADR 0101). Only for calls that hand over folders.
     Workspace,
+    /// Calls of this action from now on, in this call's environment: a
+    /// rule of the person's, as the plugin's page shows it (ADR 0103).
+    Always,
 }
 
 /// A call as the thread's access lists it.
@@ -741,7 +744,19 @@ impl Core {
             })
             .collect();
         let mut folder_scope = crate::folders::FolderScope::Run { run: crate::folders::run_id(&call.run_hash) };
-        if grant == Some(GrantScope::Workspace) {
+        if grant == Some(GrantScope::Always) {
+            if request.decision.once {
+                return Err(CoreError::Invalid(format!(
+                    "{} allows no rule that lets it go: each is approved on its own",
+                    prepared.action
+                )));
+            }
+            let manifest = installed::manifest(&self.data_dir, &prepared.plugin)?;
+            let matching = manifest.environments.as_ref().and_then(|environments| {
+                prepared.fields.get(&environments.field).map(|value| (environments.field.clone(), value.clone()))
+            });
+            installed::set_rule(&self.data_dir, &prepared.plugin, &prepared.action, Some(silt_plugin::Rule::Allow), matching)?;
+        } else if grant == Some(GrantScope::Workspace) {
             if folders.is_empty() {
                 return Err(CoreError::Invalid("only a folder can be granted always in its workspace".into()));
             }
@@ -754,7 +769,7 @@ impl Core {
             let (run_hash, until_ms) = match scope {
                 GrantScope::Run => (Some(call.run_hash.clone()), None),
                 GrantScope::Thread { minutes } => (None, Some(now + i64::from(minutes.clamp(1, 24 * 60)) * 60_000)),
-                GrantScope::Workspace => unreachable!("handled above"),
+                GrantScope::Workspace | GrantScope::Always => unreachable!("handled above"),
             };
             if let Some(until_ms) = until_ms {
                 folder_scope = crate::folders::FolderScope::Thread { until_ms: Some(until_ms) };
