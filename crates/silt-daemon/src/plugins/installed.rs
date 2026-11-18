@@ -68,8 +68,9 @@ pub struct Installed {
 }
 
 impl Installed {
+    /// Whether it's on in `workspace`; `*` is every workspace.
     pub fn on_in(&self, workspace: &str) -> bool {
-        self.workspaces.iter().any(|on| on == workspace)
+        self.workspaces.iter().any(|on| on == workspace || on == "*")
     }
 
     /// The `silt credential` holding its credential `id` for `environment`.
@@ -162,6 +163,56 @@ pub fn write_files(data_dir: &Path, manifest_text: &str, wasm: &[u8], readme: Op
         }
     }
     Ok(manifest)
+}
+
+/// Puts the plugins shipped with this Silt in place: new ones installed,
+/// on everywhere if they're meant to be; those of another version replaced,
+/// keeping what the person chose for them.
+pub fn ensure_shipped(data_dir: &Path) -> Result<(), CoreError> {
+    let mut all = load(data_dir);
+    let mut changed = false;
+    for shipped in silt_shipped::PLUGINS.iter().filter(|shipped| !shipped.wasm.is_empty()) {
+        let manifest = Manifest::parse(shipped.manifest).map_err(|error| CoreError::Invalid(error.to_string()))?;
+        let dir = dir(data_dir, &manifest.id);
+        let current = std::fs::read(dir.join("plugin.wasm")).is_ok_and(|wasm| wasm == shipped.wasm)
+            && std::fs::read_to_string(dir.join("silt-plugin.toml")).is_ok_and(|text| text == shipped.manifest);
+        if !current {
+            write_files(data_dir, shipped.manifest, shipped.wasm, Some(shipped.readme))?;
+        }
+        let declared: BTreeSet<String> = manifest.capabilities.iter().map(|capability| capability.name().to_owned()).collect();
+        match all.iter_mut().find(|installed| installed.id == manifest.id) {
+            Some(installed) => {
+                if installed.version != manifest.version
+                    || installed.granted != declared
+                    || installed.source != PluginSource::Shipped
+                {
+                    installed.version = manifest.version.clone();
+                    installed.granted = declared;
+                    installed.source = PluginSource::Shipped;
+                    changed = true;
+                }
+            }
+            None => {
+                all.push(Installed {
+                    id: manifest.id.clone(),
+                    source: PluginSource::Shipped,
+                    version: manifest.version.clone(),
+                    granted: declared,
+                    workspaces: if shipped.everywhere { vec!["*".to_owned()] } else { Vec::new() },
+                    environments: BTreeMap::new(),
+                    credentials: BTreeMap::new(),
+                    settings: BTreeMap::new(),
+                    rules: Vec::new(),
+                });
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        all.sort_by(|one, other| one.id.cmp(&other.id));
+        save(data_dir, &all)?;
+    }
+    Ok(())
 }
 
 /// The publishers whose plugins' defaults the person accepts. Silt is

@@ -356,6 +356,9 @@ impl Core {
     }
 
     pub(crate) async fn load_workspaces(&mut self) -> Result<(), CoreError> {
+        if let Err(error) = crate::plugins::installed::ensure_shipped(&self.data_dir) {
+            tracing::warn!(%error, "the plugins shipped with Silt couldn't be put in place");
+        }
         self.workspaces = load(&self.data_dir);
         let ids = |text: String| WorkspaceId::new(text).ok();
         self.project_workspaces =

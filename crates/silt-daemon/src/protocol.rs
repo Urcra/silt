@@ -807,6 +807,11 @@ pub enum Request {
     GrantRevoke {
         id: u64,
     },
+    /// Takes a folder back from a thread's agents (ADR 0098).
+    FolderRevoke {
+        thread: String,
+        path: String,
+    },
     /// What reached a thread's sandboxes through Silt: plugin calls,
     /// grants, and what the gateway refused (ADR 0093).
     Access {
@@ -2448,6 +2453,7 @@ mod tests {
             crate::plugins::CallView::decl(&config),
             crate::plugins::GrantView::decl(&config),
             crate::plugins::AccessView::decl(&config),
+            crate::plugins::FolderView::decl(&config),
             crate::plugins::NetworkRefusal::decl(&config),
             crate::plugins::RelayView::decl(&config),
             BusSubscription::decl(&config),
@@ -2550,6 +2556,8 @@ mod tests {
             BackendView::decl(&config),
             WorkspaceProject::decl(&config),
             silt_workspace::Workspace::decl(&config),
+            silt_workspace::FolderRule::decl(&config),
+            silt_workspace::FolderAnswer::decl(&config),
             silt_workspace::Workspaces::decl(&config),
             silt_workspace::ServerBinding::decl(&config),
             silt_workspace::MatchRule::decl(&config),

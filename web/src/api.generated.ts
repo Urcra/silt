@@ -343,7 +343,7 @@ export type Effect = { "type": "http", method: string, url: string, body_sha256?
 
 export type Channel = "sockets" | "ssh" | "mcp-process";
 
-export type GrantScope = { "for": "run" } | { "for": "thread", minutes: number, };
+export type GrantScope = { "for": "run" } | { "for": "thread", minutes: number, } | { "for": "workspace" };
 
 export type CallView = { id: number, plugin: string, tool: string, environment: string, target: string, shown: string, change: boolean, 
 /**
@@ -377,7 +377,17 @@ refused: Array<NetworkRefusal>,
 /**
  * The devices Silt holds for the thread's sandboxes.
  */
-devices: Array<RelayView>, };
+devices: Array<RelayView>, 
+/**
+ * The folders granted to its agents (ADR 0098).
+ */
+folders: Array<FolderView>, };
+
+export type FolderView = { path: string, writable: boolean, 
+/**
+ * For the run that asked, rather than the thread on this machine.
+ */
+run_only: boolean, granted_ms: number, until_ms: number | null, };
 
 export type NetworkRefusal = { time_ms: number, host: string, port: number, why: string, };
 
@@ -1427,6 +1437,18 @@ server: ServerBinding | null, rules: Array<MatchRule>, defaults: Defaults,
  */
 env: { [key in string]: string }, policy: Policy, };
 
+export type FolderRule = { 
+/**
+ * A folder, `~/` for the home folder's.
+ */
+root: string, answer: FolderAnswer, 
+/**
+ * Writing may be given in it.
+ */
+writable: boolean, };
+
+export type FolderAnswer = "allow" | "ask" | "never";
+
 export type Workspaces = { 
 /**
  * Where projects no rule matches go.
@@ -1541,7 +1563,16 @@ refuse?: Array<Extra>,
 /**
  * The agent's own sandbox may not run inside Silt's.
  */
-no_nested?: boolean, };
+no_nested?: boolean, 
+/**
+ * The folders agents may ask for, and how each is answered (ADR 0098).
+ */
+folders?: Array<FolderRule>, 
+/**
+ * The folder rules of more than one policy, each set judged on its
+ * own, once policies are combined.
+ */
+folder_layers?: Array<Array<FolderRule>>, };
 
 export type Network = "none" | "gateway" | "full" | "host";
 

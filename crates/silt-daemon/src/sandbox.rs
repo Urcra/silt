@@ -507,6 +507,20 @@ pub fn extra_dir(path: &str, writable: bool, home: Option<&Path>) -> ExtraDir {
     ExtraDir { path, real, writable, repos }
 }
 
+/// Why `dir` is never handed to a sandbox, whatever the rules say: the
+/// built-in refusals of ADR 0098, judged by both its names.
+pub fn folder_refusal(data_dir: &Path, dir: &ExtraDir) -> Option<String> {
+    let home = silt_os::home_dir();
+    let paths = RunPaths {
+        real_home: home.as_deref().and_then(real_if_linked),
+        home,
+        data_dir: Some(data_dir.to_owned()),
+        real_data_dir: real_if_linked(data_dir),
+        ..RunPaths::default()
+    };
+    paths.extra_refusal(dir)
+}
+
 /// The git dirs under `root`, never following a link; `None` once more
 /// than `limit` entries have been looked at.
 fn repos_in(root: &Path, limit: usize) -> Option<Vec<ExtraRepo>> {

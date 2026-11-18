@@ -1,0 +1,23 @@
+id = "silt.folders"
+name = "Folders"
+version = "1.0.0"
+publisher = "silt"
+description = "Lets an agent ask for more folders of this machine, such as another repo it needs to work in."
+license = "AGPL-3.0-only"
+world = "silt:plugin@1"
+build = "shipped"
+
+[[capabilities]]
+kind = "reach"
+reason = "Shows the agent the folders you grant, at their own paths, from its next restart."
+
+[[actions]]
+id = "request"
+label = "Show a folder"
+description = "Shows the agent a folder, read-only or writable. The workspace's folder rules answer first; a folder they don't name is asked."
+kind = "change"
+default = "ask"
+fields = ["path", "writable"]
+
+[docs]
+readme = "README.md"

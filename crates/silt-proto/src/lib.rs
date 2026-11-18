@@ -1032,7 +1032,7 @@ pub enum OrgChange {
     /// What agents started in the org's projects may do (ADR 0065).
     Policy {
         org: String,
-        policy: silt_workspace::Policy,
+        policy: Box<silt_workspace::Policy>,
     },
     /// Moves the project (a normalized remote) into `org`.
     MoveProject {

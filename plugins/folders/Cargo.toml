@@ -1,0 +1,17 @@
+[package]
+name = "silt-plugin-folders"
+description = "Folders: an agent asks for more folders of this machine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+silt-plugin-api = { path = "../../crates/silt-plugin-api" }

@@ -14,6 +14,8 @@ pub enum AccessCommand {
     Show { thread: String },
     /// Let go of a device relayed to a thread's sandboxes, ending its session
     Release { thread: String, device: String },
+    /// Take a folder back from a thread's agents; they lose it when their turn ends
+    Unfolder { thread: String, path: String },
 }
 
 pub fn run(command: AccessCommand) -> Result<(), Exn<CliError>> {
@@ -23,6 +25,11 @@ pub fn run(command: AccessCommand) -> Result<(), Exn<CliError>> {
             Ok(())
         }
         AccessCommand::Show { thread } => crate::plugin::access(&thread),
+        AccessCommand::Unfolder { thread, path } => {
+            let said: String = crate::commands::call(&silt_daemon::protocol::Request::FolderRevoke { thread, path })?;
+            println!("{said}");
+            Ok(())
+        }
         AccessCommand::Release { thread, device } => {
             let said: String = crate::commands::call(&silt_daemon::protocol::Request::ReleaseDevice { thread, device })?;
             println!("{said}");

@@ -322,6 +322,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "silt-plugin-folders"
+version = "1.0.0"
+dependencies = [
+ "silt-plugin-api",
+]
+
+[[package]]
 name = "silt-plugin-probe"
 version = "1.0.0"
 dependencies = [

@@ -223,8 +223,8 @@ enum Command {
         id: u64,
         #[arg(long)]
         reject: bool,
-        /// Also let calls like it run without asking: for the rest of this `run`, or the `thread`
-        #[arg(long, value_parser = ["run", "thread"])]
+        /// Also let calls like it run without asking: for the rest of this `run`, or the `thread`; or, for a folder, make it the `workspace`'s own
+        #[arg(long, value_parser = ["run", "thread", "workspace"])]
         grant: Option<String>,
         /// How long a thread's grant lasts, in minutes
         #[arg(long, default_value_t = 60)]
@@ -664,6 +664,9 @@ enum OrgCommand {
         /// Agents' own sandboxes may not run inside Silt's
         #[arg(long)]
         no_nested: bool,
+        /// The folders agents may ask for, comma-separated, each `root:allow|ask|never`, with `:rw` where writing may be given; members' own rules only tighten these
+        #[arg(long)]
+        ask_folders: Option<String>,
     },
 }
 
@@ -978,7 +981,9 @@ fn run() -> Result<(), Exn<CliError>> {
                 devices,
                 refuse,
                 no_nested,
+                ask_folders,
             } => {
+                let folders = workspace::folder_rules(ask_folders.as_deref())?;
                 let reach = workspace::parse_reach(network.as_deref(), devices.as_deref(), refuse.as_deref())?;
                 let max_preset = match max_preset.as_deref().map(|name| silt_workspace::Preset::parse(name).ok_or(name)) {
                     Some(Err(name)) => return Err(commands::fail(format!("no preset {name}"))),
@@ -1002,10 +1007,11 @@ fn run() -> Result<(), Exn<CliError>> {
                     devices: reach.devices,
                     refuse: reach.refuse,
                     no_nested,
+                    folders,
                     // A Local only workspace has no server, so no org's policy reaches it.
                     ..silt_workspace::Policy::default()
                 };
-                admin::org_change(OrgChange::Policy { org, policy })
+                admin::org_change(OrgChange::Policy { org, policy: Box::new(policy) })
             }
         },
         Command::Team { command } => admin::org_change(match command {

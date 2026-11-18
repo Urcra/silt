@@ -2,7 +2,7 @@
 # Their own workspace: they build for wasm32-wasip2, not for this machine.
 [workspace]
 resolver = "3"
-members = ["probe"]
+members = ["folders", "probe"]
 
 [workspace.package]
 version = "1.0.0"

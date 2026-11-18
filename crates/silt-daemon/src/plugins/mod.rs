@@ -23,7 +23,9 @@ pub mod installed;
 mod mcp;
 pub(crate) mod wasm;
 
-pub use calls::{AccessView, ApprovalState, ApprovalView, Approvals, CallView, GrantScope, GrantView, NetworkRefusal, RelayView};
+pub use calls::{
+    AccessView, ApprovalState, ApprovalView, Approvals, CallView, FolderView, GrantScope, GrantView, NetworkRefusal, RelayView,
+};
 
 const FILE: &str = "plugins.json";
 

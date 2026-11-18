@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use silt_plugin::{Block, Card, Context, Decision, Prepared, Rule, Rules, Tool, decide, environment_for};
+use silt_plugin::{Block, Card, Context, Decision, Effect, Prepared, Rule, RuleSource, Rules, Tool, decide, environment_for};
 use silt_plugin_host::{Env, Host, Limits, Loaded, Scope};
+use silt_workspace::{FolderAnswer, Policy};
 
 use super::PluginTool;
 use super::capabilities::DaemonCapabilities;
@@ -72,6 +73,7 @@ impl Wasm {
             Scope { plugin: installed.id.clone(), ..Scope::default() },
             None,
             tokio::runtime::Handle::current(),
+            None,
         );
         let tools = self.host()?.describe(&loaded, &env).map_err(|error| error.to_string())?;
         lock(&self.tools).insert(installed.id.clone(), (installed.version.clone(), tools.clone()));
@@ -142,6 +144,7 @@ impl Wasm {
         let trusted = installed::trusted(&call.data_dir).contains(&manifest.publisher);
         let rules = Rules(call.installed.rules.clone());
         let decision = decide(action, trusted, &rules, None, &prepared.fields);
+        let decision = with_folder_rules(decision, &prepared.effects, call.policy.as_ref(), &call.data_dir);
         Ok(WasmRequest { prepared, decision, context })
     }
 
@@ -168,6 +171,11 @@ pub(crate) struct CallParts {
     pub(crate) environment: Option<String>,
     pub(crate) checkout: Option<PathBuf>,
     pub(crate) handle: tokio::runtime::Handle,
+    /// The rules in effect in the workspace, for the folders a call hands
+    /// over.
+    pub(crate) policy: Option<Policy>,
+    /// Who the folders the call grants go to, once it's allowed.
+    pub(crate) folders: Option<crate::folders::FolderScope>,
 }
 
 impl CallParts {
@@ -178,7 +186,7 @@ impl CallParts {
             workspace: self.workspace.clone(),
             environment: self.environment.clone(),
         };
-        env_for(&self.data_dir, &self.installed, loaded, scope, self.checkout.clone(), self.handle.clone())
+        env_for(&self.data_dir, &self.installed, loaded, scope, self.checkout.clone(), self.handle.clone(), self.folders.clone())
     }
 }
 
@@ -189,6 +197,7 @@ fn env_for(
     scope: Scope,
     checkout: Option<PathBuf>,
     handle: tokio::runtime::Handle,
+    folders: Option<crate::folders::FolderScope>,
 ) -> Env {
     let thread_dir = installed::thread_dir(data_dir, &installed.id, if scope.thread.is_empty() { "none" } else { &scope.thread });
     let work = data_dir.join("work").join(&scope.thread);
@@ -200,6 +209,7 @@ fn env_for(
         checkout,
         work: (!scope.thread.is_empty() && work.is_dir()).then_some(work),
         handle,
+        folders,
     };
     Env {
         capabilities: Arc::new(capabilities),
@@ -207,6 +217,44 @@ fn env_for(
         data_dir: installed::dir(data_dir, &installed.id).join("data"),
         granted: installed.granted.clone(),
     }
+}
+
+/// `decision` with the workspace's folder rules applied to each folder the
+/// call hands over (ADR 0098): Silt's refusals and a never hold whatever the
+/// plugin's rules say; otherwise the folder rules answer where only the
+/// plugin's default did, and tighten a rule of the person's.
+fn with_folder_rules(mut decision: Decision, effects: &[Effect], policy: Option<&Policy>, data_dir: &Path) -> Decision {
+    let home = silt_os::home_dir();
+    for effect in effects {
+        let Effect::Reach { path, writable } = effect else { continue };
+        let dir = crate::sandbox::extra_dir(path, *writable, home.as_deref());
+        let refused = crate::sandbox::folder_refusal(data_dir, &dir).or_else(|| {
+            (dir.real.as_deref() != Some(Path::new(path))).then(|| format!("{path} isn't where the folder really is"))
+        });
+        if let Some(why) = refused {
+            return Decision {
+                rule: Rule::Never,
+                source: RuleSource::BuiltIn,
+                why: format!("{why}: it's never handed over"),
+                ..decision
+            };
+        }
+        let Some(policy) = policy else { continue };
+        let resolve = |root: &str| std::fs::canonicalize(silt_workspace::expand_home(root, home.as_deref())).ok();
+        let verdict = policy.folder_verdict(Path::new(path), *writable, resolve);
+        let rule = match verdict.answer {
+            FolderAnswer::Allow => Rule::Allow,
+            FolderAnswer::Ask => Rule::Ask,
+            FolderAnswer::Never => Rule::Never,
+        };
+        let combined = if decision.source == RuleSource::Default { rule } else { decision.rule.max(rule) };
+        if combined != decision.rule || decision.source == RuleSource::Default {
+            decision.rule = combined;
+            decision.why = verdict.why;
+            decision.source = RuleSource::Yours;
+        }
+    }
+    decision
 }
 
 /// A card as text, for the terminal and for agents told what waits.

@@ -238,6 +238,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/approvals", get(approvals))
         .route("/api/approvals/{id}", post(approval_answer))
         .route("/api/grants/{id}", delete(grant_revoke))
+        .route("/api/threads/{thread}/folders", delete(folder_revoke))
         .route("/api/threads/{id}/access", get(access))
         .route("/api/threads/{id}/devices/release", post(release_device))
         .route("/api/plugins", get(plugins))
@@ -1891,6 +1892,15 @@ async fn approval_answer(State(web): State<Web>, Path(id): Path<u64>, Json(body)
 
 async fn grant_revoke(State(web): State<Web>, Path(id): Path<u64>) -> HttpResponse {
     ask(&web, Request::GrantRevoke { id }).await
+}
+
+#[derive(Deserialize)]
+struct FolderBody {
+    path: String,
+}
+
+async fn folder_revoke(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<FolderBody>) -> HttpResponse {
+    ask(&web, Request::FolderRevoke { thread, path: body.path }).await
 }
 
 #[derive(Deserialize)]

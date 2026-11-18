@@ -847,6 +847,9 @@ impl Core {
                 to_response(released.map(|()| "released"))
             }
             Request::GrantRevoke { id } => to_response(self.grant_revoke(id).await.map(|()| "revoked")),
+            Request::FolderRevoke { thread, path } => {
+                to_response(self.folder_revoke(&thread, &path).map(|()| "taken back; the agent loses it when its turn ends"))
+            }
             Request::Access { thread } => to_response(self.access_view(&thread).await),
             Request::PutArtifact { .. } => Response::error("only an agent's run shows the person something, with its token"),
             Request::ArtifactGuide { .. } => Response::error("only an agent's run asks for its artifact guide, with its token"),

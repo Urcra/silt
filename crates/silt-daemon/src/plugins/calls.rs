@@ -78,6 +78,9 @@ pub enum GrantScope {
     Run,
     /// The thread, until `minutes` from now.
     Thread { minutes: u32 },
+    /// The workspace from now on: a folder asked for becomes one of its own
+    /// (ADR 0098). Only for calls that hand over folders.
+    Workspace,
 }
 
 /// A call as the thread's access lists it.
@@ -130,6 +133,20 @@ pub struct AccessView {
     pub refused: Vec<NetworkRefusal>,
     /// The devices Silt holds for the thread's sandboxes.
     pub devices: Vec<RelayView>,
+    /// The folders granted to its agents (ADR 0098).
+    pub folders: Vec<FolderView>,
+}
+
+/// A folder granted to a thread's agents, shown from its next restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct FolderView {
+    pub path: String,
+    pub writable: bool,
+    /// For the run that asked, rather than the thread on this machine.
+    pub run_only: bool,
+    pub granted_ms: i64,
+    pub until_ms: Option<i64>,
 }
 
 /// A device relayed to the thread's sandboxes, its session kept across
@@ -538,6 +555,9 @@ impl Core {
             let (run_hash, until_ms) = match scope {
                 GrantScope::Run => (Some(call.run_hash.clone()), None),
                 GrantScope::Thread { minutes } => (None, Some(now + i64::from(minutes.clamp(1, 24 * 60)) * 60_000)),
+                GrantScope::Workspace => {
+                    return Err(CoreError::Invalid("only a folder can be granted always in its workspace".into()));
+                }
             };
             self.store
                 .add_grant(&GrantRecord {
@@ -557,6 +577,17 @@ impl Core {
         }
         self.store.set_plugin_call(id, "running", None, Some(now)).await?;
         self.run_call(id, &call.workspace, &canonical, channel);
+        self.announce(BusEvent::Approvals);
+        Ok(())
+    }
+
+    /// Takes back the folder `path` from the thread's agents: gone from
+    /// their sandbox at the end of their turn.
+    pub(crate) fn folder_revoke(&mut self, thread: &str, path: &str) -> Result<(), CoreError> {
+        let thread = self.find_thread(thread)?;
+        if !crate::folders::revoke(&self.data_dir, &thread.to_string(), path)? {
+            return Err(CoreError::Invalid(format!("{path} isn't granted to that thread")));
+        }
         self.announce(BusEvent::Approvals);
         Ok(())
     }
@@ -660,12 +691,22 @@ impl Core {
                 revoked_ms: grant.revoked_ms,
             })
             .collect();
+        let folders = crate::folders::grants(&self.data_dir, &thread.to_string())
+            .into_iter()
+            .map(|grant| {
+                let (run_only, until_ms) = match grant.scope {
+                    crate::folders::FolderScope::Run { .. } => (true, None),
+                    crate::folders::FolderScope::Thread { until_ms } => (false, until_ms),
+                };
+                FolderView { path: grant.path, writable: grant.writable, run_only, granted_ms: grant.granted_ms, until_ms }
+            })
+            .collect();
         let refused = network_refusals(&crate::sandbox::access_log(&self.data_dir, &thread.to_string()));
         #[cfg(unix)]
         let devices = self.devices_view(thread);
         #[cfg(not(unix))]
         let devices = Vec::new();
-        Ok(AccessView { calls, grants, refused, devices })
+        Ok(AccessView { calls, grants, refused, devices, folders })
     }
 }
 
@@ -693,6 +734,11 @@ impl Core {
             environment,
             checkout,
             handle: tokio::runtime::Handle::current(),
+            policy: silt_workspace::WorkspaceId::new(workspace)
+                .ok()
+                .and_then(|id| self.workspaces().get(&id).cloned())
+                .map(|workspace| self.effective_policy(&workspace)),
+            folders: None,
         }
     }
 
@@ -788,9 +834,26 @@ impl Core {
         let channel = self.approvals.channel(id);
         self.announce(BusEvent::Approvals);
         if !ask {
+            let mut parts = parts;
+            parts.folders = Some(crate::folders::FolderScope::Run { run: crate::folders::run_id(&run_hash) });
             self.run_wasm_call(id, parts, request, channel.clone());
         }
         Ok((id, channel))
+    }
+
+    /// Makes `folders` the workspace's own, as the person chose on the card.
+    fn add_workspace_folders(&mut self, workspace: &str, folders: &[(String, bool)]) -> Result<(), CoreError> {
+        let id = silt_workspace::WorkspaceId::new(workspace).map_err(|error| CoreError::Invalid(error.to_string()))?;
+        let mut all = self.workspaces();
+        let found = all
+            .workspaces
+            .iter_mut()
+            .find(|candidate| candidate.id == id)
+            .ok_or_else(|| CoreError::Invalid(format!("no workspace {workspace}")))?;
+        for (path, writable) in folders {
+            *found.policy.paths.entry(path.clone()).or_insert(false) |= *writable;
+        }
+        self.set_workspaces(all)
     }
 
     /// The person approved a WebAssembly plugin's call: grant what they
@@ -805,14 +868,33 @@ impl Core {
         let request: WasmRequest =
             serde_json::from_str(&call.request).map_err(|_| CoreError::Invalid("this approval's call can't be read".into()))?;
         let prepared = &request.prepared;
-        if let Some(scope) = grant {
+        let folders: Vec<(String, bool)> = prepared
+            .effects
+            .iter()
+            .filter_map(|effect| match effect {
+                silt_plugin::Effect::Reach { path, writable } => Some((path.clone(), *writable)),
+                _ => None,
+            })
+            .collect();
+        let mut folder_scope = crate::folders::FolderScope::Run { run: crate::folders::run_id(&call.run_hash) };
+        if grant == Some(GrantScope::Workspace) {
+            if folders.is_empty() {
+                return Err(CoreError::Invalid("only a folder can be granted always in its workspace".into()));
+            }
+            self.add_workspace_folders(&call.workspace, &folders)?;
+            folder_scope = crate::folders::FolderScope::Thread { until_ms: None };
+        } else if let Some(scope) = grant {
             if request.decision.once {
                 return Err(CoreError::Invalid(format!("{} allows no grant: each is approved on its own", prepared.action)));
             }
             let (run_hash, until_ms) = match scope {
                 GrantScope::Run => (Some(call.run_hash.clone()), None),
                 GrantScope::Thread { minutes } => (None, Some(now + i64::from(minutes.clamp(1, 24 * 60)) * 60_000)),
+                GrantScope::Workspace => unreachable!("handled above"),
             };
+            if let Some(until_ms) = until_ms {
+                folder_scope = crate::folders::FolderScope::Thread { until_ms: Some(until_ms) };
+            }
             self.store
                 .add_grant(&GrantRecord {
                     id: 0,
@@ -832,7 +914,9 @@ impl Core {
         let installed = installed::find(&self.data_dir, &prepared.plugin)
             .ok_or_else(|| CoreError::Invalid(format!("{} isn't installed any more", prepared.plugin)))?;
         self.store.set_plugin_call(call.id, "running", None, Some(now)).await?;
-        let parts = self.call_parts(call.thread, &call.workspace, installed, prepared.tool.clone(), prepared.environment.clone());
+        let mut parts =
+            self.call_parts(call.thread, &call.workspace, installed, prepared.tool.clone(), prepared.environment.clone());
+        parts.folders = Some(folder_scope);
         self.run_wasm_call(call.id, parts, request, channel);
         self.announce(BusEvent::Approvals);
         Ok(())
@@ -1026,6 +1110,84 @@ mod tests {
         let access = core.access_view(&ThreadId(7).to_string()).await.expect("access");
         assert_eq!(access.calls.len(), 3);
         assert!(access.grants.iter().any(|grant| grant.plugin == "test.probe"));
+    }
+
+    async fn ask_for(core: &mut Core, token: &str, path: &std::path::Path, writable: bool) -> oneshot::Receiver<Response> {
+        let (reply, answer) = oneshot::channel();
+        let input = json!({"path": path.to_string_lossy(), "writable": writable, "reason": "the app uses it"});
+        core.plugin_call(token, "folders_request", input, reply).await;
+        answer
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_agent_asks_for_a_folder_and_the_workspaces_rules_answer_first() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let mine = tempfile::tempdir().expect("temp dir");
+        let root = std::fs::canonicalize(mine.path()).expect("real");
+        let (lib, secret, other) = (root.join("lib"), root.join("secret"), root.join("other"));
+        for dir in [&lib, &secret, &other] {
+            std::fs::create_dir_all(dir).expect("made");
+        }
+        let mut core = core(data.path()).await;
+        let mut work = silt_workspace::Workspace::new(silt_workspace::WorkspaceId::new("work").expect("an id"), "Work");
+        work.policy.folders = vec![
+            silt_workspace::FolderRule::parse(&format!("{}:allow", lib.display())).expect("a rule"),
+            silt_workspace::FolderRule::parse(&format!("{}:never", secret.display())).expect("a rule"),
+        ];
+        let mut all = silt_workspace::Workspaces::single(None);
+        all.workspaces.push(work);
+        core.set_workspaces(all).expect("saved");
+        let thread = ThreadId(7).to_string();
+        let this_run = crate::folders::run_of_token("work-run");
+
+        // Allowed by its rule, it's granted to this run without asking.
+        let answer = ask_for(&mut core, "work-run", &lib, false).await;
+        let Outcome::Done { output } = outcome(answer.await.expect("answers")) else { panic!("not done") };
+        assert!(output.contains("End your turn"), "{output}");
+        let lib_text = lib.to_string_lossy().into_owned();
+        assert_eq!(
+            crate::folders::granted(data.path(), &thread, Some(&this_run), 1),
+            BTreeMap::from([(lib_text.clone(), false)])
+        );
+        assert!(crate::folders::granted(data.path(), &thread, Some("another run"), 1).is_empty());
+        assert!(crate::folders::take_pending(data.path(), &thread), "the agent restarts with it");
+
+        // Writing isn't given where its rule doesn't give it, and never is never.
+        for (path, writable, said) in [(&lib, true, "doesn't give writing"), (&secret, false, ":never")] {
+            let answer = ask_for(&mut core, "work-run", path, writable).await;
+            let Outcome::Refused { why } = outcome(answer.await.expect("answers")) else { panic!("not refused") };
+            assert!(why.contains(said), "{why}");
+        }
+        // Silt's own refusals hold whatever the rules say.
+        let home = silt_os::home_dir().expect("a home");
+        let answer = ask_for(&mut core, "work-run", &home, false).await;
+        let Outcome::Refused { why } = outcome(answer.await.expect("answers")) else { panic!("not refused") };
+        assert!(why.contains("never handed over"), "{why}");
+
+        // One no rule names is asked; granted always, it's the workspace's own.
+        let waiting = ask_for(&mut core, "work-run", &other, true).await;
+        let pending = core.approvals_view(None, false).await.expect("approvals");
+        assert_eq!(pending.len(), 1);
+        let card = pending[0].card.as_ref().expect("a card");
+        assert!(card.title.contains("read and write"), "{}", card.title);
+        assert!(super::super::wasm::card_text(card).contains("The agent says: the app uses it"));
+        core.approval_answer(pending[0].id, true, &pending[0].hash, Some(GrantScope::Workspace)).await.expect("approves");
+        assert!(matches!(outcome(waiting.await.expect("answers")), Outcome::Done { .. }));
+        let saved = core.workspaces();
+        let work = saved.workspaces.iter().find(|workspace| workspace.id.as_str() == "work").expect("work");
+        assert_eq!(work.policy.paths.get(other.to_string_lossy().as_ref()), Some(&true));
+        assert!(
+            crate::folders::granted(data.path(), &thread, Some("a later run"), 1).contains_key(other.to_string_lossy().as_ref())
+        );
+
+        // The Access tab lists them, and taking one back narrows at the next restart.
+        let access = core.access_view(&thread).await.expect("access");
+        assert_eq!(access.folders.len(), 2, "{:?}", access.folders);
+        assert!(access.folders.iter().any(|folder| folder.path == lib_text && folder.run_only && !folder.writable));
+        core.folder_revoke(&thread, &lib_text).expect("taken back");
+        assert!(!crate::folders::granted(data.path(), &thread, Some(&this_run), 1).contains_key(&lib_text));
+        assert!(crate::folders::take_pending(data.path(), &thread));
+        assert!(core.folder_revoke(&thread, &lib_text).is_err(), "not granted any more");
     }
 
     #[tokio::test(flavor = "multi_thread")]

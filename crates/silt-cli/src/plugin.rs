@@ -105,6 +105,7 @@ fn core_error(error: silt_daemon::CoreError) -> Exn<CliError> {
 
 pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
     let data = paths::data_dir();
+    installed::ensure_shipped(&data).map_err(core_error)?;
     match command {
         PluginCommand::Add { source, workspace, yes } if !source.ends_with(".json") => {
             add_from_git(&data, &source, &workspace, yes)?
@@ -207,6 +208,8 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
                 };
                 let on = if record.workspaces.is_empty() {
                     "on in no workspace".to_owned()
+                } else if record.workspaces.iter().any(|on| on == "*") {
+                    "on in every workspace".to_owned()
                 } else {
                     format!("on in {}", record.workspaces.join(", "))
                 };
@@ -398,7 +401,14 @@ fn set_rule(data: &std::path::Path, id: &str, action: &str, rule: &str, matching
 
 fn turn(data: &std::path::Path, name: &str, workspace: &str, on: bool) -> Result<(), Exn<CliError>> {
     if installed::find(data, name).is_some() {
+        let every: Vec<String> = silt_daemon::workspaces::load(data)
+            .map(|all| all.workspaces.iter().map(|workspace| workspace.id.as_str().to_owned()).collect())
+            .unwrap_or_else(|| vec!["default".to_owned()]);
         installed::update(data, name, |record| {
+            // On everywhere, until it's turned off somewhere.
+            if !on && record.workspaces.iter().any(|other| other == "*") {
+                record.workspaces = every.clone();
+            }
             record.workspaces.retain(|other| other != workspace);
             if on {
                 record.workspaces.push(workspace.to_owned());
@@ -458,6 +468,7 @@ pub fn list(all: bool, thread: Option<String>) -> Result<(), Exn<CliError>> {
 pub fn answer(id: u64, reject: bool, grant: Option<&str>, minutes: u32) -> Result<(), Exn<CliError>> {
     let grant = match grant {
         Some("run") => Some(GrantScope::Run),
+        Some("workspace") => Some(GrantScope::Workspace),
         Some(_) => Some(GrantScope::Thread { minutes }),
         None => None,
     };
@@ -485,6 +496,7 @@ pub fn answer(id: u64, reject: bool, grant: Option<&str>, minutes: u32) -> Resul
             Some(GrantScope::Thread { minutes }) => {
                 print!("Run exactly this, and let the thread make calls like it without asking for {minutes} minutes? [y/N] ");
             }
+            Some(GrantScope::Workspace) => print!("Run exactly this, and make its folder one of the workspace's own? [y/N] "),
             None => print!("Run exactly this, once? [y/N] "),
         }
         let _ = std::io::stdout().flush();
@@ -537,6 +549,14 @@ pub fn access(thread: &str) -> Result<(), Exn<CliError>> {
         println!("  {}  {} {} in {}  {how}", call.id, call.plugin, call.tool, call.environment);
         if let Some(Outcome::Refused { why } | Outcome::Unknown { why }) = &call.outcome {
             println!("      {why}");
+        }
+    }
+    if !access.folders.is_empty() {
+        println!("Folders");
+        for folder in &access.folders {
+            let access = if folder.writable { "read and write" } else { "read-only" };
+            let scope = if folder.run_only { "its run" } else { "the thread" };
+            println!("  {}  {access}, for {scope}", folder.path);
         }
     }
     if !access.devices.is_empty() {

@@ -2,6 +2,7 @@
 //! threads sync with, and the rules for agents started in it. Pure: the
 //! daemon and the CLI read the files and enforce what this decides.
 
+mod folders;
 mod policy;
 mod preset;
 mod reach;
@@ -9,6 +10,7 @@ mod sandbox;
 mod seatbelt;
 mod workspace;
 
+pub use folders::{FolderAnswer, FolderRule, FolderVerdict};
 pub use policy::{
     AgentChoice, AgentKey, Broken, KNOWN_AGENTS, ModeMeaning, OrgPolicy, Policy, Refusal, Rules, SandboxSupport, Source,
     agent_key, check_move,

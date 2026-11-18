@@ -6,10 +6,12 @@ use silt_acp::registry::{self, AgentCommand};
 use silt_acp::{SignInHow, SignInMethod};
 use silt_agents::sign_in::{Login, LoginEvent, LoginScreen};
 use silt_proto::{AgentState, SignInAsked, SignInChoice, SignInShown};
+use std::collections::BTreeMap;
+
 use silt_types::ThreadId;
 
 use super::{AcpEvent, AcpRun, send, spawn_agent};
-use crate::core::{Core, CoreError, Event};
+use crate::core::{Core, CoreError, Event, now_ms};
 
 /// How much of a sign-in's output is kept, from its end.
 const KEPT_OUTPUT: usize = 256 * 1024;
@@ -329,8 +331,12 @@ impl Core {
         run.load = load;
         run.state = AgentState::Starting;
         run.queued.clear();
+        let folders = run.sandbox.as_ref().map_or_else(BTreeMap::new, |(_, run_token, _)| {
+            crate::folders::granted(&self.data_dir, &thread.to_string(), Some(&crate::folders::run_of_token(run_token)), now_ms())
+        });
+        run.folders = folders.clone();
         let sandbox = run.sandbox.clone().map(|(reach, run_token, workspace)| super::AcpSandbox {
-            reach,
+            reach: crate::folders::widened(reach, &folders),
             token: run_token,
             scratch: super::run_scratch(&self.data_dir, thread, token),
             workspace,
@@ -339,6 +345,33 @@ impl Core {
         });
         spawn_agent(self.events.clone(), thread, token, run.info.clone(), self.data_dir.clone(), start, sandbox);
         self.agent_changed(thread).await;
+    }
+
+    /// Restarts the agent in a sandbox with the folders granted to it, at
+    /// the end of a turn in which they changed, telling it what's now there
+    /// once its session resumes (ADR 0098). Answers whether it did.
+    pub(super) async fn restart_for_folders(&mut self, thread: ThreadId) -> bool {
+        let Some(run) = self.acp.get(&thread) else { return false };
+        let Some((_, token, _)) = &run.sandbox else { return false };
+        // The turn's end may have reached Silt as a hook first.
+        let thread_id = thread.to_string();
+        let asked = crate::folders::take_pending(&self.data_dir, &thread_id)
+            | crate::folders::take_restart(&self.data_dir, &thread_id, 0);
+        if !asked {
+            return false;
+        }
+        let now =
+            crate::folders::granted(&self.data_dir, &thread.to_string(), Some(&crate::folders::run_of_token(token)), now_ms());
+        let (added, removed) = crate::folders::difference(&run.folders, &now);
+        if added.is_empty() && removed.is_empty() {
+            return false;
+        }
+        let note = crate::folders::resume_note(&added, &removed);
+        self.restart_agent(thread, None).await;
+        if let Some(run) = self.acp.get_mut(&thread) {
+            run.resume_note = Some(note);
+        }
+        true
     }
 
     /// Sends a prompt the agent refused for want of a sign-in, as it was:

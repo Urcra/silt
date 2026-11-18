@@ -6132,6 +6132,7 @@ dependencies = [
  "silt-proto",
  "silt-redact",
  "silt-sheet",
+ "silt-shipped",
  "silt-store",
  "silt-sync",
  "silt-types",
@@ -6400,6 +6401,14 @@ version = "0.0.1"
 dependencies = [
  "proptest",
  "serde",
+]
+
+[[package]]
+name = "silt-shipped"
+version = "0.0.1"
+dependencies = [
+ "silt-plugin",
+ "silt-plugin-host",
 ]
 
 [[package]]

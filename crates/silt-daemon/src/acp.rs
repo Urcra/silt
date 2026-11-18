@@ -34,6 +34,11 @@ pub(crate) struct AcpRun {
     /// What its sandbox reaches and the run's token, when it runs in Silt's
     /// sandbox, for starting it again the same way (ADR 0093).
     sandbox: Option<(silt_workspace::Reach, String, String)>,
+    /// The folders granted to it that its sandbox was started with
+    /// (ADR 0098).
+    folders: std::collections::BTreeMap<String, bool>,
+    /// What to tell it once it's restarted with other folders.
+    resume_note: Option<String>,
     checkout_id: CheckoutId,
     checkout: PathBuf,
     handle: Option<AgentHandle>,
@@ -679,8 +684,10 @@ impl Core {
             Some(reach) => self.relayed_for(thread, reach).await?,
             None => Vec::new(),
         };
+        let folders =
+            crate::folders::granted(&self.data_dir, &thread.to_string(), Some(&crate::folders::run_of_token(&token)), now_ms());
         let sandbox = reach.map(|reach| AcpSandbox {
-            reach,
+            reach: crate::folders::widened(reach, &folders),
             token,
             scratch: run_scratch(&self.data_dir, thread, run),
             workspace: workspace.id.as_str().to_owned(),
@@ -694,6 +701,8 @@ impl Core {
                 run,
                 info,
                 sandbox: kept,
+                folders,
+                resume_note: None,
                 checkout_id,
                 checkout,
                 handle: None,
@@ -906,6 +915,10 @@ impl Core {
         let Some(run) = self.acp.get_mut(&thread).filter(|run| run.state == AgentState::Idle) else {
             return Ok(());
         };
+        if let Some(note) = run.resume_note.take() {
+            let me = self.own_user(thread);
+            return self.send_prompt(thread, &me, &note, Vec::new()).await;
+        }
         if let Some(steer) = run.steering.take() {
             let me = self.own_user(thread);
             let said = format!("I interrupted your last turn to say: {steer}");
@@ -1546,6 +1559,9 @@ impl Core {
                 run.calls_running.clear();
                 let signing_in = run.sign_in.is_some();
                 self.questions_dropped(thread).await?;
+                if !signing_in && self.restart_for_folders(thread).await {
+                    return Ok(());
+                }
                 // The queue waits for the sign-in, as the agent would refuse it too.
                 if !signing_in {
                     self.next_prompt(thread).await?;

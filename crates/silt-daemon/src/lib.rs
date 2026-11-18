@@ -22,6 +22,7 @@ pub mod devices;
 mod disk;
 mod edited;
 mod erase;
+pub mod folders;
 mod forks;
 mod frames;
 mod gallery;

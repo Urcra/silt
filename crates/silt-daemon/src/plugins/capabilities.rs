@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use silt_plugin::{Manifest, Send};
-use silt_plugin_host::{Capabilities, Commit, FileChange, HttpRequest, HttpResponse, Scope};
+use silt_plugin_host::{Capabilities, Commit, FileChange, Folder, HttpRequest, HttpResponse, Scope};
 
 use super::installed::Installed;
 
@@ -26,6 +26,9 @@ pub(crate) struct DaemonCapabilities {
     /// The thread's work area, where agents clone what they work on.
     pub(crate) work: Option<PathBuf>,
     pub(crate) handle: tokio::runtime::Handle,
+    /// Who the folders a running call grants go to; `None` outside a call
+    /// that runs.
+    pub(crate) folders: Option<crate::folders::FolderScope>,
 }
 
 impl DaemonCapabilities {
@@ -284,5 +287,29 @@ impl Capabilities for DaemonCapabilities {
             .collect();
         names.sort();
         Ok(names)
+    }
+
+    fn reach_resolve(&self, _scope: &Scope, path: &str, writable: bool) -> Result<Folder, String> {
+        let dir = crate::sandbox::extra_dir(path, writable, silt_os::home_dir().as_deref());
+        if let Some(why) = crate::sandbox::folder_refusal(&self.data_dir, &dir) {
+            return Err(format!("{why}: it's never handed over"));
+        }
+        let real = dir.real.as_ref().ok_or_else(|| format!("{path} isn't there"))?;
+        if !real.is_dir() {
+            return Err(format!("{path} isn't a folder"));
+        }
+        let repos = dir
+            .repos
+            .unwrap_or_default()
+            .into_iter()
+            .map(|repo| repo.work_tree.unwrap_or(repo.git_dir).to_string_lossy().into_owned())
+            .collect();
+        Ok(Folder { asked: path.to_owned(), real: real.to_string_lossy().into_owned(), repos })
+    }
+
+    fn reach_grant(&self, scope: &Scope, real: &str, writable: bool) -> Result<(), String> {
+        let to = self.folders.clone().ok_or("a folder is granted only by a call that runs")?;
+        let grant = crate::folders::FolderGrant { path: real.to_owned(), writable, scope: to, granted_ms: crate::core::now_ms() };
+        crate::folders::record(&self.data_dir, &scope.thread, grant).map_err(|error| error.to_string())
     }
 }
