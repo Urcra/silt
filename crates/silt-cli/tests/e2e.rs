@@ -1072,6 +1072,25 @@ fn a_command_left_running_in_the_background_is_stopped_from_the_web_ui() {
     assert_eq!(listed_background(&api, &thread), 0, "{live}");
 }
 
+/// A command left running that ended without Silt hearing of it, as when
+/// Copilot ends a detached shell itself, is marked stopped when the person
+/// stops it, rather than shown running for good.
+#[test]
+fn a_command_left_running_that_ended_unheard_is_marked_stopped_when_stopped() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v1", "add acp Forgotten");
+    settled_history(&api, &thread, "Done: add acp Forgotten");
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["stoppable"], serde_json::json!(["shell-1"]), "{live}");
+
+    api.ok("POST", &format!("/api/threads/{thread}/agent/tasks/shell-1/stop"), None);
+    assert_eq!(task_news(&api, &thread, "shell-1"), ["running", "stopped"]);
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["stoppable"], serde_json::json!([]), "{live}");
+    assert_eq!(listed_background(&api, &thread), 0, "{live}");
+}
+
 /// A subagent the agent left running past its turn keeps the thread in
 /// progress until it ends, as the person stopping the agent ends it.
 #[test]

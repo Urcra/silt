@@ -1314,7 +1314,9 @@ impl Core {
 
     /// Ends a command the thread's agent left running in the background,
     /// started by the call `call`: ACP has no way to ask the agent to, so
-    /// Silt ends its processes, and the agent hears that it ended.
+    /// Silt ends its processes, and the agent hears that it ended. One that
+    /// none of the agent's processes runs any more ended without Silt hearing
+    /// of it, and is only marked stopped.
     pub(crate) async fn stop_task(&mut self, selector: &str, call: &str) -> Result<&'static str, CoreError> {
         let thread = self.find_thread(selector)?;
         let run = self.running(thread)?;
@@ -1327,13 +1329,10 @@ impl Core {
         // The same command left running twice is told apart by age.
         let nth = run.background.values().filter(|other| other.started < kept.started && other.command == command).count();
         let handle = run.handle.clone().ok_or_else(not_running)?;
-        let ended = tokio::task::spawn_blocking(move || handle.stop_command(&command, nth))
+        tokio::task::spawn_blocking(move || handle.stop_command(&command, nth))
             .await
             .map_err(|error| CoreError::Invalid(format!("could not look for the command: {error}")))?
             .map_err(|error| CoreError::Invalid(format!("could not read this machine's processes: {error}")))?;
-        if ended == 0 {
-            return Err(CoreError::Invalid("none of the agent's processes runs that command; it may have just ended".into()));
-        }
         let run = self.acp.get_mut(&thread).expect("checked above");
         run.background.remove(&task);
         run.stopped_tasks.insert(call.to_owned());
