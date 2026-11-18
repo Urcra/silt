@@ -17,7 +17,11 @@ use silt_access::{Canonical, DataClass, Schema};
 use crate::CoreError;
 
 mod calls;
+mod capabilities;
+pub mod install;
+pub mod installed;
 mod mcp;
+pub(crate) mod wasm;
 
 pub use calls::{AccessView, ApprovalState, ApprovalView, Approvals, CallView, GrantScope, GrantView, NetworkRefusal, RelayView};
 

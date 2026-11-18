@@ -16,6 +16,8 @@ use silt_store::{GrantRecord, PluginCallRecord, Store};
 use silt_types::ThreadId;
 use tokio::sync::{broadcast, oneshot, watch};
 
+use super::installed::{self, Installed};
+use super::wasm::{CallParts, WasmRequest, asks};
 use super::{Outcome, exec_of, execute, load, prepare, shown_input, tools};
 use crate::CoreError;
 use crate::core::{Core, now_ms, to_response};
@@ -59,6 +61,12 @@ pub struct ApprovalView {
     pub change: bool,
     /// Its environment allows no grant: each is approved on its own.
     pub once: bool,
+    /// A WebAssembly plugin's card, which Silt draws (ADR 0100).
+    pub card: Option<silt_plugin::Card>,
+    /// What it will send, each checked while it runs unless opaque.
+    pub effects: Vec<silt_plugin::Effect>,
+    /// What decided it, such as a rule or an untrusted publisher.
+    pub why: Option<String>,
 }
 
 /// What an approval may also allow from then on.
@@ -92,6 +100,8 @@ pub struct CallView {
     pub outcome: Option<Outcome>,
     pub created_ms: i64,
     pub answered_ms: Option<i64>,
+    pub card: Option<silt_plugin::Card>,
+    pub effects: Vec<silt_plugin::Effect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +160,8 @@ pub struct NetworkRefusal {
 pub struct Approvals {
     waiting: HashMap<i64, Arc<watch::Sender<Option<Outcome>>>>,
     listed: Arc<std::sync::Mutex<BTreeMap<String, Vec<Value>>>>,
+    /// WebAssembly plugins (ADR 0100).
+    pub(crate) wasm: Arc<super::wasm::Wasm>,
 }
 
 impl Approvals {
@@ -176,6 +188,63 @@ fn canonical_of(call: &PluginCallRecord) -> Canonical {
         target: String::new(),
         input: Value::Null,
     })
+}
+
+/// A call as the person sees it, whichever kind of plugin made it.
+struct Described {
+    plugin: String,
+    tool: String,
+    environment: String,
+    target: String,
+    shown: String,
+    card: Option<silt_plugin::Card>,
+    effects: Vec<silt_plugin::Effect>,
+    once: Option<bool>,
+    why: Option<String>,
+}
+
+fn described(call: &PluginCallRecord) -> Described {
+    if call.kind == "wasm" {
+        if let Ok(request) = serde_json::from_str::<WasmRequest>(&call.request) {
+            let prepared = request.prepared;
+            return Described {
+                plugin: prepared.plugin,
+                tool: prepared.tool,
+                environment: prepared.environment.unwrap_or_default(),
+                target: prepared.card.title.clone(),
+                shown: super::wasm::card_text(&prepared.card),
+                card: Some(prepared.card.shown()),
+                effects: prepared.effects,
+                once: Some(request.decision.once),
+                why: Some(request.decision.why),
+            };
+        }
+        // Refused before it was prepared: the tool and input it was given.
+        let asked: Value = serde_json::from_str(&call.request).unwrap_or(Value::Null);
+        return Described {
+            plugin: asked.get("plugin").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            tool: asked.get("tool").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            environment: String::new(),
+            target: String::new(),
+            shown: shown_input(asked.get("input").unwrap_or(&Value::Null)),
+            card: None,
+            effects: Vec::new(),
+            once: Some(true),
+            why: None,
+        };
+    }
+    let canonical = canonical_of(call);
+    Described {
+        plugin: canonical.plugin,
+        tool: canonical.tool,
+        environment: canonical.environment,
+        target: canonical.target,
+        shown: shown_input(&canonical.input),
+        card: None,
+        effects: Vec::new(),
+        once: None,
+        why: None,
+    }
 }
 
 fn outcome_of(call: &PluginCallRecord) -> Option<Outcome> {
@@ -229,7 +298,7 @@ impl Core {
                 return;
             }
         };
-        let (data_dir, listed) = (self.data_dir.clone(), self.approvals.listed.clone());
+        let (data_dir, listed, wasm) = (self.data_dir.clone(), self.approvals.listed.clone(), self.approvals.wasm.clone());
         tokio::spawn(async move {
             let plugins = load(&data_dir);
             for plugin in plugins.iter().filter(|plugin| plugin.workspaces.contains(&workspace)) {
@@ -238,7 +307,10 @@ impl Core {
                 }
             }
             let known = listed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-            let _ = reply.send(Response::ok(tools(&plugins, &workspace, &known)));
+            let mut offered = tools(&plugins, &workspace, &known);
+            let wasm_offered = tokio::task::spawn_blocking(move || wasm.tools(&data_dir, &workspace)).await.unwrap_or_default();
+            offered.extend(wasm_offered);
+            let _ = reply.send(Response::ok(offered));
         });
     }
 
@@ -271,6 +343,14 @@ impl Core {
         input: Value,
     ) -> Result<(i64, Arc<watch::Sender<Option<Outcome>>>), CoreError> {
         let (thread, workspace, run_hash) = self.run_of(token).await?;
+        let found = {
+            let (wasm, data_dir, workspace, tool) =
+                (self.approvals.wasm.clone(), self.data_dir.clone(), workspace.clone(), tool.to_owned());
+            tokio::task::spawn_blocking(move || wasm.find(&data_dir, &workspace, &tool)).await.ok().flatten()
+        };
+        if let Some((installed, plugin_tool)) = found {
+            return self.start_wasm_call(thread, workspace, run_hash, installed, plugin_tool.name, input).await;
+        }
         let plugins = load(&self.data_dir);
         let now = now_ms();
         let mut call = PluginCallRecord {
@@ -287,6 +367,7 @@ impl Core {
             grant: None,
             created_ms: now,
             answered_ms: None,
+            kind: "legacy".into(),
         };
         let data_dir = self.data_dir.clone();
         let schemas = move |plugin: &str, environment: &str| super::schema_of(&data_dir, plugin, environment);
@@ -320,7 +401,15 @@ impl Core {
         if ask && !prepared.once {
             let grant = self
                 .store
-                .grant_for(thread, &run_hash, &prepared.canonical.plugin, &prepared.canonical.environment, prepared.change, now)
+                .grant_for(
+                    thread,
+                    &run_hash,
+                    &prepared.canonical.plugin,
+                    &prepared.canonical.environment,
+                    prepared.change,
+                    None,
+                    now,
+                )
                 .await?;
             if let Some(grant) = grant {
                 ask = false;
@@ -422,7 +511,6 @@ impl Core {
         if call.hash != hash {
             return Err(CoreError::Invalid("that isn't the request this approval holds; look again".into()));
         }
-        let canonical = canonical_of(&call);
         if !approve {
             let outcome = Outcome::Refused { why: "the person rejected it".into() };
             let json = serde_json::to_string(&outcome).unwrap_or_default();
@@ -431,6 +519,10 @@ impl Core {
             self.announce(BusEvent::Approvals);
             return Ok(());
         }
+        if call.kind == "wasm" {
+            return self.approve_wasm_call(call, grant, channel, now).await;
+        }
+        let canonical = canonical_of(&call);
         if let Some(scope) = grant {
             let once = load(&self.data_dir)
                 .iter()
@@ -459,6 +551,7 @@ impl Core {
                     until_ms,
                     revoked_ms: None,
                     from_call: id,
+                    action: None,
                 })
                 .await?;
         }
@@ -487,26 +580,31 @@ impl Core {
             .into_iter()
             .filter(|call| call.asked && (all || state_of(call, now) == ApprovalState::Pending))
             .map(|call| {
-                let canonical = canonical_of(&call);
-                let once = plugins
-                    .iter()
-                    .find(|plugin| plugin.name == canonical.plugin)
-                    .and_then(|plugin| plugin.environments.get(&canonical.environment))
-                    .is_none_or(|environment| environment.once);
+                let seen = described(&call);
+                let once = seen.once.unwrap_or_else(|| {
+                    plugins
+                        .iter()
+                        .find(|plugin| plugin.name == seen.plugin)
+                        .and_then(|plugin| plugin.environments.get(&seen.environment))
+                        .is_none_or(|environment| environment.once)
+                });
                 ApprovalView {
                     id: id_of(call.id),
                     thread: call.thread.to_string(),
-                    plugin: canonical.plugin,
-                    tool: canonical.tool,
-                    environment: canonical.environment,
-                    target: canonical.target,
-                    shown: shown_input(&canonical.input),
+                    plugin: seen.plugin,
+                    tool: seen.tool,
+                    environment: seen.environment,
+                    target: seen.target,
+                    shown: seen.shown,
                     hash: call.hash.clone(),
                     created_ms: call.created_ms,
                     state: state_of(&call, now),
                     outcome: outcome_of(&call),
                     change: call.change,
                     once,
+                    card: seen.card,
+                    effects: seen.effects,
+                    why: seen.why,
                 }
             })
             .collect())
@@ -523,16 +621,16 @@ impl Core {
             .await?
             .into_iter()
             .map(|call| {
-                let canonical = canonical_of(&call);
+                let seen = described(&call);
                 let state =
                     if state_of(&call, now) == ApprovalState::Expired { "expired".to_owned() } else { call.state.clone() };
                 CallView {
                     id: id_of(call.id),
-                    plugin: canonical.plugin,
-                    tool: canonical.tool,
-                    environment: canonical.environment,
-                    target: canonical.target,
-                    shown: shown_input(&canonical.input),
+                    plugin: seen.plugin,
+                    tool: seen.tool,
+                    environment: seen.environment,
+                    target: seen.target,
+                    shown: seen.shown,
                     change: call.change,
                     asked: call.asked,
                     grant: call.grant.map(id_of),
@@ -540,6 +638,8 @@ impl Core {
                     outcome: outcome_of(&call),
                     created_ms: call.created_ms,
                     answered_ms: call.answered_ms,
+                    card: seen.card,
+                    effects: seen.effects,
                 }
             })
             .collect();
@@ -566,6 +666,199 @@ impl Core {
         #[cfg(not(unix))]
         let devices = Vec::new();
         Ok(AccessView { calls, grants, refused, devices })
+    }
+}
+
+impl Core {
+    /// What a WebAssembly plugin's call is given of this machine.
+    fn call_parts(
+        &self,
+        thread: ThreadId,
+        workspace: &str,
+        installed: Installed,
+        tool: String,
+        environment: Option<String>,
+    ) -> CallParts {
+        let checkout = self
+            .checkouts
+            .values()
+            .find(|checkout| checkout.record.thread == thread)
+            .map(|checkout| checkout.record.path.clone());
+        CallParts {
+            data_dir: self.data_dir.clone(),
+            installed,
+            tool,
+            thread: thread.to_string(),
+            workspace: workspace.to_owned(),
+            environment,
+            checkout,
+            handle: tokio::runtime::Handle::current(),
+        }
+    }
+
+    /// A WebAssembly plugin's call (ADR 0100): prepared by its plugin,
+    /// decided by its rules, then run, waited on, or refused.
+    async fn start_wasm_call(
+        &mut self,
+        thread: ThreadId,
+        workspace: String,
+        run_hash: Vec<u8>,
+        installed: Installed,
+        tool: String,
+        input: Value,
+    ) -> Result<(i64, Arc<watch::Sender<Option<Outcome>>>), CoreError> {
+        let now = now_ms();
+        let plugin = installed.id.clone();
+        let parts = self.call_parts(thread, &workspace, installed, tool.clone(), None);
+        let wasm = self.approvals.wasm.clone();
+        let asked_input = input.clone();
+        let (prepared, parts) = tokio::task::spawn_blocking(move || {
+            let mut parts = parts;
+            let prepared = wasm.prepare(&parts, &asked_input);
+            if let Ok(request) = &prepared {
+                parts.environment = request.prepared.environment.clone();
+            }
+            (prepared, parts)
+        })
+        .await
+        .map_err(|error| CoreError::Invalid(error.to_string()))?;
+        let mut call = PluginCallRecord {
+            id: 0,
+            thread,
+            run_hash: run_hash.clone(),
+            workspace: workspace.clone(),
+            request: String::new(),
+            hash: String::new(),
+            change: false,
+            asked: false,
+            state: "running".into(),
+            outcome: None,
+            grant: None,
+            created_ms: now,
+            answered_ms: None,
+            kind: "wasm".into(),
+        };
+        let request = match prepared {
+            Ok(request) => request,
+            Err(why) => {
+                let asked = serde_json::json!({"plugin": plugin, "tool": tool, "input": input});
+                call.request = asked.to_string();
+                call.hash = blake3::hash(call.request.as_bytes()).to_hex().to_string();
+                call.state = "ended".into();
+                let outcome = Outcome::Refused { why };
+                call.outcome = Some(serde_json::to_string(&outcome).unwrap_or_default());
+                let id = self.store.add_plugin_call(&call).await?;
+                self.announce(BusEvent::Approvals);
+                return Ok((id, Arc::new(watch::channel(Some(outcome)).0)));
+            }
+        };
+        let change = installed::manifest(&self.data_dir, &plugin)
+            .ok()
+            .and_then(|manifest| {
+                manifest.action(&request.prepared.action).map(|action| action.kind == silt_plugin::ActionKind::Change)
+            })
+            .unwrap_or(true);
+        call.request = serde_json::to_string(&request).unwrap_or_default();
+        call.hash = request.prepared.hash();
+        call.change = change;
+        let Some(mut ask) = asks(&request.decision) else {
+            call.state = "ended".into();
+            let outcome = Outcome::Refused { why: format!("refused by {}", request.decision.why) };
+            call.outcome = Some(serde_json::to_string(&outcome).unwrap_or_default());
+            let id = self.store.add_plugin_call(&call).await?;
+            self.announce(BusEvent::Approvals);
+            return Ok((id, Arc::new(watch::channel(Some(outcome)).0)));
+        };
+        if ask && !request.decision.once {
+            let environment = request.prepared.environment.clone().unwrap_or_default();
+            let grant = self
+                .store
+                .grant_for(thread, &run_hash, &plugin, &environment, change, Some(&request.prepared.action), now)
+                .await?;
+            if let Some(grant) = grant {
+                ask = false;
+                call.grant = Some(grant.id);
+            }
+        }
+        call.asked = ask;
+        if ask {
+            call.state = "pending".into();
+        }
+        let id = self.store.add_plugin_call(&call).await?;
+        let channel = self.approvals.channel(id);
+        self.announce(BusEvent::Approvals);
+        if !ask {
+            self.run_wasm_call(id, parts, request, channel.clone());
+        }
+        Ok((id, channel))
+    }
+
+    /// The person approved a WebAssembly plugin's call: grant what they
+    /// chose, then run it as it was prepared.
+    async fn approve_wasm_call(
+        &mut self,
+        call: PluginCallRecord,
+        grant: Option<GrantScope>,
+        channel: Arc<watch::Sender<Option<Outcome>>>,
+        now: i64,
+    ) -> Result<(), CoreError> {
+        let request: WasmRequest =
+            serde_json::from_str(&call.request).map_err(|_| CoreError::Invalid("this approval's call can't be read".into()))?;
+        let prepared = &request.prepared;
+        if let Some(scope) = grant {
+            if request.decision.once {
+                return Err(CoreError::Invalid(format!("{} allows no grant: each is approved on its own", prepared.action)));
+            }
+            let (run_hash, until_ms) = match scope {
+                GrantScope::Run => (Some(call.run_hash.clone()), None),
+                GrantScope::Thread { minutes } => (None, Some(now + i64::from(minutes.clamp(1, 24 * 60)) * 60_000)),
+            };
+            self.store
+                .add_grant(&GrantRecord {
+                    id: 0,
+                    thread: call.thread,
+                    run_hash,
+                    plugin: prepared.plugin.clone(),
+                    environment: prepared.environment.clone().unwrap_or_default(),
+                    change: call.change,
+                    created_ms: now,
+                    until_ms,
+                    revoked_ms: None,
+                    from_call: call.id,
+                    action: Some(prepared.action.clone()),
+                })
+                .await?;
+        }
+        let installed = installed::find(&self.data_dir, &prepared.plugin)
+            .ok_or_else(|| CoreError::Invalid(format!("{} isn't installed any more", prepared.plugin)))?;
+        self.store.set_plugin_call(call.id, "running", None, Some(now)).await?;
+        let parts = self.call_parts(call.thread, &call.workspace, installed, prepared.tool.clone(), prepared.environment.clone());
+        self.run_wasm_call(call.id, parts, request, channel);
+        self.announce(BusEvent::Approvals);
+        Ok(())
+    }
+
+    /// Runs call `id` on a blocking thread, as it was prepared, and ends it
+    /// with how it went.
+    fn run_wasm_call(&self, id: i64, parts: CallParts, request: WasmRequest, channel: Arc<watch::Sender<Option<Outcome>>>) {
+        let (store, bus, wasm) = (self.store.clone(), self.bus.clone(), self.approvals.wasm.clone());
+        tokio::spawn(async move {
+            let ran = tokio::task::spawn_blocking(move || wasm.run(&parts, &request)).await;
+            let outcome = match ran {
+                Ok(Ok(ran)) if !ran.refused.is_empty() => {
+                    let refused: Vec<String> = ran.refused.iter().map(ToString::to_string).collect();
+                    Outcome::Refused { why: format!("Silt refused what wasn't approved: {}", refused.join("; ")) }
+                }
+                Ok(Ok(ran)) => match ran.output {
+                    Ok(output) => Outcome::Done { output: output.text },
+                    Err(error) if ran.observed.is_empty() => Outcome::Failed { error },
+                    Err(error) => Outcome::Unknown { why: format!("it failed after sending something: {error}") },
+                },
+                Ok(Err(error)) => Outcome::Failed { error },
+                Err(error) => Outcome::Unknown { why: error.to_string() },
+            };
+            end(&store, &bus, &channel, id, outcome).await;
+        });
     }
 }
 
@@ -667,6 +960,95 @@ mod tests {
         let input = json!({"environment": "fleet", "target": "car-1.fleet.vpn", "args": ["now"]});
         core.plugin_call(token, "test_fleet_run", input, reply).await;
         answer
+    }
+
+    fn probe_installed(data: &std::path::Path) {
+        let manifest_text = silt_plugin_host::testing::PROBE_MANIFEST.to_owned();
+        let package = super::super::install::Package {
+            manifest: silt_plugin::Manifest::parse(&manifest_text).expect("the probe's manifest"),
+            manifest_text,
+            wasm: silt_plugin_host::testing::plugin("silt-plugin-probe"),
+            readme: Some("# Probe".into()),
+        };
+        super::super::install::install(
+            data,
+            &package,
+            installed::PluginSource::Dev { path: "plugins/probe".into() },
+            &["work".into()],
+            false,
+        )
+        .expect("installs");
+    }
+
+    async fn call_tool(core: &mut Core, token: &str, tool: &str) -> oneshot::Receiver<Response> {
+        let (reply, answer) = oneshot::channel();
+        core.plugin_call(token, tool, json!({"name": "ada"}), reply).await;
+        answer
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_webassembly_plugins_call_waits_for_an_untrusted_publisher_then_runs_as_prepared() {
+        let data = tempfile::tempdir().expect("temp dir");
+        probe_installed(data.path());
+        let mut core = core(data.path()).await;
+        let (reply, tools) = oneshot::channel();
+        core.plugin_tools("work-run", reply).await;
+        let Response::Ok { data: offered } = tools.await.expect("tools") else { panic!("no tools") };
+        let names: Vec<String> =
+            offered.as_array().expect("a list").iter().filter_map(|tool| tool["name"].as_str().map(str::to_owned)).collect();
+        assert!(names.contains(&"probe_files".to_owned()), "{names:?}");
+
+        let (reply, other) = oneshot::channel();
+        core.plugin_tools("other-thread", reply).await;
+        let Response::Ok { data: elsewhere } = other.await.expect("tools") else { panic!("no tools") };
+        assert!(!elsewhere.to_string().contains("probe_"), "not on in personal");
+
+        let waiting = call_tool(&mut core, "work-run", "probe_files").await;
+        let pending = core.approvals_view(None, false).await.expect("approvals");
+        assert_eq!(pending.len(), 1, "its publisher isn't trusted, so it asks");
+        let approval = &pending[0];
+        assert_eq!(approval.plugin, "test.probe");
+        assert!(approval.card.as_ref().is_some_and(|card| card.title == "files"));
+        assert!(approval.why.as_deref().is_some_and(|why| why.contains("isn't trusted")));
+        core.approval_answer(approval.id, true, &approval.hash, Some(GrantScope::Run)).await.expect("approves");
+        assert_eq!(outcome(waiting.await.expect("answers")), Outcome::Done { output: "wrote /data/note; no /etc/passwd".into() });
+
+        // The grant was for this action, for this run.
+        let again = call_tool(&mut core, "work-run", "probe_files").await;
+        assert!(core.approvals_view(None, false).await.expect("approvals").is_empty());
+        assert!(matches!(outcome(again.await.expect("answers")), Outcome::Done { .. }));
+
+        // Trusted, its own default lets a read go without asking.
+        installed::set_trusted(data.path(), "test", true).expect("trusts");
+        let trusted = call_tool(&mut core, "work-again", "probe_files").await;
+        assert!(core.approvals_view(None, false).await.expect("approvals").is_empty());
+        assert!(matches!(outcome(trusted.await.expect("answers")), Outcome::Done { .. }));
+        let access = core.access_view(&ThreadId(7).to_string()).await.expect("access");
+        assert_eq!(access.calls.len(), 3);
+        assert!(access.grants.iter().any(|grant| grant.plugin == "test.probe"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_never_rule_refuses_before_the_plugin_runs() {
+        let data = tempfile::tempdir().expect("temp dir");
+        probe_installed(data.path());
+        installed::update(data.path(), "test.probe", |installed| {
+            installed.rules.push(silt_plugin::ScopedRule {
+                action: "look".into(),
+                field: None,
+                pattern: None,
+                rule: silt_plugin::Rule::Never,
+                once: false,
+                source: silt_plugin::RuleSource::Yours,
+            });
+            Ok(())
+        })
+        .expect("a rule");
+        let mut core = core(data.path()).await;
+        let refused = call_tool(&mut core, "work-run", "probe_files").await;
+        let Outcome::Refused { why } = outcome(refused.await.expect("answers")) else { panic!("not refused") };
+        assert!(why.contains("your rule for Look"), "{why}");
+        assert!(!data.path().join("plugins/test.probe/data/note").exists(), "it never ran");
     }
 
     #[tokio::test]

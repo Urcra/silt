@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use exn::{Exn, ResultExt as _};
 use silt_daemon::paths;
-use silt_daemon::plugins::{self, AccessView, ApprovalState, ApprovalView, GrantScope, Kind, Outcome, Plugin};
+use silt_daemon::plugins::{
+    self, AccessView, ApprovalState, ApprovalView, GrantScope, Kind, Outcome, Plugin, install, installed,
+};
 use silt_daemon::protocol::Request;
 
 use crate::CliError;
@@ -16,8 +18,60 @@ use crate::commands::{call, fail};
 
 #[derive(Debug, Subcommand)]
 pub enum PluginCommand {
-    /// Add a plugin from its JSON definition, or replace the one of its name
-    Add { file: PathBuf },
+    /// Add a plugin from a git repository (`URL#tag` to pin one), showing everything it gets first; or from a JSON definition of `plugins.json`'s kinds
+    Add {
+        source: String,
+        /// Turn it on in this workspace too; may be given more than once
+        #[arg(long)]
+        workspace: Vec<String>,
+        /// Agree to what it gets without being asked
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Add or rebuild a plugin from a folder you're developing
+    Dev {
+        folder: PathBuf,
+        #[arg(long)]
+        workspace: Vec<String>,
+    },
+    /// Update a plugin from where it came from, showing what the new version adds
+    Update {
+        id: String,
+        /// Agree to what it adds without being asked
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Trust a publisher, so its plugins' actions start from their own defaults rather than asking
+    Trust {
+        publisher: String,
+        /// Stop trusting it
+        #[arg(long)]
+        off: bool,
+    },
+    /// Set the patterns that pick one of a plugin's environments, such as `acme/*,acme-labs/*`; `none` removes it
+    Environment { id: String, name: String, patterns: String },
+    /// Say which of `silt credential`'s credentials is one of a plugin's own
+    Credential {
+        id: String,
+        /// The plugin's own name for it, from its manifest
+        credential: String,
+        /// The credential `silt credential add` keeps
+        name: String,
+        /// For this environment only
+        #[arg(long)]
+        environment: Option<String>,
+    },
+    /// Allow, ask or never one of a plugin's actions; with `--where field=pattern`, only for calls that match
+    Rule {
+        id: String,
+        action: String,
+        /// allow, ask or never; `reset` removes your rule
+        rule: String,
+        #[arg(long = "where")]
+        matching: Option<String>,
+    },
+    /// Set one of a plugin's settings to a JSON value; `null` resets it
+    Set { id: String, key: String, value: String },
     /// List this machine's plugins and the workspaces each is on in
     List,
     /// Remove a plugin
@@ -52,7 +106,11 @@ fn core_error(error: silt_daemon::CoreError) -> Exn<CliError> {
 pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
     let data = paths::data_dir();
     match command {
-        PluginCommand::Add { file } => {
+        PluginCommand::Add { source, workspace, yes } if !source.ends_with(".json") => {
+            add_from_git(&data, &source, &workspace, yes)?
+        }
+        PluginCommand::Add { source, .. } => {
+            let file = PathBuf::from(source);
             let bytes = std::fs::read(&file).or_raise(|| CliError(format!("cannot read {}", file.display())))?;
             let plugin: Plugin = serde_json::from_slice(&bytes)
                 .or_raise(|| CliError(format!("{} isn't a plugin's definition", file.display())))?;
@@ -60,9 +118,107 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
             plugins::put(&data, plugin).map_err(core_error)?;
             println!("added {name}; turn it on with `silt plugin enable {name} --workspace <id>`");
         }
+        PluginCommand::Dev { folder, workspace } => {
+            let folder = std::fs::canonicalize(&folder).or_raise(|| CliError(format!("no folder {}", folder.display())))?;
+            let package = runtime()?.block_on(install::package(&folder, true)).map_err(core_error)?;
+            let source = installed::PluginSource::Dev { path: folder.to_string_lossy().into_owned() };
+            let record = install::install(&data, &package, source, &workspace, true).map_err(core_error)?;
+            println!("{} {} built from {} (dev)", record.id, record.version, folder.display());
+        }
+        PluginCommand::Update { id, yes } => update(&data, &id, yes)?,
+        PluginCommand::Trust { publisher, off } => {
+            installed::set_trusted(&data, &publisher, !off).map_err(core_error)?;
+            println!(
+                "{publisher} is {}",
+                if off {
+                    "no longer trusted: its plugins' actions ask"
+                } else {
+                    "trusted: its plugins' actions start from their own defaults"
+                }
+            );
+        }
+        PluginCommand::Environment { id, name, patterns } => {
+            installed::update(&data, &id, |record| {
+                if patterns == "none" {
+                    record.environments.remove(&name);
+                } else {
+                    record.environments.insert(
+                        name.clone(),
+                        patterns
+                            .split(',')
+                            .map(|pattern| pattern.trim().to_owned())
+                            .filter(|pattern| !pattern.is_empty())
+                            .collect(),
+                    );
+                }
+                Ok(())
+            })
+            .map_err(core_error)?;
+            println!("{id}'s {name}: {patterns}");
+        }
+        PluginCommand::Credential { id, credential, name, environment } => {
+            let manifest = installed::manifest(&data, &id).map_err(core_error)?;
+            if !manifest.credentials.iter().any(|spec| spec.id == credential) {
+                return Err(fail(format!("{id} has no credential {credential}")));
+            }
+            let key = environment.as_ref().map_or(credential.clone(), |environment| format!("{credential}@{environment}"));
+            installed::update(&data, &id, |record| {
+                record.credentials.insert(key.clone(), name.clone());
+                Ok(())
+            })
+            .map_err(core_error)?;
+            println!("{id}'s {key} is the credential {name}");
+        }
+        PluginCommand::Rule { id, action, rule, matching } => set_rule(&data, &id, &action, &rule, matching.as_deref())?,
+        PluginCommand::Set { id, key, value } => {
+            let manifest = installed::manifest(&data, &id).map_err(core_error)?;
+            let spec = manifest
+                .settings
+                .iter()
+                .find(|spec| spec.key == key)
+                .ok_or_else(|| fail(format!("{id} has no setting {key}")))?;
+            let value: serde_json::Value = serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value));
+            if !value.is_null() {
+                silt_plugin::resolve_setting(spec, Some(&value), None)
+                    .filter(|resolved| resolved.source == silt_plugin::SettingSource::Yours)
+                    .ok_or_else(|| fail(format!("{key} isn't set that way; see its description in `silt plugin list`")))?;
+            }
+            installed::update(&data, &id, |record| {
+                if value.is_null() {
+                    record.settings.remove(&key);
+                } else {
+                    record.settings.insert(key.clone(), value.clone());
+                }
+                Ok(())
+            })
+            .map_err(core_error)?;
+            println!("{id}'s {key} is set");
+        }
         PluginCommand::List => {
+            for record in installed::load(&data) {
+                let source = match &record.source {
+                    installed::PluginSource::Shipped => "shipped with Silt".to_owned(),
+                    installed::PluginSource::Git { url, commit, .. } => {
+                        format!("from {url} at {}", &commit[..commit.len().min(7)])
+                    }
+                    installed::PluginSource::Dev { path } => format!("dev, from {path}"),
+                    installed::PluginSource::Marketplace { server } => format!("from the marketplace at {server}"),
+                    installed::PluginSource::Org { org } => format!("from {org}'s policy"),
+                };
+                let on = if record.workspaces.is_empty() {
+                    "on in no workspace".to_owned()
+                } else {
+                    format!("on in {}", record.workspaces.join(", "))
+                };
+                println!("{} {}  {source}  {on}", record.id, record.version);
+                let granted: Vec<&str> = record.granted.iter().map(String::as_str).collect();
+                println!("  granted: {}", if granted.is_empty() { "nothing".to_owned() } else { granted.join(", ") });
+                for (name, patterns) in &record.environments {
+                    println!("  {name}: {}", patterns.join(", "));
+                }
+            }
             let all = plugins::load(&data);
-            if all.is_empty() {
+            if all.is_empty() && installed::load(&data).is_empty() {
                 println!("no plugins; add one with `silt plugin add <file>`");
             }
             for plugin in all {
@@ -87,6 +243,10 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
                 }
             }
         }
+        PluginCommand::Remove { name } if installed::find(&data, &name).is_some() => {
+            install::remove(&data, &name).map_err(core_error)?;
+            println!("removed {name}");
+        }
         PluginCommand::Remove { name } => {
             plugins::remove(&data, &name).map_err(core_error)?;
             println!("removed {name}");
@@ -110,7 +270,146 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
+fn runtime() -> Result<tokio::runtime::Runtime, Exn<CliError>> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .or_raise(|| CliError("cannot start the async runtime".into()))
+}
+
+/// Whether the person agrees to `lines`: asked at a terminal, else only
+/// with `--yes`.
+fn agreed(lines: &[String], yes: bool) -> Result<bool, Exn<CliError>> {
+    for line in lines {
+        println!("{line}");
+    }
+    if yes {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(fail("agree to what it gets with --yes, or run this at a terminal"));
+    }
+    print!("Add it? [y/N] ");
+    std::io::stdout().flush().ok();
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer).ok();
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
+}
+
+fn add_from_git(data: &std::path::Path, source: &str, workspaces: &[String], yes: bool) -> Result<(), Exn<CliError>> {
+    let (url, reference) = match source.rsplit_once('#') {
+        Some((url, reference)) => (url, Some(reference)),
+        None => (source, None),
+    };
+    let checkout = tempfile::tempdir().or_raise(|| CliError("cannot make a folder to clone into".into()))?;
+    let commit = install::clone(url, reference, checkout.path()).map_err(core_error)?;
+    let manifest = std::fs::read_to_string(checkout.path().join("silt-plugin.toml"))
+        .ok()
+        .and_then(|text| silt_plugin::Manifest::parse(&text).ok())
+        .ok_or_else(|| fail(format!("{url} has no valid silt-plugin.toml at its root")))?;
+    if !agreed(&install::consent(&manifest), yes)? {
+        println!("nothing added");
+        return Ok(());
+    }
+    let package = runtime()?.block_on(install::package(checkout.path(), false)).map_err(core_error)?;
+    let follow = reference.filter(|reference| !reference.chars().all(|c| c.is_ascii_hexdigit())).map(str::to_owned);
+    let source = installed::PluginSource::Git { url: url.to_owned(), commit: commit.clone(), follow };
+    let record = install::install(data, &package, source, workspaces, true).map_err(core_error)?;
+    println!("added {} {} at {}", record.id, record.version, &commit[..commit.len().min(7)]);
+    if record.workspaces.is_empty() {
+        println!("turn it on with `silt plugin enable {} --workspace <id>`", record.id);
+    }
+    Ok(())
+}
+
+fn update(data: &std::path::Path, id: &str, yes: bool) -> Result<(), Exn<CliError>> {
+    let record = installed::find(data, id).ok_or_else(|| fail(format!("no plugin {id}")))?;
+    let package = match &record.source {
+        installed::PluginSource::Git { url, follow, .. } => {
+            let checkout = tempfile::tempdir().or_raise(|| CliError("cannot make a folder to clone into".into()))?;
+            let commit = install::clone(url, follow.as_deref(), checkout.path()).map_err(core_error)?;
+            let package = runtime()?.block_on(install::package(checkout.path(), false)).map_err(core_error)?;
+            (package, installed::PluginSource::Git { url: url.clone(), commit, follow: follow.clone() })
+        }
+        installed::PluginSource::Dev { path } => {
+            let package = runtime()?.block_on(install::package(std::path::Path::new(path), true)).map_err(core_error)?;
+            (package, record.source.clone())
+        }
+        installed::PluginSource::Shipped => return Err(fail(format!("{id} updates with Silt"))),
+        installed::PluginSource::Marketplace { .. } | installed::PluginSource::Org { .. } => {
+            return Err(fail(format!("{id} updates from where it came from; `silt plugin search` finds it")));
+        }
+    };
+    let (package, source) = package;
+    let before = installed::manifest(data, id).map_err(core_error)?;
+    let added = before.added_in(&package.manifest);
+    if !added.is_empty() {
+        let mut lines = vec![format!("{} {} asks for more:", package.manifest.name, package.manifest.version)];
+        lines.extend(added.iter().map(|line| format!("  {line}")));
+        if !agreed(&lines, yes)? {
+            println!("not updated; {} {} keeps running", record.id, record.version);
+            return Ok(());
+        }
+    }
+    let updated = install::install(data, &package, source, &[], true).map_err(core_error)?;
+    println!("{} is now {}", updated.id, updated.version);
+    Ok(())
+}
+
+fn set_rule(data: &std::path::Path, id: &str, action: &str, rule: &str, matching: Option<&str>) -> Result<(), Exn<CliError>> {
+    let manifest = installed::manifest(data, id).map_err(core_error)?;
+    let spec = manifest.action(action).ok_or_else(|| fail(format!("{id} has no action {action}")))?;
+    let (field, pattern) = match matching {
+        Some(matching) => {
+            let (field, pattern) =
+                matching.split_once('=').ok_or_else(|| fail("--where is `field=pattern`, such as `branch=ada/*`"))?;
+            if !spec.fields.iter().any(|known| known == field) {
+                return Err(fail(format!("{action}'s rules can match {}, not {field}", spec.fields.join(", "))));
+            }
+            (Some(field.to_owned()), Some(silt_plugin::Glob::new(pattern)))
+        }
+        None => (None, None),
+    };
+    let decided = match rule {
+        "allow" => Some(silt_plugin::Rule::Allow),
+        "ask" => Some(silt_plugin::Rule::Ask),
+        "never" => Some(silt_plugin::Rule::Never),
+        "reset" => None,
+        other => return Err(fail(format!("{other} isn't allow, ask, never or reset"))),
+    };
+    installed::update(data, id, |record| {
+        record.rules.retain(|existing| !(existing.action == action && existing.field == field && existing.pattern == pattern));
+        if let Some(rule) = decided {
+            record.rules.push(silt_plugin::ScopedRule {
+                action: action.to_owned(),
+                field: field.clone(),
+                pattern: pattern.clone(),
+                rule,
+                once: false,
+                source: silt_plugin::RuleSource::Yours,
+            });
+        }
+        Ok(())
+    })
+    .map_err(core_error)?;
+    println!("{id}'s {action}{}: {rule}", matching.map(|matching| format!(" where {matching}")).unwrap_or_default());
+    Ok(())
+}
+
 fn turn(data: &std::path::Path, name: &str, workspace: &str, on: bool) -> Result<(), Exn<CliError>> {
+    if installed::find(data, name).is_some() {
+        installed::update(data, name, |record| {
+            record.workspaces.retain(|other| other != workspace);
+            if on {
+                record.workspaces.push(workspace.to_owned());
+                record.workspaces.sort();
+            }
+            Ok(())
+        })
+        .map_err(core_error)?;
+        println!("{name} is {} in {workspace}", if on { "on" } else { "off" });
+        return Ok(());
+    }
     let mut plugin =
         plugins::load(data).into_iter().find(|plugin| plugin.name == name).ok_or_else(|| fail(format!("no plugin {name}")))?;
     plugin.workspaces.retain(|other| other != workspace);

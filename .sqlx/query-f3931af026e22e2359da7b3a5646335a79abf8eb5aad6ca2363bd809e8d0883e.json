@@ -1,0 +1,182 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!\", thread_id, run_hash, workspace, request, hash, change, asked, state, outcome, grant_id, created_ms, answered_ms, kind\n               FROM plugin_calls\n               WHERE (?1 IS NULL OR thread_id = ?1) AND (?2 IS NULL OR state = ?2)\n               ORDER BY id DESC LIMIT ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "thread_id",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "name": "run_hash",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "run_hash"
+          }
+        }
+      },
+      {
+        "name": "workspace",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "workspace"
+          }
+        }
+      },
+      {
+        "name": "request",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "request"
+          }
+        }
+      },
+      {
+        "name": "hash",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "hash"
+          }
+        }
+      },
+      {
+        "name": "change",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "change"
+          }
+        }
+      },
+      {
+        "name": "asked",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "asked"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "outcome",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "outcome"
+          }
+        }
+      },
+      {
+        "name": "grant_id",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "grant_id"
+          }
+        }
+      },
+      {
+        "name": "created_ms",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "created_ms"
+          }
+        }
+      },
+      {
+        "name": "answered_ms",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "answered_ms"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "kind"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "f3931af026e22e2359da7b3a5646335a79abf8eb5aad6ca2363bd809e8d0883e"
+}

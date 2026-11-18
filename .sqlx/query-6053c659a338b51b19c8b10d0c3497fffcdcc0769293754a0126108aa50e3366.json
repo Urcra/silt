@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", thread_id, run_hash, workspace, request, hash, change, asked, state, outcome, grant_id, created_ms, answered_ms\n               FROM plugin_calls WHERE id = ?",
+  "query": "SELECT id AS \"id!\", thread_id, run_hash, plugin, environment, change, created_ms, until_ms, revoked_ms, from_call, action\n               FROM plugin_grants\n               WHERE thread_id = ? AND plugin = ? AND environment = ? AND change = ? AND action IS ? AND revoked_ms IS NULL\n                 AND (until_ms IS NULL OR until_ms > ?) AND (run_hash IS NULL OR run_hash = ?)\n               ORDER BY id DESC LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -9,7 +9,7 @@
         "type_info": "Integer",
         "origin": {
           "Table": {
-            "table": "plugin_calls",
+            "table": "plugin_grants",
             "name": "id"
           }
         }
@@ -20,7 +20,7 @@
         "type_info": "Blob",
         "origin": {
           "Table": {
-            "table": "plugin_calls",
+            "table": "plugin_grants",
             "name": "thread_id"
           }
         }
@@ -31,131 +31,107 @@
         "type_info": "Blob",
         "origin": {
           "Table": {
-            "table": "plugin_calls",
+            "table": "plugin_grants",
             "name": "run_hash"
           }
         }
       },
       {
-        "name": "workspace",
+        "name": "plugin",
         "ordinal": 3,
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "plugin_calls",
-            "name": "workspace"
+            "table": "plugin_grants",
+            "name": "plugin"
           }
         }
       },
       {
-        "name": "request",
+        "name": "environment",
         "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "plugin_calls",
-            "name": "request"
-          }
-        }
-      },
-      {
-        "name": "hash",
-        "ordinal": 5,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "plugin_calls",
-            "name": "hash"
+            "table": "plugin_grants",
+            "name": "environment"
           }
         }
       },
       {
         "name": "change",
-        "ordinal": 6,
+        "ordinal": 5,
         "type_info": "Integer",
         "origin": {
           "Table": {
-            "table": "plugin_calls",
+            "table": "plugin_grants",
             "name": "change"
           }
         }
       },
       {
-        "name": "asked",
-        "ordinal": 7,
-        "type_info": "Integer",
-        "origin": {
-          "Table": {
-            "table": "plugin_calls",
-            "name": "asked"
-          }
-        }
-      },
-      {
-        "name": "state",
-        "ordinal": 8,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "plugin_calls",
-            "name": "state"
-          }
-        }
-      },
-      {
-        "name": "outcome",
-        "ordinal": 9,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "plugin_calls",
-            "name": "outcome"
-          }
-        }
-      },
-      {
-        "name": "grant_id",
-        "ordinal": 10,
-        "type_info": "Integer",
-        "origin": {
-          "Table": {
-            "table": "plugin_calls",
-            "name": "grant_id"
-          }
-        }
-      },
-      {
         "name": "created_ms",
-        "ordinal": 11,
+        "ordinal": 6,
         "type_info": "Integer",
         "origin": {
           "Table": {
-            "table": "plugin_calls",
+            "table": "plugin_grants",
             "name": "created_ms"
           }
         }
       },
       {
-        "name": "answered_ms",
-        "ordinal": 12,
+        "name": "until_ms",
+        "ordinal": 7,
         "type_info": "Integer",
         "origin": {
           "Table": {
-            "table": "plugin_calls",
-            "name": "answered_ms"
+            "table": "plugin_grants",
+            "name": "until_ms"
+          }
+        }
+      },
+      {
+        "name": "revoked_ms",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "revoked_ms"
+          }
+        }
+      },
+      {
+        "name": "from_call",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "from_call"
+          }
+        }
+      },
+      {
+        "name": "action",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "action"
           }
         }
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 7
     },
     "nullable": [
       false,
       false,
-      false,
-      false,
-      false,
+      true,
       false,
       false,
       false,
@@ -166,5 +142,5 @@
       true
     ]
   },
-  "hash": "b10b792b4ef0faca9d90039bc644cb23e48353045f74accdc88b0a03f90076b9"
+  "hash": "6053c659a338b51b19c8b10d0c3497fffcdcc0769293754a0126108aa50e3366"
 }

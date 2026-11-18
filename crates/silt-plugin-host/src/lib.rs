@@ -14,6 +14,8 @@
 mod capabilities;
 mod limits;
 mod state;
+#[doc(hidden)]
+pub mod testing;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;

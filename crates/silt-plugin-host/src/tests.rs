@@ -2,66 +2,18 @@
 //! `wasm32-wasip2` the first time a test needs it.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 use silt_plugin::{Context, Effect, Manifest, Observed, Refused};
 
 use crate::{Capabilities, Env, Host, HostError, HttpRequest, HttpResponse, Limits, Scope};
 
-fn repo() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+fn probe() -> Vec<u8> {
+    crate::testing::plugin("silt-plugin-probe")
 }
 
-/// The probe, built once per test run.
-fn probe() -> &'static [u8] {
-    static WASM: OnceLock<Vec<u8>> = OnceLock::new();
-    WASM.get_or_init(|| {
-        let target = repo().join("target/plugins");
-        let status = std::process::Command::new(env!("CARGO"))
-            .args(["build", "--release", "--target", "wasm32-wasip2", "-p", "silt-plugin-probe", "--manifest-path"])
-            .arg(repo().join("plugins/Cargo.toml"))
-            .arg("--target-dir")
-            .arg(&target)
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "the probe builds");
-        std::fs::read(target.join("wasm32-wasip2/release/silt_plugin_probe.wasm")).expect("the probe's component")
-    })
-}
-
-const MANIFEST: &str = r#"
-id = "test.probe"
-name = "Probe"
-version = "1.0.0"
-publisher = "test"
-description = "Does what the host must allow or refuse."
-license = "AGPL-3.0-only"
-world = "silt:plugin@1"
-build = { cargo = { package = "silt-plugin-probe", toolchain = "1.99.1" } }
-
-[[capabilities]]
-kind = "http"
-hosts = ["api.probe.test"]
-reason = "Reads and makes things."
-
-[[actions]]
-id = "look"
-label = "Look"
-description = "Reads."
-kind = "read"
-default = "allow"
-fields = ["name"]
-
-[[actions]]
-id = "change"
-label = "Change"
-description = "Makes a thing."
-kind = "change"
-default = "ask"
-fields = ["name"]
-"#;
+const MANIFEST: &str = crate::testing::PROBE_MANIFEST;
 
 #[derive(Default)]
 struct Fake {
@@ -105,7 +57,7 @@ fn context() -> Context {
 #[test]
 fn a_plugin_describes_its_tools_and_reads_while_it_runs() {
     let world = world(Limits::default());
-    let loaded = world.host.load(Manifest::parse(MANIFEST).unwrap(), probe(), &world.env.granted).unwrap();
+    let loaded = world.host.load(Manifest::parse(MANIFEST).unwrap(), &probe(), &world.env.granted).unwrap();
     let tools = world.host.describe(&loaded, &world.env).unwrap();
     assert!(tools.iter().any(|tool| tool.name == "look" && tool.action == "look"));
     let prepared = world.host.prepare(&loaded, &world.env, "look", &json!({}), &context()).unwrap();
@@ -118,7 +70,7 @@ fn a_plugin_describes_its_tools_and_reads_while_it_runs() {
 #[test]
 fn a_change_sends_only_what_was_approved() {
     let world = world(Limits::default());
-    let loaded = world.host.load(Manifest::parse(MANIFEST).unwrap(), probe(), &world.env.granted).unwrap();
+    let loaded = world.host.load(Manifest::parse(MANIFEST).unwrap(), &probe(), &world.env.granted).unwrap();
     let prepared = world.host.prepare(&loaded, &world.env, "change", &json!({"name": "ada"}), &context()).unwrap();
     assert_eq!(prepared.fields.get("name").map(String::as_str), Some("ada"));
     assert!(prepared.card.title.contains("was green"), "it looked while preparing: {}", prepared.card.title);
@@ -140,7 +92,7 @@ fn a_change_sends_only_what_was_approved() {
 #[test]
 fn an_undeclared_change_is_refused_and_reported() {
     let world = world(Limits::default());
-    let loaded = world.host.load(Manifest::parse(MANIFEST).unwrap(), probe(), &world.env.granted).unwrap();
+    let loaded = world.host.load(Manifest::parse(MANIFEST).unwrap(), &probe(), &world.env.granted).unwrap();
     let prepared = world.host.prepare(&loaded, &world.env, "sneak", &json!({"name": "ada"}), &context()).unwrap();
     let ran = world.host.run(&loaded, &world.env, &prepared, &context()).unwrap();
     let refused = ran.output.unwrap_err();
@@ -153,7 +105,7 @@ fn an_undeclared_change_is_refused_and_reported() {
 #[test]
 fn nothing_changes_while_a_call_is_prepared() {
     let world = world(Limits::default());
-    let loaded = world.host.load(Manifest::parse(MANIFEST).unwrap(), probe(), &world.env.granted).unwrap();
+    let loaded = world.host.load(Manifest::parse(MANIFEST).unwrap(), &probe(), &world.env.granted).unwrap();
     let error = world.host.prepare(&loaded, &world.env, "change_while_preparing", &json!({}), &context()).unwrap_err();
     assert!(error.to_string().contains("can't change anything while it prepares"), "{error}");
     assert!(world.fake.sent.lock().unwrap().iter().all(|request| request.method != "POST"));
@@ -162,14 +114,14 @@ fn nothing_changes_while_a_call_is_prepared() {
 #[test]
 fn a_capability_not_granted_keeps_the_plugin_from_loading() {
     let world = world(Limits::default());
-    let error = world.host.load(Manifest::parse(MANIFEST).unwrap(), probe(), &BTreeSet::new()).err().unwrap();
+    let error = world.host.load(Manifest::parse(MANIFEST).unwrap(), &probe(), &BTreeSet::new()).err().unwrap();
     assert!(matches!(&error, HostError::NotGranted { capability, .. } if capability == "http"), "{error}");
 }
 
 #[test]
 fn a_plugin_past_its_time_stops() {
     let world = world(Limits { run_seconds: 1, ..Limits::default() });
-    let loaded = world.host.load(Manifest::parse(MANIFEST).unwrap(), probe(), &world.env.granted).unwrap();
+    let loaded = world.host.load(Manifest::parse(MANIFEST).unwrap(), &probe(), &world.env.granted).unwrap();
     let prepared = world.host.prepare(&loaded, &world.env, "spin", &json!({}), &context()).unwrap();
     let started = std::time::Instant::now();
     let ran = world.host.run(&loaded, &world.env, &prepared, &context()).unwrap();
@@ -180,7 +132,7 @@ fn a_plugin_past_its_time_stops() {
 #[test]
 fn a_plugin_sees_only_its_own_folder() {
     let world = world(Limits::default());
-    let loaded = world.host.load(Manifest::parse(MANIFEST).unwrap(), probe(), &world.env.granted).unwrap();
+    let loaded = world.host.load(Manifest::parse(MANIFEST).unwrap(), &probe(), &world.env.granted).unwrap();
     let prepared = world.host.prepare(&loaded, &world.env, "files", &json!({}), &context()).unwrap();
     let ran = world.host.run(&loaded, &world.env, &prepared, &context()).unwrap();
     assert_eq!(ran.output.unwrap().text, "wrote /data/note; no /etc/passwd");

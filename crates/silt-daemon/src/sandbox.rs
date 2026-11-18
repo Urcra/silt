@@ -199,6 +199,15 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     }
     std::fs::create_dir_all(run.checkout.join(".silt"))?;
     let mut plan = silt_workspace::plan(&paths, run.reach);
+    // What plugins keep for the thread and show its agents, read-only, at
+    // `/silt/<plugin>`, such as GitHub's mirrors (ADR 0100). Seatbelt can't
+    // show a folder under another name, so it waits for the VM backends.
+    if !run.seatbelt() && !run.thread.is_empty() {
+        for (source, path) in crate::plugins::wasm::agent_folders(run.data_dir, run.workspace, run.thread) {
+            std::fs::create_dir_all(&source)?;
+            plan.mounts.push(silt_workspace::Mount { kind: silt_workspace::MountKind::ReadOnly, path, source: Some(source) });
+        }
+    }
     std::fs::create_dir_all(run.scratch)?;
     let Relays { outside, env: mut extra_env, missing } = relays(run, &mut plan)?;
     extra_env.extend(devices(run, &mut plan));

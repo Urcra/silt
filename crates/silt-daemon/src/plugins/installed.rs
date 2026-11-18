@@ -1,0 +1,248 @@
+//! The plugins installed on this machine (ADR 0100): what each is, where it
+//! came from, and what the person decided about it. A plugin's files live in
+//! `plugins/<id>/` in Silt's data: its manifest, its component, its README,
+//! its own data folder, and a folder per thread for what it keeps for that
+//! thread, such as GitHub's mirrors.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use silt_plugin::{Manifest, ScopedRule};
+
+use crate::CoreError;
+
+const RECORDS: &str = "plugins/installed.json";
+const TRUSTED: &str = "plugins/trusted.json";
+
+/// Where an installed plugin came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum PluginSource {
+    /// Built into Silt, and updated with it.
+    Shipped,
+    /// A git repository, pinned to `commit`, following `follow` (a tag
+    /// pattern or a branch) only if the person chose to.
+    Git {
+        url: String,
+        commit: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        follow: Option<String>,
+    },
+    /// A folder being developed, rebuilt when it changes.
+    Dev { path: String },
+    /// A marketplace, served by a Silt server (ADR 0101).
+    Marketplace { server: String },
+    /// An org's policy, which installs and locks it in its workspaces.
+    Org { org: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Installed {
+    pub id: String,
+    pub source: PluginSource,
+    pub version: String,
+    /// The capabilities the person granted, by name.
+    #[serde(default)]
+    pub granted: BTreeSet<String>,
+    /// The workspaces it's on in, by id.
+    #[serde(default)]
+    pub workspaces: Vec<String>,
+    /// Its environments, each with the patterns that pick it.
+    #[serde(default)]
+    pub environments: BTreeMap<String, Vec<String>>,
+    /// Which of `silt credential`'s credentials each of its own is: by the
+    /// credential's id, or `id@environment` for one per environment.
+    #[serde(default)]
+    pub credentials: BTreeMap<String, String>,
+    /// The person's values of its settings; never secrets.
+    #[serde(default)]
+    #[cfg_attr(test, ts(type = "Record<string, unknown>"))]
+    pub settings: BTreeMap<String, Value>,
+    /// The person's rules for its actions.
+    #[serde(default)]
+    pub rules: Vec<ScopedRule>,
+}
+
+impl Installed {
+    pub fn on_in(&self, workspace: &str) -> bool {
+        self.workspaces.iter().any(|on| on == workspace)
+    }
+
+    /// The `silt credential` holding its credential `id` for `environment`.
+    pub fn credential_for(&self, id: &str, environment: Option<&str>) -> Option<&str> {
+        environment
+            .and_then(|environment| self.credentials.get(&format!("{id}@{environment}")))
+            .or_else(|| self.credentials.get(id))
+            .map(String::as_str)
+    }
+
+    /// Its environments, with their patterns as globs.
+    pub fn environment_globs(&self) -> Vec<(String, Vec<silt_plugin::Glob>)> {
+        self.environments
+            .iter()
+            .map(|(name, patterns)| (name.clone(), patterns.iter().map(silt_plugin::Glob::new).collect()))
+            .collect()
+    }
+}
+
+pub fn load(data_dir: &Path) -> Vec<Installed> {
+    std::fs::read(data_dir.join(RECORDS)).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+}
+
+pub fn save(data_dir: &Path, all: &[Installed]) -> Result<(), CoreError> {
+    let bytes = serde_json::to_vec_pretty(all).map_err(|error| CoreError::Invalid(error.to_string()))?;
+    let path = data_dir.join(RECORDS);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    silt_os::write_private(&path, &bytes)?;
+    Ok(())
+}
+
+pub fn find(data_dir: &Path, id: &str) -> Option<Installed> {
+    load(data_dir).into_iter().find(|installed| installed.id == id)
+}
+
+/// Changes the record of `id` with `change`, and keeps it.
+pub fn update(
+    data_dir: &Path,
+    id: &str,
+    change: impl FnOnce(&mut Installed) -> Result<(), CoreError>,
+) -> Result<Installed, CoreError> {
+    let mut all = load(data_dir);
+    let installed =
+        all.iter_mut().find(|installed| installed.id == id).ok_or_else(|| CoreError::Invalid(format!("no plugin {id}")))?;
+    change(installed)?;
+    let updated = installed.clone();
+    save(data_dir, &all)?;
+    Ok(updated)
+}
+
+/// A plugin's own folder: its manifest, component, README and data.
+pub fn dir(data_dir: &Path, id: &str) -> PathBuf {
+    data_dir.join("plugins").join(id)
+}
+
+/// What a plugin keeps for one thread; `agent/` in it is shown to that
+/// thread's agents, read-only, where the plugin may.
+pub fn thread_dir(data_dir: &Path, id: &str, thread: &str) -> PathBuf {
+    dir(data_dir, id).join("threads").join(thread)
+}
+
+pub fn manifest(data_dir: &Path, id: &str) -> Result<Manifest, CoreError> {
+    let text = std::fs::read_to_string(dir(data_dir, id).join("silt-plugin.toml"))
+        .map_err(|error| CoreError::Invalid(format!("{id}'s manifest can't be read: {error}")))?;
+    Manifest::parse(&text).map_err(|error| CoreError::Invalid(format!("{id}: {error}")))
+}
+
+pub fn component(data_dir: &Path, id: &str) -> Result<Vec<u8>, CoreError> {
+    std::fs::read(dir(data_dir, id).join("plugin.wasm"))
+        .map_err(|error| CoreError::Invalid(format!("{id}'s component can't be read: {error}")))
+}
+
+pub fn readme(data_dir: &Path, id: &str) -> Option<String> {
+    std::fs::read_to_string(dir(data_dir, id).join("README.md")).ok()
+}
+
+/// Puts a plugin's files in place, replacing those of an older version.
+pub fn write_files(data_dir: &Path, manifest_text: &str, wasm: &[u8], readme: Option<&str>) -> Result<Manifest, CoreError> {
+    let manifest = Manifest::parse(manifest_text).map_err(|error| CoreError::Invalid(error.to_string()))?;
+    let dir = dir(data_dir, &manifest.id);
+    std::fs::create_dir_all(dir.join("data"))?;
+    std::fs::write(dir.join("silt-plugin.toml"), manifest_text)?;
+    std::fs::write(dir.join("plugin.wasm"), wasm)?;
+    match readme {
+        Some(text) => std::fs::write(dir.join("README.md"), text)?,
+        None => {
+            let _ = std::fs::remove_file(dir.join("README.md"));
+        }
+    }
+    Ok(manifest)
+}
+
+/// The publishers whose plugins' defaults the person accepts. Silt is
+/// always among them, as its plugins ship with it.
+pub fn trusted(data_dir: &Path) -> BTreeSet<String> {
+    let mut trusted: BTreeSet<String> =
+        std::fs::read(data_dir.join(TRUSTED)).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+    if !trusted.contains("-silt") {
+        trusted.insert("silt".into());
+    }
+    trusted.retain(|publisher| !publisher.starts_with('-'));
+    trusted
+}
+
+/// Trusts `publisher`, or stops trusting it. Withdrawing Silt's trust is
+/// kept as `-silt`.
+pub fn set_trusted(data_dir: &Path, publisher: &str, trust: bool) -> Result<(), CoreError> {
+    let path = data_dir.join(TRUSTED);
+    let mut kept: BTreeSet<String> =
+        std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+    if publisher == "silt" {
+        if trust {
+            kept.remove("-silt");
+        } else {
+            kept.insert("-silt".into());
+        }
+    } else if trust {
+        kept.insert(publisher.to_owned());
+    } else {
+        kept.remove(publisher);
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(path, serde_json::to_vec_pretty(&kept).unwrap_or_default())?;
+    Ok(())
+}
+
+/// The agent-facing tool name of a plugin's tool: the plugin's name part,
+/// then the tool's, so `silt.github`'s `push` is `github_push`.
+pub fn tool_name(id: &str, tool: &str) -> String {
+    let short = id.split_once('.').map_or(id, |(_, name)| name).replace('-', "_");
+    format!("{short}_{tool}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn records_round_trip_and_credentials_resolve_by_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let installed = Installed {
+            id: "silt.github".into(),
+            source: PluginSource::Shipped,
+            version: "1.0.0".into(),
+            granted: BTreeSet::from(["http".into()]),
+            workspaces: vec!["work".into()],
+            environments: BTreeMap::from([("acme".into(), vec!["acme/*".into()])]),
+            credentials: BTreeMap::from([("token".into(), "mine".into()), ("token@acme".into(), "work-github".into())]),
+            settings: BTreeMap::new(),
+            rules: Vec::new(),
+        };
+        save(dir.path(), std::slice::from_ref(&installed)).unwrap();
+        assert_eq!(find(dir.path(), "silt.github"), Some(installed.clone()));
+        assert_eq!(installed.credential_for("token", Some("acme")), Some("work-github"));
+        assert_eq!(installed.credential_for("token", Some("personal")), Some("mine"));
+        assert!(installed.on_in("work") && !installed.on_in("home"));
+        assert_eq!(tool_name("silt.github", "push"), "github_push");
+        assert_eq!(tool_name("acme.silt-deploys", "rollout"), "silt_deploys_rollout");
+    }
+
+    #[test]
+    fn silt_is_trusted_until_the_person_says_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(trusted(dir.path()).contains("silt"));
+        set_trusted(dir.path(), "tidewater", true).unwrap();
+        set_trusted(dir.path(), "silt", false).unwrap();
+        let now = trusted(dir.path());
+        assert!(now.contains("tidewater") && !now.contains("silt"));
+        set_trusted(dir.path(), "silt", true).unwrap();
+        assert!(trusted(dir.path()).contains("silt"));
+    }
+}

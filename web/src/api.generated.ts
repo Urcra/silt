@@ -311,7 +311,37 @@ change: boolean,
 /**
  * Its environment allows no grant: each is approved on its own.
  */
-once: boolean, };
+once: boolean, 
+/**
+ * A WebAssembly plugin's card, which Silt draws (ADR 0100).
+ */
+card: Card | null, 
+/**
+ * What it will send, each checked while it runs unless opaque.
+ */
+effects: Array<Effect>, 
+/**
+ * What decided it, such as a rule or an untrusted publisher.
+ */
+why: string | null, };
+
+export type Card = { title: string, blocks: Array<Block>, };
+
+export type Block = { "type": "fields", pairs: Array<[string, string]>, } | { "type": "list", label: string, items: Array<Item>, } | { "type": "diff", label: string, files: Array<FileChange>, } | { "type": "code", label: string, text: string, } | { "type": "note", tone: Tone, text: string, };
+
+export type Item = { 
+/**
+ * Set apart, such as a commit's id.
+ */
+key?: string | null, text: string, };
+
+export type FileChange = { path: string, added: number, removed: number, };
+
+export type Tone = "neutral" | "good" | "warn" | "danger";
+
+export type Effect = { "type": "http", method: string, url: string, body_sha256?: string | null, } | { "type": "git_push", remote: string, reference: string, old: string, new: string, } | { "type": "reach", path: string, writable: boolean, } | { "type": "opaque", channel: Channel, what: string, };
+
+export type Channel = "sockets" | "ssh" | "mcp-process";
 
 export type GrantScope = { "for": "run" } | { "for": "thread", minutes: number, };
 
@@ -327,7 +357,7 @@ grant: number | null,
 /**
  * `pending`, `running`, `rejected`, `expired` or `ended`.
  */
-state: string, outcome: Outcome | null, created_ms: number, answered_ms: number | null, };
+state: string, outcome: Outcome | null, created_ms: number, answered_ms: number | null, card: Card | null, effects: Array<Effect>, };
 
 export type GrantView = { id: number, plugin: string, environment: string, change: boolean, 
 /**
