@@ -1,6 +1,6 @@
 [package]
 name = "silt-plugin-host"
-description = "Runs plugins (ADR 0100): WebAssembly components on wasmtime, with only the capabilities each was granted, within limits, and only the effects a call was approved for"
+description = "Runs plugins (ADR 0103): WebAssembly components on wasmtime, with only the capabilities each was granted, within limits, and only the effects a call was approved for"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

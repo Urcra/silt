@@ -1,4 +1,4 @@
-//! The plugins shipped with Silt (ADR 0100), built from `plugins/` and
+//! The plugins shipped with Silt (ADR 0103), built from `plugins/` and
 //! embedded: each its manifest, README and component, as any plugin is.
 
 pub struct Shipped {

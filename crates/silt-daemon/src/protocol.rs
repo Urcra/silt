@@ -807,7 +807,7 @@ pub enum Request {
     GrantRevoke {
         id: u64,
     },
-    /// Takes a folder back from a thread's agents (ADR 0098).
+    /// Takes a folder back from a thread's agents (ADR 0101).
     FolderRevoke {
         thread: String,
         path: String,

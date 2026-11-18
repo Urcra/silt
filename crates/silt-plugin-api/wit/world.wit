@@ -1,4 +1,4 @@
-/// Silt's plugin world, version 1 (ADR 0100).
+/// Silt's plugin world, version 1 (ADR 0103).
 ///
 /// A plugin exports `plugin`: what tools it offers, how it prepares a call,
 /// and how it runs one once the call is allowed. Everything else it may do

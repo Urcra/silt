@@ -42,6 +42,11 @@ pub struct StoredCredential {
     /// one before they send anything, such as `GH_TOKEN`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
+    /// The plugin whose own secret it is, set with `silt plugin secret`:
+    /// handed to that plugin's requests only, by Silt, never added by the
+    /// gateway to a sandbox's (ADR 0103). Its workspace is `*`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
 }
 
 fn root() -> String {
@@ -85,7 +90,10 @@ pub fn resolve(
     let mut credentials = Vec::new();
     let mut placeholders = Vec::new();
     let mut missing = Vec::new();
-    for stored in load(data_dir).into_iter().filter(|stored| stored.workspace == workspace && !leave_out(&stored.host)) {
+    for stored in load(data_dir)
+        .into_iter()
+        .filter(|stored| stored.plugin.is_none() && stored.workspace == workspace && !leave_out(&stored.host))
+    {
         let Some(credential) = secret_of(&stored) else {
             missing.push(stored.name.clone());
             continue;
@@ -112,7 +120,7 @@ pub fn resolve_named(data_dir: &Path, workspace: &str, name: &str) -> Option<sil
 pub fn secret_named(data_dir: &Path, workspace: &str, name: &str) -> Option<String> {
     load(data_dir)
         .into_iter()
-        .find(|stored| stored.workspace == workspace && stored.name == name)
+        .find(|stored| stored.name == name && (stored.workspace == workspace || stored.plugin.is_some()))
         .and_then(|stored| raw_secret(&stored))
 }
 
@@ -159,6 +167,7 @@ mod tests {
             scheme: "Bearer".into(),
             source: Source::Command { argv: vec!["echo".into(), "s3cret".into()] },
             placeholder: Some("GH_TOKEN".into()),
+            plugin: None,
         };
         save(dir.path(), &[stored("work-gh", "work"), stored("own-gh", "personal")]).unwrap();
         let (credentials, placeholders, missing) = resolve(dir.path(), "work", &|_| false);
@@ -170,5 +179,25 @@ mod tests {
         let broken = StoredCredential { source: Source::Command { argv: vec!["false".into()] }, ..stored("broken", "work") };
         save(dir.path(), &[broken]).unwrap();
         assert_eq!(resolve(dir.path(), "work", &|_| false).2, vec!["broken".to_owned()]);
+    }
+
+    #[test]
+    fn a_plugins_own_secret_is_never_the_gateways() {
+        let dir = tempfile::tempdir().unwrap();
+        let own = StoredCredential {
+            name: "plugin:acme.deploys:token".into(),
+            workspace: "*".into(),
+            host: "deploy.acme.internal".into(),
+            path: "/".into(),
+            header: "authorization".into(),
+            scheme: String::new(),
+            source: Source::Command { argv: vec!["echo".into(), "d3ploy".into()] },
+            placeholder: None,
+            plugin: Some("acme.deploys".into()),
+        };
+        save(dir.path(), &[own]).unwrap();
+        assert!(resolve(dir.path(), "*", &|_| false).0.is_empty());
+        assert!(resolve(dir.path(), "work", &|_| false).0.is_empty());
+        assert_eq!(secret_named(dir.path(), "work", "plugin:acme.deploys:token").as_deref(), Some("d3ploy"));
     }
 }

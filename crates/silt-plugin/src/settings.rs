@@ -3,10 +3,12 @@
 //! A secret's value is never here; it's in the keyring, and only whether
 //! one is kept is.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::manifest::{SettingKind, SettingSpec};
+use crate::manifest::{SettingKind, SettingScope, SettingSpec};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -64,12 +66,47 @@ pub fn resolve_setting(spec: &SettingSpec, yours: Option<&Value>, org: Option<(&
     spec.default.as_ref().map(|value| SettingValue { value: value.clone(), source: SettingSource::Default })
 }
 
+/// Where a value of `spec` for `environment` or `workspace` is kept in a
+/// plugin's settings: `key` for the plugin, `key@environment` or
+/// `key#workspace` for a setting of that scope. Why not, for a scope it
+/// doesn't have.
+pub fn setting_key(spec: &SettingSpec, environment: Option<&str>, workspace: Option<&str>) -> Result<String, String> {
+    match (spec.scope, environment, workspace) {
+        (_, Some(_), Some(_)) => Err("give an environment or a workspace, not both".into()),
+        (SettingScope::Environment, Some(environment), None) => Ok(format!("{}@{environment}", spec.key)),
+        (SettingScope::Workspace, None, Some(workspace)) => Ok(format!("{}#{workspace}", spec.key)),
+        (_, None, None) => Ok(spec.key.clone()),
+        (SettingScope::Plugin, ..) => Err(format!("{} is the plugin's alone, not per environment or workspace", spec.key)),
+        (SettingScope::Environment, None, Some(_)) => Err(format!("{} is set per environment", spec.key)),
+        (SettingScope::Workspace, Some(_), None) => Err(format!("{} is set per workspace", spec.key)),
+    }
+}
+
+/// The value `spec` has in `environment` and `workspace`, from the
+/// person's `settings` kept by [`setting_key`]: theirs for that scope, else
+/// theirs for the plugin, else an org's or the default as
+/// [`resolve_setting`] has it.
+pub fn resolve_scoped(
+    spec: &SettingSpec,
+    settings: &BTreeMap<String, Value>,
+    environment: Option<&str>,
+    workspace: Option<&str>,
+    org: Option<(&str, &Value)>,
+) -> Option<SettingValue> {
+    let scoped = match spec.scope {
+        SettingScope::Environment => environment.map(|environment| format!("{}@{environment}", spec.key)),
+        SettingScope::Workspace => workspace.map(|workspace| format!("{}#{workspace}", spec.key)),
+        SettingScope::Plugin => None,
+    };
+    let yours = scoped.and_then(|key| settings.get(&key)).or_else(|| settings.get(&spec.key));
+    resolve_setting(spec, yours, org)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::manifest::SettingScope;
 
     fn spec(kind: SettingKind, default: Option<Value>, options: &[&str]) -> SettingSpec {
         SettingSpec {
@@ -104,5 +141,18 @@ mod tests {
             Some(SettingSource::Default),
             "a value that no longer fits"
         );
+    }
+
+    #[test]
+    fn a_setting_per_environment_falls_back_to_the_plugins() {
+        let canary = SettingSpec { scope: SettingScope::Environment, ..spec(SettingKind::Number, Some(json!(10)), &[]) };
+        assert_eq!(setting_key(&canary, Some("prod"), None).unwrap(), "k@prod");
+        assert!(setting_key(&canary, None, Some("work")).is_err());
+        assert!(setting_key(&spec(SettingKind::Number, None, &[]), Some("prod"), None).is_err());
+        let settings = BTreeMap::from([("k".to_owned(), json!(5)), ("k@prod".to_owned(), json!(1))]);
+        let value = |environment| resolve_scoped(&canary, &settings, environment, None, None).map(|value| value.value);
+        assert_eq!(value(Some("prod")), Some(json!(1)));
+        assert_eq!(value(Some("staging")), Some(json!(5)));
+        assert_eq!(resolve_scoped(&canary, &BTreeMap::new(), Some("prod"), None, None).map(|value| value.value), Some(json!(10)));
     }
 }

@@ -405,7 +405,7 @@ async fn agent() -> Result<()> {
                     }
                     let mut reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
                     if let Some(path) = newest(&prompt).split_once("Look in ").and_then(|(_, rest)| rest.split_whitespace().next()) {
-                        // What it sees of a folder outside its checkout (ADR 0098).
+                        // What it sees of a folder outside its checkout (ADR 0101).
                         let mut names: Vec<String> = std::fs::read_dir(path)
                             .map(|entries| entries.flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
                             .unwrap_or_default();

@@ -1,4 +1,4 @@
-//! The plugins installed on this machine (ADR 0100): what each is, where it
+//! The plugins installed on this machine (ADR 0103): what each is, where it
 //! came from, and what the person decided about it. A plugin's files live in
 //! `plugins/<id>/` in Silt's data: its manifest, its component, its README,
 //! its own data folder, and a folder per thread for what it keeps for that
@@ -33,7 +33,7 @@ pub enum PluginSource {
     },
     /// A folder being developed, rebuilt when it changes.
     Dev { path: String },
-    /// A marketplace, served by a Silt server (ADR 0101).
+    /// A marketplace, served by a Silt server (ADR 0104).
     Marketplace { server: String },
     /// An org's policy, which installs and locks it in its workspaces.
     Org { org: String },
@@ -65,6 +65,10 @@ pub struct Installed {
     /// The person's rules for its actions.
     #[serde(default)]
     pub rules: Vec<ScopedRule>,
+    /// What the person agreed to for this version, in the words they saw:
+    /// each capability with its hosts, credential and action.
+    #[serde(default)]
+    pub consented: Vec<String>,
 }
 
 impl Installed {
@@ -140,6 +144,12 @@ pub fn manifest(data_dir: &Path, id: &str) -> Result<Manifest, CoreError> {
     Manifest::parse(&text).map_err(|error| CoreError::Invalid(format!("{id}: {error}")))
 }
 
+/// When `id`'s component was last put in place, so a dev folder's rebuild
+/// at the same version is loaded again.
+pub fn built(data_dir: &Path, id: &str) -> Option<std::time::SystemTime> {
+    std::fs::metadata(dir(data_dir, id).join("plugin.wasm")).and_then(|metadata| metadata.modified()).ok()
+}
+
 pub fn component(data_dir: &Path, id: &str) -> Result<Vec<u8>, CoreError> {
     std::fs::read(dir(data_dir, id).join("plugin.wasm"))
         .map_err(|error| CoreError::Invalid(format!("{id}'s component can't be read: {error}")))
@@ -203,6 +213,7 @@ pub fn ensure_shipped(data_dir: &Path) -> Result<(), CoreError> {
                     credentials: BTreeMap::new(),
                     settings: BTreeMap::new(),
                     rules: Vec::new(),
+                    consented: Vec::new(),
                 });
                 changed = true;
             }
@@ -275,6 +286,7 @@ mod tests {
             credentials: BTreeMap::from([("token".into(), "mine".into()), ("token@acme".into(), "work-github".into())]),
             settings: BTreeMap::new(),
             rules: Vec::new(),
+            consented: Vec::new(),
         };
         save(dir.path(), std::slice::from_ref(&installed)).unwrap();
         assert_eq!(find(dir.path(), "silt.github"), Some(installed.clone()));

@@ -1,4 +1,4 @@
-//! Runs plugins (ADR 0100). Each is a WebAssembly component, compiled once
+//! Runs plugins (ADR 0103). Each is a WebAssembly component, compiled once
 //! and instantiated fresh for every call, with:
 //! - no files but its own data folder, no network and no process;
 //! - limits on memory, time and what it returns;

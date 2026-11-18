@@ -61,7 +61,7 @@ pub struct ApprovalView {
     pub change: bool,
     /// Its environment allows no grant: each is approved on its own.
     pub once: bool,
-    /// A WebAssembly plugin's card, which Silt draws (ADR 0100).
+    /// A WebAssembly plugin's card, which Silt draws (ADR 0103).
     pub card: Option<silt_plugin::Card>,
     /// What it will send, each checked while it runs unless opaque.
     pub effects: Vec<silt_plugin::Effect>,
@@ -79,7 +79,7 @@ pub enum GrantScope {
     /// The thread, until `minutes` from now.
     Thread { minutes: u32 },
     /// The workspace from now on: a folder asked for becomes one of its own
-    /// (ADR 0098). Only for calls that hand over folders.
+    /// (ADR 0101). Only for calls that hand over folders.
     Workspace,
 }
 
@@ -133,7 +133,7 @@ pub struct AccessView {
     pub refused: Vec<NetworkRefusal>,
     /// The devices Silt holds for the thread's sandboxes.
     pub devices: Vec<RelayView>,
-    /// The folders granted to its agents (ADR 0098).
+    /// The folders granted to its agents (ADR 0101).
     pub folders: Vec<FolderView>,
 }
 
@@ -177,7 +177,7 @@ pub struct NetworkRefusal {
 pub struct Approvals {
     waiting: HashMap<i64, Arc<watch::Sender<Option<Outcome>>>>,
     listed: Arc<std::sync::Mutex<BTreeMap<String, Vec<Value>>>>,
-    /// WebAssembly plugins (ADR 0100).
+    /// WebAssembly plugins (ADR 0103).
     pub(crate) wasm: Arc<super::wasm::Wasm>,
 }
 
@@ -742,7 +742,7 @@ impl Core {
         }
     }
 
-    /// A WebAssembly plugin's call (ADR 0100): prepared by its plugin,
+    /// A WebAssembly plugin's call (ADR 0103): prepared by its plugin,
     /// decided by its rules, then run, waited on, or refused.
     async fn start_wasm_call(
         &mut self,
@@ -1272,6 +1272,7 @@ mod tests {
                 scheme: "Bearer".into(),
                 source: crate::credentials::Source::Command { argv: vec!["echo".into(), "s3cret".into()] },
                 placeholder: None,
+                plugin: None,
             }],
         )
         .expect("saved");

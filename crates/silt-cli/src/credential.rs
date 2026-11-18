@@ -75,6 +75,7 @@ pub fn run(command: CredentialCommand) -> Result<(), Exn<CliError>> {
                 scheme,
                 source,
                 placeholder,
+                plugin: None,
             });
             credentials::save(&data, &all).map_err(|error| fail(error.to_string()))?;
             println!("added {name}: Silt's gateway adds it to requests for {host} from the workspace's sandboxed agents");

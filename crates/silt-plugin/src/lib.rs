@@ -1,4 +1,4 @@
-//! Plugins (ADR 0100), the parts with no I/O: a plugin's manifest and its
+//! Plugins (ADR 0103), the parts with no I/O: a plugin's manifest and its
 //! validation, the cards it describes, the effects it declares, the prepared
 //! call an approval is bound to, and the rules that decide each call. The
 //! daemon's WebAssembly host runs plugins; this crate says what they may do.
@@ -23,5 +23,5 @@ pub use manifest::{
 };
 pub use prepared::{Prepared, canonical_json};
 pub use rules::{Decision, Rule, RuleSource, Rules, ScopedRule, decide, environment_for};
-pub use settings::{SettingSource, SettingValue, resolve_setting};
+pub use settings::{SettingSource, SettingValue, fits, resolve_scoped, resolve_setting, setting_key};
 pub use sha256::sha256_hex;

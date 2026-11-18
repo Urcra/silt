@@ -1,6 +1,6 @@
 //! What decides a call: allowed, asked or never, from the person's rules,
 //! an org's and the manifest's defaults, with one precedence for every
-//! plugin (ADR 0100):
+//! plugin (ADR 0103):
 //!
 //! 1. Silt's built-in refusals, which nothing lifts;
 //! 2. a never from any scope;

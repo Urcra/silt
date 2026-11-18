@@ -645,7 +645,7 @@ pub struct RunRules {
     #[serde(default)]
     pub args: Option<Vec<String>>,
     /// The rules in effect, an org's with the workspace's, which folders
-    /// granted to the run are checked against at each start (ADR 0098).
+    /// granted to the run are checked against at each start (ADR 0101).
     #[serde(default)]
     pub policy: Option<Policy>,
 }

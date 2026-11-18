@@ -1,4 +1,4 @@
-//! WebAssembly plugins' calls (ADR 0100): the tools they offer a run, a call
+//! WebAssembly plugins' calls (ADR 0103): the tools they offer a run, a call
 //! prepared by its plugin and decided by its rules, approved by the hash of
 //! what it prepared, and run with only the effects it declared.
 
@@ -45,7 +45,13 @@ impl Wasm {
 
     /// `installed`, compiled with its grants.
     pub(crate) fn loaded(&self, data_dir: &Path, installed: &Installed) -> Result<Arc<Loaded>, String> {
-        let key = format!("{}@{}:{:?}", installed.id, installed.version, installed.granted);
+        let key = format!(
+            "{}@{}:{:?}:{:?}",
+            installed.id,
+            installed.version,
+            installed.granted,
+            installed::built(data_dir, &installed.id)
+        );
         if let Some((cached, loaded)) = lock(&self.loaded).get(&installed.id)
             && *cached == key
         {
@@ -60,8 +66,9 @@ impl Wasm {
 
     /// The tools `installed` offers, asked once per version.
     fn tools_of(&self, data_dir: &Path, installed: &Installed) -> Result<Vec<Tool>, String> {
-        if let Some((version, tools)) = lock(&self.tools).get(&installed.id)
-            && *version == installed.version
+        let version = format!("{}:{:?}", installed.version, installed::built(data_dir, &installed.id));
+        if let Some((cached, tools)) = lock(&self.tools).get(&installed.id)
+            && *cached == version
         {
             return Ok(tools.clone());
         }
@@ -76,7 +83,7 @@ impl Wasm {
             None,
         );
         let tools = self.host()?.describe(&loaded, &env).map_err(|error| error.to_string())?;
-        lock(&self.tools).insert(installed.id.clone(), (installed.version.clone(), tools.clone()));
+        lock(&self.tools).insert(installed.id.clone(), (version, tools.clone()));
         Ok(tools)
     }
 
@@ -221,7 +228,7 @@ fn env_for(
 }
 
 /// `decision` with the workspace's folder rules applied to each folder the
-/// call hands over (ADR 0098): Silt's refusals and a never hold whatever the
+/// call hands over (ADR 0101): Silt's refusals and a never hold whatever the
 /// plugin's rules say; otherwise the folder rules answer where only the
 /// plugin's default did, and tighten a rule of the person's.
 fn with_folder_rules(mut decision: Decision, effects: &[Effect], policy: Option<&Policy>, data_dir: &Path) -> Decision {

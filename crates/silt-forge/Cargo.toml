@@ -1,6 +1,6 @@
 [package]
 name = "silt-forge"
-description = "The forges' APIs as requests to make and answers to read, with no I/O (ADR 0042, ADR 0099)"
+description = "The forges' APIs as requests to make and answers to read, with no I/O (ADR 0042, ADR 0102)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

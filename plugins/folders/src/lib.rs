@@ -1,4 +1,4 @@
-//! Folders, shipped with Silt (ADR 0098): an agent asks for a folder of
+//! Folders, shipped with Silt (ADR 0101): an agent asks for a folder of
 //! this machine, and Silt shows it from the agent's next restart once the
 //! workspace's rules or the person allow it.
 

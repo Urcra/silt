@@ -1,7 +1,7 @@
 //! The forges a thread's pull request lives on (ADR 0042), as requests to
 //! make and answers to read: GitHub, GitLab and Forgejo. No I/O here: the
 //! server's forge bridge sends them, and GitHub's plugin builds its URLs
-//! with them (ADR 0099).
+//! with them (ADR 0102).
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

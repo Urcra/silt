@@ -35,7 +35,7 @@ pub(crate) struct AcpRun {
     /// sandbox, for starting it again the same way (ADR 0093).
     sandbox: Option<(silt_workspace::Reach, String, String)>,
     /// The folders granted to it that its sandbox was started with
-    /// (ADR 0098).
+    /// (ADR 0101).
     folders: std::collections::BTreeMap<String, bool>,
     /// What to tell it once it's restarted with other folders.
     resume_note: Option<String>,
@@ -2426,7 +2426,7 @@ fn send(run: &mut AcpRun, command: Command) {
 /// forwards what it does to the daemon's event loop.
 impl Core {
     /// The folders granted to the run holding `token` that the rules in
-    /// force in `workspace` still allow (ADR 0098).
+    /// force in `workspace` still allow (ADR 0101).
     pub(crate) fn folders_for(&self, thread: ThreadId, token: &str, workspace: &str) -> std::collections::BTreeMap<String, bool> {
         let granted =
             crate::folders::granted(&self.data_dir, &thread.to_string(), Some(&crate::folders::run_of_token(token)), now_ms());

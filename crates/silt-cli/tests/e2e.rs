@@ -2727,7 +2727,7 @@ fn web_ui(url: &str) -> (&str, &str) {
 }
 
 /// A sandboxed agent the web UI runs asks for a folder its workspace's
-/// rules allow (ADR 0098): it doesn't see it until its turn ends, when Silt
+/// rules allow (ADR 0101): it doesn't see it until its turn ends, when Silt
 /// starts its sandbox again with the folder, read-only, and tells it what's
 /// there. A folder the rules never give stays out.
 #[cfg(target_os = "linux")]
@@ -2798,7 +2798,7 @@ fn a_sandboxed_agent_asks_for_a_folder_and_is_restarted_with_it() {
 
 /// The same from a terminal: `silt claude` stops the agent once the turn
 /// that was granted a folder ends, and starts it again in a sandbox with
-/// the folder, resuming its session (ADR 0098).
+/// the folder, resuming its session (ADR 0101).
 #[cfg(target_os = "linux")]
 #[test]
 fn a_terminals_sandboxed_agent_is_restarted_with_the_folder_it_was_granted() {

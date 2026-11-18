@@ -316,7 +316,7 @@ pub fn event_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<Str
 pub struct Copilot;
 
 /// Copilot's token, added at the gateway for its model's API only, never
-/// held in a sandbox (ADR 0099).
+/// held in a sandbox (ADR 0102).
 const COPILOT_APIS: [crate::ModelApi; 2] = [
     crate::ModelApi {
         variable: "COPILOT_GITHUB_TOKEN",

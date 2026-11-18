@@ -96,7 +96,7 @@ fi
 
 step "clippy"
 cargo clippy --workspace --all-targets -- -D warnings
-# The plugins Silt ships, and the probe its host is tested with (ADR 0100),
+# The plugins Silt ships, and the probe its host is tested with (ADR 0103),
 # a workspace of their own built for wasm32-wasip2.
 (cd plugins && cargo clippy --workspace --target wasm32-wasip2 --target-dir ../target/plugins -- -D warnings)
 (cd plugins && cargo test --workspace --target-dir ../target/plugins --quiet)

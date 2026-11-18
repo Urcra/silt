@@ -33,6 +33,9 @@ pub enum PluginCommand {
         folder: PathBuf,
         #[arg(long)]
         workspace: Vec<String>,
+        /// Keep watching it, building it again whenever it changes, until stopped
+        #[arg(long)]
+        watch: bool,
     },
     /// Update a plugin from where it came from, showing what the new version adds
     Update {
@@ -71,7 +74,32 @@ pub enum PluginCommand {
         matching: Option<String>,
     },
     /// Set one of a plugin's settings to a JSON value; `null` resets it
-    Set { id: String, key: String, value: String },
+    Set {
+        id: String,
+        key: String,
+        value: String,
+        /// For this environment, for a setting that's set per environment
+        #[arg(long)]
+        environment: Option<String>,
+        /// For this workspace, for a setting that's set per workspace
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Keep one of a plugin's credentials as its own secret, read from stdin into the keyring, or printed by `--command` when it's needed; Silt adds it to that plugin's requests alone
+    Secret {
+        id: String,
+        /// The plugin's own name for it, from its manifest
+        credential: String,
+        /// For this environment only
+        #[arg(long)]
+        environment: Option<String>,
+        /// A command run on this machine that prints it, such as `gh auth token`
+        #[arg(long)]
+        command: Option<String>,
+        /// Forget it
+        #[arg(long)]
+        remove: bool,
+    },
     /// List this machine's plugins and the workspaces each is on in
     List,
     /// Remove a plugin
@@ -119,12 +147,31 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
             plugins::put(&data, plugin).map_err(core_error)?;
             println!("added {name}; turn it on with `silt plugin enable {name} --workspace <id>`");
         }
-        PluginCommand::Dev { folder, workspace } => {
+        PluginCommand::Dev { folder, workspace, watch } => {
             let folder = std::fs::canonicalize(&folder).or_raise(|| CliError(format!("no folder {}", folder.display())))?;
-            let package = runtime()?.block_on(install::package(&folder, true)).map_err(core_error)?;
-            let source = installed::PluginSource::Dev { path: folder.to_string_lossy().into_owned() };
-            let record = install::install(&data, &package, source, &workspace, true).map_err(core_error)?;
-            println!("{} {} built from {} (dev)", record.id, record.version, folder.display());
+            let build = |workspace: &[String]| -> Result<(), Exn<CliError>> {
+                let package = runtime()?.block_on(install::package(&folder, true)).map_err(core_error)?;
+                let source = installed::PluginSource::Dev { path: folder.to_string_lossy().into_owned() };
+                let record = install::install(&data, &package, source, workspace, true).map_err(core_error)?;
+                println!("{} {} built from {} (dev)", record.id, record.version, folder.display());
+                Ok(())
+            };
+            build(&workspace)?;
+            if !watch {
+                return Ok(());
+            }
+            let mut seen = install::changed_at(&folder);
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let now = install::changed_at(&folder);
+                if now != seen {
+                    seen = now;
+                    // A broken build leaves the last good one running.
+                    if let Err(error) = build(&[]) {
+                        eprintln!("silt: {error:?}");
+                    }
+                }
+            }
         }
         PluginCommand::Update { id, yes } => update(&data, &id, yes)?,
         PluginCommand::Trust { publisher, off } => {
@@ -171,13 +218,20 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
             println!("{id}'s {key} is the credential {name}");
         }
         PluginCommand::Rule { id, action, rule, matching } => set_rule(&data, &id, &action, &rule, matching.as_deref())?,
-        PluginCommand::Set { id, key, value } => {
+        PluginCommand::Secret { id, credential, environment, command, remove } => {
+            secret(&data, &id, &credential, environment.as_deref(), command.as_deref(), remove)?;
+        }
+        PluginCommand::Set { id, key, value, environment, workspace } => {
             let manifest = installed::manifest(&data, &id).map_err(core_error)?;
             let spec = manifest
                 .settings
                 .iter()
                 .find(|spec| spec.key == key)
                 .ok_or_else(|| fail(format!("{id} has no setting {key}")))?;
+            if spec.kind == silt_plugin::SettingKind::Secret {
+                return Err(fail(format!("{key} is a secret: keep it with `silt plugin secret`")));
+            }
+            let stored = silt_plugin::setting_key(spec, environment.as_deref(), workspace.as_deref()).map_err(fail)?;
             let value: serde_json::Value = serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value));
             if !value.is_null() {
                 silt_plugin::resolve_setting(spec, Some(&value), None)
@@ -186,14 +240,14 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
             }
             installed::update(&data, &id, |record| {
                 if value.is_null() {
-                    record.settings.remove(&key);
+                    record.settings.remove(&stored);
                 } else {
-                    record.settings.insert(key.clone(), value.clone());
+                    record.settings.insert(stored.clone(), value.clone());
                 }
                 Ok(())
             })
             .map_err(core_error)?;
-            println!("{id}'s {key} is set");
+            println!("{id}'s {key} is {}", if value.is_null() { "reset" } else { "set" });
         }
         PluginCommand::List => {
             for record in installed::load(&data) {
@@ -273,6 +327,77 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
+/// Keeps plugin `id`'s credential `credential` as its own secret, sent by
+/// Silt with its requests alone (ADR 0103).
+fn secret(
+    data: &std::path::Path,
+    id: &str,
+    credential: &str,
+    environment: Option<&str>,
+    command: Option<&str>,
+    remove: bool,
+) -> Result<(), Exn<CliError>> {
+    use silt_daemon::credentials::{self, Source, StoredCredential};
+    let manifest = installed::manifest(data, id).map_err(core_error)?;
+    let spec = manifest
+        .credentials
+        .iter()
+        .find(|spec| spec.id == credential && spec.same_as.is_none())
+        .ok_or_else(|| fail(format!("{id} has no credential {credential} of its own")))?;
+    if environment.is_some() && !spec.per_environment {
+        return Err(fail(format!("{credential} is the same in every environment")));
+    }
+    let mapped = environment.map_or_else(|| credential.to_owned(), |environment| format!("{credential}@{environment}"));
+    let name = format!("plugin:{id}:{mapped}");
+    let mut all = credentials::load(data);
+    all.retain(|stored| stored.name != name);
+    if remove {
+        // One printed by a command was never in the keyring.
+        let _ = credentials::set_secret(&name, None);
+        credentials::save(data, &all).map_err(|error| fail(error.to_string()))?;
+        installed::update(data, id, |record| {
+            record.credentials.retain(|key, value| !(key == &mapped && value == &name));
+            Ok(())
+        })
+        .map_err(core_error)?;
+        println!("{id}'s {credential} is forgotten");
+        return Ok(());
+    }
+    let source = match command {
+        Some(command) => Source::Command { argv: command.split_whitespace().map(str::to_owned).collect() },
+        None => {
+            let mut secret = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut secret)
+                .or_raise(|| CliError("cannot read the secret".into()))?;
+            let secret = secret.trim();
+            if secret.is_empty() {
+                return Err(fail("give the secret on stdin, or `--command` that prints it"));
+            }
+            credentials::set_secret(&name, Some(secret)).map_err(|error| fail(error.to_string()))?;
+            Source::Keyring
+        }
+    };
+    all.push(StoredCredential {
+        name: name.clone(),
+        workspace: "*".into(),
+        host: spec.hosts.first().cloned().unwrap_or_default(),
+        path: "/".into(),
+        header: "authorization".into(),
+        scheme: String::new(),
+        source,
+        placeholder: None,
+        plugin: Some(id.to_owned()),
+    });
+    credentials::save(data, &all).map_err(|error| fail(error.to_string()))?;
+    installed::update(data, id, |record| {
+        record.credentials.insert(mapped.clone(), name.clone());
+        Ok(())
+    })
+    .map_err(core_error)?;
+    println!("{id}'s {credential} is kept; Silt adds it to {id}'s requests to {} alone", spec.hosts.join(", "));
+    Ok(())
+}
+
 fn runtime() -> Result<tokio::runtime::Runtime, Exn<CliError>> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -328,9 +453,30 @@ fn add_from_git(data: &std::path::Path, source: &str, workspaces: &[String], yes
 fn update(data: &std::path::Path, id: &str, yes: bool) -> Result<(), Exn<CliError>> {
     let record = installed::find(data, id).ok_or_else(|| fail(format!("no plugin {id}")))?;
     let package = match &record.source {
-        installed::PluginSource::Git { url, follow, .. } => {
+        installed::PluginSource::Git { url, follow, commit: old } => {
             let checkout = tempfile::tempdir().or_raise(|| CliError("cannot make a folder to clone into".into()))?;
             let commit = install::clone(url, follow.as_deref(), checkout.path()).map_err(core_error)?;
+            if commit == *old {
+                println!("{id} is up to date at {}", &commit[..commit.len().min(7)]);
+                return Ok(());
+            }
+            match install::commits_between(checkout.path(), old, &commit) {
+                Ok(commits) => {
+                    println!(
+                        "{} since {}:",
+                        if commits.len() == 1 { "1 commit".to_owned() } else { format!("{} commits", commits.len()) },
+                        &old[..old.len().min(7)]
+                    );
+                    for line in commits {
+                        println!("  {line}");
+                    }
+                }
+                Err(_) => println!(
+                    "{} isn't an ancestor of {}: its history was rewritten",
+                    &old[..old.len().min(7)],
+                    &commit[..commit.len().min(7)]
+                ),
+            }
             let package = runtime()?.block_on(install::package(checkout.path(), false)).map_err(core_error)?;
             (package, installed::PluginSource::Git { url: url.clone(), commit, follow: follow.clone() })
         }

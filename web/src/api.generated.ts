@@ -313,7 +313,7 @@ change: boolean,
  */
 once: boolean, 
 /**
- * A WebAssembly plugin's card, which Silt draws (ADR 0100).
+ * A WebAssembly plugin's card, which Silt draws (ADR 0103).
  */
 card: Card | null, 
 /**
@@ -379,7 +379,7 @@ refused: Array<NetworkRefusal>,
  */
 devices: Array<RelayView>, 
 /**
- * The folders granted to its agents (ADR 0098).
+ * The folders granted to its agents (ADR 0101).
  */
 folders: Array<FolderView>, };
 
@@ -1565,7 +1565,7 @@ refuse?: Array<Extra>,
  */
 no_nested?: boolean, 
 /**
- * The folders agents may ask for, and how each is answered (ADR 0098).
+ * The folders agents may ask for, and how each is answered (ADR 0101).
  */
 folders?: Array<FolderRule>, 
 /**

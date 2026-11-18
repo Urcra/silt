@@ -163,7 +163,7 @@ pub struct Policy {
     /// The agent's own sandbox may not run inside Silt's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_nested: bool,
-    /// The folders agents may ask for, and how each is answered (ADR 0098).
+    /// The folders agents may ask for, and how each is answered (ADR 0101).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folders: Vec<crate::FolderRule>,
     /// The folder rules of more than one policy, each set judged on its

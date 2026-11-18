@@ -25,7 +25,7 @@ pub struct PluginCallRecord {
     pub answered_ms: Option<i64>,
     /// `legacy` for `plugins.json`'s kinds, whose request is a canonical
     /// request; `wasm` for a WebAssembly plugin's, whose request is the call
-    /// as it prepared it (ADR 0100).
+    /// as it prepared it (ADR 0103).
     pub kind: String,
 }
 

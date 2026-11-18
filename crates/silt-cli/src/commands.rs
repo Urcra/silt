@@ -406,7 +406,7 @@ impl Run<'_> {
     /// Runs the agent with Silt's MCP server, hooks, and the repository's
     /// rules and skills it doesn't read by itself. In Silt's sandbox, it's
     /// started again with its session resumed when a turn ends with other
-    /// folders granted to it (ADR 0098).
+    /// folders granted to it (ADR 0101).
     fn launch(
         &self,
         start: Start,

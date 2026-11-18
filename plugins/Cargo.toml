@@ -1,4 +1,4 @@
-# Plugins shipped with Silt, and the probe its host is tested with (ADR 0100).
+# Plugins shipped with Silt, and the probe its host is tested with (ADR 0103).
 # Their own workspace: they build for wasm32-wasip2, not for this machine.
 [workspace]
 resolver = "3"

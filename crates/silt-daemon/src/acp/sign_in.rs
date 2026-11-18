@@ -351,7 +351,7 @@ impl Core {
 
     /// Restarts the agent in a sandbox with the folders granted to it, at
     /// the end of a turn in which they changed, telling it what's now there
-    /// once its session resumes (ADR 0098). Answers whether it did.
+    /// once its session resumes (ADR 0101). Answers whether it did.
     pub(super) async fn restart_for_folders(&mut self, thread: ThreadId) -> bool {
         let Some(run) = self.acp.get(&thread) else { return false };
         let Some((_, token, workspace)) = &run.sandbox else { return false };

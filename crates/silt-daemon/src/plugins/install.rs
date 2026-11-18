@@ -1,4 +1,4 @@
-//! Installing plugins (ADR 0100): from a folder being developed, a git
+//! Installing plugins (ADR 0103): from a folder being developed, a git
 //! repository pinned to a commit, or a release asset checked against its
 //! hash. A repository's code is built in a sandbox that reaches nothing: its
 //! crates are fetched first, outside, which runs none of them.
@@ -223,8 +223,13 @@ pub fn install(
             credentials: Default::default(),
             settings: Default::default(),
             rules: Vec::new(),
+            consented: Vec::new(),
         },
     };
+    let mut record = record;
+    if consented {
+        record.consented = consent(&package.manifest);
+    }
     let mut all = installed::load(data_dir);
     all.retain(|other| other.id != id);
     all.push(record.clone());
@@ -250,6 +255,47 @@ pub fn remove(data_dir: &Path, id: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// The commits from `old` to `new` in the repository at `dir`, newest
+/// first, as `<short id> <subject>`: what an update brings.
+pub fn commits_between(dir: &Path, old: &str, new: &str) -> Result<Vec<String>, CoreError> {
+    if [old, new].iter().any(|commit| commit.is_empty() || !commit.chars().all(|c| c.is_ascii_hexdigit())) {
+        return Err(invalid("a commit is named by its id"));
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "core.hooksPath=/dev/null", "log", "--format=%h %s", "-n", "100"])
+        .arg(format!("{old}..{new}"))
+        .arg("--")
+        .output()?;
+    if !output.status.success() {
+        return Err(invalid(String::from_utf8_lossy(&output.stderr).trim().to_owned()));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).lines().map(str::to_owned).collect())
+}
+
+/// When the newest file of the plugin in `dir` changed, past its build
+/// output and git's: what a dev folder is watched by.
+pub fn changed_at(dir: &Path) -> Option<std::time::SystemTime> {
+    let mut newest = None;
+    let mut stack = vec![dir.to_owned()];
+    while let Some(folder) = stack.pop() {
+        for entry in std::fs::read_dir(&folder).ok()?.flatten() {
+            let name = entry.file_name();
+            if matches!(name.to_str(), Some("target" | ".git" | ".silt-cargo-home")) {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else { continue };
+            if kind.is_dir() {
+                stack.push(entry.path());
+            } else if let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) {
+                newest = newest.max(Some(modified));
+            }
+        }
+    }
+    newest
+}
+
 /// What a person agrees to by adding `manifest`, in words.
 pub fn consent(manifest: &Manifest) -> Vec<String> {
     let mut lines = vec![format!("{} {} by {}: {}", manifest.name, manifest.version, manifest.publisher, manifest.description)];
@@ -273,4 +319,63 @@ pub fn consent(manifest: &Manifest) -> Vec<String> {
         lines.push(format!("  {} ({kind}): {}", action.label, action.description));
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "-c", "init.defaultBranch=main"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    #[test]
+    fn a_repository_is_pinned_to_its_tag_and_an_update_names_what_came_since() {
+        let repo = tempfile::tempdir().unwrap();
+        git(repo.path(), &["init", "-q"]);
+        std::fs::write(repo.path().join("silt-plugin.toml"), "v1").unwrap();
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "-qm", "First"]);
+        git(repo.path(), &["tag", "v1"]);
+        for subject in ["Add a tool", "Fix its card"] {
+            std::fs::write(repo.path().join("README.md"), subject).unwrap();
+            git(repo.path(), &["add", "."]);
+            git(repo.path(), &["commit", "-qm", subject]);
+        }
+        git(repo.path(), &["tag", "v2"]);
+        let url = format!("file://{}", repo.path().display());
+
+        let first = tempfile::tempdir().unwrap();
+        let at_v1 = clone(&url, Some("v1"), &first.path().join("plugin")).unwrap();
+        assert_eq!(at_v1, git(repo.path(), &["rev-parse", "v1^{commit}"]));
+        let second = tempfile::tempdir().unwrap();
+        let at_v2 = clone(&url, Some("v2"), &second.path().join("plugin")).unwrap();
+        let since = commits_between(&second.path().join("plugin"), &at_v1, &at_v2).unwrap();
+        assert_eq!(since.iter().map(|line| line.split_once(' ').unwrap().1).collect::<Vec<_>>(), ["Fix its card", "Add a tool"]);
+        assert!(commits_between(&second.path().join("plugin"), "--all", &at_v2).is_err());
+        assert!(clone("--upload-pack=touch /tmp/x", None, &first.path().join("bad")).is_err());
+    }
+
+    #[test]
+    fn a_dev_folder_changes_with_its_files_but_not_its_build() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "1").unwrap();
+        let before = changed_at(dir.path());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::create_dir_all(dir.path().join("target")).unwrap();
+        std::fs::write(dir.path().join("target/out.wasm"), "built").unwrap();
+        assert_eq!(changed_at(dir.path()), before, "its build isn't a change");
+        std::fs::write(dir.path().join("src/lib.rs"), "2").unwrap();
+        assert!(changed_at(dir.path()) > before);
+    }
 }

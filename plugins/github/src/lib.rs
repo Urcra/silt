@@ -1,4 +1,4 @@
-//! GitHub, shipped with Silt (ADR 0099): an agent's clones, pushes and calls
+//! GitHub, shipped with Silt (ADR 0102): an agent's clones, pushes and calls
 //! to GitHub's API, each one an action the person's rules allow, ask or
 //! never, per repo. Silt keeps the thread's mirrors and pushes from them;
 //! the agent never holds a token.

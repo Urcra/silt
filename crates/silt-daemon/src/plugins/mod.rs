@@ -931,6 +931,7 @@ done"#;
                 scheme: "Bearer".into(),
                 source: crate::credentials::Source::Command { argv: vec!["echo".into(), "s3cret".into()] },
                 placeholder: None,
+                plugin: None,
             }],
         )
         .unwrap();

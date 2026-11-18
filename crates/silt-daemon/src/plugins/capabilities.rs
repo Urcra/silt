@@ -1,4 +1,4 @@
-//! The daemon's side of a plugin's capabilities (ADR 0100), once the plugin
+//! The daemon's side of a plugin's capabilities (ADR 0103), once the plugin
 //! host has decided the plugin may: requests sent with the credential its
 //! manifest names, git on mirrors Silt keeps for it, the thread read.
 //!
@@ -165,10 +165,9 @@ pub(crate) fn host_matches(pattern: &str, host: &str) -> bool {
 impl Capabilities for DaemonCapabilities {
     fn setting(&self, scope: &Scope, key: &str) -> Option<String> {
         let spec = self.manifest.settings.iter().find(|spec| spec.key == key)?;
-        let yours = self.installed.settings.get(key);
-        let org = None;
-        let _ = scope;
-        silt_plugin::resolve_setting(spec, yours, org).map(|value| value.value.to_string())
+        let workspace = (!scope.workspace.is_empty()).then_some(scope.workspace.as_str());
+        silt_plugin::resolve_scoped(spec, &self.installed.settings, scope.environment.as_deref(), workspace, None)
+            .map(|value| value.value.to_string())
     }
 
     fn http(&self, scope: &Scope, request: HttpRequest) -> Result<HttpResponse, String> {
