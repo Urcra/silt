@@ -17,6 +17,10 @@ export interface Action {
   label: string
   /** Its shortcut, shown next to it. */
   keys?: string
+  /** Shown next to it when it has no shortcut. */
+  hint?: string
+  /** A theme the palette shows while the action is highlighted (ADR 0098). */
+  preview?: { theme: string; appearance: string }
   run: () => void
 }
 

@@ -185,7 +185,7 @@ export function NewChat() {
           </p>
           {workspace && workspacesQuery.data?.saved && <WorkspaceLine view={workspace} />}
           {choices.isSuccess && agents.length === 0 && (
-            <p className="mt-1 px-0.5 text-xs text-warn">
+            <p className="mt-1 px-0.5 text-xs text-warn-fg">
               No agent CLI is on the daemon's <code className="font-mono">PATH</code>. Install one, such as Claude Code, then run{' '}
               <code className="font-mono">silt daemon stop</code> so the next start finds it.
             </p>

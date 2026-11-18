@@ -733,7 +733,7 @@ export function NewThread() {
               chosenWhere !== 'cloud' && (
                 <>
                   {agents.length > 0 && !agent && workspace ? (
-                    <span className="px-2 text-xs text-warn">No agent installed here is allowed in {workspace.workspace.name}</span>
+                    <span className="px-2 text-xs text-warn-fg">No agent installed here is allowed in {workspace.workspace.name}</span>
                   ) : agents.length > 0 ? (
                     <ChipSelect
                       ghost
@@ -815,14 +815,14 @@ export function NewThread() {
           <p className="mt-2 px-0.5 text-xs text-fg-2">{whereSays(chosenWhere, clone?.path ?? '', base, chosenWhere !== 'cloud' && devices > 0 ? device : null)}</p>
           {workspace && (workspacesQuery.data?.saved || rulesLine(workspace.effective)) && <WorkspaceLine view={workspace} />}
           {choices.isSuccess && agents.length === 0 && chosenWhere !== 'cloud' && (
-            <p className="mt-1 px-0.5 text-xs text-warn">
+            <p className="mt-1 px-0.5 text-xs text-warn-fg">
               No agent CLI is on the daemon's <code className="font-mono">PATH</code>. Install one, such as Claude Code, then run{' '}
               <code className="font-mono">silt daemon stop</code> so the next start finds it, or add your own in{' '}
               <code className="font-mono">agents.json</code> in Silt's data directory.
             </p>
           )}
           {chosenWhere === 'local' && busyHere && (
-            <p className="mt-1 px-0.5 text-xs text-warn">An agent is already working in this project. A second Local one shares its files; pick Worktree to keep them apart.</p>
+            <p className="mt-1 px-0.5 text-xs text-warn-fg">An agent is already working in this project. A second Local one shares its files; pick Worktree to keep them apart.</p>
           )}
           {error && <p className="mt-2 text-sm whitespace-pre-wrap text-danger">{error}</p>}
         </form>

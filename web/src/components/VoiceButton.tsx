@@ -134,7 +134,7 @@ export function VoiceBar({ dictation }: { dictation: Dictation }) {
     ) : phase === 'finishing' ? (
       'Finishing…'
     ) : quiet ? (
-      <span className="text-warn">No sound. Is the microphone muted?</span>
+      <span className="text-warn-fg">No sound. Is the microphone muted?</span>
     ) : holding ? (
       <>
         release <Keys keys={DICTATION_KEYS} /> to insert
