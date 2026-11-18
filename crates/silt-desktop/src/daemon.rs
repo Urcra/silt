@@ -64,6 +64,16 @@ pub fn run(command: Command) -> Result<(), Exn<DesktopError>> {
     silt_output(command).map(drop)
 }
 
+/// Starts `command`, a `silt` command, without waiting for it, so it
+/// outlives this app.
+pub fn spawn(mut command: Command) {
+    hide_console(&mut command);
+    let shown = command.get_program().to_string_lossy().into_owned();
+    if let Err(error) = command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        eprintln!("silt-desktop: could not run {shown}: {error}");
+    }
+}
+
 /// What a `silt` command printed, or the reason it gave for failing.
 fn silt_output(mut command: Command) -> Result<String, Exn<DesktopError>> {
     let shown = command.get_program().to_string_lossy().into_owned();

@@ -113,9 +113,10 @@ fn warn_of_other_agent_homes() {
 }
 
 /// Stops the daemon if its program was replaced since it started, as
-/// installing Silt again does, so this command starts the new build. Only
-/// when no agent works in it, and when it's this program: running another
-/// build beside it never swaps it. Says whether it stopped it.
+/// installing Silt again does, so this command starts the new build. When
+/// an agent works in it, it's asked to restart once none does instead. Only
+/// when it's this program: running another build beside it never swaps it.
+/// Says whether it stopped it.
 fn stop_replaced_daemon() -> Result<bool, Exn<CliError>> {
     let Ok(build) = call::<DaemonBuild>(&Request::DaemonBuild) else {
         return Ok(false);
@@ -123,22 +124,72 @@ fn stop_replaced_daemon() -> Result<bool, Exn<CliError>> {
     if !build.replaced {
         return Ok(false);
     }
-    let canonical = |path: PathBuf| fs::canonicalize(&path).unwrap_or(path);
-    let mine = env::current_exe().ok().map(canonical);
-    if build.working > 0 || build.exe.map(canonical) != mine {
-        let why = match build.working {
-            0 => String::new(),
-            1 => ", as an agent works in it".to_owned(),
-            working => format!(", as {working} agents work in it"),
+    if !runs_this_program(&build) {
+        eprintln!("silt: the daemon still runs the build installed before this one; `silt daemon stop` restarts it on this one");
+        return Ok(false);
+    }
+    if build.working > 0 {
+        let later = if restart_when_idle().is_ok() {
+            "it restarts on this one once none does"
+        } else {
+            "`silt daemon stop` restarts it on this one"
         };
-        eprintln!(
-            "silt: the daemon still runs the build installed before this one{why}; `silt daemon stop` restarts it on this one"
-        );
+        eprintln!("silt: the daemon still runs the build installed before this one, as {}; {later}", working(build.working));
         return Ok(false);
     }
     stop_daemon()?;
     eprintln!("silt: restarted the daemon on the build installed since it started");
     Ok(true)
+}
+
+fn runs_this_program(build: &DaemonBuild) -> bool {
+    let canonical = |path: PathBuf| fs::canonicalize(&path).unwrap_or(path);
+    build.exe.clone().map(canonical) == env::current_exe().ok().map(canonical)
+}
+
+fn working(agents: usize) -> String {
+    match agents {
+        1 => "an agent works in it".to_owned(),
+        agents => format!("{agents} agents work in it"),
+    }
+}
+
+/// Asks the daemon to restart on this program once no agent works in it.
+/// A daemon from before it could be asked refuses.
+fn restart_when_idle() -> Result<(), Exn<CliError>> {
+    let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
+    call::<()>(&Request::RestartWhenIdle { exe })
+}
+
+/// Restarts the daemon on this program: at once when no agent works in it,
+/// else once none does. With `if_replaced`, only when an install replaced
+/// its program since it started.
+pub fn daemon_restart(if_replaced: bool) -> Result<(), Exn<CliError>> {
+    if !is_running() && silt_daemon::holds_lock(&paths::data_dir()) {
+        wait_for_busy_daemon()?;
+    }
+    if !is_running() {
+        println!("not running");
+        return Ok(());
+    }
+    let build = call::<DaemonBuild>(&Request::DaemonBuild)?;
+    if if_replaced && !build.replaced {
+        println!("the daemon runs the build installed");
+        return Ok(());
+    }
+    if if_replaced && !runs_this_program(&build) {
+        println!("the daemon runs another program; `silt daemon restart` restarts it on this one");
+        return Ok(());
+    }
+    if build.working > 0 {
+        restart_when_idle()?;
+        println!("restarts once no agent works in it: {} now", working(build.working));
+        return Ok(());
+    }
+    stop_daemon()?;
+    ensure_daemon()?;
+    println!("restarted");
+    Ok(())
 }
 
 /// How long to wait for a daemon that runs but doesn't answer yet, say

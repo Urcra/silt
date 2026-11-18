@@ -477,6 +477,14 @@ enum DaemonCommand {
     Start,
     /// Stop the daemon
     Stop,
+    /// Restart the daemon on this build: at once when no agent works in
+    /// it, else once none does
+    Restart {
+        /// Only when an install replaced its program since it started, as
+        /// `just install` and closing the desktop app ask
+        #[arg(long)]
+        if_replaced: bool,
+    },
     /// Show whether the daemon is running
     Status,
     /// Give back the space a store from an older Silt holds: compress its
@@ -1125,6 +1133,7 @@ fn run() -> Result<(), Exn<CliError>> {
             DaemonCommand::Run => commands::daemon_run(),
             DaemonCommand::Start => commands::ensure_daemon().map(|_| ()),
             DaemonCommand::Stop => commands::daemon_stop(),
+            DaemonCommand::Restart { if_replaced } => commands::daemon_restart(if_replaced),
             DaemonCommand::Status => commands::daemon_status(),
             DaemonCommand::Compact => commands::daemon_compact(),
         },
