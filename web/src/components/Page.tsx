@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode, type RefObject, useContext, useRef } from 'react'
+import { type ReactNode, type RefObject, useContext, useRef } from 'react'
 import { useDragWidth } from '../dragWidth'
 import { WIDE, useMedia } from '../media'
 import { MainScroll } from '../scroll'
@@ -74,7 +74,8 @@ export function Page({
   const column = width === 'narrow' ? 'max-w-3xl' : width === 'wide' ? 'max-w-6xl' : ''
   const embedded = useContext(InSettings)
   // A width per kind of page, kept across its tabs; a diff wanted wide on a thread mustn't squeeze a review's.
-  const panel = useDragWidth(`silt-inspector-width:${label ?? 'page'}`, { ...INSPECTOR, start: inspectorWidth }, 'left')
+  const aside = useRef<HTMLElement>(null)
+  const panel = useDragWidth(`silt-inspector-width:${label ?? 'page'}`, { ...INSPECTOR, start: inspectorWidth }, 'left', '--inspector', aside)
   const desktop = useMedia(WIDE)
   const outer = useContext(MainScroll)
   const fallback = useRef<HTMLDivElement>(null)
@@ -120,8 +121,9 @@ export function Page({
       )}
       {inspector && (
         <aside
+          ref={aside}
           aria-label={inspectorLabel}
-          style={{ '--inspector': `${panel.width}px` } as CSSProperties}
+          style={panel.style}
           className={cx(
             'flex w-full shrink-0 flex-col border-line lg:h-full lg:overflow-y-auto',
             split && full ? 'lg:flex-1 lg:shrink' : 'lg:w-(--inspector) lg:max-w-[50vw] lg:border-l',

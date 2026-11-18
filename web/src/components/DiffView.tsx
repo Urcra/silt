@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import type { CommentView } from '../api'
 import { type CodeLine, type DiffFile, type Hunk, LARGE_DIFF, diffSize, parseFiles, splitRows } from '../diffParse'
 import { type Token, languageOf, useHighlighted } from '../highlight'
@@ -537,7 +537,8 @@ export function DiffView({
   /** A file's lines written since the person saw it. */
   fresh?: (path: string) => ReadonlySet<number> | undefined
 }) {
-  const files = (given ?? parseFiles(text ?? '')).filter((file) => only === undefined || file.path === only)
+  const parsed = useMemo(() => given ?? parseFiles(text ?? ''), [given, text])
+  const files = parsed.filter((file) => only === undefined || file.path === only)
   if (files.length === 0) return <p className="text-sm text-fg-2">No changes.</p>
   if (bare)
     return (
@@ -578,7 +579,7 @@ export function DiffView({
             </>
           }
         >
-          <div className="overflow-x-auto font-mono text-xs leading-5">
+          <div className="overflow-x-auto font-mono text-xs leading-5 [content-visibility:auto]" style={{ containIntrinsicSize: `auto ${heightOf(file, layout)}px` }}>
             <div className="min-w-fit">
               <FileHunks file={file} layout={layout} commenting={commenting} note={hunkNote} cursor={cursor} ask={ask} fresh={fresh?.(file.path)} />
             </div>
@@ -587,4 +588,12 @@ export function DiffView({
       ))}
     </div>
   )
+}
+
+/** About how tall a file's lines are, in pixels, until they're first drawn. Files out of view aren't laid out or
+ * painted (`content-visibility`): with thousands of lines, each frame of a sidebar or panel dragged took 100 ms. */
+function heightOf(file: DiffFile, layout: DiffLayout): number {
+  if (diffSize(file) > LARGE_DIFF) return 40
+  const rows = file.hunks.reduce((total, hunk) => total + 1 + (layout === 'split' ? splitRows(hunk).length : hunk.lines.length), 0)
+  return rows * 20
 }

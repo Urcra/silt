@@ -6,6 +6,19 @@
 @import '@fontsource/ibm-plex-mono/500.css';
 @import './nous.css';
 
+/* Panels' dragged widths (dragWidth.ts). Not inherited: changing an inherited
+   variable styles again everything inside, a large diff's every line. */
+@property --sidebar {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 260px;
+}
+@property --inspector {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 360px;
+}
+
 /* Components use the Nous tokens through Tailwind's names for them, so a
    theme changes only nous.css. */
 

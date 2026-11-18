@@ -46,16 +46,17 @@ export const DiffPanel = memo(function DiffPanel({
   const [view, setView] = useState<View>('thread')
   // Side by side only where both sides fit, until the person picks.
   const [picked, setPicked] = useState<DiffLayout>()
-  const [width, setWidth] = useState(0)
+  // Only whether it fits, so a panel dragged wider doesn't draw the diff again at each pixel.
+  const [fits, setFits] = useState(false)
   const section = useRef<HTMLElement>(null)
   useEffect(() => {
     const element = section.current
     if (!element) return
-    const observer = new ResizeObserver(([entry]) => setWidth(entry?.contentRect.width ?? 0))
+    const observer = new ResizeObserver(([entry]) => setFits((entry?.contentRect.width ?? 0) >= SPLIT_WIDTH))
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
-  const layout: DiffLayout = picked ?? (wide && width >= SPLIT_WIDTH ? 'split' : 'unified')
+  const layout: DiffLayout = picked ?? (wide && fits ? 'split' : 'unified')
   const [reviewed] = useState(() => keptView(thread).file)
   const [other, setOther] = useState('merge-base')
   const [commit, setCommit] = useState('')
