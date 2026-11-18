@@ -1072,20 +1072,44 @@ fn a_command_left_running_in_the_background_is_stopped_from_the_web_ui() {
     assert_eq!(listed_background(&api, &thread), 0, "{live}");
 }
 
-/// A command left running that ended without Silt hearing of it, as when
-/// Copilot ends a detached shell itself, is marked stopped when the person
-/// stops it, rather than shown running for good.
+/// A command left running that ended without Silt hearing of it is marked
+/// stopped when the person stops it, rather than shown running for good.
 #[test]
 fn a_command_left_running_that_ended_unheard_is_marked_stopped_when_stopped() {
     let env = Env::new();
     let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v2", "add acp Unheard");
+    settled_history(&api, &thread, "Done: add acp Unheard");
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["stoppable"], serde_json::json!(["unheard-1"]), "{live}");
+
+    api.ok("POST", &format!("/api/threads/{thread}/agent/tasks/unheard-1/stop"), None);
+    assert_eq!(task_news(&api, &thread, "unheard-1"), ["running", "stopped"]);
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["stoppable"], serde_json::json!([]), "{live}");
+    assert_eq!(listed_background(&api, &thread), 0, "{live}");
+}
+
+/// A shell Copilot detached and never reads ends without Silt hearing of
+/// it: Silt sees its process gone and marks it done, and leaves it running
+/// until then.
+#[test]
+fn a_shell_an_agent_speaking_v1_never_reads_is_done_once_its_process_ended() {
+    let env = Env::new();
+    let api = Api::open(&env);
     let thread = start_fake_acp(&env, &api, "v1", "add acp Forgotten");
     settled_history(&api, &thread, "Done: add acp Forgotten");
+    assert!(eventually(|| kept(&env).len() == 1), "the command runs");
+    // Past its first look among the agent's processes.
+    std::thread::sleep(Duration::from_secs(7));
+    assert_eq!(task_news(&api, &thread, "shell-1"), ["running"], "it still runs");
     let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
     assert_eq!(live["agent"]["stoppable"], serde_json::json!(["shell-1"]), "{live}");
 
-    api.ok("POST", &format!("/api/threads/{thread}/agent/tasks/shell-1/stop"), None);
-    assert_eq!(task_news(&api, &thread, "shell-1"), ["running", "stopped"]);
+    for pid in kept(&env) {
+        silt_os::kill(pid).expect("ends");
+    }
+    assert!(eventually(|| task_news(&api, &thread, "shell-1") == ["running", "completed"]), "its end was seen");
     let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
     assert_eq!(live["agent"]["stoppable"], serde_json::json!([]), "{live}");
     assert_eq!(listed_background(&api, &thread), 0, "{live}");

@@ -402,6 +402,18 @@ impl AgentHandle {
         Ok(ended.len())
     }
 
+    /// Which of `commands`, left running in the background, any of the
+    /// agent's processes still runs, each as [`Self::stop_command`] finds
+    /// it. Before the agent started, all are taken to run. It reads the
+    /// machine's processes, so it blocks.
+    pub fn commands_running(&self, commands: &[String]) -> std::io::Result<Vec<bool>> {
+        let Some(agent) = self.pid.get().copied() else {
+            return Ok(vec![true; commands.len()]);
+        };
+        let processes = silt_os::processes()?;
+        Ok(commands.iter().map(|command| !crate::processes::running(&processes, agent, command, 0).is_empty()).collect())
+    }
+
     /// Ends the agent and everything it started at once, for when nothing
     /// will be left to hear it end, as the daemon exits. It blocks.
     pub fn end_now(&self) {

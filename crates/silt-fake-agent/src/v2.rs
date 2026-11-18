@@ -10,6 +10,7 @@
 //! ends after the turn and sets the agent going again, unless cancelled.
 //! `Keep` makes it leave a real process running in the background, `silt-fake-agent
 //! keep-running <cwd>`, whose end it reports, as Claude does, and goes on about.
+//! `Unheard` makes it leave a command no process runs, whose end it never reports.
 //! `Present` makes it put a plan to the person, as Claude's ExitPlanMode
 //! does, by asking leave to quit its plan mode. Its session offers the commands
 //! `count` and `compact` as it opens, and drops `compact` on a prompt.
@@ -201,6 +202,12 @@ pub async fn main() -> Result<()> {
                         say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "bg-1", "name": "Bash", "rawInput": {"command": "sleep 1 && echo BG", "run_in_background": true}, "status": "pending", "title": "sleep 1 && echo BG", "kind": "execute", "content": [{"type": "terminal", "terminalId": "bg-1"}]}))?;
                         say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "bg-1", "output": {"data": answer}}))?;
                         say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "bg-1", "status": "completed"}))?;
+                    }
+                    if prompt.contains("Unheard") {
+                        let answer = base64::engine::general_purpose::STANDARD.encode("Command running in background with ID: bgunheard1.");
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "unheard-1", "name": "Bash", "rawInput": {"command": "sleep 1 && echo UNHEARD", "run_in_background": true}, "status": "pending", "title": "sleep 1 && echo UNHEARD", "kind": "execute", "content": [{"type": "terminal", "terminalId": "unheard-1"}]}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "unheard-1", "output": {"data": answer}}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "unheard-1", "status": "completed"}))?;
                     }
                     if prompt.contains("Keep") {
                         let command = format!("keep-running {}", cwd.display());
