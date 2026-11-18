@@ -1,23 +1,28 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { type AgentUsage, api } from '../api'
 import { UsageRing } from './UsageRing'
+
+// A morning, so a reset an hour on is the same day, worded "Resets at", whenever the test runs.
+const MORNING = new Date(2026, 10, 17, 9, 0).getTime()
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(MORNING)
+})
 
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
-
-// An hour from now, but still today, which the reset reads as a time of day
-// rather than a weekday after 11 PM.
-const endOfToday = new Date().setHours(23, 59, 59, 0)
 
 const MAX: AgentUsage = {
   agent: 'Claude Code',
   plan: 'Max',
   limits: [
-    { name: '5-hour limit', used_percent: 32, resets_at_ms: Math.min(Date.now() + 3_600_000, endOfToday) },
+    { name: '5-hour limit', used_percent: 32, resets_at_ms: MORNING + 3_600_000 },
     { name: 'Weekly · all models', used_percent: 6.4, resets_at_ms: null },
   ],
   page: 'https://claude.ai/settings/usage',

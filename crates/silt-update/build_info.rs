@@ -1,4 +1,4 @@
-// What a build says of itself (ADR 0098): its commit, branch, whether
+// What a build says of itself (ADR 0100): its commit, branch, whether
 // tracked files had changes, the clone it was built from and its channel.
 // Shared by silt-update's build script and silt-desktop's, which is its own
 // workspace. Each `SILT_BUILD_*` variable set while building wins over git:

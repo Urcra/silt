@@ -1,4 +1,4 @@
-//! Updating this machine's Silt from the web UI (ADR 0098): whether a newer
+//! Updating this machine's Silt from the web UI (ADR 0100): whether a newer
 //! build is out, checked at start and every few hours, and the detached
 //! `silt update run` that installs it, whose state this reads back.
 

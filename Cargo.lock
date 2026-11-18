@@ -5731,6 +5731,7 @@ dependencies = [
  "silt-redact",
  "silt-server",
  "silt-sheet",
+ "silt-theme",
  "silt-types",
  "silt-update",
  "silt-workspace",
@@ -5794,6 +5795,7 @@ dependencies = [
  "silt-sheet",
  "silt-store",
  "silt-sync",
+ "silt-theme",
  "silt-types",
  "silt-update",
  "silt-vendor",
@@ -5958,6 +5960,7 @@ dependencies = [
  "silt-crdt",
  "silt-log",
  "silt-sheet",
+ "silt-theme",
  "silt-types",
  "silt-workspace",
  "thiserror 2.0.21",
@@ -6068,6 +6071,16 @@ dependencies = [
  "silt-crdt",
  "silt-log",
  "silt-types",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "silt-theme"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "silt-design",
  "thiserror 2.0.21",
 ]
 

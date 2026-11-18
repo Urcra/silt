@@ -77,7 +77,7 @@ install-wsl: install-cli try-install-voice install-windows
 install-windows: build-web
     scripts/install-windows.sh
 
-# What updating from the app runs (ADR 0098): `install`, with the desktop app
+# What updating from the app runs (ADR 0100): `install`, with the desktop app
 # only where WebKitGTK is; in WSL, `install-wsl`, building for Windows only
 # where Silt is installed there
 update:

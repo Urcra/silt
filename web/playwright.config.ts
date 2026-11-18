@@ -6,7 +6,7 @@ import { defineConfig } from '@playwright/test'
 const executablePath = process.env.SILT_E2E_CHROMIUM
 
 // The daemons the fixtures start run a build of this clone, which would fetch
-// `main` and show an update the screen references don't (ADR 0098).
+// `main` and show an update the screen references don't (ADR 0100).
 process.env.SILT_UPDATE_CHECK = 'never'
 
 export default defineConfig({

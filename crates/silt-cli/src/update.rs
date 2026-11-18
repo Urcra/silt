@@ -1,6 +1,6 @@
 //! `silt update`: a nightly build fast-forwards its clone's `main`, runs
 //! `just update` there and restarts the daemon on what it installed, while
-//! writing how far it got for the web UI to show (ADR 0098).
+//! writing how far it got for the web UI to show (ADR 0100).
 
 use std::env;
 use std::fs::{File, OpenOptions};

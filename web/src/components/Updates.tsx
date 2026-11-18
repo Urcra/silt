@@ -1,4 +1,4 @@
-// Settings › Updates (ADR 0098): which build this is, whether a newer one is
+// Settings › Updates (ADR 0100): which build this is, whether a newer one is
 // out, and an update's progress, as the runner writes it, through the
 // daemon's restart.
 

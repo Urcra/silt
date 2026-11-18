@@ -1,5 +1,5 @@
 //! Which build this is: its channel, commit and the clone it was built
-//! from, as the build script found them (ADR 0098).
+//! from, as the build script found them (ADR 0100).
 
 use std::fmt;
 use std::path::PathBuf;

@@ -210,7 +210,7 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
           {action ?? <span className="font-mono">{shortCommand(command.trim().split('\n')[0]!)}</span>}
         </span>
         {action && <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg-3 max-sm:hidden">{shortCommand(command.trim().split('\n')[0]!)}</span>}
-        <span className={cx('ml-auto min-w-0 shrink truncate tabular-nums', outcome?.failed ? 'text-danger' : waiting ? 'text-warn' : 'text-fg-2')}>
+        <span className={cx('ml-auto min-w-0 shrink truncate tabular-nums', outcome?.failed ? 'text-danger' : waiting ? 'text-warn-fg' : 'text-fg-2')}>
           {waiting ? 'waiting for you' : under ? <Running since={call.time_ms} /> : commandStatus(step)}
         </span>
       </button>
@@ -324,7 +324,7 @@ export function AnswerForm({ thread, asked }: { thread: string; asked: QuestionA
             {optional(field) ? (
               <span className="ml-auto shrink-0 text-fg-2">optional</span>
             ) : (
-              <span className="ml-auto shrink-0 text-warn">
+              <span className="ml-auto shrink-0 text-warn-fg">
                 {questions.length > 1 && (
                   <span className="mr-2 font-mono text-fg-2">
                     {questions.indexOf(field) + 1} of {questions.length}

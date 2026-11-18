@@ -51,6 +51,8 @@
   /* In dark, a step lighter than the design's 500s, which fail 4.5:1 as text. */
   --ok: light-dark(var(--olive-600), #8a9a4c);
   --warn: var(--honey-500);
+  /* Honey reads at only 2.3:1 on paper, so words take a darker one. */
+  --warn-fg: light-dark(#936400, var(--honey-500));
   --danger: light-dark(var(--rust-600), #d97a59);
   --info: light-dark(var(--slate-600), #7b98a8);
   /* Fainter in dark than its siblings: olive on the dark ground reads louder than rust does. */
@@ -59,6 +61,23 @@
   --danger-tint: light-dark(rgb(194 90 58 / 0.12), rgb(194 90 58 / 0.18));
   --info-tint: light-dark(rgb(91 122 138 / 0.12), rgb(91 122 138 / 0.18));
   --backdrop: rgb(20 14 8 / 0.4);
+  /* Code's highlight tags (ADR 0098); a theme sets these too. */
+  --syntax-keyword: var(--accent-fg);
+  --syntax-string: var(--ok);
+  --syntax-string-special: var(--ok);
+  --syntax-number: var(--danger);
+  --syntax-constant: var(--danger);
+  --syntax-comment: var(--fg-3);
+  --syntax-comment-style: italic;
+  --syntax-type: var(--info);
+  --syntax-macro: var(--info);
+  --syntax-operator: var(--fg-2);
+  --syntax-punctuation: var(--fg-2);
+  --syntax-meta: var(--fg-2);
+  --syntax-definition-weight: 500;
+  --syntax-heading-weight: 500;
+  --syntax-emphasis-style: italic;
+  --syntax-strong-weight: 600;
   --shadow-1:
     0 1px 2px light-dark(rgb(20 14 8 / 0.04), rgb(0 0 0 / 0.3)),
     0 1px 1px light-dark(rgb(20 14 8 / 0.06), rgb(0 0 0 / 0.2));

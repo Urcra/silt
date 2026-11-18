@@ -32,6 +32,7 @@ silt-proto = { path = "../silt-proto" }
 silt-redact = { path = "../silt-redact" }
 silt-server = { path = "../silt-server" }
 silt-sheet = { path = "../silt-sheet" }
+silt-theme = { path = "../silt-theme" }
 silt-types = { path = "../silt-types" }
 silt-update = { path = "../silt-update" }
 silt-workspace = { path = "../silt-workspace" }

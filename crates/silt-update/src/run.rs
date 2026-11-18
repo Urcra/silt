@@ -1,6 +1,6 @@
 //! An update's run: its steps, as named from the recipe lines `just`
 //! echoes, how far along it is, and the state the runner writes for the
-//! daemon to show (ADR 0098).
+//! daemon to show (ADR 0100).
 
 use std::fs;
 use std::io;

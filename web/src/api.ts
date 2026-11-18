@@ -6,6 +6,11 @@
 import { apiUrl } from './served'
 import { askedServer } from './workspace'
 import type {
+  AppearanceMode,
+  AppearanceSettings,
+  ThemeCatalog,
+  ThemeDetail,
+  ThemeSaved,
   AgentChoices,
   AgentUsage,
   ArtifactContent,
@@ -33,6 +38,7 @@ import type {
   FileAt,
   FileTurns,
   FoundFolder,
+  Subfolder,
   GraphQuery,
   GraphRow,
   HistoryPage,
@@ -239,7 +245,7 @@ export const api = {
   modelFiles: (repo: string) => request<ModelFiles>('GET', `/api/models/files?repo=${encodeURIComponent(repo)}`),
   /** Starts downloading llama.cpp's latest build for this machine. */
   pullRuntime: () => request<string>('POST', '/api/models/runtime'),
-  /** Whether a newer Silt is out and how an update goes (ADR 0098), for the desktop app built from `desktop`; a daemon's only. */
+  /** Whether a newer Silt is out and how an update goes (ADR 0100), for the desktop app built from `desktop`; a daemon's only. */
   update: (desktop?: string) => request<UpdateView>('GET', `/api/update${desktop ? `?desktop=${encodeURIComponent(desktop)}` : ''}`),
   checkUpdate: () => request<string>('POST', '/api/update/check'),
   startUpdate: () => request<string>('POST', '/api/update/start'),
@@ -434,6 +440,7 @@ export const api = {
   setThreadState: (id: string, change: StateChange) => request<Mine>('PATCH', `${thread(id)}/state`, change),
   addClone: (path: string) => request<string>('POST', '/api/projects', { path }),
   found: () => request<FoundFolder[]>('GET', '/api/found'),
+  subfolders: (dir: string) => request<Subfolder[]>('GET', `/api/folders?dir=${encodeURIComponent(dir)}`),
   importFound: (paths: string[] = []) => request<number>('POST', '/api/found/import', { paths }),
   cloneProject: (url: string, path: string) => request<string>('POST', '/api/projects/clone', { url, path }),
   newProject: (path: string) => request<string>('POST', '/api/projects/new', { path }),
@@ -450,6 +457,15 @@ export const api = {
   designStart: (start: DesignStart) => request<string>('POST', '/api/design-systems/start', start),
   threadDesign: (id: string) => request<ThreadDesign | null>('GET', `${thread(id)}/design-system`),
   designKeep: (thread: string, name: string) => request<DesignSummary>('POST', '/api/design-systems/keep', { thread, name }),
+  themes: () => request<ThemeCatalog>('GET', '/api/themes'),
+  themeDetail: (id: string) => request<ThemeDetail>('GET', `/api/themes/detail?id=${encodeURIComponent(id)}`),
+  themeCss: (pick: { light?: string; dark?: string } = {}) => {
+    const query = new URLSearchParams(Object.entries(pick).filter((entry): entry is [string, string] => Boolean(entry[1])))
+    return request<{ css: string; mode: AppearanceMode }>('GET', `/api/themes/css${query.size ? `?${query}` : ''}`)
+  },
+  setAppearance: (settings: AppearanceSettings) => request<string>('PUT', '/api/appearance', settings),
+  importTheme: (text: string) => request<ThemeSaved>('POST', '/api/themes/import', { text }),
+  duplicateTheme: (from: string) => request<ThemeSaved>('POST', '/api/themes/duplicate', { from }),
   artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),
   setArtifactSettings: (settings: ArtifactSettings) => request<string>('PUT', '/api/artifact-settings', settings),
   projectDesignSystems: () => request<Record<string, string>>('GET', '/api/projects/design-systems'),

@@ -52,7 +52,7 @@ if ! compgen -G "$prebuilt/*/lib/sherpa-onnx-c-api.lib" >/dev/null; then
 fi
 
 # The copy has no `.git`, so the builds are told which clone they come
-# from, for updating from the app (ADR 0098).
+# from, for updating from the app (ADR 0100).
 quoted() { printf "'%s'" "${1//\'/\'\'}"; }
 dirty=
 [ -z "$(git -C "$root" status --porcelain --untracked-files=no)" ] || dirty=1

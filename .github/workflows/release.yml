@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 # A release is the stable channel: it learns of newer releases rather than
-# following `main` (ADR 0098).
+# following `main` (ADR 0100).
 env:
   SILT_BUILD_CHANNEL: stable
 

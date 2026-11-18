@@ -1,6 +1,6 @@
 //! `silt update` on a build pointed at a clone behind its upstream, with a
 //! stand-in for `just` that echoes the recipe lines the real one does
-//! (ADR 0098). Unix only: the stand-in is a shell script, and Windows
+//! (ADR 0100). Unix only: the stand-in is a shell script, and Windows
 //! updates go through WSL.
 #![cfg(unix)]
 

@@ -6,9 +6,9 @@ import { linkToken } from './links'
 import { takeTokenFromUrl } from './api'
 import { legacyPath } from './legacy'
 import { hosted } from './served'
-import { applyTheme, storedTheme } from './theme'
+import { startTheme } from './theme'
 
-applyTheme(storedTheme())
+startTheme()
 const moved = legacyPath(window.location.hash)
 if (moved) window.history.replaceState(null, '', moved)
 

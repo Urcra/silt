@@ -11,7 +11,7 @@ declare global {
     /** Set by the desktop app's window when it has more than one place to show Silt from. */
     __siltBackends?: Backend[]
     __siltBackend?: string
-    /** Set by the desktop app's window: the commit it was built from (ADR 0098). */
+    /** Set by the desktop app's window: the commit it was built from (ADR 0100). */
     __siltDesktop?: { commit?: string }
   }
 }
@@ -30,6 +30,36 @@ export function useBackends(): { backends: Backend[]; current: string | undefine
 /** Asks the desktop app's window to show Silt from `backend`, which it does in place of opening the link. */
 export function switchBackend(backend: string) {
   window.location.href = `silt://open/?backend=${encodeURIComponent(backend)}`
+}
+
+/** `rgb(r, g, b)` or `rgba(…)` as a browser computes it, as `#rrggbb`. */
+export function hexOf(computed: string): string | null {
+  const channels = computed.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+  if (!channels) return null
+  return `#${channels
+    .slice(1, 4)
+    .map((channel) => Number(channel).toString(16).padStart(2, '0'))
+    .join('')}`
+}
+
+/** The link that tells the desktop app's window which theme the page shows (ADR 0099). */
+export function themeLink(appearance: 'light' | 'dark', bg: string, fg: string): string {
+  return `silt://theme/?${new URLSearchParams({ appearance, bg, fg })}`
+}
+
+let told = ''
+
+/** Tells the desktop app's window the theme shown, so its frame and next start follow it; nothing in a browser. */
+export function tellDesktopTheme(appearance: 'light' | 'dark') {
+  if (!window.__siltBackends) return
+  const body = getComputedStyle(document.body)
+  const bg = hexOf(body.backgroundColor)
+  const fg = hexOf(body.color)
+  if (!bg || !fg) return
+  const link = themeLink(appearance, bg, fg)
+  if (link === told) return
+  told = link
+  window.location.href = link
 }
 
 /** The commit the desktop app showing this page was built from, or none outside the app. */

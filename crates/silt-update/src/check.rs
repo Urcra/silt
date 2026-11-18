@@ -1,6 +1,6 @@
 //! Whether a newer build is out: for a nightly build, whether `main` has
 //! moved past it in its clone; for a stable one, whether a newer release is
-//! out (ADR 0098).
+//! out (ADR 0100).
 
 use std::time::Duration;
 

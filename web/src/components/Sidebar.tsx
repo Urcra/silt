@@ -272,7 +272,7 @@ const PILL_TONE = {
   failed: 'bg-danger-tint text-danger',
 }
 
-/** The sidebar's word on an update (ADR 0098): out, under way, waiting, done but for a relaunch, or failed. */
+/** The sidebar's word on an update (ADR 0100): out, under way, waiting, done but for a relaunch, or failed. */
 function UpdatePill() {
   const update = useUpdate()
   const pill = pillOf(update.data)

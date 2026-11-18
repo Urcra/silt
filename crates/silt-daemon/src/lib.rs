@@ -59,6 +59,8 @@ mod sessions;
 mod spool;
 mod sync;
 mod sync_once;
+pub mod theme;
+mod theme_sync;
 mod thumbnails;
 mod transcripts;
 mod updates;

@@ -1,4 +1,4 @@
-// What Settings › Updates and the sidebar show of an update (ADR 0098), from
+// What Settings › Updates and the sidebar show of an update (ADR 0100), from
 // what the daemon says: the build, the last check and the last run.
 
 import { useQuery } from '@tanstack/react-query'

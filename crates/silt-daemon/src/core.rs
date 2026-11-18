@@ -273,7 +273,7 @@ pub struct Core {
     pub(crate) models: std::sync::Arc<crate::models::LocalModelsHere>,
     /// What each agent's plan has used (ADR 0095).
     pub(crate) usage: std::sync::Arc<crate::usage::Usage>,
-    /// Whether a newer Silt is out, and the update installing it (ADR 0098).
+    /// Whether a newer Silt is out, and the update installing it (ADR 0100).
     pub(crate) updates: std::sync::Arc<crate::updates::Updates>,
     /// Each server's last sync error, by URL.
     pub(crate) sync_errors: HashMap<String, String>,
@@ -321,6 +321,8 @@ pub struct Core {
     pub(crate) sample_stops: HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// What changed, for browsers listening (ADR 0021).
     pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
+    /// The watch on `themes/`, from the first page that asks for a theme.
+    themes_watch: Option<crate::watch::Watched>,
     /// How each thread's agent stands as last stored (ADR 0022).
     pub(crate) agent_runs: HashMap<ThreadId, silt_store::AgentRunRecord>,
     /// What each thread's summary reads from its log, with the family's log
@@ -613,6 +615,7 @@ impl Core {
             draining: HashSet::new(),
             history_cache: Mutex::default(),
             watchers: Watchers::new(),
+            themes_watch: None,
             prelisted: None,
         };
         for thread in core.store.threads().await? {
@@ -867,6 +870,36 @@ impl Core {
                 to_response(crate::design::note_design_skill(&self.data_dir, &thread).map(|()| "noted"))
             }
             Request::KeepDesignSystem { thread, name } => to_response(self.keep_design_system(&thread, &name)),
+            Request::Themes => {
+                self.watch_themes();
+                Response::ok(crate::theme::catalog(&self.data_dir))
+            }
+            Request::ThemeDetail { id } => match crate::theme::detail(&self.data_dir, &id) {
+                Some(detail) => Response::ok(detail),
+                None => Response::error(format!("no theme {id}")),
+            },
+            Request::SetAppearance { settings } => {
+                let saved = crate::theme::set_appearance(&self.data_dir, &settings);
+                if saved.is_ok() {
+                    let _ = self.bus.send(crate::protocol::BusEvent::Appearance);
+                }
+                to_response(saved.map(|()| "saved"))
+            }
+            Request::ThemeFont { id, file } => match crate::theme::font(&self.data_dir, &id, &file) {
+                Some((bytes, media_type)) => {
+                    use base64::Engine as _;
+                    let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+                    Response::ok(serde_json::json!({ "media_type": media_type, "data": data }))
+                }
+                None => Response::error("no such font"),
+            },
+            Request::ImportTheme { text } => to_response(crate::theme::import(&self.data_dir, &text)),
+            Request::DuplicateTheme { from } => to_response(crate::theme::duplicate(&self.data_dir, &from)),
+            Request::ThemeCss { light, dark } => {
+                self.watch_themes();
+                let mode = crate::theme::appearance(&self.data_dir).mode;
+                Response::ok(serde_json::json!({ "css": crate::theme::css(&self.data_dir, light, dark), "mode": mode }))
+            }
             Request::ArtifactSettings => Response::ok(crate::design::artifact_settings(&self.data_dir)),
             Request::SetArtifactSettings { settings } => {
                 to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))
@@ -1310,6 +1343,7 @@ impl Core {
             Request::ThreadState { thread, change } => to_response(self.change_thread_state(&thread, change).await),
             Request::AddClone { path } => to_response(self.add_clone(&path).await),
             Request::NewProject { path } => to_response(self.new_project(&path).await),
+            Request::Subfolders { dir } => return answer_later(reply, Ok(crate::projects::subfolders(dir))),
             Request::CloneProject { url, path } => return answer_later(reply, self.clone_project(&url, &path)),
             Request::ProjectHome { repo, home } => to_response(self.set_project_home(&repo, &home).await),
             Request::Workspaces => to_response(Ok::<_, CoreError>(self.workspaces_view())),
@@ -1493,6 +1527,25 @@ impl Core {
     /// transcripts are left to it.
     fn recorded_elsewhere(&self, thread: ThreadId) -> bool {
         !self.adopted.contains(&thread) && crate::capture_lock::RecordingLock::held(&self.data_dir, thread)
+    }
+
+    /// Tells every page when a theme file is saved, so a theme's author sees
+    /// it as they write it (ADR 0098).
+    fn watch_themes(&mut self) {
+        if !self.resident || self.themes_watch.is_some() {
+            return;
+        }
+        let dir = crate::theme::themes_dir(&self.data_dir);
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let bus = self.bus.clone();
+        match self.watchers.watch(&dir, move |_| {
+            let _ = bus.send(crate::protocol::BusEvent::Appearance);
+        }) {
+            Ok(watched) => self.themes_watch = Some(watched),
+            Err(error) => warn!("not watching {}: {error}", dir.display()),
+        }
     }
 
     pub(crate) fn start_checkout(

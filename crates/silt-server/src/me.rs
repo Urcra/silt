@@ -272,3 +272,49 @@ pub(crate) async fn put_design_system(
     }
     Ok(StatusCode::NO_CONTENT)
 }
+
+/// A person's own themes, removed ones as tombstones, as their devices last
+/// sent them (ADR 0099).
+pub(crate) async fn stored_themes(server: &Server, user: crate::UserId) -> Result<Vec<silt_proto::ThemeCopy>, ApiError> {
+    let rows = sqlx::query!("SELECT body FROM themes WHERE user_id = ? ORDER BY name", user).fetch_all(server.db()).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| serde_json::from_slice::<silt_proto::ThemeCopy>(&row.body).ok())
+        .filter(silt_proto::ThemeCopy::valid)
+        .collect())
+}
+
+pub(crate) async fn themes(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Json<Vec<silt_proto::ThemeCopy>>, ApiError> {
+    Ok(Json(stored_themes(&server, caller.user).await?))
+}
+
+/// Keeps a copy of one of the caller's themes unless the one kept changed
+/// later, in one statement, so two devices sending at once can't race.
+pub(crate) async fn put_theme(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    UrlPath(name): UrlPath<String>,
+    Json(copy): Json<silt_proto::ThemeCopy>,
+) -> Result<StatusCode, ApiError> {
+    if copy.name != name || !copy.valid() {
+        return Err(bad_request("that isn't a theme a device can take"));
+    }
+    let body = serde_json::to_vec(&copy).map_err(|_| bad_request("the copy can't be stored"))?;
+    let deleted = i64::from(copy.deleted);
+    sqlx::query!(
+        "INSERT INTO themes (user_id, name, at_ms, deleted, body) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (user_id, name) DO UPDATE SET at_ms = excluded.at_ms, deleted = excluded.deleted, body = excluded.body
+         WHERE excluded.at_ms > themes.at_ms",
+        caller.user,
+        name,
+        copy.at_ms,
+        deleted,
+        body,
+    )
+    .execute(server.db())
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
