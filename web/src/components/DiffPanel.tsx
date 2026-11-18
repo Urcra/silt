@@ -1,10 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
 import { memo, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { type Hidden, api } from '../api'
+import type { Hidden } from '../api'
 import { type View, VIEWS, baseOf } from '../diffSpec'
-import { useHideGit, useHideOthers } from '../hideGit'
-import { keys, message } from '../query'
+import { useHideGit, useHideOthers, useShared } from '../hideGit'
+import { message } from '../query'
 import { keptView } from '../reviewView'
 import { itemOf, useReview } from '../review'
 import { useActions } from '../shortcuts'
@@ -69,7 +68,13 @@ export const DiffPanel = memo(function DiffPanel({
   const hideOthers = hideOthersSetting && view !== 'main' && shared
   const of = { base, hideGit, hideOthers }
   const review = useReview(thread)
-  const { stats, whole, diff, text, files, commenting, unsent, changed, pending, outdated, error } = useThreadDiff(thread, of, review, onCommented, agent)
+  const { stats, whole, diff, text, files, commenting, unsent, changed, pending, outdated, error } = useThreadDiff(
+    thread,
+    of,
+    review,
+    onCommented,
+    agent,
+  )
   const shownReviewed = text !== undefined && reviewed !== undefined
   useEffect(() => {
     if (shownReviewed) document.getElementById(`file-${reviewed}`)?.scrollIntoView({ block: 'start' })
@@ -82,7 +87,12 @@ export const DiffPanel = memo(function DiffPanel({
   // What it compares is a menu, as it's picked once in a while; the layout stays a toggle.
   const controls = (
     <>
-      <ChipSelect label="compare" value={view} onChange={(chosen) => setView(chosen as View)} options={VIEWS.map((choice) => ({ id: choice.id, name: choice.label }))} />
+      <ChipSelect
+        label="compare"
+        value={view}
+        onChange={(chosen) => setView(chosen as View)}
+        options={VIEWS.map((choice) => ({ id: choice.id, name: choice.label }))}
+      />
       <HideGitBox on={hideGitSetting} onChange={setHideGit} disabled={view === 'main'} />
       {shared && <HideOthersBox on={hideOthersSetting} onChange={setHideOthers} disabled={view === 'main'} />}
       <Tabs label="layout" tabs={LAYOUTS} value={layout} onChange={setPicked} />
@@ -90,7 +100,11 @@ export const DiffPanel = memo(function DiffPanel({
   )
   return (
     <section ref={section} aria-label="changes" className="flex flex-col gap-3">
-      {controlsIn ? createPortal(controls, controlsIn) : <div className="flex flex-wrap items-center justify-end gap-2">{controls}</div>}
+      {controlsIn ? (
+        createPortal(controls, controlsIn)
+      ) : (
+        <div className="flex flex-wrap items-center justify-end gap-2">{controls}</div>
+      )}
       {view === 'other' && (
         <div className="flex flex-wrap items-center gap-2">
           <Select aria-label="diff base" value={other} onChange={(event) => setOther(event.target.value)}>
@@ -99,13 +113,27 @@ export const DiffPanel = memo(function DiffPanel({
             <option value="commit">Since a commit…</option>
           </Select>
           {other === 'commit' && (
-            <Input aria-label="commit" placeholder="sha" className="w-28 font-mono" value={commit} onChange={(event) => setCommit(event.target.value)} />
+            <Input
+              aria-label="commit"
+              placeholder="sha"
+              className="w-28 font-mono"
+              value={commit}
+              onChange={(event) => setCommit(event.target.value)}
+            />
           )}
         </div>
       )}
       {(review.review.drafts.length > 0 || unsent.length > 0) && (
         <div className="flex justify-end">
-          <FinishReview thread={thread} review={pending} unsent={unsent} items={(comment) => itemOf(comment, files)} agent={agent} working={working} onSent={changed} />
+          <FinishReview
+            thread={thread}
+            review={pending}
+            unsent={unsent}
+            items={(comment) => itemOf(comment, files)}
+            agent={agent}
+            working={working}
+            onSent={changed}
+          />
         </div>
       )}
       <OutdatedDrafts drafts={outdated} review={review} />
@@ -113,7 +141,9 @@ export const DiffPanel = memo(function DiffPanel({
       {(stats.isPending || (whole && diff.isPending)) && <Skeleton className="h-32" />}
       <HiddenNote hidden={of} />
       {whole === false && <FilesByStats thread={thread} stats={stats.data ?? []} of={of} commenting={commenting} />}
-      {whole && text !== undefined && <DiffView text={text} layout={layout} viewFiles={thread} commenting={commenting} anchors={reviewed !== undefined} />}
+      {whole && text !== undefined && (
+        <DiffView text={text} layout={layout} viewFiles={thread} commenting={commenting} anchors={reviewed !== undefined} />
+      )}
       {whole && diff.hasNextPage && (
         <Button className="self-start" disabled={diff.isFetchingNextPage} onClick={() => void diff.fetchNextPage()}>
           More files
@@ -141,7 +171,10 @@ export function HideOthersBox(props: BoxProps) {
 
 function HideBox({ on, onChange, disabled = false, label, title }: BoxProps & { label: string; title: string }) {
   return (
-    <label className="flex min-h-8 items-center gap-1.5 text-xs text-fg-2 max-md:min-h-11" title={disabled ? 'Against main, the diff is git’s own' : title}>
+    <label
+      className="flex min-h-8 items-center gap-1.5 text-xs text-fg-2 max-md:min-h-11"
+      title={disabled ? 'Against main, the diff is git’s own' : title}
+    >
       <input
         type="checkbox"
         checked={on && !disabled}
@@ -154,15 +187,12 @@ function HideBox({ on, onChange, disabled = false, label, title }: BoxProps & { 
   )
 }
 
-/** Whether the thread records other agents' edits, the only threads where leaving them out shows anything (ADR 0089). */
-export function useShared(thread: string | undefined): boolean {
-  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
-  return threads.data?.some((candidate) => candidate.id === thread && candidate.shared) ?? false
-}
-
 /** Says what a diff leaves out, as what's on disk may differ. */
 export function HiddenNote({ hidden }: { hidden: Hidden }) {
-  const left = [hidden.hideGit && 'what git rewrote, as a checkout, pull or stash does', hidden.hideOthers && 'other agents’ edits in this clone'].filter(Boolean)
+  const left = [
+    hidden.hideGit && 'what git rewrote, as a checkout, pull or stash does',
+    hidden.hideOthers && 'other agents’ edits in this clone',
+  ].filter(Boolean)
   if (left.length === 0) return null
   return (
     <p role="note" className="text-xs text-fg-2">

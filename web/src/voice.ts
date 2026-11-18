@@ -128,7 +128,8 @@ export function microphoneProblem(failure: unknown): string {
   const name = failure instanceof DOMException || failure instanceof Error ? failure.name : ''
   if (name === 'NotAllowedError') return 'Microphone access was refused.'
   if (name === 'NotFoundError') return 'No microphone was found.'
-  if (name === 'InvalidStateError') return "The audio system wouldn't start. On Linux, install GStreamer's good plugins (gst-plugins-good)."
+  if (name === 'InvalidStateError')
+    return "The audio system wouldn't start. On Linux, install GStreamer's good plugins (gst-plugins-good)."
   return 'The microphone could not be opened.'
 }
 
@@ -299,7 +300,10 @@ export function useDictation({
         if (text) latestOnText.current(text, send)
         else
           setProblem({
-            text: peak === 0 ? 'Silt heard only silence; your microphone may be muted.' : "Silt didn't catch any words. Nothing was added.",
+            text:
+              peak === 0
+                ? 'Silt heard only silence; your microphone may be muted.'
+                : "Silt didn't catch any words. Nothing was added.",
             tone: 'note',
           })
       }
@@ -453,7 +457,8 @@ export function useDictation({
     if (phase !== 'starting' && phase !== 'recording') return undefined
     const key = (event: KeyboardEvent) => {
       if (event.key === 'Escape') discard()
-      else if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !(event.target instanceof HTMLButtonElement)) end(true)
+      else if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !(event.target instanceof HTMLButtonElement))
+        end(true)
       else return
       event.preventDefault()
       event.stopPropagation()
@@ -503,7 +508,11 @@ export type PageTake = { stop: () => Promise<void> }
  * `heard`, until stopped, too long, or failed. Rejects when the speech helper has no model yet or the microphone won't
  * open.
  */
-export async function pageTake(heard: { partial: (text: string) => void; final: (text: string) => void; ended: (reason: string) => void }): Promise<PageTake> {
+export async function pageTake(heard: {
+  partial: (text: string) => void
+  final: (text: string) => void
+  ended: (reason: string) => void
+}): Promise<PageTake> {
   const status = await api.voiceStatus()
   if (!status.model) throw new Error("Silt's speech model isn't downloaded yet; dictate once in the composer to get it.")
   const framer = new Framer(FRAME_SAMPLES)

@@ -81,7 +81,9 @@ export function tasksOf(entries: HistoryEntry[]): Tasks {
 
 /** The tasks still running, oldest first. */
 export function running(tasks: Tasks): TaskState[] {
-  return [...tasks.byCall.values(), ...tasks.loose.values()].filter((task) => task.status === 'running').sort((a, b) => a.started_ms - b.started_ms)
+  return [...tasks.byCall.values(), ...tasks.loose.values()]
+    .filter((task) => task.status === 'running')
+    .sort((a, b) => a.started_ms - b.started_ms)
 }
 
 /** How long before a task with no news reads as having gone quiet rather than running: its session has likely ended. */

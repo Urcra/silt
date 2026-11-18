@@ -17,7 +17,9 @@ test('a diff too large to read whole lists its files and reads only the one open
     'fetch',
     vi.fn(async (path: string) => {
       asked.push(path)
-      return new Response(JSON.stringify('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+fn opened() {}\n'))
+      return new Response(
+        JSON.stringify('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+fn opened() {}\n'),
+      )
     }),
   )
   const stats: DiffStat[] = Array.from({ length: 450 }, (_, index) => ({
@@ -52,7 +54,9 @@ test("with git's changes hidden, a file is read without them", async () => {
     'fetch',
     vi.fn(async (path: string) => {
       asked.push(path)
-      return new Response(JSON.stringify('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+fn mine() {}\n'))
+      return new Response(
+        JSON.stringify('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+fn mine() {}\n'),
+      )
     }),
   )
   const stats: DiffStat[] = [{ path: 'src/a.rs', old_path: null, added: 1, removed: 1, binary: false, size: 80 }]
@@ -72,7 +76,9 @@ test("with other agents' changes hidden too, a file is read without either", asy
     'fetch',
     vi.fn(async (path: string) => {
       asked.push(path)
-      return new Response(JSON.stringify('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+fn ours() {}\n'))
+      return new Response(
+        JSON.stringify('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+fn ours() {}\n'),
+      )
     }),
   )
   const stats: DiffStat[] = [{ path: 'src/a.rs', old_path: null, added: 1, removed: 1, binary: false, size: 80 }]

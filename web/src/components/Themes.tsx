@@ -78,7 +78,11 @@ export function ThemeSettings() {
           <select
             aria-label={appearance === 'light' ? 'light theme' : 'dark theme'}
             value={current?.id ?? ''}
-            onChange={(event) => void choose(appearance === 'light' ? { ...settings, light: event.target.value } : { ...settings, dark: event.target.value })}
+            onChange={(event) =>
+              void choose(
+                appearance === 'light' ? { ...settings, light: event.target.value } : { ...settings, dark: event.target.value },
+              )
+            }
             className="min-w-0 flex-1 cursor-pointer appearance-none bg-transparent pr-5 text-sm text-fg-1 focus:outline-none"
           >
             {!current && <option value="">Nous</option>}
@@ -97,7 +101,11 @@ export function ThemeSettings() {
   return (
     <div className="flex flex-col gap-3">
       <h2 className={SETTINGS_HEADING}>Appearance</h2>
-      <div role="radiogroup" aria-label="theme" className="inline-flex self-start overflow-hidden rounded-sm border border-line text-xs">
+      <div
+        role="radiogroup"
+        aria-label="theme"
+        className="inline-flex self-start overflow-hidden rounded-sm border border-line text-xs"
+      >
         {THEMES.map((choice) => (
           <button
             key={choice}
@@ -105,7 +113,10 @@ export function ThemeSettings() {
             role="radio"
             aria-checked={settings.mode === choice}
             onClick={() => void choose({ ...settings, mode: choice })}
-            className={cx('px-3 py-1 capitalize max-md:min-h-11', settings.mode === choice ? 'bg-accent-tint text-accent-fg' : 'text-fg-2 hover:bg-surface-2')}
+            className={cx(
+              'px-3 py-1 capitalize max-md:min-h-11',
+              settings.mode === choice ? 'bg-accent-tint text-accent-fg' : 'text-fg-2 hover:bg-surface-2',
+            )}
           >
             {choice}
           </button>
@@ -122,7 +133,14 @@ export function ThemeSettings() {
         </p>
         {!hosted() && (
           <>
-            <input ref={file} type="file" accept=".json,.jsonc,application/json" className="hidden" aria-label="theme file" onChange={(event) => void importFile(event.target.files?.[0])} />
+            <input
+              ref={file}
+              type="file"
+              accept=".json,.jsonc,application/json"
+              className="hidden"
+              aria-label="theme file"
+              onChange={(event) => void importFile(event.target.files?.[0])}
+            />
             <Button icon="download" onClick={() => file.current?.click()}>
               Import from VS Code or Zed
             </Button>
@@ -137,7 +155,10 @@ export function ThemeSettings() {
             role="tab"
             aria-selected={filter === each.id}
             onClick={() => setFilter(each.id)}
-            className={cx('rounded-sm px-2 py-0.5 max-md:min-h-11', filter === each.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1')}
+            className={cx(
+              'rounded-sm px-2 py-0.5 max-md:min-h-11',
+              filter === each.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1',
+            )}
           >
             {each.label} <span className="font-mono text-2xs text-fg-3">{themes.filter(each.shows).length}</span>
           </button>
@@ -155,9 +176,19 @@ export function ThemeSettings() {
           const inSlot = (theme.appearance === 'light' ? settings.light : settings.dark) === theme.id
           const trouble = theme.warnings.length > 0
           return (
-            <li key={theme.id} className={cx('flex items-center gap-3 rounded-md border bg-elevated px-3.5 py-2.5', trouble ? 'border-danger' : 'border-line')}>
+            <li
+              key={theme.id}
+              className={cx(
+                'flex items-center gap-3 rounded-md border bg-elevated px-3.5 py-2.5',
+                trouble ? 'border-danger' : 'border-line',
+              )}
+            >
               <Swatch colors={theme.swatch} />
-              <Link to="/settings/appearance/theme" search={{ id: theme.id }} className="flex min-w-0 flex-1 flex-col gap-0.5 hover:text-fg-1">
+              <Link
+                to="/settings/appearance/theme"
+                search={{ id: theme.id }}
+                className="flex min-w-0 flex-1 flex-col gap-0.5 hover:text-fg-1"
+              >
                 <span className="flex flex-wrap items-baseline gap-2">
                   <span className="text-sm font-medium text-fg-1">{theme.name}</span>
                   <span className="font-mono text-2xs text-fg-3">{theme.id}</span>
@@ -174,7 +205,11 @@ export function ThemeSettings() {
               {inSlot ? (
                 <Tag tone="accent">{theme.appearance === 'light' ? 'Light theme' : 'Dark theme'}</Tag>
               ) : (
-                <Button size="sm" aria-label={`use ${theme.name} as the ${theme.appearance} theme`} onClick={() => void choose(withSlot(settings, theme))}>
+                <Button
+                  size="sm"
+                  aria-label={`use ${theme.name} as the ${theme.appearance} theme`}
+                  onClick={() => void choose(withSlot(settings, theme))}
+                >
                   Use
                 </Button>
               )}
@@ -187,8 +222,9 @@ export function ThemeSettings() {
           <>Silt's own themes, and yours from your machines; your pick is kept in this browser.</>
         ) : (
           <>
-            Themes you save in <code className="font-mono text-xs">{catalog.data?.folder ?? 'themes/'}</code> show here as you save them, and the one in use
-            changes as you edit it. Start from a theme's page with Duplicate to edit, or with <code className="font-mono text-xs">silt theme new</code>.
+            Themes you save in <code className="font-mono text-xs">{catalog.data?.folder ?? 'themes/'}</code> show here as you
+            save them, and the one in use changes as you edit it. Start from a theme's page with Duplicate to edit, or with{' '}
+            <code className="font-mono text-xs">silt theme new</code>.
           </>
         )}
       </div>
@@ -230,7 +266,12 @@ export function ThemePage() {
             {inUse ? (
               <Tag tone="accent">{theme.appearance === 'light' ? 'Light theme' : 'Dark theme'}</Tag>
             ) : (
-              <Button variant="primary" onClick={() => void save(withSlot(settings, theme)).catch((failure: unknown) => toast(message(failure), 'danger'))}>
+              <Button
+                variant="primary"
+                onClick={() =>
+                  void save(withSlot(settings, theme)).catch((failure: unknown) => toast(message(failure), 'danger'))
+                }
+              >
                 Use as the {theme.appearance} theme
               </Button>
             )}
@@ -253,7 +294,10 @@ export function ThemePage() {
                   </span>
                 </p>
                 {detail.colors.map((color) => (
-                  <div key={color.token} className="grid grid-cols-[40px_minmax(0,150px)_minmax(0,1fr)] items-center gap-3 border-b border-line-subtle py-1.5">
+                  <div
+                    key={color.token}
+                    className="grid grid-cols-[40px_minmax(0,150px)_minmax(0,1fr)] items-center gap-3 border-b border-line-subtle py-1.5"
+                  >
                     <span className="h-7 rounded-sm border border-line-subtle" style={{ background: color.value }} />
                     <span className="min-w-0">
                       <span className="block truncate font-mono text-xs text-fg-1">{color.token}</span>
@@ -269,15 +313,23 @@ export function ThemePage() {
               <section aria-label="syntax">
                 <p className={cx(LABEL, 'mb-1')}>Syntax</p>
                 {detail.syntax.map((tag) => (
-                  <div key={tag.tag} className="grid grid-cols-[minmax(0,150px)_minmax(0,1fr)] items-center gap-3 border-b border-line-subtle py-1.5">
+                  <div
+                    key={tag.tag}
+                    className="grid grid-cols-[minmax(0,150px)_minmax(0,1fr)] items-center gap-3 border-b border-line-subtle py-1.5"
+                  >
                     <span
                       className="truncate font-mono text-xs"
-                      style={{ color: tag.color ?? undefined, fontStyle: tag.font_style ?? undefined, fontWeight: tag.font_weight ?? undefined }}
+                      style={{
+                        color: tag.color ?? undefined,
+                        fontStyle: tag.font_style ?? undefined,
+                        fontWeight: tag.font_weight ?? undefined,
+                      }}
                     >
                       {tag.tag}
                     </span>
                     <span className="truncate text-xs text-fg-2">
-                      {[tag.color, tag.font_style, tag.font_weight].filter(Boolean).join(' · ') || 'as the text around it'} · {tag.about}
+                      {[tag.color, tag.font_style, tag.font_weight].filter(Boolean).join(' · ') || 'as the text around it'} ·{' '}
+                      {tag.about}
                     </span>
                   </div>
                 ))}
@@ -287,22 +339,37 @@ export function ThemePage() {
               <section aria-label="contrast">
                 <p className={cx(LABEL, 'mb-1 flex justify-between')}>
                   <span>Contrast</span>
-                  <span className={failing > 0 ? 'text-danger' : undefined}>{failing > 0 ? `${failing} below 4.5` : 'all text passes'}</span>
+                  <span className={failing > 0 ? 'text-danger' : undefined}>
+                    {failing > 0 ? `${failing} below 4.5` : 'all text passes'}
+                  </span>
                 </p>
                 {detail.checks.map((check) => (
-                  <div key={check.pair} className={cx('flex items-center gap-2.5 border-b border-line-subtle px-1.5 py-1', !check.passes && !check.mark && 'bg-danger-tint')}>
-                    <span aria-hidden="true" className="grid h-[18px] w-[26px] shrink-0 place-items-center border border-line-subtle text-[10px] font-semibold" style={{ background: check.back, color: check.fore }}>
+                  <div
+                    key={check.pair}
+                    className={cx(
+                      'flex items-center gap-2.5 border-b border-line-subtle px-1.5 py-1',
+                      !check.passes && !check.mark && 'bg-danger-tint',
+                    )}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="grid h-[18px] w-[26px] shrink-0 place-items-center border border-line-subtle text-[10px] font-semibold"
+                      style={{ background: check.back, color: check.fore }}
+                    >
                       Aa
                     </span>
                     <span className="min-w-0 flex-1 truncate font-mono text-xs">{check.pair}</span>
-                    <span className={cx('font-mono text-xs', check.passes ? 'text-fg-2' : check.mark ? 'text-fg-1' : 'text-danger')}>
+                    <span
+                      className={cx('font-mono text-xs', check.passes ? 'text-fg-2' : check.mark ? 'text-fg-1' : 'text-danger')}
+                    >
                       {check.ratio.toFixed(2)} : 1{!check.passes && check.mark && ' · advice'}
                     </span>
                   </div>
                 ))}
                 {failing > 0 && !hosted() && (
                   <p className="pt-2 text-xs text-fg-2">
-                    Silt shows it as written. <code className="font-mono">silt theme check --fix-contrast</code> moves what fails until it reads.
+                    Silt shows it as written. <code className="font-mono">silt theme check --fix-contrast</code> moves what fails
+                    until it reads.
                   </p>
                 )}
               </section>
@@ -322,7 +389,10 @@ export function ThemePage() {
                 {['sm', 'md', 'lg'].map((name, index) => (
                   <div key={name} className="flex items-center gap-3">
                     <span className="w-14 font-mono text-xs text-fg-2">{name}</span>
-                    <span className="h-[22px] w-[38px] border border-accent bg-accent-tint" style={{ borderRadius: detail.radii[index] }} />
+                    <span
+                      className="h-[22px] w-[38px] border border-accent bg-accent-tint"
+                      style={{ borderRadius: detail.radii[index] }}
+                    />
                     <span className="font-mono text-2xs text-fg-3">{detail.radii[index]}px</span>
                   </div>
                 ))}

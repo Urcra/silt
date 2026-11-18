@@ -97,7 +97,12 @@ function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
   const mrs = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests, enabled: kind === 'review' })
   const review = kind === 'review' ? (mrs.data ?? []).find((mr) => mr.target === thread.id && mr.status === 'open') : undefined
   const asked = status?.permissions[0]
-  const detail = kind === 'permission' && asked ? `${title} · asks to run ${asked.title}` : review ? `Merge request into ${title}` : `${title} · ${word}`
+  const detail =
+    kind === 'permission' && asked
+      ? `${title} · asks to run ${asked.title}`
+      : review
+        ? `Merge request into ${title}`
+        : `${title} · ${word}`
   const row = (
     <>
       <Icon name={icon} className={cx('h-3.5 w-3.5 shrink-0', kind === 'stopped' ? 'text-danger' : 'text-accent-fg')} />
@@ -111,11 +116,23 @@ function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
   return (
     <li role="group" aria-label={`${review?.title ?? title} needs you`}>
       {review ? (
-        <Link to="/mr/$id" params={{ id: review.id }} title={detail} className={cx(ROW, 'h-7')} activeProps={{ className: 'bg-elevated' }}>
+        <Link
+          to="/mr/$id"
+          params={{ id: review.id }}
+          title={detail}
+          className={cx(ROW, 'h-7')}
+          activeProps={{ className: 'bg-elevated' }}
+        >
           {row}
         </Link>
       ) : (
-        <Link to="/t/$id" params={{ id: thread.id }} title={detail} className={cx(ROW, 'h-7')} activeProps={{ className: 'bg-elevated' }}>
+        <Link
+          to="/t/$id"
+          params={{ id: thread.id }}
+          title={detail}
+          className={cx(ROW, 'h-7')}
+          activeProps={{ className: 'bg-elevated' }}
+        >
           {row}
         </Link>
       )}
@@ -163,7 +180,9 @@ function ProjectGroup({
         >
           <Icon name={open ? 'chevronDown' : 'chevronRight'} className="h-3 w-3 shrink-0 text-fg-2" />
           <span className="truncate font-mono font-medium">{name}</span>
-          <span className="ml-auto shrink-0 font-mono text-2xs text-fg-3">{working > 0 ? `${working} working` : !open ? threads.length : ''}</span>
+          <span className="ml-auto shrink-0 font-mono text-2xs text-fg-3">
+            {working > 0 ? `${working} working` : !open ? threads.length : ''}
+          </span>
         </button>
         {!hosted() && (
           <Link
@@ -212,7 +231,11 @@ function ChatGroup({ threads, now }: { threads: ThreadSummary[]; now: number }) 
         className="px-2"
         aside={
           !hosted() && (
-            <Link to="/chat" aria-label="New chat" className="inline-flex items-center rounded-sm p-0.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 max-md:px-2">
+            <Link
+              to="/chat"
+              aria-label="New chat"
+              className="inline-flex items-center rounded-sm p-0.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 max-md:px-2"
+            >
               <Icon name="plus" className="h-3.5 w-3.5" />
             </Link>
           )
@@ -277,18 +300,38 @@ function UpdatePill() {
   const update = useUpdate()
   const pill = pillOf(update.data)
   if (!pill) return null
-  const look = cx('inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-px text-[11px] font-medium max-md:min-h-11', PILL_TONE[pill.kind])
-  const icon = pill.kind === 'running' ? <Spinner className="h-2.5 w-2.5" /> : pill.kind === 'update' ? <Icon name="arrowUp" className="h-3 w-3" /> : pill.kind === 'relaunch' ? <Icon name="reload" className="h-3 w-3" /> : null
+  const look = cx(
+    'inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-px text-[11px] font-medium max-md:min-h-11',
+    PILL_TONE[pill.kind],
+  )
+  const icon =
+    pill.kind === 'running' ? (
+      <Spinner className="h-2.5 w-2.5" />
+    ) : pill.kind === 'update' ? (
+      <Icon name="arrowUp" className="h-3 w-3" />
+    ) : pill.kind === 'relaunch' ? (
+      <Icon name="reload" className="h-3 w-3" />
+    ) : null
   if (pill.kind === 'relaunch' && inDesktop()) {
     return (
-      <button type="button" className={cx(look, 'hover:brightness-95')} onClick={relaunchDesktop} title="Relaunch the desktop app on the new build">
+      <button
+        type="button"
+        className={cx(look, 'hover:brightness-95')}
+        onClick={relaunchDesktop}
+        title="Relaunch the desktop app on the new build"
+      >
         {icon}
         {pill.text}
       </button>
     )
   }
   return (
-    <Link to="/settings/$section" params={{ section: 'update' }} className={cx(look, 'hover:brightness-95')} data-testid="update-pill">
+    <Link
+      to="/settings/$section"
+      params={{ section: 'update' }}
+      className={cx(look, 'hover:brightness-95')}
+      data-testid="update-pill"
+    >
       {icon}
       {pill.text}
     </Link>
@@ -306,54 +349,62 @@ function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
   const { backends, current } = useBackends()
   return (
     <div className="flex flex-col border-t border-line">
-    {backends.length > 1 && (
-      <div className="flex items-center gap-2 px-2 pt-2 text-xs text-fg-2">
-        <Icon name="laptop" className="h-3.5 w-3.5 shrink-0" />
-        <span className="shrink-0">Runs on</span>
-        <Menu
-          label="where Silt runs"
-          above
-          align="left"
-          trigger={
-            <span className="inline-flex min-w-0 items-center gap-1 text-fg-1">
-              <span className="truncate">{backends.find((backend) => backend.id === current)?.label ?? 'This computer'}</span>
-              <Icon name="chevronDown" className="h-3 w-3 shrink-0" />
-            </span>
-          }
-          items={backends.map((backend) => ({ label: backend.label, onSelect: () => switchBackend(backend.id), disabled: backend.id === current }))}
-        />
-      </div>
-    )}
-    <div className="flex items-center gap-2 px-2 pt-2.5 pb-1 text-xs text-fg-2">
-      {hosted() ? (
-        <span className="flex-1 truncate">On the server</span>
-      ) : (
-        <Link to="/settings/devices" className="flex min-w-0 flex-1 items-center gap-2 hover:text-fg-1" title={sync ?? undefined}>
-          <Dot tone={sync ? 'danger' : signIn ? 'ok' : 'idle'} />
-          <span className="truncate">{sync ? `${name} · sync failing` : name}</span>
+      {backends.length > 1 && (
+        <div className="flex items-center gap-2 px-2 pt-2 text-xs text-fg-2">
+          <Icon name="laptop" className="h-3.5 w-3.5 shrink-0" />
+          <span className="shrink-0">Runs on</span>
+          <Menu
+            label="where Silt runs"
+            above
+            align="left"
+            trigger={
+              <span className="inline-flex min-w-0 items-center gap-1 text-fg-1">
+                <span className="truncate">{backends.find((backend) => backend.id === current)?.label ?? 'This computer'}</span>
+                <Icon name="chevronDown" className="h-3 w-3 shrink-0" />
+              </span>
+            }
+            items={backends.map((backend) => ({
+              label: backend.label,
+              onSelect: () => switchBackend(backend.id),
+              disabled: backend.id === current,
+            }))}
+          />
+        </div>
+      )}
+      <div className="flex items-center gap-2 px-2 pt-2.5 pb-1 text-xs text-fg-2">
+        {hosted() ? (
+          <span className="flex-1 truncate">On the server</span>
+        ) : (
+          <Link
+            to="/settings/devices"
+            className="flex min-w-0 flex-1 items-center gap-2 hover:text-fg-1"
+            title={sync ?? undefined}
+          >
+            <Dot tone={sync ? 'danger' : signIn ? 'ok' : 'idle'} />
+            <span className="truncate">{sync ? `${name} · sync failing` : name}</span>
+          </Link>
+        )}
+        {waiting > 0 && (
+          <Tag tone="accent" className="shrink-0 font-sans">
+            {waiting} waiting
+          </Tag>
+        )}
+        {running > 0 && (
+          <Tag tone="ok" className="shrink-0 font-sans">
+            {running} running
+          </Tag>
+        )}
+        {!hosted() && <UpdatePill />}
+        <Link
+          to="/settings"
+          aria-label="Settings"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-sm hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11"
+          activeProps={{ className: 'bg-accent-tint text-accent-fg' }}
+        >
+          <Icon name="settings" className="h-[15px] w-[15px]" />
         </Link>
-      )}
-      {waiting > 0 && (
-        <Tag tone="accent" className="shrink-0 font-sans">
-          {waiting} waiting
-        </Tag>
-      )}
-      {running > 0 && (
-        <Tag tone="ok" className="shrink-0 font-sans">
-          {running} running
-        </Tag>
-      )}
-      {!hosted() && <UpdatePill />}
-      <Link
-        to="/settings"
-        aria-label="Settings"
-        className="inline-flex h-7 w-7 items-center justify-center rounded-sm hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11"
-        activeProps={{ className: 'bg-accent-tint text-accent-fg' }}
-      >
-        <Icon name="settings" className="h-[15px] w-[15px]" />
-      </Link>
-      {signIn && <Avatar name={signIn.user} size={22} />}
-    </div>
+        {signIn && <Avatar name={signIn.user} size={22} />}
+      </div>
     </div>
   )
 }
@@ -387,127 +438,138 @@ export function Sidebar() {
   const unreadInbox = (inbox.data ?? []).filter((entry) => !entry.read).length
   return (
     <>
-    <nav aria-label="projects" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pt-2.5 pb-2 text-[13px] [&>*]:shrink-0">
-      <div className="flex items-center gap-2 px-1.5 pb-2.5">
-        <Link to="/" className="text-[15px] font-medium tracking-[-0.04em] text-fg-1">
-          silt
-        </Link>
-        {!hosted() && <WorkspaceSwitcher />}
-        <button
-          type="button"
-          aria-label="command palette"
-          title={`Search and commands (${formatKeys('mod+k')})`}
-          onClick={openPalette}
-          className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-sm text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11"
-        >
-          <Icon name="search" className="h-[15px] w-[15px]" />
-        </button>
-      </div>
-      {!hosted() && (
-        <Link to="/new" className={cx(ROW, 'h-[30px]', (path === '/' || path === '/new') && ACTIVE)}>
-          <Icon name="plus" className="h-[15px] w-[15px] shrink-0" />
-          <span className="flex-1">New thread</span>
-          <Kbd>{formatKeys('n')}</Kbd>
-        </Link>
-      )}
-      {!hosted() && (
-        <Link to="/chat" className={cx(ROW, 'h-[30px]')} activeProps={{ className: ACTIVE }}>
-          <Icon name="comment" className="h-[15px] w-[15px] shrink-0" />
-          <span className="flex-1">New chat</span>
-          <Kbd>{formatKeys('c')}</Kbd>
-        </Link>
-      )}
-      <NavItem to="/threads" icon="list">
-        All threads
-      </NavItem>
-      <NavItem to="/artifacts" icon="image">
-        Artifacts
-      </NavItem>
-      <NavItem to="/mrs" icon="merge" count={reviews || undefined} also={path.startsWith('/mr/')}>
-        Merge requests
-      </NavItem>
-      <NavItem to="/inbox" icon="inbox" count={unreadInbox || undefined} accent>
-        Inbox
-      </NavItem>
-      {threads.isPending && (
-        <div className="space-y-2 px-2 pt-3">
-          <Skeleton />
-          <Skeleton className="h-4 w-2/3" />
-        </div>
-      )}
-      {grouped.needs_you.length > 0 && (
-        <section aria-label="needs you" className="mt-3 mb-1 rounded-md border border-accent bg-accent-tint px-1 pt-1 pb-0.5">
-          <SectionLabel className="px-2 pt-1 text-accent-fg" aside={<span className="font-mono">{grouped.needs_you.length}</span>}>
-            Needs you
-          </SectionLabel>
-          <ul>
-            {grouped.needs_you.map((thread) => (
-              <NeedsYouItem key={thread.id} thread={thread} />
-            ))}
-          </ul>
-          <Link
-            to="/needs-you"
-            className={cx('flex items-center justify-between rounded-sm px-2 py-1.5 text-xs text-accent-fg hover:bg-elevated max-md:min-h-11', path === '/needs-you' && 'bg-elevated')}
-          >
-            Open the queue
-            <Kbd>{formatKeys('q')}</Kbd>
-          </Link>
-        </section>
-      )}
-      {grouped.pinned.length > 0 && (
-        <section aria-label="pinned" className="mt-2">
-          <SectionLabel className="px-2">Pinned</SectionLabel>
-          <ul>
-            {grouped.pinned.map((thread) => (
-              <ThreadItem key={thread.id} thread={thread} />
-            ))}
-          </ul>
-        </section>
-      )}
-      {chats.length > 0 && <ChatGroup threads={chats} now={now} />}
-      <SectionLabel
-        className="mt-2 px-2"
-        aside={
-          !hosted() && (
-            <Link
-              to="/"
-              search={{ pick: 'folder' }}
-              aria-label="Add a project"
-              className="inline-flex items-center rounded-sm p-0.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 max-md:px-2"
-            >
-              <Icon name="plus" className="h-3.5 w-3.5" />
-            </Link>
-          )
-        }
+      <nav
+        aria-label="projects"
+        className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pt-2.5 pb-2 text-[13px] [&>*]:shrink-0"
       >
-        Projects
-      </SectionLabel>
-      {threads.isSuccess && inProjects.length === 0 && grouped.needs_you.length === 0 && <p className="px-2 py-1 text-xs text-fg-2">None yet.</p>}
-      {recentProjects.map(([repo, inRepo]) => (
-        <ProjectGroup key={repo} repo={repo} name={nameOf(repo)} clone={cloneOf(repo)} threads={inRepo} now={now} />
-      ))}
-      {olderProjects.length > 0 && (
-        <button
-          type="button"
-          aria-expanded={showOlder}
-          onClick={() => setShowOlder(!showOlder)}
-          title="Projects with no thread touched in the last two weeks"
-          className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-left text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11"
+        <div className="flex items-center gap-2 px-1.5 pb-2.5">
+          <Link to="/" className="text-[15px] font-medium tracking-[-0.04em] text-fg-1">
+            silt
+          </Link>
+          {!hosted() && <WorkspaceSwitcher />}
+          <button
+            type="button"
+            aria-label="command palette"
+            title={`Search and commands (${formatKeys('mod+k')})`}
+            onClick={openPalette}
+            className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-sm text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11"
+          >
+            <Icon name="search" className="h-[15px] w-[15px]" />
+          </button>
+        </div>
+        {!hosted() && (
+          <Link to="/new" className={cx(ROW, 'h-[30px]', (path === '/' || path === '/new') && ACTIVE)}>
+            <Icon name="plus" className="h-[15px] w-[15px] shrink-0" />
+            <span className="flex-1">New thread</span>
+            <Kbd>{formatKeys('n')}</Kbd>
+          </Link>
+        )}
+        {!hosted() && (
+          <Link to="/chat" className={cx(ROW, 'h-[30px]')} activeProps={{ className: ACTIVE }}>
+            <Icon name="comment" className="h-[15px] w-[15px] shrink-0" />
+            <span className="flex-1">New chat</span>
+            <Kbd>{formatKeys('c')}</Kbd>
+          </Link>
+        )}
+        <NavItem to="/threads" icon="list">
+          All threads
+        </NavItem>
+        <NavItem to="/artifacts" icon="image">
+          Artifacts
+        </NavItem>
+        <NavItem to="/mrs" icon="merge" count={reviews || undefined} also={path.startsWith('/mr/')}>
+          Merge requests
+        </NavItem>
+        <NavItem to="/inbox" icon="inbox" count={unreadInbox || undefined} accent>
+          Inbox
+        </NavItem>
+        {threads.isPending && (
+          <div className="space-y-2 px-2 pt-3">
+            <Skeleton />
+            <Skeleton className="h-4 w-2/3" />
+          </div>
+        )}
+        {grouped.needs_you.length > 0 && (
+          <section aria-label="needs you" className="mt-3 mb-1 rounded-md border border-accent bg-accent-tint px-1 pt-1 pb-0.5">
+            <SectionLabel
+              className="px-2 pt-1 text-accent-fg"
+              aside={<span className="font-mono">{grouped.needs_you.length}</span>}
+            >
+              Needs you
+            </SectionLabel>
+            <ul>
+              {grouped.needs_you.map((thread) => (
+                <NeedsYouItem key={thread.id} thread={thread} />
+              ))}
+            </ul>
+            <Link
+              to="/needs-you"
+              className={cx(
+                'flex items-center justify-between rounded-sm px-2 py-1.5 text-xs text-accent-fg hover:bg-elevated max-md:min-h-11',
+                path === '/needs-you' && 'bg-elevated',
+              )}
+            >
+              Open the queue
+              <Kbd>{formatKeys('q')}</Kbd>
+            </Link>
+          </section>
+        )}
+        {grouped.pinned.length > 0 && (
+          <section aria-label="pinned" className="mt-2">
+            <SectionLabel className="px-2">Pinned</SectionLabel>
+            <ul>
+              {grouped.pinned.map((thread) => (
+                <ThreadItem key={thread.id} thread={thread} />
+              ))}
+            </ul>
+          </section>
+        )}
+        {chats.length > 0 && <ChatGroup threads={chats} now={now} />}
+        <SectionLabel
+          className="mt-2 px-2"
+          aside={
+            !hosted() && (
+              <Link
+                to="/"
+                search={{ pick: 'folder' }}
+                aria-label="Add a project"
+                className="inline-flex items-center rounded-sm p-0.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 max-md:px-2"
+              >
+                <Icon name="plus" className="h-3.5 w-3.5" />
+              </Link>
+            )
+          }
         >
-          <Icon name={showOlder ? 'chevronDown' : 'chevronRight'} className="h-3 w-3 shrink-0" />
-          <span className="truncate">Older projects</span>
-          <span className="ml-auto shrink-0 font-mono text-2xs text-fg-3">{olderProjects.length}</span>
-        </button>
-      )}
-      {showOlder &&
-        olderProjects.map(([repo, inRepo]) => (
-          <ProjectGroup key={repo} repo={repo} name={nameOf(repo)} clone={cloneOf(repo)} threads={inRepo} now={now} older />
+          Projects
+        </SectionLabel>
+        {threads.isSuccess && inProjects.length === 0 && grouped.needs_you.length === 0 && (
+          <p className="px-2 py-1 text-xs text-fg-2">None yet.</p>
+        )}
+        {recentProjects.map(([repo, inRepo]) => (
+          <ProjectGroup key={repo} repo={repo} name={nameOf(repo)} clone={cloneOf(repo)} threads={inRepo} now={now} />
         ))}
-    </nav>
-    {/* Outside the list, so a long one never scrolls Settings and this machine out of reach. */}
-    <div className="shrink-0 px-2 pb-2">
-      <DeviceFooter threads={mine} />
-    </div>
+        {olderProjects.length > 0 && (
+          <button
+            type="button"
+            aria-expanded={showOlder}
+            onClick={() => setShowOlder(!showOlder)}
+            title="Projects with no thread touched in the last two weeks"
+            className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-left text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11"
+          >
+            <Icon name={showOlder ? 'chevronDown' : 'chevronRight'} className="h-3 w-3 shrink-0" />
+            <span className="truncate">Older projects</span>
+            <span className="ml-auto shrink-0 font-mono text-2xs text-fg-3">{olderProjects.length}</span>
+          </button>
+        )}
+        {showOlder &&
+          olderProjects.map(([repo, inRepo]) => (
+            <ProjectGroup key={repo} repo={repo} name={nameOf(repo)} clone={cloneOf(repo)} threads={inRepo} now={now} older />
+          ))}
+      </nav>
+      {/* Outside the list, so a long one never scrolls Settings and this machine out of reach. */}
+      <div className="shrink-0 px-2 pb-2">
+        <DeviceFooter threads={mine} />
+      </div>
     </>
   )
 }

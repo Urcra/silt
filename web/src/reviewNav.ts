@@ -35,8 +35,10 @@ export function filtered<T extends { path: string }>(files: T[], filter: string)
 /** The first line a hunk changed, to comment on by key: an added line, or a deleted one where those take comments. */
 export function firstChange(file: DiffFile, hunk: number, deleted: boolean): Lines | null {
   for (const line of file.hunks[hunk]?.lines ?? []) {
-    if (line.kind === 'add' && line.newLine !== null) return { path: file.path, start: line.newLine, end: line.newLine, side: 'new' }
-    if (deleted && line.kind === 'del' && line.oldLine !== null) return { path: file.path, start: line.oldLine, end: line.oldLine, side: 'old' }
+    if (line.kind === 'add' && line.newLine !== null)
+      return { path: file.path, start: line.newLine, end: line.newLine, side: 'new' }
+    if (deleted && line.kind === 'del' && line.oldLine !== null)
+      return { path: file.path, start: line.oldLine, end: line.oldLine, side: 'old' }
   }
   return null
 }

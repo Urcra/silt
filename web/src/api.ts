@@ -246,7 +246,8 @@ export const api = {
   /** Starts downloading llama.cpp's latest build for this machine. */
   pullRuntime: () => request<string>('POST', '/api/models/runtime'),
   /** Whether a newer Silt is out and how an update goes (ADR 0100), for the desktop app built from `desktop`; a daemon's only. */
-  update: (desktop?: string) => request<UpdateView>('GET', `/api/update${desktop ? `?desktop=${encodeURIComponent(desktop)}` : ''}`),
+  update: (desktop?: string) =>
+    request<UpdateView>('GET', `/api/update${desktop ? `?desktop=${encodeURIComponent(desktop)}` : ''}`),
   checkUpdate: () => request<string>('POST', '/api/update/check'),
   startUpdate: () => request<string>('POST', '/api/update/start'),
   /** Restarts the daemon on the installed update now, ending agents' turns. */
@@ -257,9 +258,11 @@ export const api = {
   /** An artifact's content, by the blob a version of it names (ADR 0068). */
   artifact: (id: string, blob: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${blob}`),
   /** A read or write of an artifact's page data (ADR 0072). */
-  pageData: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/data`, asked),
+  pageData: (id: string, artifact: string, asked: Record<string, unknown>) =>
+    request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/data`, asked),
   /** What the person allowed or refused an artifact's page, by capability (ADR 0072). */
-  artifactGrants: (id: string, artifact: string) => request<Record<string, 'granted' | 'refused'>>('GET', `${thread(id)}/artifacts/${artifact}/grants`),
+  artifactGrants: (id: string, artifact: string) =>
+    request<Record<string, 'granted' | 'refused'>>('GET', `${thread(id)}/artifacts/${artifact}/grants`),
   /** Kept for what `version`, the one the person saw, declares of `capability`. */
   setArtifactGrant: (id: string, artifact: string, capability: string, state: 'granted' | 'refused' | null, version?: number) =>
     request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/grants`, { capability, state, version: version ?? null }),
@@ -267,20 +270,27 @@ export const api = {
   publishArtifact: (id: string, artifact: string, html: string, base: number) =>
     request<{ id: string; version: number }>('POST', `${thread(id)}/artifacts/${artifact}/publish`, { html, base }),
   /** The files people added to an artifact's page (ADR 0074). */
-  pageAssets: (id: string, artifact: string, asked: { op: 'add'; name: string; media_type: string; data: string } | { op: 'list' } | { op: 'delete'; id: string }) =>
-    request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/assets`, asked),
+  pageAssets: (
+    id: string,
+    artifact: string,
+    asked: { op: 'add'; name: string; media_type: string; data: string } | { op: 'list' } | { op: 'delete'; id: string },
+  ) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/assets`, asked),
   /** The thread's files, for a page that declares `files` (ADR 0078). */
-  pageFiles: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/files`, asked),
+  pageFiles: (id: string, artifact: string, asked: Record<string, unknown>) =>
+    request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/files`, asked),
   /** Every artifact in the threads the person can read, for the Artifacts page (ADR 0075). */
   artifacts: () => request<ArtifactListed[]>('GET', '/api/artifacts'),
   /** An artifact's thumbnail, drawn the first time it's asked for where a headless browser is installed (ADR 0075). */
-  artifactThumbnail: (id: string, artifact: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${artifact}/thumbnail`),
-  pinArtifact: (id: string, artifact: string, pinned: boolean) => request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/pin`, { pinned }),
+  artifactThumbnail: (id: string, artifact: string) =>
+    request<ArtifactContent>('GET', `${thread(id)}/artifacts/${artifact}/thumbnail`),
+  pinArtifact: (id: string, artifact: string, pinned: boolean) =>
+    request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/pin`, { pinned }),
   /** Hides an artifact for everyone, or shows it again; the thread's owner's to do. */
   archiveArtifact: (id: string, artifact: string, archived: boolean) =>
     request<unknown>('PUT', `${thread(id)}/artifacts/${artifact}/archive`, { archived }),
   /** A page's call of the viewer's page connectors (ADR 0080). */
-  pageMcp: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/mcp`, asked),
+  pageMcp: (id: string, artifact: string, asked: Record<string, unknown>) =>
+    request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/mcp`, asked),
   /** The MCP servers this machine lists for pages (ADR 0080). */
   pageConnectors: () => request<PageConnector[]>('GET', '/api/page-connectors'),
   setPageConnectors: (connectors: PageConnector[]) => request<unknown>('PUT', '/api/page-connectors', connectors),
@@ -296,7 +306,8 @@ export const api = {
     asked: { op: 'read' } | { op: 'edit'; edits: { pos: number; delete: number; insert: string }[]; base?: string | null },
   ) => request<{ text: string; base?: string }>('POST', `${thread(id)}/artifacts/${artifact}/doc`, asked),
   /** A sheet's cells and values, or changes to it (ADR 0077). */
-  sheetData: (id: string, artifact: string, asked: Record<string, unknown>) => request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/sheet`, asked),
+  sheetData: (id: string, artifact: string, asked: Record<string, unknown>) =>
+    request<unknown>('POST', `${thread(id)}/artifacts/${artifact}/sheet`, asked),
   sheetXlsx: (id: string, artifact: string) => requestBlob(`${thread(id)}/artifacts/${artifact}/sheet.xlsx`),
   /** Who views the thread's pages, for their `user` capability. */
   pageViewer: (id: string) => request<PageViewer>('GET', `${thread(id)}/viewer`),
@@ -308,13 +319,19 @@ export const api = {
   saveVersion: (id: string, artifact: string, note: string) =>
     request<{ id: string; version: number }>('POST', `${thread(id)}/artifacts/${artifact}/versions`, { note }),
   /** A doc or a deck printed to a PDF by this computer's headless browser, from the page drawn of it. */
-  artifactPdf: (id: string, artifact: string, html: string) => request<ArtifactContent>('POST', `${thread(id)}/artifacts/${artifact}/pdf`, { html }),
+  artifactPdf: (id: string, artifact: string, html: string) =>
+    request<ArtifactContent>('POST', `${thread(id)}/artifacts/${artifact}/pdf`, { html }),
   /** A page's answer to the agent's call of a tool it gave its question. */
   /** Stops a page's question while this machine's agent answers it. */
   sampleStop: (id: string, artifact: string, ask: string) =>
     request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/stop`),
-  sampleToolResult: (id: string, artifact: string, ask: string, call: number, result: { ok: boolean; value?: unknown; error?: string }) =>
-    request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/tools/${call}`, result),
+  sampleToolResult: (
+    id: string,
+    artifact: string,
+    ask: string,
+    call: number,
+    result: { ok: boolean; value?: unknown; error?: string },
+  ) => request<null>('POST', `${thread(id)}/artifacts/${artifact}/sample/${encodeURIComponent(ask)}/tools/${call}`, result),
   /** What the agent has said so far of a page's question in the hosted app, which a device answers. */
   sampleSoFar: (id: string, artifact: string, ask: string) =>
     request<{ text: string; calls?: { call: number; name: string; input: unknown }[] }>(
@@ -338,8 +355,11 @@ export const api = {
       model,
     }),
   /** A key that opens one version of an HTML artifact in a frame, at the path it answers (ADR 0074). */
-  artifactFrame: (id: string, artifact: string, ask: { version: number; theme: 'light' | 'dark'; parent: string; boot?: unknown }) =>
-    request<{ path: string; expires_in_ms: number }>('POST', `${thread(id)}/artifacts/${artifact}/frame`, ask),
+  artifactFrame: (
+    id: string,
+    artifact: string,
+    ask: { version: number; theme: 'light' | 'dark'; parent: string; boot?: unknown },
+  ) => request<{ path: string; expires_in_ms: number }>('POST', `${thread(id)}/artifacts/${artifact}/frame`, ask),
   /** A thread's history; with `limit`, only that many entries from the `offset`th. */
   history: (id: string, offset?: number, limit?: number) =>
     request<HistoryPage>('GET', `${thread(id)}/history${limit === undefined ? '' : `?offset=${offset ?? 0}&limit=${limit}`}`),
@@ -367,12 +387,14 @@ export const api = {
     return request<string>('GET', `${thread(id)}/diff?${params}`)
   },
   /** The diff's files with their counts and sizes but not their lines, in the diff's order. */
-  diffStats: (id: string, options: DiffSpec = {}) => request<DiffStat[]>('GET', `${thread(id)}/diff/stats?${diffParams(options)}`),
+  diffStats: (id: string, options: DiffSpec = {}) =>
+    request<DiffStat[]>('GET', `${thread(id)}/diff/stats?${diffParams(options)}`),
   /** The diff's files this person marked seen: each as they saw it, or changed since, with the lines new since (ADR 0067). */
   threadSeen: (id: string, options: DiffSpec = {}) => request<ThreadSeenView>('GET', `${thread(id)}/seen?${diffParams(options)}`),
   markThreadSeen: (id: string, mark: MarkSeen) => request<string>('PUT', `${thread(id)}/seen`, mark),
   /** For the diff's files, the turns that last wrote their new lines. */
-  diffTurns: (id: string, options: DiffSpec = {}) => request<FileTurns[]>('GET', `${thread(id)}/diff/turns?${diffParams(options)}`),
+  diffTurns: (id: string, options: DiffSpec = {}) =>
+    request<FileTurns[]>('GET', `${thread(id)}/diff/turns?${diffParams(options)}`),
   /** With `base`, a diff base, code comments say where they are there too. */
   comments: (id: string, base?: string, hidden: Hidden = {}) => {
     const params = new URLSearchParams()
@@ -381,8 +403,7 @@ export const api = {
     return request<CommentView[]>('GET', `${thread(id)}/comments${query ? `?${query}` : ''}`)
   },
   commentsSent: (id: string, comments: string[]) => request<CommentView[]>('POST', `${thread(id)}/comments/sent`, { comments }),
-  addComment: (id: string, on: CommentOn, text: string) =>
-    request<CommentView>('POST', `${thread(id)}/comments`, { on, text }),
+  addComment: (id: string, on: CommentOn, text: string) => request<CommentView>('POST', `${thread(id)}/comments`, { on, text }),
   /** Anchors lines for a pending review comment, recording nothing, so it follows their text (ADR 0066). */
   anchorLines: (id: string, on: CommentOn) => request<PendingAnchor>('POST', `${thread(id)}/comments/anchor`, on),
   /** Where pending review comments' anchors are now, and at `base`, as comments are placed. */
@@ -408,10 +429,16 @@ export const api = {
   agents: () => request<AgentChoices>('GET', '/api/agents'),
   /** How much of its plan `agent` has used, with the sign-in it runs with in `thread` (ADR 0095); a daemon's only. */
   usage: (agent: string, thread?: string) =>
-    request<AgentUsage>('GET', `/api/agents/${encodeURIComponent(agent)}/usage${thread ? `?thread=${encodeURIComponent(thread)}` : ''}`),
+    request<AgentUsage>(
+      'GET',
+      `/api/agents/${encodeURIComponent(agent)}/usage${thread ? `?thread=${encodeURIComponent(thread)}` : ''}`,
+    ),
   /** Starts `agent` in a thread, a clone, or with neither a new chat (`options.chat`, ADR 0059). */
-  startAgent: (agent: string, where: { thread: string } | { clone: string } | Record<string, never>, options: Partial<StartOptions> = {}) =>
-    request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),
+  startAgent: (
+    agent: string,
+    where: { thread: string } | { clone: string } | Record<string, never>,
+    options: Partial<StartOptions> = {},
+  ) => request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),
   chatSettings: () => request<ChatSettings>('GET', '/api/chats/settings'),
   setChatSettings: (settings: ChatSettings) => request<string>('PUT', '/api/chats/settings', settings),
   /** Makes a chat's folder a project of its own; answers with the project. */
@@ -433,10 +460,8 @@ export const api = {
   revokeLink: (id: string, link: number) => request<null>('POST', `${thread(id)}/links/${link}/revoke`),
   changeDevice: (id: string, change: DeviceChange) =>
     request<DeviceView>('PATCH', `/api/devices/${encodeURIComponent(id)}${onServer(askedServer())}`, change),
-  revokeDevice: (id: string) =>
-    request<null>('POST', `/api/devices/${encodeURIComponent(id)}/revoke${onServer(askedServer())}`),
-  continueOn: (id: string, device: string, agent: string) =>
-    request<string>('POST', `${thread(id)}/continue`, { device, agent }),
+  revokeDevice: (id: string) => request<null>('POST', `/api/devices/${encodeURIComponent(id)}/revoke${onServer(askedServer())}`),
+  continueOn: (id: string, device: string, agent: string) => request<string>('POST', `${thread(id)}/continue`, { device, agent }),
   setThreadState: (id: string, change: StateChange) => request<Mine>('PATCH', `${thread(id)}/state`, change),
   addClone: (path: string) => request<string>('POST', '/api/projects', { path }),
   found: () => request<FoundFolder[]>('GET', '/api/found'),
@@ -448,7 +473,8 @@ export const api = {
   // This machine's workspaces (ADR 0065).
   workspaces: () => request<WorkspacesView>('GET', '/api/workspaces'),
   // The person's design systems and Silt's own, for a workspace's default (ADR 0071).
-  designSystems: (clone?: string) => request<DesignSystemView[]>('GET', clone ? `/api/design-systems?clone=${encodeURIComponent(clone)}` : '/api/design-systems'),
+  designSystems: (clone?: string) =>
+    request<DesignSystemView[]>('GET', clone ? `/api/design-systems?clone=${encodeURIComponent(clone)}` : '/api/design-systems'),
   // Settings › Design systems: every system, one system's page, its assets, and the threads that make one (ADR 0088).
   designCatalog: () => request<DesignCatalog>('GET', '/api/design-systems/catalog'),
   designSystem: (where: DesignWhere) => request<DesignDetail>('GET', `/api/design-systems/system?${designQuery(where)}`),
@@ -469,13 +495,15 @@ export const api = {
   artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),
   setArtifactSettings: (settings: ArtifactSettings) => request<string>('PUT', '/api/artifact-settings', settings),
   projectDesignSystems: () => request<Record<string, string>>('GET', '/api/projects/design-systems'),
-  setProjectDesignSystem: (repo: string, design_system: string | null) => request<string>('PUT', '/api/projects/design-systems', { repo, design_system }),
+  setProjectDesignSystem: (repo: string, design_system: string | null) =>
+    request<string>('PUT', '/api/projects/design-systems', { repo, design_system }),
   setWorkspaces: (workspaces: Workspaces) => request<string>('PUT', '/api/workspaces', workspaces),
   /** Puts a project in a workspace, or with none back under the match rules. */
   assignProject: (repo: string, workspace: string | null) =>
     request<string>('POST', '/api/workspaces/assign', { repo, workspace }),
   // Plugin calls waiting for the person, and this machine's plugins (ADR 0093).
-  approvals: (thread?: string) => request<ApprovalView[]>('GET', thread ? `/api/approvals?thread=${encodeURIComponent(thread)}` : '/api/approvals'),
+  approvals: (thread?: string) =>
+    request<ApprovalView[]>('GET', thread ? `/api/approvals?thread=${encodeURIComponent(thread)}` : '/api/approvals'),
   /** Answers an approval, naming the hash of the request shown, so it answers only that. */
   answerApproval: (id: number, approve: boolean, hash: string, grant: GrantScope | null = null) =>
     request<string>('POST', `/api/approvals/${id}`, { approve, hash, grant }),
@@ -542,8 +570,7 @@ export const api = {
     request<string>('PUT', `/api/mrs/${encodeURIComponent(id)}/seen`, { path, seen }),
   requestChanges: (id: string, reason: string) =>
     request<MrSummary>('POST', `/api/mrs/${encodeURIComponent(id)}/request-changes`, { reason }),
-  decline: (id: string, reason: string) =>
-    request<MrSummary>('POST', `/api/mrs/${encodeURIComponent(id)}/decline`, { reason }),
+  decline: (id: string, reason: string) => request<MrSummary>('POST', `/api/mrs/${encodeURIComponent(id)}/decline`, { reason }),
 }
 
 export function short(id: string): string {

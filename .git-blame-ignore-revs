@@ -1,0 +1,6 @@
+# Reformats with no change in behaviour, which `git blame` skips where
+# blame.ignoreRevsFile names this file: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub reads it without that.
+
+# The web UI formatted with oxfmt
+8ffd97f74e81ff44af325323ab0f8582d5f45c00

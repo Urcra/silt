@@ -86,7 +86,11 @@ function Commits({ commits, ahead, now }: { commits: NewCommit[]; ahead: number;
       </ul>
       {more > 0 &&
         (shown.length < commits.length ? (
-          <button type="button" className="self-start px-4 pb-3 text-xs text-accent-fg hover:underline" onClick={() => setAll(true)}>
+          <button
+            type="button"
+            className="self-start px-4 pb-3 text-xs text-accent-fg hover:underline"
+            onClick={() => setAll(true)}
+          >
             and {more} more
           </button>
         ) : (
@@ -125,10 +129,15 @@ function Steps({ view }: { view: UpdateView }) {
   if (!run) return null
   const waiting = run.outcome.kind === 'waiting' ? run.outcome.agents : 0
   const headline = run.outcome.kind === 'waiting' ? 'Installed' : 'Updating to'
-  const left = run.expected_ms !== null && run.outcome.kind === 'running' ? Math.max(0, run.expected_ms - run.elapsed_ms) : undefined
+  const left =
+    run.expected_ms !== null && run.outcome.kind === 'running' ? Math.max(0, run.expected_ms - run.elapsed_ms) : undefined
   const meta =
     run.outcome.kind === 'running'
-      ? [`${run.percent}%`, took(run.elapsed_ms), left !== undefined && left > 0 ? `about ${Math.max(1, Math.round(left / 60_000))}m left` : undefined]
+      ? [
+          `${run.percent}%`,
+          took(run.elapsed_ms),
+          left !== undefined && left > 0 ? `about ${Math.max(1, Math.round(left / 60_000))}m left` : undefined,
+        ]
           .filter(Boolean)
           .join(' · ')
       : run.outcome.kind === 'waiting'
@@ -177,19 +186,33 @@ function Steps({ view }: { view: UpdateView }) {
                 <span
                   className={cx(
                     'min-w-0 flex-1',
-                    step.status === 'todo' || step.status === 'skipped' ? 'text-fg-3' : step.status === 'failed' ? 'text-danger' : 'text-fg-1',
+                    step.status === 'todo' || step.status === 'skipped'
+                      ? 'text-fg-3'
+                      : step.status === 'failed'
+                        ? 'text-danger'
+                        : 'text-fg-1',
                     (step.status === 'active' || step.status === 'waiting') && 'font-medium',
                   )}
                 >
                   {step.label}
                 </span>
-                <span className={cx('text-2xs', step.status === 'failed' ? 'text-danger' : step.status === 'waiting' ? 'text-accent-fg' : 'text-fg-3')}>{detail}</span>
+                <span
+                  className={cx(
+                    'text-2xs',
+                    step.status === 'failed' ? 'text-danger' : step.status === 'waiting' ? 'text-accent-fg' : 'text-fg-3',
+                  )}
+                >
+                  {detail}
+                </span>
               </div>
               {compiling && (
                 <div className="flex items-center gap-2.5 pl-[26px]">
                   {step.expected_compiled !== null && (
                     <div className="h-1 max-w-[260px] flex-1 overflow-hidden rounded-full bg-surface-2">
-                      <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, (100 * step.compiled) / step.expected_compiled)}%` }} />
+                      <div
+                        className="h-full rounded-full bg-accent"
+                        style={{ width: `${Math.min(100, (100 * step.compiled) / step.expected_compiled)}%` }}
+                      />
                     </div>
                   )}
                   <span className="font-mono text-2xs text-fg-3">
@@ -261,12 +284,20 @@ export function UpdatesSettings() {
     return (
       <section aria-label="Updates" className="flex flex-col gap-3">
         <h2 className={SETTINGS_HEADING}>Updates</h2>
-        {update.isError ? <p className="text-xs text-danger">{message(update.error)}</p> : <p className="text-sm text-fg-2">Looking…</p>}
+        {update.isError ? (
+          <p className="text-xs text-danger">{message(update.error)}</p>
+        ) : (
+          <p className="text-sm text-fg-2">Looking…</p>
+        )}
       </section>
     )
   }
   const availability = view.availability
-  const checked = view.checking ? 'checking…' : view.checked_ms ? `checked ${ago(view.checked_ms, now)}${ago(view.checked_ms, now) === 'just now' ? '' : ' ago'}` : 'not checked yet'
+  const checked = view.checking
+    ? 'checking…'
+    : view.checked_ms
+      ? `checked ${ago(view.checked_ms, now)}${ago(view.checked_ms, now) === 'just now' ? '' : ' ago'}`
+      : 'not checked yet'
   const showCheck = !inFlight(view.run) && availability?.kind !== 'off'
   const run = view.run
   const waitingAgents = run?.outcome.kind === 'waiting' ? run.outcome.agents : 0
@@ -289,7 +320,15 @@ export function UpdatesSettings() {
       {state === 'up-to-date' && (
         <div className="flex items-center gap-2 px-0.5 text-sm">
           <Dot tone="ok" />
-          <span>{view.build.channel === 'stable' ? 'This is the latest release.' : <>Up to date with <Code>main</Code></>}</span>
+          <span>
+            {view.build.channel === 'stable' ? (
+              'This is the latest release.'
+            ) : (
+              <>
+                Up to date with <Code>main</Code>
+              </>
+            )}
+          </span>
         </div>
       )}
 
@@ -309,7 +348,9 @@ export function UpdatesSettings() {
                 )}{' '}
                 and runs <Code>just update</Code> there.
               </Point>
-              <Point tone="idle">The daemon restarts on the new build. Agents keep running, and this window follows the daemon.</Point>
+              <Point tone="idle">
+                The daemon restarts on the new build. Agents keep running, and this window follows the daemon.
+              </Point>
               {inDesktop() &&
                 (view.relaunch ? (
                   <Point tone="accent">
@@ -321,7 +362,13 @@ export function UpdatesSettings() {
             </ul>
           </div>
           <div className="flex items-center gap-3 pt-1">
-            <Button variant="primary" size="lg" icon="arrowUp" onClick={() => act('start', api.startUpdate)} disabled={busy === 'start'}>
+            <Button
+              variant="primary"
+              size="lg"
+              icon="arrowUp"
+              onClick={() => act('start', api.startUpdate)}
+              disabled={busy === 'start'}
+            >
               Update now
             </Button>
             <span className="text-2xs text-fg-3">you can keep working</span>
@@ -341,8 +388,8 @@ export function UpdatesSettings() {
       {state === 'waiting' && (
         <div className="flex flex-col gap-2.5 rounded-md bg-accent-tint px-4 py-3 text-sm" role="status">
           <span>
-            <span className="font-medium">Installed.</span> {waitingAgents} {waitingAgents === 1 ? 'agent is' : 'agents are'} mid-turn, so the daemon restarts on the new build once
-            they finish.
+            <span className="font-medium">Installed.</span> {waitingAgents} {waitingAgents === 1 ? 'agent is' : 'agents are'}{' '}
+            mid-turn, so the daemon restarts on the new build once they finish.
           </span>
           <div className="flex flex-wrap items-center gap-2.5">
             <Button variant="danger" onClick={() => act('restart', api.restartForUpdate)} disabled={busy === 'restart'}>
@@ -359,12 +406,15 @@ export function UpdatesSettings() {
             <Ticked text={run.outcome.message} />
           </span>
           <span className="text-fg-1">
-            Silt still runs <Code>{short(view.build.commit)}</Code>. Whatever the update installed before it stopped stays installed.
+            Silt still runs <Code>{short(view.build.commit)}</Code>. Whatever the update installed before it stopped stays
+            installed.
           </span>
         </div>
       )}
 
-      {(state === 'running' || state === 'failed') && <Output lines={view.output} open={state === 'failed'} failed={state === 'failed'} />}
+      {(state === 'running' || state === 'failed') && (
+        <Output lines={view.output} open={state === 'failed'} failed={state === 'failed'} />
+      )}
 
       {state === 'failed' && (
         <div className="flex flex-wrap items-center gap-2">
@@ -387,7 +437,11 @@ export function UpdatesSettings() {
         </div>
       )}
 
-      {state === 'running' && <p className="text-2xs text-fg-3">You can keep working. If the daemon restarts partway, this page picks up where it was.</p>}
+      {state === 'running' && (
+        <p className="text-2xs text-fg-3">
+          You can keep working. If the daemon restarts partway, this page picks up where it was.
+        </p>
+      )}
 
       {(state === 'done' || state === 'relaunch') && run?.outcome.kind === 'done' && sameCommit(run.to, view.build.commit) && (
         <div className="flex items-center gap-2.5 rounded-md bg-ok-tint px-4 py-3 text-sm" role="status">
@@ -417,7 +471,11 @@ export function UpdatesSettings() {
       {state === 'done' && (
         <div className="flex items-center gap-2 px-0.5 text-sm text-fg-2">
           <Dot tone="idle" />
-          <span>{inDesktop() ? 'No relaunch needed: this window already shows the new build.' : 'Reload other tabs to see the new web UI.'}</span>
+          <span>
+            {inDesktop()
+              ? 'No relaunch needed: this window already shows the new build.'
+              : 'Reload other tabs to see the new web UI.'}
+          </span>
         </div>
       )}
 
@@ -431,7 +489,9 @@ export function UpdatesSettings() {
               <span className="text-xs text-fg-2">
                 To turn them back on, install from a clean <Code>main</Code> in <Code>{view.build.source}</Code>:
               </span>
-              <pre className="rounded-md border border-line bg-elevated px-3 py-2 font-mono text-xs text-fg-1">git switch main && git pull && just install</pre>
+              <pre className="rounded-md border border-line bg-elevated px-3 py-2 font-mono text-xs text-fg-1">
+                git switch main && git pull && just install
+              </pre>
             </>
           )}
         </div>
@@ -446,12 +506,19 @@ export function UpdatesSettings() {
               </span>
               <span className="text-2xs text-fg-3">you have v{view.build.version}</span>
             </div>
-            <a className="inline-flex items-center gap-1.5 rounded-sm border border-transparent bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover" href={availability.url} target="_blank" rel="noreferrer">
+            <a
+              className="inline-flex items-center gap-1.5 rounded-sm border border-transparent bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover"
+              href={availability.url}
+              target="_blank"
+              rel="noreferrer"
+            >
               <Icon name="download" />
               Download
             </a>
           </div>
-          <p className="text-2xs text-fg-3">A stable release installs with its installer for now. Updating in place comes with signed releases.</p>
+          <p className="text-2xs text-fg-3">
+            A stable release installs with its installer for now. Updating in place comes with signed releases.
+          </p>
         </>
       )}
 
@@ -464,4 +531,3 @@ export function UpdatesSettings() {
     </section>
   )
 }
-

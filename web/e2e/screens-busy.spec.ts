@@ -63,7 +63,12 @@ test('a busy thread, by turn and verbose', async ({ page }) => {
   await expect(page.getByTestId('worked')).toContainText('1 failed on the way')
   await expect(page.getByTestId('command').first()).toBeHidden()
   await expect(page.getByText(/^Fixed: progress now counts/)).toBeVisible()
-  const shot = { mask: [page.locator('[data-volatile]')], animations: 'disabled' as const, caret: 'hide' as const, maxDiffPixelRatio: 0.001 }
+  const shot = {
+    mask: [page.locator('[data-volatile]')],
+    animations: 'disabled' as const,
+    caret: 'hide' as const,
+    maxDiffPixelRatio: 0.001,
+  }
   await expect(page).toHaveScreenshot('busy-thread-by-turn-dark.png', shot)
   await choose(page, 'transcript detail', 'Verbose')
   await expect(page.getByTestId('thought').first()).toContainText('The bar reaches 100% early')

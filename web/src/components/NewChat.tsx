@@ -88,7 +88,13 @@ export function NewChat() {
       )
       .then(
         (thread) => {
-          if (!background && prompt.trim()) addSending(thread, prompt, attached.map((file) => file.name), 0)
+          if (!background && prompt.trim())
+            addSending(
+              thread,
+              prompt,
+              attached.map((file) => file.name),
+              0,
+            )
           clear()
           // The draft was this one's; New chat opens empty next time.
           setPrompt('')
@@ -126,7 +132,8 @@ export function NewChat() {
             onChange={setPrompt}
             onSend={send}
             onCycle={() => {
-              if (modesArePermissions && modes) setMode(modes[(modes.findIndex((choice) => choice.id === chosenMode) + 1) % modes.length]!.id)
+              if (modesArePermissions && modes)
+                setMode(modes[(modes.findIndex((choice) => choice.id === chosenMode) + 1) % modes.length]!.id)
               else setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)
             }}
             placeholder="Ask anything: which part to buy, how something works, a quick script. It works in a folder of its own."
@@ -145,7 +152,12 @@ export function NewChat() {
                       setMode(undefined)
                       setChosenSettings({})
                     }}
-                    options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description, refused: agentRefused(workspace, choice.id) }))}
+                    options={agents.map((choice) => ({
+                      id: choice.id,
+                      name: choice.name,
+                      description: choice.description,
+                      refused: agentRefused(workspace, choice.id),
+                    }))}
                   />
                 ) : choices.isPending ? (
                   <Skeleton className="h-6 w-20" />
@@ -168,7 +180,12 @@ export function NewChat() {
                     icon="lock"
                     value={preset}
                     onChange={(chosen) => setPreset(chosen as Preset)}
-                    options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says, refused: presetRefused(workspace, choice.id) }))}
+                    options={PRESETS.map((choice) => ({
+                      id: choice.id,
+                      name: choice.label,
+                      description: choice.says,
+                      refused: presetRefused(workspace, choice.id),
+                    }))}
                   />
                 )}
                 {agent && <UsageRing agent={agent} />}

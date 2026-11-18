@@ -122,7 +122,7 @@ test('following a co-viewer shows their file and line', async ({ browser }) => {
   await bob.context().close()
 })
 
-test('an agent started from the web UI takes everyone\'s drafts and asks before editing', async ({ browser }) => {
+test("an agent started from the web UI takes everyone's drafts and asks before editing", async ({ browser }) => {
   const alice = await (await browser.newContext()).newPage()
   const bob = await (await browser.newContext()).newPage()
   // Alice runs the agent from the thread's page; Bob edits on its Live page.
@@ -380,15 +380,23 @@ test("another of Alice's machines directs the agent running on the first, throug
   await laptop.context().close()
 })
 
-test('a new thread starts a Claude Code cloud session through claude, and lists it until its thread arrives', async ({ page }) => {
+test('a new thread starts a Claude Code cloud session through claude, and lists it until its thread arrives', async ({
+  page,
+}) => {
   await page.goto(live.alice)
   await page.getByRole('radio', { name: 'Cloud' }).click()
   await expect(page.getByLabel('agent to start')).toBeHidden()
   await page.getByLabel('first prompt').fill('tidy the readme in the cloud')
   await page.getByLabel('first prompt').press('Enter')
-  const launch = page.getByRole('region', { name: 'Cloud sessions' }).getByRole('listitem').filter({ hasText: 'tidy the readme in the cloud' })
+  const launch = page
+    .getByRole('region', { name: 'Cloud sessions' })
+    .getByRole('listitem')
+    .filter({ hasText: 'tidy the readme in the cloud' })
   await expect(launch).toContainText('waiting for its thread', { timeout: 20_000 })
-  await expect(launch.getByRole('link', { name: 'claude.ai' })).toHaveAttribute('href', 'https://claude.ai/code/session_01FakeCloud')
+  await expect(launch.getByRole('link', { name: 'claude.ai' })).toHaveAttribute(
+    'href',
+    'https://claude.ai/code/session_01FakeCloud',
+  )
   await expect(page.getByLabel('first prompt')).toHaveValue('')
 })
 
@@ -472,7 +480,9 @@ test('on a phone, the hosted app answers a waiting agent from Needs you', async 
   await machine.getByLabel('draft').press('Enter')
   await expect(machine.getByRole('group', { name: 'permission' })).toContainText('Edit src/main.rs')
 
-  const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })).newPage()
+  const phone = await (
+    await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  ).newPage()
   await phone.goto(`${live.server}/app/needs-you`)
   await phone.getByLabel('User').fill('alice')
   await phone.getByLabel('Password').fill('correct horse battery')
@@ -505,7 +515,9 @@ test('a phone paired by QR code answers a permission, but may not prompt until a
   await expect(desk.getByRole('img', { name: 'QR code to pair a phone' })).toBeVisible()
   const code = (await desk.getByTestId('pairing-code').textContent()) ?? ''
 
-  const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })).newPage()
+  const phone = await (
+    await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  ).newPage()
   await phone.goto(`${live.server}/pair`)
   await phone.getByLabel('Code').fill(code.toLowerCase())
   await phone.getByRole('button', { name: 'Continue' }).click()
@@ -635,8 +647,12 @@ test('a revert takes the files back to a turn and keeps the later turns, rewound
   await expect(page.getByText(/^Reverted to turn 1/)).toBeVisible()
   await expect.poll(edits, { timeout: 15_000 }).toBe(1)
   const history = page.getByTestId('history')
-  await expect(history.getByTestId('entry').filter({ has: page.getByText('revert drops this', { exact: true }) })).toHaveAttribute('data-rewound', 'true')
-  await expect(history.getByTestId('entry').filter({ has: page.getByText('revert keeps this', { exact: true }) })).not.toHaveAttribute('data-rewound')
+  await expect(
+    history.getByTestId('entry').filter({ has: page.getByText('revert drops this', { exact: true }) }),
+  ).toHaveAttribute('data-rewound', 'true')
+  await expect(
+    history.getByTestId('entry').filter({ has: page.getByText('revert keeps this', { exact: true }) }),
+  ).not.toHaveAttribute('data-rewound')
 
   // The agent started next is primed without the rewound turn.
   await page.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
@@ -661,7 +677,11 @@ test('permalinks open a turn, a comment and lines of a file, here and in the ser
   const thread = new URL(page.url()).pathname.split('/').pop() ?? ''
   const copied = async (button: ReturnType<Page['getByRole']>) => {
     await button.click()
-    const text = (await page.getByText(/^Link copied: /).last().textContent()) ?? ''
+    const text =
+      (await page
+        .getByText(/^Link copied: /)
+        .last()
+        .textContent()) ?? ''
     return text.replace(/^Link copied: /, '')
   }
   // This machine is on a server, so links point into the server's app.
@@ -676,7 +696,9 @@ test('permalinks open a turn, a comment and lines of a file, here and in the ser
   await expect(entry(page, 'permalink second')).not.toHaveAttribute('data-highlighted')
 
   await entry(page, 'permalink second').getByText('permalink second', { exact: true }).hover()
-  await entry(page, 'permalink second').getByRole('button', { name: /^comment on entry \d+$/ }).click()
+  await entry(page, 'permalink second')
+    .getByRole('button', { name: /^comment on entry \d+$/ })
+    .click()
   await page.getByLabel('comment', { exact: true }).fill('link to this')
   await page.getByRole('button', { name: 'Comment', exact: true }).click()
   const said = page.getByRole('group', { name: 'comment by alice' }).filter({ hasText: 'link to this' })
@@ -787,10 +809,15 @@ test('a new thread starts with an agent in a known clone, which edits without as
   await expect(changed).toContainText('1 file changed')
   const createPr = changed.getByRole('button', { name: 'Create PR' })
   await expect(createPr).toBeDisabled()
-  await expect(createPr).toHaveAttribute('title', /isn't on a branch|has nothing committed|works on \S+ itself|no origin|isn't on a forge/)
+  await expect(createPr).toHaveAttribute(
+    'title',
+    /isn't on a branch|has nothing committed|works on \S+ itself|no origin|isn't on a forge/,
+  )
 })
 
-test('what an agent shows opens beside the thread: an artifact in a sandbox, its versions, full view, comments to the agent, and images', async ({ page }) => {
+test('what an agent shows opens beside the thread: an artifact in a sandbox, its versions, full view, comments to the agent, and images', async ({
+  page,
+}) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('draft').fill('Artifact please')
   await page.getByLabel('draft').press('Enter')
@@ -799,12 +826,20 @@ test('what an agent shows opens beside the thread: an artifact in a sandbox, its
   const viewer = page.getByTestId('artifact-viewer')
   await expect(viewer).toBeVisible()
   await expect(viewer.getByTestId('artifact-frame')).toHaveAttribute('sandbox', 'allow-scripts')
-  await expect(page.frameLocator('[data-testid="artifact-frame"]').getByRole('heading', { name: 'Rescan benchmark' })).toBeVisible()
+  await expect(
+    page.frameLocator('[data-testid="artifact-frame"]').getByRole('heading', { name: 'Rescan benchmark' }),
+  ).toBeVisible()
   // The frame follows the viewer's theme (ADR 0071).
-  await expect(page.frameLocator('[data-testid="artifact-frame"]').locator('html')).toHaveAttribute('data-theme', /^(light|dark)$/)
+  await expect(page.frameLocator('[data-testid="artifact-frame"]').locator('html')).toHaveAttribute(
+    'data-theme',
+    /^(light|dark)$/,
+  )
   await expect(page.getByTestId('artifact-card')).toBeVisible()
   // The version and the view are in the header, so nothing covers the page's top.
-  const header = await viewer.getByRole('button', { name: 'Versions' }).locator('xpath=ancestor::div[contains(@class,"sticky")]').boundingBox()
+  const header = await viewer
+    .getByRole('button', { name: 'Versions' })
+    .locator('xpath=ancestor::div[contains(@class,"sticky")]')
+    .boundingBox()
   const frame = await viewer.getByTestId('artifact-frame').boundingBox()
   expect(frame!.y).toBeGreaterThanOrEqual(header!.y + header!.height)
   await viewer.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Source' }).click()
@@ -839,7 +874,9 @@ test('what an agent shows opens beside the thread: an artifact in a sandbox, its
   await expect(list.getByTestId('shown-image')).toBeVisible()
 })
 
-test("an artifact's page keeps what it stores for the viewer, and gets null for a capability it didn't declare", async ({ page }) => {
+test("an artifact's page keeps what it stores for the viewer, and gets null for a capability it didn't declare", async ({
+  page,
+}) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('draft').fill('Artifact counter')
   await page.getByLabel('draft').press('Enter')
@@ -878,7 +915,9 @@ test("an artifact's page keeps its tasks in the thread's page data, live and acr
   await expect(page.frameLocator('[data-testid="artifact-frame"]').getByText('tasks: 2')).toBeVisible()
 })
 
-test('an agent that goes on by itself once its turn ended, as Claude does after a background task, opens a turn of its own', async ({ page }) => {
+test('an agent that goes on by itself once its turn ended, as Claude does after a background task, opens a turn of its own', async ({
+  page,
+}) => {
   await startInNewThread(page, 'Fake v2 agent')
   await page.getByLabel('draft').fill('add acp Later')
   await page.getByLabel('draft').press('Enter')
@@ -893,7 +932,9 @@ test('an agent that goes on by itself once its turn ended, as Claude does after 
   await expect(turns.nth(0)).not.toContainText('Went on by itself.')
 })
 
-test("an agent's subagent and the command it left running show as cards, and the agent goes on once the command ends", async ({ page }) => {
+test("an agent's subagent and the command it left running show as cards, and the agent goes on once the command ends", async ({
+  page,
+}) => {
   await startInNewThread(page, 'Fake v2 agent')
   await page.getByLabel('draft').fill('add acp Subagent Background')
   await page.getByLabel('draft').press('Enter')
@@ -1033,19 +1074,25 @@ test('files attached to a prompt reach the agent and are named in the conversati
   await expect(page.getByRole('list', { name: 'attached files' })).toContainText('shot.png')
   await page.getByLabel('draft').fill('look at these')
   await page.getByLabel('draft').press('Enter')
-  await expect(page.getByText('Done: look at these (with an image (image/png), attachment:notes.txt saying "hello")')).toBeVisible()
+  await expect(
+    page.getByText('Done: look at these (with an image (image/png), attachment:notes.txt saying "hello")'),
+  ).toBeVisible()
   await expect(page.getByText(/\(attached: prompt\/\w+\/shot\.png, prompt\/\w+\/notes\.txt\)/)).toBeVisible()
   await expect(page.getByRole('list', { name: 'attached files' })).toBeHidden()
 })
 
-test("an agent that takes no images is told a text file's content in the prompt, and an image's place on disk", async ({ page }) => {
+test("an agent that takes no images is told a text file's content in the prompt, and an image's place on disk", async ({
+  page,
+}) => {
   await startInNewThread(page, 'Plain agent')
   await page.getByLabel('draft').fill('see this')
   await page.getByLabel('attach files').setInputFiles([SHOT, NOTES])
   await page.getByLabel('draft').press('Enter')
   // The message is Markdown: the saved files are a list, and the file's content a code block.
   await expect(
-    page.getByText(/^Done: see this\s*Files attached to this prompt, saved where you can read them:\s*shot\.png \(image\/png\): \S+\/attachments\/\S+\/shot\.png\s*notes\.txt:\s*hello$/),
+    page.getByText(
+      /^Done: see this\s*Files attached to this prompt, saved where you can read them:\s*shot\.png \(image\/png\): \S+\/attachments\/\S+\/shot\.png\s*notes\.txt:\s*hello$/,
+    ),
   ).toBeVisible()
 })
 
@@ -1062,7 +1109,11 @@ async function sendFiles(page: Page, label: string, event: 'paste' | 'drop', fil
       const data = new DataTransfer()
       for (const file of sent) data.items.add(new File([new Uint8Array(file.bytes)], file.name, { type: file.type }))
       const init = { bubbles: true, cancelable: true }
-      box.dispatchEvent(event === 'paste' ? new ClipboardEvent('paste', { ...init, clipboardData: data }) : new DragEvent('drop', { ...init, dataTransfer: data }))
+      box.dispatchEvent(
+        event === 'paste'
+          ? new ClipboardEvent('paste', { ...init, clipboardData: data })
+          : new DragEvent('drop', { ...init, dataTransfer: data }),
+      )
     },
     { event, sent },
   )
@@ -1079,7 +1130,9 @@ test('an image pasted on New thread, and a file attached there, go with the firs
   await expect(attached).toContainText('pasted-1.png')
   await expect(attached).toContainText('notes.txt')
   await page.getByLabel('first prompt').press('Enter')
-  await expect(page.getByText('Done: look at this (with an image (image/png), attachment:notes.txt saying "hello")')).toBeVisible()
+  await expect(
+    page.getByText('Done: look at this (with an image (image/png), attachment:notes.txt saying "hello")'),
+  ).toBeVisible()
   await expect(page.getByText(/\(attached: prompt\/\w+\/pasted-1\.png, prompt\/\w+\/notes\.txt\)/)).toBeVisible()
 })
 
@@ -1127,10 +1180,16 @@ test("a review of the agent's changes goes back to it as one prompt", async ({ p
   await page.getByLabel('compare').selectOption({ label: 'Last turn' })
   await expect(changes.getByTestId('diff')).toContainText('+ fn acp() {}')
   // Comments on a deleted line and on an added one wait in the review.
-  await changes.getByRole('button', { name: /^comment on src\/main\.rs deleted line \d+$/ }).first().click()
+  await changes
+    .getByRole('button', { name: /^comment on src\/main\.rs deleted line \d+$/ })
+    .first()
+    .click()
   await page.getByLabel('code comment').fill('keep this one')
   await page.getByRole('button', { name: 'Start a review' }).click()
-  await changes.getByRole('button', { name: /^comment on src\/main\.rs line \d+$/ }).last().click()
+  await changes
+    .getByRole('button', { name: /^comment on src\/main\.rs line \d+$/ })
+    .last()
+    .click()
   await page.getByLabel('code comment').fill('give it a better name')
   await page.getByRole('button', { name: 'Add review comment' }).click()
   await expect(changes.getByRole('group', { name: 'pending comment' })).toHaveCount(2)
@@ -1145,7 +1204,8 @@ test("a review of the agent's changes goes back to it as one prompt", async ({ p
   await expect(review).toBeHidden()
   await expect(
     page.getByTestId('entry').filter({
-      hasText: /Done: Nearly there\.\s*Please address these review comments:\s*src\/main\.rs:1, lines the change deleted: keep this one/,
+      hasText:
+        /Done: Nearly there\.\s*Please address these review comments:\s*src\/main\.rs:1, lines the change deleted: keep this one/,
     }),
   ).toBeVisible()
 
@@ -1172,7 +1232,10 @@ test('the review expands across the page, split, and its keys move through the d
   await expect(page).toHaveURL(new RegExp(`/t/${thread}/review$`))
   const changes = page.getByRole('region', { name: 'changes' })
   await expect(changes.getByTestId('diff')).toContainText('fn acp() {}')
-  await expect(page.getByRole('tablist', { name: 'layout' }).getByRole('tab', { name: 'Split' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tablist', { name: 'layout' }).getByRole('tab', { name: 'Split' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
   // The conversation's composer isn't part of it.
   await expect(page.getByLabel('draft')).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: 'files' })).toContainText('src/main.rs')
@@ -1188,12 +1251,19 @@ test('the review expands across the page, split, and its keys move through the d
 
   // s switches the layout; Esc goes back to the conversation, the pending comment kept.
   await page.keyboard.press('s')
-  await expect(page.getByRole('tablist', { name: 'layout' }).getByRole('tab', { name: 'Unified' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tablist', { name: 'layout' }).getByRole('tab', { name: 'Unified' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
   await page.keyboard.press('Escape')
   await expect(page).toHaveURL(new RegExp(`/t/${thread}$`))
   await expect(page.getByLabel('draft')).toBeVisible()
   await expect(page.getByRole('region', { name: 'changes' }).getByRole('group', { name: 'pending comment' })).toHaveCount(1)
-  await page.getByRole('region', { name: 'changes' }).getByRole('group', { name: 'pending comment' }).getByRole('button', { name: 'delete' }).click()
+  await page
+    .getByRole('region', { name: 'changes' })
+    .getByRole('group', { name: 'pending comment' })
+    .getByRole('button', { name: 'delete' })
+    .click()
   // Away from the review, n is New thread again.
   await page.keyboard.press('n')
   await expect(page).not.toHaveURL(/\/t\//)
@@ -1227,7 +1297,9 @@ test("the review names the turn that wrote each hunk, and shows one turn's chang
   await expect(page).toHaveURL(new RegExp(`/t/${thread}#turn-\\d+$`))
 })
 
-test('a file marked seen comes back when the agent changes it, and the next review starts after the turn reviewed', async ({ page }) => {
+test('a file marked seen comes back when the agent changes it, and the next review starts after the turn reviewed', async ({
+  page,
+}) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('draft').fill('add a function')
   await page.getByLabel('draft').press('Enter')
@@ -1252,8 +1324,14 @@ test('a file marked seen comes back when the agent changes it, and the next revi
   await page.keyboard.press('Shift+D')
 
   // The review starts after the turn reviewed, and the file seen before comes back half-ticked.
-  await expect(page.getByRole('group', { name: 'turns' }).getByRole('button', { name: '2', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByRole('group', { name: 'turns' }).getByRole('button', { name: '1', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByRole('group', { name: 'turns' }).getByRole('button', { name: '2', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  await expect(page.getByRole('group', { name: 'turns' }).getByRole('button', { name: '1', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  )
   await expect(files).toContainText(/new since you saw it|changed since you saw it/)
   await expect(main).not.toBeChecked()
   await expect(page.getByTestId('seen-count')).toHaveText('0/1 seen')
@@ -1276,7 +1354,9 @@ async function startInBackground(page: Page, project: RegExp, prompt: string) {
   await expect(form.getByLabel('first prompt')).toHaveValue('')
 }
 
-test('two agents in two projects queue prompts, are answered from the Needs you queue, and a fork is offered back', async ({ page }) => {
+test('two agents in two projects queue prompts, are answered from the Needs you queue, and a fork is offered back', async ({
+  page,
+}) => {
   await page.goto(live.alice)
   await startInBackground(page, /origin/, 'work in origin')
   await startInBackground(page, /tools/, 'work in tools')
@@ -1302,7 +1382,10 @@ test('two agents in two projects queue prompts, are answered from the Needs you 
   const there = queue.getByRole('group', { name: 'work in origin needs you' })
   await expect(there).toContainText('Edit src/main.rs')
   await there.getByRole('button', { name: 'Allow' }).click()
-  await sidebar.getByRole('link', { name: /^work in origin/ }).first().click()
+  await sidebar
+    .getByRole('link', { name: /^work in origin/ })
+    .first()
+    .click()
   await expect(page.getByText('Done: work in origin')).toBeVisible()
   // The queued prompt went next, and asks in turn.
   await page.getByRole('group', { name: 'permission' }).getByRole('button', { name: 'Allow' }).click()
@@ -1348,7 +1431,9 @@ test('projects show their clone here, and one is added by cloning its URL', asyn
   const list = page.getByTestId('projects')
   // A clone's path is cut to its last folders, whole in its title.
   await expect(list.getByRole('listitem', { name: 'tools' })).toContainText('Cloned here at …/alice/tools')
-  await expect(list.getByRole('listitem', { name: 'tools' }).getByTitle(`${live.work}/alice/tools`, { exact: true })).toBeVisible()
+  await expect(
+    list.getByRole('listitem', { name: 'tools' }).getByTitle(`${live.work}/alice/tools`, { exact: true }),
+  ).toBeVisible()
   const origin = list.getByRole('listitem', { name: 'origin' })
   await expect(origin).toContainText(/\d+ threads?/)
   await expect(origin.getByTitle(`${live.work}/alice/repo`, { exact: true })).toBeVisible()
@@ -1370,7 +1455,7 @@ test('projects show their clone here, and one is added by cloning its URL', asyn
   expect(readFileSync(join(live.work, 'alice', 'docs', 'src', 'main.rs'), 'utf8')).toBe('fn tool() {}\n')
 })
 
-test("a new thread starts with what its project says, until the person picks", async ({ page }) => {
+test('a new thread starts with what its project says, until the person picks', async ({ page }) => {
   await page.goto(live.alice)
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })
@@ -1385,13 +1470,18 @@ test("a new thread starts with what its project says, until the person picks", a
   await expect(form.getByLabel('agent to start')).toHaveValue('fake')
 })
 
-test('each person pins, snoozes and settles threads for themselves, and sees what changed since they looked', async ({ browser }) => {
+test('each person pins, snoozes and settles threads for themselves, and sees what changed since they looked', async ({
+  browser,
+}) => {
   const alice = await (await browser.newContext()).newPage()
   const bob = await (await browser.newContext()).newPage()
   await alice.goto(live.alice)
   await bob.goto(live.bob)
   const sidebar = (page: Page) => page.getByRole('navigation', { name: 'projects' })
-  const shared = (page: Page) => sidebar(page).getByRole('link', { name: /^Add a farewell/ }).first()
+  const shared = (page: Page) =>
+    sidebar(page)
+      .getByRole('link', { name: /^Add a farewell/ })
+      .first()
   const act = async (page: Page, action: string) => {
     await shared(page).hover()
     await sidebar(page).getByRole('button', { name: 'actions for Add a farewell' }).first().click()
@@ -1424,7 +1514,11 @@ test('each person pins, snoozes and settles threads for themselves, and sees wha
 
   await act(alice, 'Settle')
   // Settled, it folds with the rest; the fold is still open from waking it above.
-  await expect(sidebar(alice).getByRole('button', { name: /^Show (fewer|\d+ more)$/ }).first()).toBeVisible()
+  await expect(
+    sidebar(alice)
+      .getByRole('button', { name: /^Show (fewer|\d+ more)$/ })
+      .first(),
+  ).toBeVisible()
   await alice.context().close()
   await bob.context().close()
 })
@@ -1492,7 +1586,17 @@ test('the owner shares a thread from its page: who sees it, and who may write in
 // Last: it commits in Alice's clone, which the threads above work in.
 test("a thread's page lists its commits with the turns they came in", async ({ page }) => {
   const repo = join(live.work, 'alice', 'repo')
-  execFileSync('git', ['-C', repo, '-c', 'user.name=Alice', '-c', 'user.email=alice@example.com', 'commit', '-qam', 'Add the farewell'])
+  execFileSync('git', [
+    '-C',
+    repo,
+    '-c',
+    'user.name=Alice',
+    '-c',
+    'user.email=alice@example.com',
+    'commit',
+    '-qam',
+    'Add the farewell',
+  ])
   await page.goto(live.alice)
   const commits = page.getByRole('region', { name: 'commits' })
   await expect(async () => {
@@ -1571,7 +1675,9 @@ test('a project kept on this machine starts threads that stay here, until it mov
   await expect(page.getByText('This machine only', { exact: true })).toHaveCount(0)
 })
 
-test('a new project made from New thread starts its first thread in a folder made for it, kept on this machine', async ({ page }) => {
+test('a new project made from New thread starts its first thread in a folder made for it, kept on this machine', async ({
+  page,
+}) => {
   await page.goto(live.alice)
   await page.getByRole('button', { name: /^project:/ }).click()
   const picker = page.getByRole('dialog', { name: 'Pick a project' })
@@ -1625,7 +1731,10 @@ test("the agent's commands are offered as / starts a prompt, in its thread and i
   const draft = page.getByLabel('draft')
   const commands = page.getByRole('listbox', { name: 'commands' })
   await draft.fill('/co')
-  await expect(commands.getByRole('option')).toHaveText(['/count <what to count>Count what you name', '/compactSummarize the conversation so far'])
+  await expect(commands.getByRole('option')).toHaveText([
+    '/count <what to count>Count what you name',
+    '/compactSummarize the conversation so far',
+  ])
   await draft.press('ArrowDown')
   await expect(commands.getByRole('option').filter({ hasText: '/compact' })).toHaveAttribute('aria-selected', 'true')
   await draft.press('ArrowUp')
@@ -1691,7 +1800,16 @@ test('a data page links each number to its source, and a canvas shows each board
   await expect(boards).toHaveCount(3)
   await expect(boards.nth(2)).toContainText('390×844')
   // The phone's board grows to its page, past the screen it was drawn for.
-  await expect.poll(async () => Number(await boards.nth(2).locator('iframe').evaluate((frame) => (frame as HTMLIFrameElement).style.height.replace('px', '')))).toBeGreaterThan(1500)
+  await expect
+    .poll(async () =>
+      Number(
+        await boards
+          .nth(2)
+          .locator('iframe')
+          .evaluate((frame) => (frame as HTMLIFrameElement).style.height.replace('px', '')),
+      ),
+    )
+    .toBeGreaterThan(1500)
   // Two boards side by side at one scale.
   await boards.nth(0).getByRole('button', { name: 'Compare' }).click()
   await boards.nth(2).getByRole('button', { name: 'Compare' }).click()
@@ -1715,7 +1833,10 @@ test("a page's comment on one of its elements says so, and shows the element whe
     '<!doctype html><p style="margin-top:1200px" id="total" data-comment-anchor="total-row">Total: 42</p><button id="c" style="position:fixed;top:8px">Comment on the total</button>' +
     '<script>silt.use("comments").then(function(c){document.getElementById("c").onclick=function(){c.openComposer({element:document.getElementById("total")})}})</script>'
   const file = join(mkdtempSync(join(tmpdir(), 'silt-element-')), 'page.json')
-  writeFileSync(file, JSON.stringify({ title: 'Totals', kind: 'html', content: html, capabilities: { comments: { composer_only: true } } }))
+  writeFileSync(
+    file,
+    JSON.stringify({ title: 'Totals', kind: 'html', content: html, capabilities: { comments: { composer_only: true } } }),
+  )
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('draft').fill(`Artifact from ${file}`)
   await page.getByLabel('draft').press('Enter')
@@ -1747,7 +1868,9 @@ test('a doc and a sheet are edited in place, and what was typed is kept (ADR 007
   await doc.getByRole('button', { name: 'Edit' }).click()
   const text = doc.getByLabel("the doc's text")
   // Typing goes through the browser's replica, as deltas, rather than a request per pause.
-  const typedLive = page.waitForRequest((request) => request.method() === 'POST' && /\/replica$/.test(new URL(request.url()).pathname))
+  const typedLive = page.waitForRequest(
+    (request) => request.method() === 'POST' && /\/replica$/.test(new URL(request.url()).pathname),
+  )
   await text.press('ControlOrMeta+End')
   await text.pressSequentially('- review\n')
   await typedLive
@@ -1762,7 +1885,11 @@ test('a doc and a sheet are edited in place, and what was typed is kept (ADR 007
   await doc.getByRole('button', { name: 'Read' }).click()
   await expect(doc.getByText('review', { exact: true })).toBeVisible()
   await expect
-    .poll(() => page.evaluate(() => (CSS as unknown as { highlights: Map<string, { size: number }> }).highlights.get('silt-doc-comments')?.size ?? 0))
+    .poll(() =>
+      page.evaluate(
+        () => (CSS as unknown as { highlights: Map<string, { size: number }> }).highlights.get('silt-doc-comments')?.size ?? 0,
+      ),
+    )
     .toBe(1)
   // The first version against the doc now, then the doc kept as a version of its own.
   await doc.getByRole('button', { name: 'Compare with a version' }).click()
@@ -1802,7 +1929,10 @@ test('a doc and a sheet are edited in place, and what was typed is kept (ADR 007
   await expect(sheet.getByRole('grid')).toContainText('apples')
 })
 
-test("two views of a whiteboard see each other's cursors, and a note moved by one stays moved (ADR 0081)", async ({ page, context }) => {
+test("two views of a whiteboard see each other's cursors, and a note moved by one stays moved (ADR 0081)", async ({
+  page,
+  context,
+}) => {
   await startInNewThread(page, 'Fake agent')
   await page.getByLabel('draft').fill('Artifact board')
   await page.getByLabel('draft').press('Enter')
@@ -1887,7 +2017,10 @@ test('on a whiteboard people draw, connect, resize, rename and delete, and add a
   await expect(board.locator('[data-item="goal"]')).toContainText('Ship rooms by Friday')
 
   // An image, as a file someone picked.
-  const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+  const pixel = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  )
   await board.getByLabel('an image to add').setInputFiles({ name: 'dot.png', mimeType: 'image/png', buffer: pixel })
   await expect(board.getByTestId('whiteboard-image').locator('image')).toHaveCount(1)
 
@@ -1926,11 +2059,20 @@ test('each artifact viewer has no serious accessibility problem axe finds', asyn
     await page.getByLabel('draft').press('Enter')
     await expect(page.getByText(`Done: ${prompt}`)).toBeVisible()
     if (!(await page.getByTestId(viewer).isVisible()))
-      await (viewer === 'canvas' ? page.getByRole('button', { name: /^Open the artifact Settings screen/ }).first() : page.getByTestId('artifact-card').last()).click()
+      await (
+        viewer === 'canvas'
+          ? page.getByRole('button', { name: /^Open the artifact Settings screen/ }).first()
+          : page.getByTestId('artifact-card').last()
+      ).click()
     await expect(page.getByTestId(viewer)).toBeVisible()
     const checked = await new AxeBuilder({ page }).include(`[data-testid="${viewer}"]`).withTags(['wcag2a', 'wcag2aa']).analyze()
     for (const violation of checked.violations.filter((one) => one.impact === 'serious' || one.impact === 'critical'))
-      found.push(`${viewer}: ${violation.id} (${violation.nodes.map((node) => node.target.join(' ')).slice(0, 3).join(', ')})`)
+      found.push(
+        `${viewer}: ${violation.id} (${violation.nodes
+          .map((node) => node.target.join(' '))
+          .slice(0, 3)
+          .join(', ')})`,
+      )
   }
   expect(found).toEqual([])
 })

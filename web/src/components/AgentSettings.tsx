@@ -1,24 +1,10 @@
 import { Fragment, type ReactNode, useContext } from 'react'
 import { presetDriven } from '../agentState'
 import type { AgentChoiceItem, AgentSetting } from '../api'
+import { isEffort, isModel } from '../agentSettings'
 import { Icon, Popover } from '../ui'
 import { ChipSelect, GHOST_CHIP } from './ChipSelect'
 import { ComposerFolded } from './composerFolded'
-
-/** By its tag, or by its id where the agent tags none. */
-function isModel(setting: AgentSetting): boolean {
-  return setting.category === 'model' || (setting.category === null && setting.id === 'model')
-}
-
-/** How hard the agent thinks, by its tag or a name agents give it. */
-function isEffort(setting: AgentSetting): boolean {
-  return setting.category === 'thought_level' || /^(effort|reasoning|thinking)/i.test(setting.id)
-}
-
-/** Its name where it's listed on its own, the same for every agent's model and effort. */
-export function settingLabel(setting: AgentSetting): string {
-  return isModel(setting) ? 'Model' : isEffort(setting) ? 'Effort' : setting.name
-}
 
 /**
  * An agent's mode and settings as both composers show them, in one row: the
@@ -78,7 +64,12 @@ export function AgentSettings({
       prefix="Mode"
       value={mode}
       onChange={onMode}
-      options={modes.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description, refused: refusedMode?.(choice.id) }))}
+      options={modes.map((choice) => ({
+        id: choice.id,
+        name: choice.name,
+        description: choice.description,
+        refused: refusedMode?.(choice.id),
+      }))}
     />
   )
   const inMenu = folded ? [modeChip, ...shown.map(chip), more] : [...rest.map(chip), more]

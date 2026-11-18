@@ -1,6 +1,13 @@
 // The small pieces every view is built of, in Nous.
 
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, Ref, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import type {
+  ButtonHTMLAttributes,
+  InputHTMLAttributes,
+  ReactNode,
+  Ref,
+  SelectHTMLAttributes,
+  TextareaHTMLAttributes,
+} from 'react'
 import { type ButtonSize, type ButtonVariant, buttonClass } from './buttonClass'
 import { cx } from './cx'
 import { Icon, type IconName } from './icons'
@@ -44,7 +51,8 @@ export function IconButton({
   )
 }
 
-const FIELD = 'rounded-sm border border-line bg-elevated px-2 py-1 text-sm text-fg-1 placeholder:text-fg-3 max-md:min-h-11 max-md:text-base'
+const FIELD =
+  'rounded-sm border border-line bg-elevated px-2 py-1 text-sm text-fg-1 placeholder:text-fg-3 max-md:min-h-11 max-md:text-base'
 
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
   return <input className={cx(FIELD, className)} {...props} />
@@ -84,15 +92,15 @@ export type Tone = keyof typeof TONE
 
 /** A short label: a status, a kind, a count. */
 export function Tag({ tone = 'neutral', children, className }: { tone?: Tone; children: ReactNode; className?: string }) {
-  return <span className={cx('inline-flex items-center rounded-sm px-1.5 font-mono text-[11px]', TONE[tone], className)}>{children}</span>
+  return (
+    <span className={cx('inline-flex items-center rounded-sm px-1.5 font-mono text-[11px]', TONE[tone], className)}>
+      {children}
+    </span>
+  )
 }
 
 /** A tag that can be turned on and off, such as a filter. */
-export function Chip({
-  selected,
-  children,
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { selected: boolean }) {
+export function Chip({ selected, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { selected: boolean }) {
   return (
     <button
       type="button"

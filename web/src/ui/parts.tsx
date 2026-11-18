@@ -119,7 +119,12 @@ export function DiffBlock({
   const [folded, setFolded] = useState(false)
   return (
     <section id={id} className={cx('overflow-hidden rounded-md border border-line bg-elevated', className)}>
-      <header className={cx('flex items-center gap-2 bg-surface-1 px-3 py-1.5 font-mono text-2xs text-fg-2', !folded && 'border-b border-line')}>
+      <header
+        className={cx(
+          'flex items-center gap-2 bg-surface-1 px-3 py-1.5 font-mono text-2xs text-fg-2',
+          !folded && 'border-b border-line',
+        )}
+      >
         {children !== undefined && (
           <button
             type="button"
@@ -132,7 +137,9 @@ export function DiffBlock({
           </button>
         )}
         <span className="min-w-0 truncate text-fg-1">{path}</span>
-        {(added !== undefined || removed !== undefined) && <Counts added={added ?? 0} removed={removed ?? 0} className="ml-auto" />}
+        {(added !== undefined || removed !== undefined) && (
+          <Counts added={added ?? 0} removed={removed ?? 0} className="ml-auto" />
+        )}
         {actions && <span className={cx('flex items-center gap-3', added === undefined && 'ml-auto')}>{actions}</span>}
       </header>
       {!folded && children}
@@ -141,7 +148,17 @@ export function DiffBlock({
 }
 
 /** Lines added and removed, as `+57 −9`. */
-export function Counts({ added, removed, binary = false, className }: { added: number; removed: number; binary?: boolean; className?: string }) {
+export function Counts({
+  added,
+  removed,
+  binary = false,
+  className,
+}: {
+  added: number
+  removed: number
+  binary?: boolean
+  className?: string
+}) {
   if (binary) return <span className={cx('font-mono text-2xs whitespace-nowrap text-fg-2', className)}>binary</span>
   return (
     <span className={cx('font-mono text-2xs whitespace-nowrap', className)}>
@@ -155,7 +172,10 @@ export function StatusBar({ children, className, label }: { children: ReactNode;
   return (
     <footer
       aria-label={label}
-      className={cx('flex h-6 shrink-0 items-center gap-3 border-t border-line bg-bg px-2.5 font-mono text-2xs text-fg-2', className)}
+      className={cx(
+        'flex h-6 shrink-0 items-center gap-3 border-t border-line bg-bg px-2.5 font-mono text-2xs text-fg-2',
+        className,
+      )}
     >
       {children}
     </footer>
