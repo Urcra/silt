@@ -92,6 +92,27 @@ impl Srgb {
         oklab_of(self.linear())
     }
 
+    /// From OKLab (L, a, b), each channel clamped into sRGB's gamut.
+    pub fn from_oklab([l, a, b]: [f64; 3]) -> Self {
+        let l_ = (l + 0.3963377774 * a + 0.2158037573 * b).powi(3);
+        let m_ = (l - 0.1055613458 * a - 0.0638541728 * b).powi(3);
+        let s_ = (l - 0.0894841775 * a - 1.2914855480 * b).powi(3);
+        let linear = [
+            4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_,
+            -1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_,
+            -0.0041960863 * l_ - 0.7034186147 * m_ + 1.7076147010 * s_,
+        ];
+        Self(linear.map(|c| {
+            let c = c.clamp(0.0, 1.0);
+            if c <= 0.0031308 { 12.92 * c } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+        }))
+    }
+
+    /// The 8-bit channels.
+    pub fn bytes(self) -> [u8; 3] {
+        self.0.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
+    }
+
     /// OKLCH lightness, chroma and hue in degrees.
     pub fn oklch(self) -> (f64, f64, f64) {
         let [l, a, b] = self.oklab();
@@ -465,6 +486,16 @@ mod tests {
         let verdict = |name: &str| report.checks.iter().find(|check| check.name == name).map(|check| check.verdict);
         assert_eq!(verdict("chroma floor"), Some(Verdict::Fail));
         assert_eq!(verdict("separation (normal)"), Some(Verdict::Fail));
+    }
+
+    #[test]
+    fn oklab_round_trips_to_the_same_bytes() {
+        for color in ["#f6f1e8", "#1a1714", "#d9883a", "#0b57d0", "#000000", "#ffffff", "#7aa2f7"] {
+            let srgb = hex(color);
+            assert_eq!(Srgb::from_oklab(srgb.oklab()).to_string(), color);
+            assert_eq!(Srgb::from_oklab(srgb.oklab()).bytes(), srgb.bytes());
+        }
+        assert_eq!(Srgb::from_oklab([1.2, 0.3, -0.3]).bytes()[0], 255, "out of gamut is clamped");
     }
 
     #[test]

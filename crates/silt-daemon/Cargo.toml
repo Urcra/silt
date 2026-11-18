@@ -38,10 +38,12 @@ silt-log = { path = "../silt-log" }
 silt-mcp = { path = "../silt-mcp" }
 silt-os = { path = "../silt-os" }
 silt-proto = { path = "../silt-proto", features = ["xlsx"] }
+silt-theme = { path = "../silt-theme" }
 silt-redact = { path = "../silt-redact" }
 silt-store = { path = "../silt-store" }
 silt-sync = { path = "../silt-sync" }
 silt-types = { path = "../silt-types" }
+silt-update = { path = "../silt-update" }
 silt-workspace = { path = "../silt-workspace" }
 similar = "3.2.0"
 thiserror = "2.0.21"
@@ -55,5 +57,6 @@ tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"]
 silt-proto = { path = "../silt-proto", features = ["ts"] }
 silt-access = { path = "../silt-access", features = ["ts"] }
 silt-workspace = { path = "../silt-workspace", features = ["ts"] }
+silt-update = { path = "../silt-update", features = ["ts"] }
 tempfile = "3.27.0"
 ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }

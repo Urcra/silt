@@ -1,8 +1,9 @@
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { useHighlighted } from '../highlight'
+import { languageOf, useHighlighted } from '../highlight'
 import { COMPONENTS } from './markdownParts'
-import { cx } from '../ui'
+import { Icon, cx } from '../ui'
 
 /** Highlighted code, line by line, as it would be in an editor. */
 export function Code({ code, language, className }: { code: string; language: string | null; className?: string }) {
@@ -21,6 +22,47 @@ export function Code({ code, language, className }: { code: string; language: st
   )
 }
 
+/** A fenced block, with a button that copies just what it holds. */
+export function CodeBlock({ text, language }: { text: string; language: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () =>
+    void navigator.clipboard?.writeText(text).then(
+      () => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
+      },
+      () => undefined,
+    )
+  const button = (
+    <button
+      type="button"
+      aria-label={copied ? 'copied' : 'copy code'}
+      title="Copy"
+      className={cx(
+        'rounded-sm p-0.5 text-fg-2 hover:bg-surface-2 hover:text-fg-1',
+        !language && 'invisible absolute top-1.5 right-1.5 bg-surface-1 group-hover/code:visible focus:visible max-md:visible',
+      )}
+      onClick={copy}
+    >
+      <Icon name={copied ? 'check' : 'copy'} className="h-3.5 w-3.5" />
+    </button>
+  )
+  return (
+    <div className="group/code relative my-2 overflow-hidden rounded-sm border border-line-subtle bg-surface-1">
+      {language ? (
+        <div className="flex items-center justify-between border-b border-line-subtle py-0.5 pr-1.5 pl-2.5 font-mono text-2xs text-fg-2">
+          {language}
+          {button}
+        </div>
+      ) : (
+        button
+      )}
+      <pre className="overflow-x-auto px-2.5 py-2 font-mono text-xs leading-5">
+        <Code code={text} language={languageOf(language)} />
+      </pre>
+    </div>
+  )
+}
 
 /**
  * A message as Markdown. Its HTML is shown as text and its images by name

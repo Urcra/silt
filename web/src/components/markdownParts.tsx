@@ -2,9 +2,8 @@
 
 import { type ReactElement, type ReactNode, isValidElement } from 'react'
 import { type Components } from 'react-markdown'
-import { languageOf } from '../highlight'
 import { cx } from '../ui'
-import { Code } from './Markdown'
+import { CodeBlock } from './Markdown'
 
 export function textOf(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') return String(node)
@@ -17,15 +16,7 @@ export const COMPONENTS: Components = {
   pre({ children }) {
     const code = (Array.isArray(children) ? children[0] : children) as ReactElement<{ className?: string; children?: ReactNode }>
     const language = /language-([\w+-]+)/.exec(code?.props?.className ?? '')?.[1] ?? ''
-    const text = textOf(code?.props?.children).replace(/\n$/, '')
-    return (
-      <div className="my-2 overflow-hidden rounded-sm border border-line-subtle bg-surface-1">
-        {language && <div className="border-b border-line-subtle px-2.5 py-1 font-mono text-2xs text-fg-2">{language}</div>}
-        <pre className="overflow-x-auto px-2.5 py-2 font-mono text-xs leading-5">
-          <Code code={text} language={languageOf(language)} />
-        </pre>
-      </div>
-    )
+    return <CodeBlock text={textOf(code?.props?.children).replace(/\n$/, '')} language={language} />
   },
   code({ children }) {
     // A short chip, a path or a name, stays whole on its line; a long one wraps with each piece boxed.

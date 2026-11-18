@@ -1,0 +1,85 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Urcra/silt/main/docs/reference/theme.schema.json",
+  "name": "Tokyo Night",
+  "author": "enkia",
+  "license": "MIT",
+  "source": "https://github.com/enkia/tokyo-night-vscode-theme",
+  "copyright": "Copyright (c) 2018-present Enkia. Colours at or below WCAG AA's 4.5:1 for text were moved in lightness, keeping their hue.",
+  "themes": [
+    {
+      "id": "tokyo-night",
+      "name": "Tokyo Night",
+      "appearance": "dark",
+      "colors": {
+        "bg": "#1a1b26",
+        "bg-elevated": "#16161e",
+        "surface-1": "#16161e",
+        "surface-2": "#24283b",
+        "surface-3": "#292e42",
+        "fg-1": "#c0caf5",
+        "fg-2": "#a9b1d6",
+        "fg-3": "#7a81aa",
+        "border": "#292e42",
+        "border-strong": "#414868",
+        "accent": "#7aa2f7",
+        "accent-fg": "#7aa2f7",
+        "ok": "#9ece6a",
+        "warn": "#e0af68",
+        "danger": "#f7768e",
+        "info": "#7dcfff"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#bb9af7"
+        },
+        "string": {
+          "color": "#9ece6a"
+        },
+        "string-special": {
+          "color": "#b4f9f8"
+        },
+        "number": {
+          "color": "#ff9e64"
+        },
+        "constant": {
+          "color": "#ff9e64"
+        },
+        "comment": {
+          "color": "#7882ae",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#2ac3de"
+        },
+        "macro": {
+          "color": "#7dcfff"
+        },
+        "variable": {
+          "color": "#c0caf5"
+        },
+        "definition": {
+          "color": "#7aa2f7"
+        },
+        "property": {
+          "color": "#73daca"
+        },
+        "operator": {
+          "color": "#89ddff"
+        },
+        "punctuation": {
+          "color": "#89ddff"
+        },
+        "meta": {
+          "color": "#e0af68"
+        },
+        "heading": {
+          "color": "#7aa2f7",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#73daca"
+        }
+      }
+    }
+  ]
+}

@@ -33,7 +33,11 @@ impl Home {
 
     pub fn command(&self, cwd: &Path) -> Command {
         let mut command = Command::new(&self.silt);
-        command.current_dir(cwd).env("SILT_HOME", &self.data).env("CLAUDE_CONFIG_DIR", &self.claude);
+        command
+            .current_dir(cwd)
+            .env("SILT_HOME", &self.data)
+            .env("CLAUDE_CONFIG_DIR", &self.claude)
+            .env("SILT_UPDATE_CHECK", "never");
         command
     }
 

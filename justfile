@@ -77,6 +77,29 @@ install-wsl: install-cli try-install-voice install-windows
 install-windows: build-web
     scripts/install-windows.sh
 
+# What updating from the app runs (ADR 0100): `install`, with the desktop app
+# only where WebKitGTK is; in WSL, `install-wsl`, building for Windows only
+# where Silt is installed there
+update:
+    #!/usr/bin/env sh
+    set -eu
+    just="{{just_executable()}}"
+    if [ -n "${WSL_DISTRO_NAME:-}" ]; then
+        "$just" install-cli
+        "$just" try-install-voice
+        if command -v powershell.exe > /dev/null && powershell.exe -NoProfile -NonInteractive -Command 'Test-Path (Join-Path $env:LOCALAPPDATA "Silt\silt.exe")' | grep -q True; then
+            "$just" install-windows
+        fi
+        exit 0
+    fi
+    "$just" install-cli
+    if pkg-config --exists webkit2gtk-4.1 2> /dev/null; then
+        "$just" install-desktop
+    else
+        echo "Skipped the desktop app, which needs WebKitGTK 4.1 (see docs/contributing.md)" >&2
+    fi
+    "$just" try-install-voice
+
 # Remove what `just install` installed
 uninstall:
     -cargo uninstall silt-cli

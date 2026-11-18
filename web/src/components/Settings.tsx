@@ -5,7 +5,6 @@ import { PRESETS } from '../agentState'
 import { api, type ChatSettings, type PageConnector, type Preset } from '../api'
 import { keys, message } from '../query'
 import { hosted, serverName } from '../served'
-import { THEMES, type Theme, applyTheme, storedTheme } from '../theme'
 import { Button, Dot, EmptyState, Input, cx, toast } from '../ui'
 import { ChipSelect } from './ChipSelect'
 import { Devices } from './Devices'
@@ -15,7 +14,9 @@ import { Orgs } from './Orgs'
 import { InSettings, SETTINGS_HEADING } from '../settingsContext'
 import { Page } from './Page'
 import { DesignSystemsSettings } from './DesignSystems'
+import { ThemeSettings } from './Themes'
 import { AddProjectPage, Projects } from './Projects'
+import { UpdatesSettings } from './Updates'
 import { WorkspacesSettings } from './Workspaces'
 
 const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
@@ -36,6 +37,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
       ...(hosted() ? [] : [{ id: 'models', label: 'Local models' }]),
       { id: 'notifications', label: 'Notifications' },
       { id: 'appearance', label: 'Appearance' },
+      ...(hosted() ? [] : [{ id: 'update', label: 'Updates' }]),
     ],
   },
 ]
@@ -138,27 +140,9 @@ function Chats() {
 }
 
 function Appearance() {
-  const [theme, setTheme] = useState<Theme>(storedTheme)
   return (
     <section aria-label="Appearance" className="flex flex-col gap-3">
-      <h2 className={SETTINGS_HEADING}>Appearance</h2>
-      <div role="radiogroup" aria-label="theme" className="inline-flex self-start overflow-hidden rounded-sm border border-line text-xs">
-        {THEMES.map((choice) => (
-          <button
-            key={choice}
-            type="button"
-            role="radio"
-            aria-checked={theme === choice}
-            onClick={() => {
-              applyTheme(choice)
-              setTheme(choice)
-            }}
-            className={cx('px-3 py-1 capitalize max-md:min-h-11', theme === choice ? 'bg-accent-tint text-accent-fg' : 'text-fg-2 hover:bg-surface-2')}
-          >
-            {choice}
-          </button>
-        ))}
-      </div>
+      <ThemeSettings />
       {!hosted() && <ArtifactLoading />}
       {!hosted() && <PageConnectors />}
     </section>
@@ -346,6 +330,7 @@ export function Settings() {
     models: <LocalModelsSettings />,
     workspaces: <WorkspacesSettings />,
     appearance: <Appearance />,
+    update: <UpdatesSettings />,
     'design-systems': <DesignSystemsSettings />,
   }
   return (

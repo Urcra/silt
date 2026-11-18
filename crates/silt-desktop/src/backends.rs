@@ -74,6 +74,12 @@ pub fn target_of(link: &Url, known: &[Backend]) -> Option<Target> {
     Some(target)
 }
 
+/// Whether `link` asks the app to restart itself, as the page does once an
+/// update installed a new build of it.
+pub fn is_relaunch(link: &Url) -> bool {
+    link.scheme() == "silt" && link.host_str() == Some("relaunch") && matches!(link.path(), "" | "/")
+}
+
 /// What a distribution's name may be, which is also what's safe to hand to
 /// `wsl.exe -d`.
 pub fn is_distribution_name(name: &str) -> bool {
@@ -201,6 +207,15 @@ mod tests {
         assert_eq!(target_of(&link("silt://elsewhere/?backend=native"), &known), None);
         assert_eq!(target_of(&link("https://open/?backend=native"), &known), None);
         assert_eq!(target_of(&link("silt://open/t/abc"), &known), None, "permalinks are for later");
+    }
+
+    #[test]
+    fn only_the_relaunch_link_relaunches() {
+        assert!(is_relaunch(&link("silt://relaunch")));
+        assert!(is_relaunch(&link("silt://relaunch/")));
+        assert!(!is_relaunch(&link("silt://relaunch/now")));
+        assert!(!is_relaunch(&link("silt://open/")));
+        assert!(!is_relaunch(&link("https://relaunch/")));
     }
 
     #[test]

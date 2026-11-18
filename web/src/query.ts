@@ -49,6 +49,9 @@ export const keys = {
   designAsset: (where: object, path: string) => ['design-systems', 'asset', where, path] as const,
   threadDesign: (id: string) => ['thread', id, 'design-system'] as const,
   artifactSettings: ['artifact-settings'] as const,
+  themes: ['themes'] as const,
+  themeDetail: (id: string) => ['themes', 'detail', id] as const,
+  themeCss: ['themes', 'css'] as const,
   cloneDesignSystems: (clone: string) => ['design-systems', 'clone', clone] as const,
   projectDesignSystems: ['design-systems', 'projects'] as const,
   voice: ['voice'] as const,
@@ -64,6 +67,7 @@ export const keys = {
   links: (thread: string) => ['links', thread] as const,
   notificationSettings: ['notification-settings'] as const,
   status: ['status'] as const,
+  update: ['update'] as const,
   chatSettings: ['chat-settings'] as const,
   // Under `threads`, which the bus refreshes when workspaces or org policies change.
   workspaces: ['threads', 'workspaces'] as const,

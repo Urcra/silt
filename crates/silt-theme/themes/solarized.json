@@ -1,0 +1,154 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Urcra/silt/main/docs/reference/theme.schema.json",
+  "name": "Solarized",
+  "author": "Ethan Schoonover",
+  "license": "MIT",
+  "source": "https://github.com/altercation/solarized",
+  "copyright": "Copyright (c) 2011 Ethan Schoonover. Colours at or below WCAG AA's 4.5:1 for text were moved in lightness, keeping their hue.",
+  "themes": [
+    {
+      "id": "solarized-light",
+      "name": "Solarized Light",
+      "appearance": "light",
+      "colors": {
+        "bg": "#fdf6e3",
+        "bg-elevated": "#fffbef",
+        "surface-1": "#eee8d5",
+        "surface-2": "#e4dcc5",
+        "surface-3": "#d9d0b5",
+        "fg-1": "#4e646b",
+        "fg-2": "#5e747c",
+        "fg-3": "#657373",
+        "border": "#ddd6c1",
+        "border-strong": "#93a1a1",
+        "accent": "#268bd2",
+        "accent-fg": "#0075bb",
+        "ok": "#677900",
+        "warn": "#b58900",
+        "danger": "#d72c2a",
+        "info": "#007f77"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#677900"
+        },
+        "string": {
+          "color": "#007f77"
+        },
+        "string-special": {
+          "color": "#d72c2a"
+        },
+        "number": {
+          "color": "#cc2e7c"
+        },
+        "constant": {
+          "color": "#6468ba"
+        },
+        "comment": {
+          "color": "#657373",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#946900"
+        },
+        "macro": {
+          "color": "#c6460e"
+        },
+        "definition": {
+          "color": "#0075bb"
+        },
+        "property": {
+          "color": "#0075bb"
+        },
+        "operator": {
+          "color": "#677900"
+        },
+        "punctuation": {
+          "color": "#5e747c"
+        },
+        "meta": {
+          "color": "#c6460e"
+        },
+        "heading": {
+          "color": "#0075bb",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#6468ba"
+        }
+      }
+    },
+    {
+      "id": "solarized-dark",
+      "name": "Solarized Dark",
+      "appearance": "dark",
+      "colors": {
+        "bg": "#002b36",
+        "bg-elevated": "#03313d",
+        "surface-1": "#073642",
+        "surface-2": "#0b3f4c",
+        "surface-3": "#124b59",
+        "fg-1": "#98a6a6",
+        "fg-2": "#869799",
+        "fg-3": "#81989f",
+        "border": "#0b4452",
+        "border-strong": "#586e75",
+        "accent": "#268bd2",
+        "accent-fg": "#3899e1",
+        "ok": "#889c0a",
+        "warn": "#b58900",
+        "danger": "#ff5b51",
+        "info": "#2ca39a"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#889c0a"
+        },
+        "string": {
+          "color": "#2ca39a"
+        },
+        "string-special": {
+          "color": "#ff5b51"
+        },
+        "number": {
+          "color": "#f759a0"
+        },
+        "constant": {
+          "color": "#868ce2"
+        },
+        "comment": {
+          "color": "#81989f",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#ba8e0f"
+        },
+        "macro": {
+          "color": "#ee6b3c"
+        },
+        "definition": {
+          "color": "#3899e1"
+        },
+        "property": {
+          "color": "#3899e1"
+        },
+        "operator": {
+          "color": "#889c0a"
+        },
+        "punctuation": {
+          "color": "#869799"
+        },
+        "meta": {
+          "color": "#ee6b3c"
+        },
+        "heading": {
+          "color": "#3899e1",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#868ce2"
+        }
+      }
+    }
+  ]
+}
