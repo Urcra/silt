@@ -6,6 +6,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { type AppearanceMode, type AppearanceSettings, type ThemeCatalog, api } from './api'
+import { tellDesktopTheme } from './desktop'
 import { keys } from './query'
 import { hosted } from './served'
 
@@ -137,6 +138,12 @@ export function useThemeSync() {
   useEffect(() => {
     if (typeof css.data?.css === 'string') injectThemeCss(css.data.css)
   }, [css.data])
+  const shown = useShownTheme()
+  useEffect(() => {
+    // After the page has drawn in it, so the colours read are the theme's.
+    const frame = requestAnimationFrame(() => tellDesktopTheme(shown))
+    return () => cancelAnimationFrame(frame)
+  }, [shown, css.data])
   const daemonMode = hosted() ? null : catalog.data?.appearance?.mode
   useEffect(() => {
     if (!daemonMode || previewing) return
