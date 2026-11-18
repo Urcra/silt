@@ -309,3 +309,50 @@ fn a_daemon_whose_program_was_replaced_is_restarted_on_the_new_one() {
     let again = silt_from(laptop, &installed, &["log"]);
     assert!(String::from_utf8_lossy(&again.stderr).is_empty(), "once: {}", String::from_utf8_lossy(&again.stderr));
 }
+
+/// An agent the web UI started keeps the replaced daemon until its turn
+/// ends, which stopping the daemon would cut short; then it restarts on the
+/// new build by itself.
+#[test]
+fn a_replaced_daemon_restarts_once_no_agent_works_in_it() {
+    let world = world();
+    let laptop = &world.laptop;
+    laptop.silt(&["daemon", "stop"]);
+    let fake = laptop.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(laptop.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let bin = world.root.path().join("bin");
+    let installed = install(&bin);
+    assert!(silt_from(laptop, &installed, &["daemon", "start"]).status.success());
+    let started = laptop.web(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": laptop.repo, "agent": "v1", "prompt": "add acp", "preset": "ask_for_everything"})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    let live = || laptop.web("GET", &format!("/api/threads/{thread}/live"), None);
+    assert!(eventually(|| live()["agent"]["state"] == "awaiting_permission"), "the agent asks: {}", live());
+    let before = daemon_pid(laptop);
+
+    install(&bin);
+    let asked = silt_from(laptop, &installed, &["daemon", "restart", "--if-replaced"]);
+    assert!(asked.status.success(), "{}", String::from_utf8_lossy(&asked.stderr));
+    assert!(
+        String::from_utf8_lossy(&asked.stdout).contains("restarts once no agent works in it"),
+        "{}",
+        String::from_utf8_lossy(&asked.stdout)
+    );
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    assert_eq!(daemon_pid(laptop), before, "the agent's turn goes on");
+
+    let permission = live()["agent"]["permissions"][0]["id"].clone();
+    laptop.web(
+        "POST",
+        &format!("/api/threads/{thread}/agent/answer"),
+        Some(serde_json::json!({"id": permission, "option": "allow"})),
+    );
+    assert!(eventually(|| daemon_pid(laptop) != before), "a new daemon runs once the turn ended");
+    let again = silt_from(laptop, &installed, &["daemon", "restart", "--if-replaced"]);
+    assert_eq!(String::from_utf8_lossy(&again.stdout).trim(), "the daemon runs the build installed");
+    assert!(laptop.stdout(&["show", &thread]).contains("Done: add acp"), "the turn was recorded");
+}
