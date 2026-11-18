@@ -441,3 +441,44 @@ export function shortCommand(command: string, max = 64): string {
   if (command.length <= max) return command
   return command.replace(/\bhttps?:\/\/\S+/g, (url) => `…/${url.replace(/\/+$/, '').split('/').pop()}`)
 }
+
+function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((item, index) => item === b[index])
+}
+
+function sameRow(a: Row, b: Row): boolean {
+  if (a.kind === 'origin') return b.kind === 'origin' && a.origin === b.origin && a.thread === b.thread && a.folded === b.folded
+  if (a.kind === 'compaction') return b.kind === 'compaction' && a.marker === b.marker && a.summary === b.summary
+  return (
+    b.kind === 'turn' &&
+    a.prompt === b.prompt &&
+    a.turn === b.turn &&
+    a.tokens === b.tokens &&
+    sameList(a.entries, b.entries) &&
+    sameList(a.images, b.images)
+  )
+}
+
+/**
+ * `after`, with each row that holds what it held in `before` kept as that row, and `before` itself when nothing
+ * changed: a row drawn once isn't drawn again because something was added below it.
+ */
+export function keepRows(before: readonly Row[] | undefined, after: Row[]): Row[] {
+  if (!before) return after
+  const byKey = new Map(before.map((row) => [row.key, row]))
+  let same = before.length === after.length
+  const kept = after.map((row, index) => {
+    const old = byKey.get(row.key)
+    const chosen = old && sameRow(old, row) ? old : row
+    if (chosen !== before[index]) same = false
+    return chosen
+  })
+  return same ? (before as Row[]) : kept
+}
+
+/** The entries `tasksOf` reads: task news and subagents' own. */
+export function taskEntries(entries: HistoryEntry[]): HistoryEntry[] {
+  return entries.filter((entry) => entry.task || entry.side)
+}
+
+export { sameList }

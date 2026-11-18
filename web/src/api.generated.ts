@@ -687,7 +687,12 @@ side: string | null,
 /**
  * On a `task`: news of a subagent or background command.
  */
-task: TaskView | null, };
+task: TaskView | null, 
+/**
+ * What a page of history left out of the entry, read whole with `whole`:
+ * an image's data, or a long output's start.
+ */
+cut: CutView | null, };
 
 export type ToolView = { id: string, name: string, 
 /**
@@ -722,6 +727,12 @@ export type ImageView = { media_type: string,
  * Base64; empty when it was too large to show.
  */
 data: string, };
+
+export type CutView = { 
+/**
+ * The whole text's lines and bytes; its last lines are what the page kept.
+ */
+lines: number, bytes: number, };
 
 export type ArtifactView = { 
 /**
@@ -1135,7 +1146,17 @@ export type HistoryHit = {
  */
 index: number, kind: string, snippet: string, };
 
-export type HistoryPage = { thread: string, total: number, entries: Array<HistoryEntry>, };
+export type HistoryPage = { thread: string, total: number, entries: Array<HistoryEntry>, 
+/**
+ * Which entry `entries` starts at: the one asked for, or an earlier one
+ * that changed since the history the request named as `known`.
+ */
+from: number | null, 
+/**
+ * The history as it is now, to name as `known` next time; a server's
+ * pages name none, and are read whole again.
+ */
+version: number | null, };
 
 export type InFlight = { thread: string, owner: string, files: Array<string>, last_ms: number, };
 

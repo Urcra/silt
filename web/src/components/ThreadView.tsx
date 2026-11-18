@@ -1,8 +1,10 @@
-import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
+  type ComponentProps,
   type ReactNode,
+  memo,
   type RefObject,
   Suspense,
   lazy,
@@ -21,6 +23,7 @@ import {
   type CommentView,
   type DiffStat,
   type HistoryEntry,
+  type Presence,
   type ThreadSummary,
   type TurnInfo,
 } from '../api'
@@ -29,6 +32,7 @@ import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
 import { readWhole } from '../diffParse'
 import { useHideGit, useHideOthers } from '../hideGit'
+import { useHistory } from '../historyLoad'
 import { appHref, filePath } from '../permalink'
 import { forgeOf, projectName } from '../projects'
 import { keys, message } from '../query'
@@ -62,6 +66,9 @@ import {
   tokens,
   toolOf,
   toolSummary,
+  keepRows,
+  sameList,
+  taskEntries,
 } from '../transcript'
 import { SessionLive, type Stoppable, StoppableTasks, type TaskState, type Tasks, TasksContext, mayRun, tasksOf } from '../tasks'
 import { RunningStrip, TaskCard } from './Tasks'
@@ -116,10 +123,12 @@ import {
   type Detail,
   type Grouping,
 } from '../detail'
-import { keepDraft, threadDraft, useDraft } from '../drafts'
+import { draftOf, keepDraft, threadDraft, useDraft } from '../drafts'
 
 // The panel's viewer and list load only once there is an artifact to show.
-const ArtifactViewer = lazy(() => import('./Artifacts').then((module) => ({ default: module.ArtifactViewer })))
+// Drawn again only when what it shows changes: beside the conversation, every key typed and every word streamed
+// drew it, decoding and parsing the artifact each time.
+const ArtifactViewer = lazy(() => import('./Artifacts').then((module) => ({ default: memo(module.ArtifactViewer) })))
 const ArtifactList = lazy(() => import('./Artifacts').then((module) => ({ default: module.ArtifactList })))
 const ThreadDesignPanel = lazy(() => import('./DesignSystems').then((module) => ({ default: module.ThreadDesignPanel })))
 
@@ -171,22 +180,29 @@ function useFollow(scroll: RefObject<HTMLElement | null>, watched: RefObject<HTM
   return useMemo(() => ({ atBottom, landed }), [])
 }
 
+const NO_ANCHOR: Anchor = {}
+
+/** What the page's hash names, once what it names has loaded; the same object until that changes. */
+function useNamedAnchor(turns: TurnInfo[] | undefined, comments: CommentView[] | undefined) {
+  const hash = useRouterState({ select: (state) => state.location.hash }).replace(/^#/, '')
+  const named = useMemo(() => anchorOf(hash, turns, comments), [hash, turns, comments])
+  return { hash, named }
+}
+
 /** Follows the page's hash once what it names has loaded, scrolling there with `scrollTo` (a row of `rows`).
  * `complete` says every page of the history has: until then, an entry not among `rows` may still come. */
-function useAnchor(
-  rows: Row[] | undefined,
+function useFollowAnchor(
+  rows: Row[],
   complete: boolean,
-  turns: TurnInfo[] | undefined,
-  comments: CommentView[] | undefined,
+  hash: string,
+  anchor: Anchor | undefined,
   scrollTo: (row: number) => void,
   scroller: RefObject<HTMLElement | null>,
-): Anchor {
-  const hash = useRouterState({ select: (state) => state.location.hash }).replace(/^#/, '')
-  const anchor = anchorOf(hash, turns, comments)
+) {
   // Followed again in a new scroller: the page's column takes over from the main one once the panel beside it shows.
   const followed = useRef<{ hash: string; in: RefObject<HTMLElement | null> } | null>(null)
   useEffect(() => {
-    if (!anchor || !rows || (followed.current?.hash === hash && followed.current.in === scroller)) return
+    if (!anchor || (followed.current?.hash === hash && followed.current.in === scroller)) return
     const holds = (row: Row, index: number) =>
       row.kind === 'turn' && (row.prompt?.index === index || row.entries.some((entry) => entry.index === index))
     const at = anchor.entry === undefined ? -1 : rows.findIndex((row) => holds(row, anchor.entry!))
@@ -195,7 +211,6 @@ function useAnchor(
     if (at >= 0) scrollTo(at)
     else if (anchor.comment) document.getElementById(`comment-${anchor.comment}`)?.scrollIntoView({ block: 'center' })
   }, [hash, anchor, rows, complete, scrollTo, scroller])
-  return anchor ?? {}
 }
 
 function CommentBox({ onSave, onCancel }: { onSave: (text: string) => Promise<void>; onCancel: () => void }) {
@@ -736,11 +751,14 @@ function TurnBar({
   turn,
   row,
   rewound,
+  settled,
 }: {
   thread: string
   turn: TurnInfo
   row: Extract<Row, { kind: 'turn' }>
   rewound: boolean
+  /** A later turn began, so what this one changed won't change. */
+  settled: boolean
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -751,14 +769,14 @@ function TurnBar({
   const of = { turn: turn.number, hideGit, hideOthers }
   // Counted from the files' stats; the lines are read only once asked for, and file by file when too many.
   const stats = useQuery({
-    queryKey: keys.diffStats(thread, of),
+    queryKey: settled ? keys.settledTurnStats(thread, of) : keys.diffStats(thread, of),
     queryFn: () => api.diffStats(thread, of),
     staleTime: Infinity,
   })
   const files = stats.data ?? null
   const whole = files !== null && readWhole(files)
   const diff = useQuery({
-    queryKey: keys.diff(thread, of),
+    queryKey: settled ? keys.settledTurnDiff(thread, of) : keys.diff(thread, of),
     queryFn: () => api.diff(thread, of),
     staleTime: Infinity,
     enabled: open && whole,
@@ -966,13 +984,16 @@ function sinceWrote(pieces: Piece[], tasks: Tasks) {
   return { wrote, since, carded, activity }
 }
 
-/** `running`: the turn is still under way, so it has no totals or actions yet. `onUnfold` shows what a fork inherited. */
-function TranscriptRow({
+/** `running`: the turn is still under way, so it has no totals or actions yet. `last`: no turn follows it yet.
+ * `onUnfold` shows what a fork inherited. Drawn again only when what it holds changed: rows scroll into view, and an
+ * agent's words stream in, far more often than a row's own entries change. */
+const TranscriptRow = memo(function TranscriptRow({
   row,
   running = false,
+  last: lastRow = false,
   onUnfold,
   ...props
-}: EntryProps & { row: Row; running?: boolean; onUnfold?: () => void }) {
+}: EntryProps & { row: Row; running?: boolean; last?: boolean; onUnfold?: () => void }) {
   const [summary, setSummary] = useState(false)
   const tasks = useContext(TasksContext)
   const grouping = useContext(TranscriptGrouping)
@@ -1100,11 +1121,11 @@ function TranscriptRow({
         ) : (
           pieces.map(drawn)
         )}
-        {row.turn && !running && <TurnBar thread={props.thread} turn={row.turn} row={row} rewound={rewound} />}
+        {row.turn && !running && <TurnBar thread={props.thread} turn={row.turn} row={row} rewound={rewound} settled={!lastRow} />}
       </div>
     </div>
   )
-}
+})
 
 function ThreadStateActions({ summary }: { summary: ThreadSummary }) {
   const items = useThreadState(summary)
@@ -2029,6 +2050,149 @@ function Here({ people }: { people: { user: string; device: string }[] }) {
 
 type InspectorTab = 'design' | 'changes' | 'artifacts' | 'details' | 'lineage' | 'access'
 
+const NO_PEOPLE: Presence[] = []
+const NO_TURNS: TurnInfo[] = []
+const NO_COMMENTS: CommentView[] = []
+
+/** The thread's tasks, the same object until the entries they're read from change. */
+function useStableTasks(entries: HistoryEntry[]): Tasks {
+  const from = useMemo(() => taskEntries(entries), [entries])
+  // What they were last read from, for the next render to compare with.
+  const [kept, setKept] = useState<{ from: HistoryEntry[]; tasks: Tasks }>()
+  if (kept && sameList(kept.from, from)) return kept.tasks
+  const tasks = tasksOf(from)
+  setKept({ from, tasks })
+  return tasks
+}
+
+/** What the page asks of its history's list: to go to its end, and stay there, as a prompt is sent. */
+interface HistoryControls {
+  follow: () => void
+}
+
+/**
+ * The history, a row at a time as it scrolls into view. Its own component, so scrolling, which draws it at each new
+ * offset, draws neither the page nor the panel beside it.
+ */
+const HistoryList = memo(function HistoryList({
+  thread,
+  rows,
+  complete,
+  running,
+  entryProps,
+  scroll,
+  below,
+  hash,
+  anchor,
+  onUnfold,
+  controls,
+}: {
+  thread: string
+  rows: Row[]
+  /** Every page of the history has loaded. */
+  complete: boolean
+  /** The last turn is still under way. */
+  running: boolean
+  entryProps: EntryProps
+  scroll: RefObject<HTMLElement | null>
+  /** What waits below the history, which the page keeps in view too as it grows. */
+  below: RefObject<HTMLElement | null>
+  hash: string
+  anchor: Anchor | undefined
+  onUnfold: () => void
+  controls: RefObject<HistoryControls | null>
+}) {
+  const list = useRef<HTMLDivElement>(null)
+  const virtual = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scroll.current,
+    estimateSize: () => 96,
+    overscan: 6,
+    scrollMargin: list.current?.offsetTop ?? 0,
+  })
+  const scrollTo = useCallback((row: number) => virtual.scrollToIndex(row, { align: 'center' }), [virtual])
+  // The column that scrolls is the page's, an element above this one, whose ref is set only after this list's own
+  // layout effects ran: the list looks for it again once it's there, or a history already loaded drew no rows.
+  const [, lookAgain] = useState(0)
+  useEffect(() => {
+    if (scroll.current && virtual.scrollElement !== scroll.current) lookAgain((times) => times + 1)
+  }, [scroll, virtual])
+  // After a prompt is sent, the page follows to its turn, which arrives a moment later.
+  const following = useRef(false)
+  const follow = useFollow(scroll, [list, below], thread)
+  const toEnd = useCallback(() => {
+    follow.landed.current = true
+    follow.atBottom.current = true
+    if (rows.length > 0) virtual.scrollToIndex(rows.length - 1, { align: 'end' })
+    // What waits below the history, a permission or a plan, comes into view too.
+    requestAnimationFrame(() => {
+      if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight
+    })
+  }, [virtual, rows.length, scroll, follow])
+  useEffect(() => {
+    controls.current = {
+      follow: () => {
+        following.current = true
+        toEnd()
+      },
+    }
+  }, [controls, toEnd])
+  useEffect(() => {
+    if (!following.current) return
+    following.current = false
+    toEnd()
+  }, [rows.length, toEnd])
+  useFollowAnchor(rows, complete, hash, anchor, scrollTo, scroll)
+  // A thread opens where it is now, its latest turn, unless a link names a place in it.
+  const landed = useRef<string | null>(null)
+  const linked = anchor !== undefined && (anchor.entry !== undefined || anchor.comment !== undefined)
+  useEffect(() => {
+    if (landed.current === thread || !complete || rows.length === 0) return
+    landed.current = thread
+    // Linked, the page stays where the link put it until the person scrolls to its end.
+    if (linked) follow.landed.current = true
+    else toEnd()
+  }, [thread, complete, rows.length, linked, toEnd, follow])
+  return (
+    <div ref={list} className="relative" style={{ height: virtual.getTotalSize() }} data-testid="history">
+      {virtual.getVirtualItems().map((item) => {
+        const row = rows[item.index]
+        const last = item.index === rows.length - 1
+        return (
+          <div
+            key={row.key}
+            data-index={item.index}
+            ref={virtual.measureElement}
+            // What a fork inherited, once shown, reads as the source's rather than its own.
+            className={cx('absolute left-0 w-full', row.kind !== 'origin' && originOf(row) === 'inherited' && 'opacity-60')}
+            style={{ transform: `translateY(${item.start - virtual.options.scrollMargin}px)` }}
+          >
+            <TranscriptRow row={row} running={running && last} last={last} onUnfold={onUnfold} {...entryProps} />
+          </div>
+        )
+      })}
+    </div>
+  )
+})
+
+/** The composer, with the draft it keeps: typing draws it alone, and tells the others here what's typed. */
+function ThreadComposer({
+  thread,
+  lastPrompt,
+  onPeople,
+  ...dock
+}: Omit<ComponentProps<typeof AgentDock>, 'draft' | 'onDraft' | 'people'> & {
+  /** The thread's last prompt, which clears a draft it took in. */
+  lastPrompt: string | undefined
+  onPeople: (people: Presence[]) => void
+}) {
+  const [draft, setDraft] = useDraft(threadDraft(thread))
+  const people = usePresence(thread, null, null, draft, onPeople, !hosted())
+  const clearDraft = useCallback(() => setDraft(''), [setDraft])
+  useClearSentDraft(lastPrompt, draft, clearDraft)
+  return <AgentDock thread={thread} {...dock} draft={draft} onDraft={setDraft} people={people} />
+}
+
 function ThreadBody({
   thread,
   id,
@@ -2073,7 +2237,6 @@ function ThreadBody({
   // The artifact the panel shows (ADR 0068), and whether it takes the conversation's space too.
   const [opened, setOpened] = useState<Opened | null>(null)
   const [full, setFull] = useState(false)
-  const [draft, setDraft] = useDraft(threadDraft(thread))
   const [detail, setDetail] = useDetailChoice()
   const [grouping, setGrouping] = useGroupingChoice()
   const [thoughts, setThoughts] = useState({ open: false, times: 0 })
@@ -2096,10 +2259,9 @@ function ThreadBody({
     () => status && { ...status, streaming: status.streaming || pending.text, thinking: status.thinking || pending.thought },
     [status, pending],
   )
-  const people = usePresence(thread, null, null, draft, undefined, !hosted())
+  // Heard by the composer, which sends the draft as it's typed: typing draws the composer, not the page.
+  const [people, setPeople] = useState<Presence[]>(NO_PEOPLE)
   const lastPrompt = entries.findLast((entry) => entry.kind === 'user')?.text
-  const clearDraft = useCallback(() => setDraft(''), [setDraft])
-  useClearSentDraft(lastPrompt, draft, clearDraft)
   const sending = useSending(thread)
   const landedPrompts = useMemo(() => arrived(sending, entries), [sending, entries])
   const waitingPrompts = sending.filter((item) => !landedPrompts.includes(item.id))
@@ -2117,8 +2279,9 @@ function ThreadBody({
       thread,
       waitingPrompts.map((item) => item.id),
     )
-    setDraft((current) => (current.trim() ? current : waitingPrompts.map((item) => item.text).join('\n\n')))
-  }, [agentState, thread, waitingPrompts, setDraft])
+    const key = threadDraft(thread)
+    if (!draftOf(key).trim()) keepDraft(key, waitingPrompts.map((item) => item.text).join('\n\n'))
+  }, [agentState, thread, waitingPrompts])
   useActions([
     { id: 'changes', label: panel ? 'Hide the changes panel' : 'Show changes', keys: 'd', run: () => setPanel(!panel) },
     ...(desktop && !hosted() ? [{ id: 'review', label: 'Expand the review', keys: 'shift+d', run: () => openReview() }] : []),
@@ -2157,11 +2320,17 @@ function ThreadBody({
     },
     [groups],
   )
-  const closeArtifact = () => {
+  const backFromArtifact = useCallback(() => {
+    setOpened(null)
+    setFull(false)
+  }, [])
+  const closeArtifactPanel = useCallback(() => {
     setOpened(null)
     setFull(false)
     setSheet(false)
-  }
+    setPanel(false)
+  }, [])
+  const toggleFull = useCallback(() => setFull((was) => !was), [])
   const artifactActions = useMemo(() => ({ thread, open: openArtifact, opened }), [thread, openArtifact, opened])
   // A link to an artifact opens it; one made while the person watches opens by itself on a desktop, unless another is open.
   const seenArtifacts = useRef<number | null>(null)
@@ -2193,8 +2362,9 @@ function ThreadBody({
   const planCalls = useRef(new Set<string>())
   for (const asked of agent?.permissions ?? []) if (asked.plan && asked.tool_call) planCalls.current.add(asked.tool_call)
   const [unfolded, setUnfolded] = useState<string | null>(null)
-  const history = rowsOf(entries, turns.data ?? [])
-  const tasks = useMemo(() => tasksOf(entries), [entries])
+  const turnList = turns.data ?? NO_TURNS
+  const history = useMemo(() => rowsOf(entries, turnList), [entries, turnList])
+  const tasks = useStableTasks(entries)
   const now = useNow()
   const lastSaid = entries.length > 0 ? entries[entries.length - 1].time_ms : 0
   const live = mayRun(
@@ -2226,65 +2396,68 @@ function ThreadBody({
     return said?.split('\n')[0] ?? task.summary?.split('\n')[0] ?? task.ids[0] ?? 'A task'
   }
   // A link into the history may name an inherited turn, so it shows them all.
-  const rows = unfolded === thread || hash ? history : foldInherited(history)
-  const list = useRef<HTMLDivElement>(null)
+  const folded = useMemo(
+    () => (unfolded === thread || hash ? history : foldInherited(history)),
+    [unfolded, thread, hash, history],
+  )
+  // The rows last drawn, for the next render to keep what's unchanged of.
+  const [shownRows, setShownRows] = useState<{ from: Row[]; rows: Row[] }>()
+  let rows: Row[]
+  if (shownRows?.from === folded) rows = shownRows.rows
+  else {
+    rows = keepRows(shownRows?.rows, folded)
+    setShownRows({ from: folded, rows })
+  }
   // Beside the open panel the history scrolls in the page's own column (see Page), not the main one.
   const outer = useContext(MainScroll)
   const column = useRef<HTMLDivElement>(null)
   const scroll = (panel || sheet) && desktop ? column : outer
-  const virtual = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => scroll.current,
-    estimateSize: () => 96,
-    overscan: 6,
-    scrollMargin: list.current?.offsetTop ?? 0,
-  })
-  const scrollTo = useCallback((row: number) => virtual.scrollToIndex(row, { align: 'center' }), [virtual])
-  // After a prompt is sent, the page follows to its turn, which arrives a moment later.
-  const following = useRef(false)
   const below = useRef<HTMLDivElement>(null)
-  const follow = useFollow(scroll, [list, below], thread)
-  const toEnd = useCallback(() => {
-    follow.landed.current = true
-    follow.atBottom.current = true
-    if (rows.length > 0) virtual.scrollToIndex(rows.length - 1, { align: 'end' })
-    // What waits below the history, a permission or a plan, comes into view too.
-    requestAnimationFrame(() => {
-      if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight
-    })
-  }, [virtual, rows.length, scroll, follow])
-  useEffect(() => {
-    if (!following.current) return
-    following.current = false
-    toEnd()
-  }, [rows.length, toEnd])
-  const anchor = useAnchor(rows, entries.length >= total, turns.data, comments.data, scrollTo, scroll)
-  // A thread opens where it is now, its latest turn, unless a link names a place in it.
-  const landed = useRef<string | null>(null)
-  const linked = anchor.entry !== undefined || anchor.comment !== undefined
-  useEffect(() => {
-    if (landed.current === thread || entries.length < total || rows.length === 0) return
-    landed.current = thread
-    // Linked, the page stays where the link put it until the person scrolls to its end.
-    if (linked) follow.landed.current = true
-    else toEnd()
-  }, [thread, entries.length, total, rows.length, linked, toEnd, follow])
+  const list = useRef<HistoryControls | null>(null)
+  const { hash: named, named: anchorNamed } = useNamedAnchor(turns.data, comments.data)
+  const anchor = anchorNamed ?? NO_ANCHOR
+  const unfold = useCallback(() => setUnfolded(thread), [thread])
   const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry' && comment.location.at !== 'doc')
   const files = stats.data ?? null
   const totals = files && {
     added: files.reduce((sum, file) => sum + file.added, 0),
     removed: files.reduce((sum, file) => sum + file.removed, 0),
   }
-  const entryProps: EntryProps = {
-    thread,
-    comments: comments.data ?? [],
-    anchor,
-    onChanged: reloadComments,
-    onComment: async (index, text) => {
-      await api.addComment(thread, { on: 'entry', index }, text)
-      await reloadComments()
-    },
-  }
+  const allComments = comments.data ?? NO_COMMENTS
+  const entryProps = useMemo<EntryProps>(
+    () => ({
+      thread,
+      comments: allComments,
+      anchor,
+      onChanged: reloadComments,
+      onComment: async (index, text) => {
+        await api.addComment(thread, { on: 'entry', index }, text)
+        await reloadComments()
+      },
+    }),
+    [thread, allComments, anchor, reloadComments],
+  )
+  const liveTool = useMemo(
+    () => (tool.id !== null && planCalls.current.has(tool.id) ? { id: null, text: '' } : tool),
+    // `planCalls` only grows as the agent asks, which changes `agent`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tool, agent?.permissions],
+  )
+  const permissions = agent?.permissions
+  const questions = agent?.questions
+  const agentName = agent?.agent
+  const liveQuestions = useMemo(
+    () =>
+      agentName !== undefined && permissions
+        ? {
+            thread,
+            agent: agentName,
+            questions: questions ?? [],
+            awaiting: permissions.flatMap((asked) => (asked.tool_call ? [asked.tool_call] : [])),
+          }
+        : null,
+    [thread, agentName, questions, permissions],
+  )
 
   // The review across the page, where there's room for it and a daemon to read the diff from.
   const openReview = () => void navigate({ to: '/t/$id/review', params: { id: thread } })
@@ -2326,20 +2499,9 @@ function ThreadBody({
             <TranscriptDetail.Provider value={detail}>
               <TranscriptGrouping.Provider value={grouping}>
                 <ThoughtsOpen.Provider value={thoughts}>
-                  <LiveTool.Provider value={tool.id !== null && planCalls.current.has(tool.id) ? { id: null, text: '' } : tool}>
+                  <LiveTool.Provider value={liveTool}>
                     <LiveThought.Provider value={thoughtCarded ? agent.thinking : ''}>
-                      <LiveQuestions.Provider
-                        value={
-                          agent
-                            ? {
-                                thread,
-                                agent: agent.agent,
-                                questions: agent.questions ?? [],
-                                awaiting: agent.permissions.flatMap((asked) => (asked.tool_call ? [asked.tool_call] : [])),
-                              }
-                            : null
-                        }
-                      >
+                      <LiveQuestions.Provider value={liveQuestions}>
                         <Page
                           flush
                           label="thread"
@@ -2357,17 +2519,11 @@ function ThreadBody({
                                   groups={groups}
                                   opened={opened}
                                   onOpen={openArtifact}
-                                  onBack={() => {
-                                    setOpened(null)
-                                    setFull(false)
-                                  }}
-                                  onClose={() => {
-                                    closeArtifact()
-                                    setPanel(false)
-                                  }}
+                                  onBack={backFromArtifact}
+                                  onClose={closeArtifactPanel}
                                   full={full}
-                                  onFull={() => setFull(!full)}
-                                  comments={comments.data ?? []}
+                                  onFull={toggleFull}
+                                  comments={allComments}
                                   onCommentsChanged={reloadComments}
                                   phone={!desktop}
                                 />
@@ -2500,31 +2656,19 @@ function ThreadBody({
                                 <CloudSession thread={summary} />
                               </div>
                             )}
-                            <div ref={list} className="relative" style={{ height: virtual.getTotalSize() }} data-testid="history">
-                              {virtual.getVirtualItems().map((item) => {
-                                const row = rows[item.index]
-                                return (
-                                  <div
-                                    key={row.key}
-                                    data-index={item.index}
-                                    ref={virtual.measureElement}
-                                    // What a fork inherited, once shown, reads as the source's rather than its own.
-                                    className={cx(
-                                      'absolute left-0 w-full',
-                                      row.kind !== 'origin' && originOf(row) === 'inherited' && 'opacity-60',
-                                    )}
-                                    style={{ transform: `translateY(${item.start - virtual.options.scrollMargin}px)` }}
-                                  >
-                                    <TranscriptRow
-                                      row={row}
-                                      running={turnRunning && item.index === rows.length - 1}
-                                      onUnfold={() => setUnfolded(thread)}
-                                      {...entryProps}
-                                    />
-                                  </div>
-                                )
-                              })}
-                            </div>
+                            <HistoryList
+                              thread={thread}
+                              rows={rows}
+                              complete={entries.length >= total}
+                              running={turnRunning}
+                              entryProps={entryProps}
+                              scroll={scroll}
+                              below={below}
+                              hash={named}
+                              anchor={anchorNamed}
+                              onUnfold={unfold}
+                              controls={list}
+                            />
                             <div ref={below} className="flex flex-col gap-3 pt-2 pb-4">
                               {waitingPrompts.map((item) => (
                                 <SendingPrompt key={item.id} item={item} />
@@ -2557,20 +2701,16 @@ function ThreadBody({
                               <div className="mb-2 empty:hidden">
                                 <RunningStrip titles={taskTitle} />
                               </div>
-                              <AgentDock
+                              <ThreadComposer
                                 thread={thread}
                                 status={agent}
                                 heard={heard}
                                 preset={preset}
                                 onPreset={setPreset}
-                                draft={draft}
-                                onDraft={setDraft}
-                                onSent={() => {
-                                  following.current = true
-                                  toEnd()
-                                }}
+                                lastPrompt={lastPrompt}
+                                onPeople={setPeople}
+                                onSent={() => list.current?.follow()}
                                 onSending={(text, files) => addSending(thread, text, files, total)}
-                                people={people}
                                 // Docked on the composer's top edge: what the thread changed and what the next prompt adds to it are one object.
                                 top={
                                   files &&
@@ -2604,41 +2744,16 @@ function ThreadBody({
   )
 }
 
-/** Entries in a thread's first page of history, which shows on its own while
- * the rest loads. */
-const FIRST_PAGE = 50
-/** Entries in each page after the first. */
-const PAGE = 500
-
-/** A thread's whole history, a page at a time: the first is drawn as soon as
- * it comes, and the others follow it. */
-function useHistory(id: string) {
-  const pages = useInfiniteQuery({
-    queryKey: [...keys.history(id), 'pages'],
-    queryFn: ({ pageParam }) => api.history(id, pageParam, pageParam === 0 ? FIRST_PAGE : PAGE),
-    initialPageParam: 0,
-    getNextPageParam: (last, _all, offset) => {
-      const next = offset + (offset === 0 ? FIRST_PAGE : PAGE)
-      return next < last.total ? next : undefined
-    },
-  })
-  const { hasNextPage, isFetching, fetchNextPage } = pages
-  const loaded = pages.data?.pages
-  // Whenever a fetch settles with more to come, whichever fetch it was: a refetch,
-  // such as the one subscribing to the thread starts, cancels the next page's
-  // fetch and brings back only the pages it had, which left a thread at its first page.
-  useEffect(() => {
-    if (hasNextPage && !isFetching) void fetchNextPage()
-  }, [hasNextPage, isFetching, fetchNextPage, loaded?.length])
-  const last = loaded?.[loaded.length - 1]
-  return {
-    error: pages.error,
-    data: last && { thread: last.thread, total: last.total, entries: loaded.flatMap((page) => page.entries) },
-  }
-}
+/** How long a thread's full id is; a link may name it by its end. */
+const FULL_ID = 32
 
 export function ThreadView({ id }: { id: string }) {
-  const history = useHistory(id)
+  // A short id is read as the full one the list knows, so the history read for it isn't read again once the address
+  // becomes the full id.
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
+  const short = id.length < FULL_ID
+  const full = short ? threads.data?.find((thread) => thread.id.endsWith(id))?.id : id
+  const history = useHistory(short && threads.isPending ? null : (full ?? id))
   useTopic('threads')
   useTopic(history.data ? `thread:${history.data.thread}` : null)
   if (history.error) return <p className="p-6 text-danger">{message(history.error)}</p>

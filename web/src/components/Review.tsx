@@ -26,7 +26,7 @@ import {
   turnsOfHunk,
 } from '../reviewNav'
 import { type Kept, keepView, keptView } from '../reviewView'
-import { useLive } from '../session'
+import { useAgentStatus } from '../agentStatus'
 import { useActions } from '../shortcuts'
 import { useThreadDiff } from '../threadDiff'
 import { Button, Icon, Input, Select, Skeleton, Tabs, cx, toast } from '../ui'
@@ -93,7 +93,8 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
   const hidden = { hideGit: hideGitSetting && !againstMain, hideOthers: hideOthersSetting && !againstMain && summary.shared }
   const spec: DiffSpec = picked ? { turn: picked[0], toTurn: picked[1], ...hidden } : { base, ...hidden }
   const review = useReview(thread)
-  const { agent: status } = useLive(thread)
+  // Its state alone: the whole live session drew the review again at every word the agent streamed.
+  const status = useAgentStatus(thread)
   const agent = status?.agent
   const working = status?.state === 'working' || status?.state === 'awaiting_permission' || status?.state === 'starting'
   // What Mark reviewed records: the end of the turns picked, else the last turn that ended.
@@ -177,11 +178,12 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
 
   const show = (file: DiffFile, hunk?: number) => {
     change({ file: file.path })
-    const target =
-      hunk === undefined
-        ? document.getElementById(`file-${file.path}`)
-        : pane.current?.querySelector(`[data-hunk="${CSS.escape(`${file.path}#${hunk}`)}"]`)
-    target?.scrollIntoView({ block: 'start' })
+    const hunkIn = () => pane.current?.querySelector(`[data-hunk="${CSS.escape(`${file.path}#${hunk}`)}"]`)
+    const target = hunk === undefined ? null : hunkIn()
+    if (target) return target.scrollIntoView({ block: 'start' })
+    document.getElementById(`file-${file.path}`)?.scrollIntoView({ block: 'start' })
+    // A large diff draws a file's lines only once it's near the view: the hunk is there a frame or two later.
+    if (hunk !== undefined) requestAnimationFrame(() => requestAnimationFrame(() => hunkIn()?.scrollIntoView({ block: 'start' })))
   }
   const go = (next: At | null) => {
     if (!next) return

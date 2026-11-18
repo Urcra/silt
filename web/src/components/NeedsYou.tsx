@@ -39,7 +39,7 @@ function Card({ tone, kind, label, children }: { tone: DotTone; kind: string; la
 /** A merge request waiting on the person: its guide, how much is seen, and approving it. */
 function ReviewCard({ thread, mr }: { thread: ThreadSummary; mr: MrSummary }) {
   const queries = useQueryClient()
-  const details = useQuery({ queryKey: keys.mr(mr.id), queryFn: () => api.mergeRequest(mr.id) })
+  const details = useQuery({ queryKey: keys.mrBrief(mr.id), queryFn: () => api.mergeRequest(mr.id, {}, true) })
   const files = details.data?.files ?? []
   const seen = files.filter((file) => file.seen).length
   const guide = details.data?.guide
@@ -243,7 +243,7 @@ function QueueRow({
 
 /** A merge request waiting on the person, in the queue: how much is seen, then approving it or reviewing the files. */
 function ReviewDetail({ mr, approve }: { mr: MrSummary; approve: () => void }) {
-  const details = useQuery({ queryKey: keys.mr(mr.id), queryFn: () => api.mergeRequest(mr.id) })
+  const details = useQuery({ queryKey: keys.mrBrief(mr.id), queryFn: () => api.mergeRequest(mr.id, {}, true) })
   const files = details.data?.files ?? []
   const seen = files.filter((file) => file.seen).length
   const guide = details.data?.guide

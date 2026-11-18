@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams, useRouterState } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, hiddenLines, short, type CommentView, type MrFile, type MrGuide, type MrSummary, type ShowLine } from '../api'
 import { useTopic } from '../bus'
 import { useHideGit, useHideOthers } from '../hideGit'
@@ -539,6 +539,8 @@ export function MergeRequest({ id }: { id: string }) {
     retry: false,
   })
   const loaded = details.data !== undefined
+  // Parsed once per diff, not at each render: a tick, a comment or a minute passing drew the page again.
+  const parsed = useMemo(() => parseFiles(details.data?.diff ?? ''), [details.data?.diff])
   useEffect(() => {
     if (loaded && picked) document.getElementById(`file-${picked}`)?.scrollIntoView({ block: 'start' })
   }, [loaded, picked])
@@ -566,7 +568,6 @@ export function MergeRequest({ id }: { id: string }) {
   // A tick shows at once, before the daemon answers.
   const seenNow = (file: MrFile) => ticked[file.path] ?? file.seen
   const seenCount = files.filter(seenNow).length
-  const parsed = parseFiles(diff)
   const counts = new Map(parsed.map((file) => [file.path, file]))
   const total = [...counts.values()].reduce(
     (sum, file) => ({ added: sum.added + file.added, removed: sum.removed + file.removed }),
@@ -805,7 +806,7 @@ export function MergeRequest({ id }: { id: string }) {
           )}
           <div className="min-w-0 flex-1 px-4 py-4 md:px-6">
             <DiffView
-              text={diff}
+              files={parsed}
               layout={layout}
               anchors
               picked={picked}

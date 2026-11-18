@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef } from 'react'
 import { api, type DiffSpec, type Hidden, hiddenLines } from './api'
-import { parseFiles, readWhole } from './diffParse'
+import { type DiffFile, parseFiles, readWhole } from './diffParse'
 import { commentBaseOf } from './diffSpec'
 import { keys } from './query'
 import { type Draft, type Lines, type ReviewState, linesOf, quoteOf, shownAt, sideOf } from './review'
@@ -9,6 +9,19 @@ import type { Commenting } from './components/DiffView'
 
 /** Files in a page of a thread's diff: a change touching thousands comes a page at a time. */
 export const FILES_PAGE = 50
+
+/** Pages of diffs parsed lately, by their text. */
+const parsedPages = new Map<string, DiffFile[]>()
+
+function parsedPage(page: string): DiffFile[] {
+  let files = parsedPages.get(page)
+  if (!files) {
+    files = parseFiles(page)
+    if (parsedPages.size >= 64) parsedPages.delete(parsedPages.keys().next().value!)
+    parsedPages.set(page, files)
+  }
+  return files
+}
 
 /** How many files a page of a diff holds. */
 function filesIn(diff: string): number {
@@ -44,8 +57,10 @@ export function useThreadDiff(
     queryFn: () => api.comments(thread, commentBase, hidden),
   })
   const changed = () => Promise.all([queries.invalidateQueries({ queryKey: keys.comments(thread) }), onCommented()])
-  const text = diff.data?.pages.join('')
-  const files = useMemo(() => (text === undefined ? [] : parseFiles(text)), [text])
+  const pages = diff.data?.pages
+  const text = useMemo(() => pages?.join(''), [pages])
+  // Each page parsed once as it comes, rather than all of them again with each: pages hold whole files.
+  const files = useMemo(() => (pages ?? []).flatMap(parsedPage), [pages])
   // Pending comments follow their text (ADR 0066): each takes an anchor when written, and shows where it is now.
   const tried = useRef(new Set<string>())
   const anchor = (id: string, at: Lines, base: string | undefined, numbered: Hidden) => {

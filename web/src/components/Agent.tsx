@@ -23,7 +23,7 @@ import { ATTACH, useAttachments } from '../attachments'
 import { AttachedFiles } from './Attachments'
 import { ChipSelect } from './ChipSelect'
 import { ComposerBox, RoundButton } from './Composer'
-import { Markdown } from './Markdown'
+import { Markdown, StreamingMarkdown } from './Markdown'
 import { PromptQueue } from './Queue'
 import { dropSending } from '../sending'
 
@@ -435,7 +435,7 @@ export function AgentTail({
           <p className="mt-1.5 text-xs whitespace-pre-wrap text-fg-2 italic">{status.thinking}</p>
         </details>
       )}
-      {status.streaming && <Markdown text={status.streaming} />}
+      {status.streaming && <StreamingMarkdown text={status.streaming} />}
       {working(status) && (
         <div role="status" className="flex items-center gap-2.5 text-xs whitespace-nowrap text-fg-2">
           {/* Blocked on the person, not busy: no spinner. */}

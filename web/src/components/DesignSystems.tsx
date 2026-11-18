@@ -1,6 +1,7 @@
 // Design systems in Settings (ADR 0088): every system here, one system's page with its components drawn live, and the
 // threads whose agents make or change one.
 
+import { useSettled } from '../now'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { type RefObject, useEffect, useMemo, useRef, useState } from 'react'
@@ -522,9 +523,11 @@ export function SystemFrame({
     window.addEventListener('message', heard)
     return () => window.removeEventListener('message', heard)
   }, [least])
+  // Written again for a new width only once the panel stops resizing: each pixel dragged loaded every frame again.
+  const written = useSettled(width, 200) || width
   const document = useMemo(
-    () => (width > 0 ? partDocument(html, undefined, width, least, css, theme, undefined, true) : ''),
-    [html, css, theme, width, least],
+    () => (written > 0 ? partDocument(html, undefined, written, least, css, theme, undefined, true) : ''),
+    [html, css, theme, written, least],
   )
   if (width <= 0) return null
   return (
