@@ -1,6 +1,24 @@
 import { expect, test } from '@playwright/test'
 import { allThreads, fixture, silt } from './fixture'
 
+test('the prompt box undoes deleted text and restores its selection', async ({ page }) => {
+  await page.goto(fixture().url)
+  const prompt = page.getByRole('textbox', { name: 'first prompt' })
+  await prompt.fill('Please fix the bug')
+  await prompt.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(7, 15))
+  await prompt.press('Backspace')
+  await expect(prompt).toHaveValue('Please bug')
+  await prompt.press('ControlOrMeta+z')
+  await expect(prompt).toHaveValue('Please fix the bug')
+  expect(await prompt.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd])).toEqual([7, 15])
+  await prompt.press('ControlOrMeta+Shift+Z')
+  await expect(prompt).toHaveValue('Please bug')
+  await prompt.press('ControlOrMeta+a')
+  await prompt.press('Backspace')
+  await prompt.press('ControlOrMeta+z')
+  await expect(prompt).toHaveValue('Please bug')
+})
+
 test('a thread page shows what changes elsewhere without a reload', async ({ page }) => {
   const { url, thread } = fixture()
   await page.goto(url)

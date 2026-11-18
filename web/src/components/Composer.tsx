@@ -6,6 +6,7 @@ import { Icon, Menu, type MenuItem, cx } from '../ui'
 import { DICTATION_KEYS, hasVoiceNote, insertWords, showKeyHint, taking, useDictation } from '../voice'
 import { ComposerFolded } from './composerFolded'
 import { RoundButton } from './RoundButton'
+import { useComposerHistory } from './useComposerHistory'
 import { Keys, VoiceBar, VoiceButton, VoiceNote, VoiceOffer } from './VoiceButton'
 
 export { RoundButton }
@@ -317,11 +318,12 @@ export function ComposerBox({
   // The text Escape closed the menu on; it opens again once the text changes.
   const [dismissed, setDismissed] = useState<string>()
   const [chosen, setChosen] = useState(0)
+  const history = useComposerHistory(id, value, box, onChange)
   const offered = typed === null || dismissed === value || take ? [] : matching(commands, typed)
   const active = Math.min(chosen, offered.length - 1)
-  const edit = (text: string) => {
+  const edit = (text: string, kind = '') => {
     setChosen(0)
-    onChange(text)
+    history.edit(text, kind)
   }
   const pick = (command: AgentCommand) => edit(`/${command.name} `)
   const choosing = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -353,6 +355,11 @@ export function ComposerBox({
     onFiles(files, false)
   }
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (history.keyDown(event)) {
+      dictatedToSend.current = null
+      setChosen(0)
+      return
+    }
     if (offered.length > 0 && choosing(event)) return
     if (dictation.onKey(event)) return
     // ⏎ sends and shift+⏎ breaks the line, as in a chat; on a touch keyboard, with no shift, ⏎ breaks it and
@@ -477,8 +484,9 @@ export function ComposerBox({
               value={value}
               onChange={(event) => {
                 dictatedToSend.current = null
-                edit(event.target.value)
+                edit(event.target.value, (event.nativeEvent as InputEvent).inputType)
               }}
+              onSelect={history.select}
               onKeyDown={keyDown}
               aria-controls={offered.length > 0 ? `${id}-commands` : undefined}
               aria-activedescendant={offered.length > 0 ? `${id}-command-${active}` : undefined}
