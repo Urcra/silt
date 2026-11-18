@@ -10,12 +10,20 @@ pub struct Shipped {
     pub everywhere: bool,
 }
 
-pub const PLUGINS: [Shipped; 1] = [Shipped {
-    manifest: include_str!("../../../plugins/folders/silt-plugin.toml"),
-    readme: include_str!("../../../plugins/folders/README.md"),
-    wasm: include_bytes!(concat!(env!("OUT_DIR"), "/folders.wasm")),
-    everywhere: true,
-}];
+pub const PLUGINS: [Shipped; 2] = [
+    Shipped {
+        manifest: include_str!("../../../plugins/folders/silt-plugin.toml"),
+        readme: include_str!("../../../plugins/folders/README.md"),
+        wasm: include_bytes!(concat!(env!("OUT_DIR"), "/folders.wasm")),
+        everywhere: true,
+    },
+    Shipped {
+        manifest: include_str!("../../../plugins/github/silt-plugin.toml"),
+        readme: include_str!("../../../plugins/github/README.md"),
+        wasm: include_bytes!(concat!(env!("OUT_DIR"), "/github.wasm")),
+        everywhere: false,
+    },
+];
 
 #[cfg(test)]
 mod tests {

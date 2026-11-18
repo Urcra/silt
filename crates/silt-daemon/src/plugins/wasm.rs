@@ -309,6 +309,23 @@ pub(crate) fn agent_folders(data_dir: &Path, workspace: &str, thread: &str) -> V
         .collect()
 }
 
+/// Whether GitHub's plugin is on in `workspace`, so nothing else of the
+/// person's reaches GitHub from its sandboxes.
+pub(crate) fn github_on(data_dir: &Path, workspace: &str) -> bool {
+    installed::find(data_dir, "silt.github").is_some_and(|installed| installed.on_in(workspace))
+}
+
+/// Where a thread's agents see their work area.
+pub(crate) const WORK_AREA: &str = "/silt/work";
+
+/// The thread's work area, where its agents clone what a plugin's mirrors
+/// hold: there for a thread of `workspace` when a plugin on in it may use
+/// git.
+pub(crate) fn work_area(data_dir: &Path, workspace: &str, thread: &str) -> Option<PathBuf> {
+    let any = installed::load(data_dir).iter().any(|installed| installed.on_in(workspace) && installed.granted.contains("git"));
+    (any && !thread.is_empty()).then(|| data_dir.join("work").join(thread))
+}
+
 /// The capabilities `manifest` declares, as granted when it's installed
 /// with the person's consent.
 pub(crate) fn declared(manifest: &silt_plugin::Manifest) -> BTreeSet<String> {

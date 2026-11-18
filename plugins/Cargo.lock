@@ -300,6 +300,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "silt-forge"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "silt-plugin"
 version = "0.0.1"
 dependencies = [
@@ -325,6 +333,14 @@ dependencies = [
 name = "silt-plugin-folders"
 version = "1.0.0"
 dependencies = [
+ "silt-plugin-api",
+]
+
+[[package]]
+name = "silt-plugin-github"
+version = "1.0.0"
+dependencies = [
+ "silt-forge",
  "silt-plugin-api",
 ]
 

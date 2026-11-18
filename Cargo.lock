@@ -6177,6 +6177,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "silt-forge"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "silt-gateway"
 version = "0.0.1"
 dependencies = [
@@ -6373,6 +6381,7 @@ dependencies = [
  "silt-agents",
  "silt-crdt",
  "silt-design",
+ "silt-forge",
  "silt-log",
  "silt-os",
  "silt-proto",

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 /// The packages shipped, by the name of their folder in `plugins/`.
-const SHIPPED: [&str; 1] = ["folders"];
+const SHIPPED: [&str; 2] = ["folders", "github"];
 
 fn main() {
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets it")).join("../../plugins");

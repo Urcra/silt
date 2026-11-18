@@ -75,11 +75,17 @@ pub fn set_secret(name: &str, secret: Option<&str>) -> Result<(), CoreError> {
 /// The gateway's credentials for `workspace`, with their secrets, and the
 /// placeholders the sandbox gets. One whose secret can't be had is left
 /// out, saying why.
-pub fn resolve(data_dir: &Path, workspace: &str) -> (Vec<silt_gateway::Credential>, Vec<(String, String)>, Vec<String>) {
+/// `leave_out` names hosts the gateway adds nothing for, such as GitHub's
+/// where its plugin is on.
+pub fn resolve(
+    data_dir: &Path,
+    workspace: &str,
+    leave_out: &dyn Fn(&str) -> bool,
+) -> (Vec<silt_gateway::Credential>, Vec<(String, String)>, Vec<String>) {
     let mut credentials = Vec::new();
     let mut placeholders = Vec::new();
     let mut missing = Vec::new();
-    for stored in load(data_dir).into_iter().filter(|stored| stored.workspace == workspace) {
+    for stored in load(data_dir).into_iter().filter(|stored| stored.workspace == workspace && !leave_out(&stored.host)) {
         let Some(credential) = secret_of(&stored) else {
             missing.push(stored.name.clone());
             continue;
@@ -155,7 +161,7 @@ mod tests {
             placeholder: Some("GH_TOKEN".into()),
         };
         save(dir.path(), &[stored("work-gh", "work"), stored("own-gh", "personal")]).unwrap();
-        let (credentials, placeholders, missing) = resolve(dir.path(), "work");
+        let (credentials, placeholders, missing) = resolve(dir.path(), "work", &|_| false);
         assert_eq!(credentials.len(), 1);
         assert_eq!(credentials[0].value, "Bearer s3cret");
         assert_eq!(credentials[0].header, "authorization");
@@ -163,6 +169,6 @@ mod tests {
         assert!(missing.is_empty());
         let broken = StoredCredential { source: Source::Command { argv: vec!["false".into()] }, ..stored("broken", "work") };
         save(dir.path(), &[broken]).unwrap();
-        assert_eq!(resolve(dir.path(), "work").2, vec!["broken".to_owned()]);
+        assert_eq!(resolve(dir.path(), "work", &|_| false).2, vec!["broken".to_owned()]);
     }
 }

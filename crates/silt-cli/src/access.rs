@@ -104,7 +104,7 @@ fn credentials() {
     let mut workspaces: Vec<&str> = all.iter().map(|stored| stored.workspace.as_str()).collect();
     workspaces.dedup();
     for workspace in workspaces {
-        let (_, _, missing) = silt_daemon::credentials::resolve(&data, workspace);
+        let (_, _, missing) = silt_daemon::credentials::resolve(&data, workspace, &|_| false);
         for stored in all.iter().filter(|stored| stored.workspace == workspace) {
             if missing.contains(&stored.name) {
                 line(

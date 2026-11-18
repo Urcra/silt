@@ -31,14 +31,38 @@ pub(crate) struct DaemonCapabilities {
     pub(crate) folders: Option<crate::folders::FolderScope>,
 }
 
+/// Where tests send a plugin's requests instead, as URL prefixes: read
+/// from `plugins/redirect.json` in Silt's data by a debug build only, so a
+/// GitHub stand-in can answer for github.com.
+pub(crate) fn redirects(data_dir: &Path) -> Vec<(String, String)> {
+    if !cfg!(debug_assertions) {
+        return Vec::new();
+    }
+    let Ok(bytes) = std::fs::read(data_dir.join("plugins/redirect.json")) else { return Vec::new() };
+    serde_json::from_slice::<std::collections::BTreeMap<String, String>>(&bytes)
+        .map(|map| map.into_iter().collect())
+        .unwrap_or_default()
+}
+
 impl DaemonCapabilities {
     /// The secret to send to `host`, and how, from the credential the
     /// manifest names for it.
     fn credential_for(&self, scope: &Scope, host: &str) -> Option<(Send, String)> {
         let spec = self.manifest.credentials.iter().find(|spec| spec.hosts.iter().any(|pattern| host_matches(pattern, host)))?;
-        let name = self.installed.credential_for(&spec.id, scope.environment.as_deref())?;
+        let id = spec.same_as.as_deref().unwrap_or(&spec.id);
+        let name = self.installed.credential_for(id, scope.environment.as_deref())?;
         let secret = crate::credentials::secret_named(&self.data_dir, &scope.workspace, name)?;
         Some((spec.send.clone(), secret))
+    }
+
+    /// `url`, where a test redirects it.
+    fn to(&self, url: &str) -> String {
+        for (from, to) in redirects(&self.data_dir) {
+            if let Some(rest) = url.strip_prefix(&from) {
+                return format!("{to}{rest}");
+            }
+        }
+        url.to_owned()
     }
 
     fn mirror(&self, name: &str) -> PathBuf {
@@ -171,6 +195,7 @@ impl Capabilities for DaemonCapabilities {
             .timeout(Duration::from_secs(120))
             .build()
             .map_err(|error| error.to_string())?;
+        let url = reqwest::Url::parse(&self.to(url.as_str())).map_err(|error| error.to_string())?;
         let mut builder = client.request(method, url).headers(headers);
         if let Some(body) = request.body {
             builder = builder.body(body);
@@ -195,7 +220,8 @@ impl Capabilities for DaemonCapabilities {
             self.git(Some(&path), &[], &["init", "--quiet", "--bare"])?;
         }
         let headers = self.git_headers(scope, remote);
-        let mut args = vec!["fetch", "--quiet", "--no-tags", "--prune", remote];
+        let remote = self.to(remote);
+        let mut args = vec!["fetch", "--quiet", "--no-tags", "--prune", remote.as_str()];
         args.extend(refspecs.iter().map(String::as_str));
         if refspecs.is_empty() {
             args.push("+refs/heads/*:refs/heads/*");
@@ -205,7 +231,7 @@ impl Capabilities for DaemonCapabilities {
 
     fn git_remote_head(&self, scope: &Scope, remote: &str, reference: &str) -> Result<Option<String>, String> {
         let headers = self.git_headers(scope, remote);
-        let listed = self.git(None, &headers, &["ls-remote", "--", remote, reference])?;
+        let listed = self.git(None, &headers, &["ls-remote", "--", &self.to(remote), reference])?;
         Ok(listed
             .lines()
             .find(|line| line.ends_with(&format!("\t{reference}")))
@@ -265,7 +291,7 @@ impl Capabilities for DaemonCapabilities {
         let headers = self.git_headers(scope, remote);
         let lease = format!("--force-with-lease={reference}:{old}");
         let refspec = format!("{commit}:{reference}");
-        self.git(Some(&path), &headers, &["push", "--quiet", "--no-verify", &lease, remote, &refspec]).map(|_| ())
+        self.git(Some(&path), &headers, &["push", "--quiet", "--no-verify", &lease, &self.to(remote), &refspec]).map(|_| ())
     }
 
     fn thread_read(&self, _scope: &Scope, path: &str) -> Result<Vec<u8>, String> {

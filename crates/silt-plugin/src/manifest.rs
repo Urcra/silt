@@ -232,6 +232,11 @@ pub struct CredentialSpec {
     /// Each environment has its own.
     #[serde(default)]
     pub per_environment: bool,
+    /// Another credential of this plugin whose secret this sends, another
+    /// way or to other hosts, such as a token to an API and to git: the
+    /// person sets it once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_as: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -454,6 +459,16 @@ impl Manifest {
                 return Err(bad(&field, "a credential per environment needs `environments`"));
             }
         }
+        for (index, credential) in self.credentials.iter().enumerate() {
+            let Some(same) = &credential.same_as else { continue };
+            let target = self.credentials.iter().find(|other| other.id == *same && other.id != credential.id);
+            if target.is_none_or(|target| target.same_as.is_some()) {
+                return Err(bad(
+                    format!("credentials[{index}].same_as"),
+                    "names another of its credentials, one that isn't itself the same as one",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -635,6 +650,14 @@ per_environment = true
         );
         assert_eq!(field_of(broken("id = \"acme.deploys\"", "id = \"silt.deploys\"")), "id");
         assert!(matches!(broken("license = \"Apache-2.0\"", "license = \"Apache-2.0\"\nsurprise = 1"), ManifestError::Parse(_)));
+        assert_eq!(
+            field_of(broken("per_environment = true", "per_environment = true\nsame_as = \"token\"")),
+            "credentials[0].same_as"
+        );
+        let twice = format!(
+            "{DEPLOYS}\n[[credentials]]\nid = \"git\"\nlabel = \"The same\"\nhosts = [\"deploy.acme.internal\"]\nsend = {{ basic = {{ user = \"x\" }} }}\nhow = \"The same token.\"\nsame_as = \"token\"\n"
+        );
+        assert!(Manifest::parse(&twice).is_ok(), "one credential sent two ways");
     }
 
     #[test]

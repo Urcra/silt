@@ -1,0 +1,211 @@
+id = "silt.github"
+name = "GitHub"
+version = "1.0.0"
+publisher = "silt"
+description = "An agent's clones, pushes and calls to GitHub's API, each allowed, asked or never by your rules, per repo."
+license = "AGPL-3.0-only"
+world = "silt:plugin@1"
+build = "shipped"
+environments = { label = "repos", field = "repo" }
+
+[[capabilities]]
+kind = "http"
+hosts = ["api.github.com"]
+reason = "Reads repos, issues, pull requests and checks, and makes the changes you allow, through GitHub's API."
+
+[[capabilities]]
+kind = "git"
+hosts = ["github.com"]
+reason = "Keeps the thread's mirrors of the repos the agent works on, and pushes exactly the commit you allowed."
+
+[[capabilities]]
+kind = "agent-files"
+reason = "Shows the agent its thread's mirrors, read-only, at /silt/github."
+
+[[capabilities]]
+kind = "thread-read"
+reason = "Reads the commit the agent asks to push from its checkout or work area, with git's upload-pack alone."
+
+[[credentials]]
+id = "token"
+label = "A GitHub token"
+hosts = ["api.github.com"]
+send = { header = { name = "Authorization", scheme = "Bearer" } }
+how = "A fine-grained token for the repos it's for, or `gh auth token`'s: `silt credential add work-github --command \"gh auth token\"`, then `silt plugin credential silt.github token work-github`."
+per_environment = true
+
+[[credentials]]
+id = "token_git"
+label = "The same token, for git"
+hosts = ["github.com"]
+send = { basic = { user = "x-access-token" } }
+how = "The same token as `token`; it's sent to git over HTTPS as its password."
+per_environment = true
+same_as = "token"
+
+[[actions]]
+id = "clone"
+label = "Clone a repo"
+description = "Makes or updates the thread's mirror of a repo, for the agent to clone from `/silt/github`."
+kind = "read"
+default = "allow"
+fields = ["repo"]
+
+[[actions]]
+id = "fetch"
+label = "Fetch a repo"
+description = "Updates the thread's mirror of a repo."
+kind = "read"
+default = "allow"
+fields = ["repo"]
+
+[[actions]]
+id = "repo"
+label = "Read a repo"
+description = "Reads a repo's description, default branch and settings."
+kind = "read"
+default = "allow"
+fields = ["repo"]
+
+[[actions]]
+id = "file"
+label = "Read a file"
+description = "Reads a file of a repo at a branch, tag or commit."
+kind = "read"
+default = "allow"
+fields = ["repo", "path"]
+
+[[actions]]
+id = "issues"
+label = "Read issues"
+description = "Lists a repo's issues, or reads one with its comments."
+kind = "read"
+default = "allow"
+fields = ["repo"]
+
+[[actions]]
+id = "pulls"
+label = "Read pull requests"
+description = "Lists a repo's pull requests, or reads one with its diff."
+kind = "read"
+default = "allow"
+fields = ["repo"]
+
+[[actions]]
+id = "checks"
+label = "Read checks"
+description = "Reads the checks and their runs for a commit or branch."
+kind = "read"
+default = "allow"
+fields = ["repo"]
+
+[[actions]]
+id = "search"
+label = "Search"
+description = "Searches a repo's code or issues."
+kind = "read"
+default = "allow"
+fields = ["repo"]
+
+[[actions]]
+id = "push"
+label = "Push a branch"
+description = "Pushes the agent's commit to a branch that isn't the default or protected, moving it forward only."
+kind = "change"
+default = "ask"
+fields = ["repo", "branch"]
+
+[[actions]]
+id = "push_default"
+label = "Push to the default or a protected branch"
+description = "Pushes to the repo's default branch, or to a protected one, moving it forward only."
+kind = "change"
+default = "ask"
+once = true
+fields = ["repo", "branch"]
+
+[[actions]]
+id = "push_force"
+label = "Force-push"
+description = "Pushes a branch to a commit that doesn't follow from where it is, losing what's there."
+kind = "change"
+default = "never"
+once = true
+fields = ["repo", "branch"]
+
+[[actions]]
+id = "branch_delete"
+label = "Delete a branch"
+description = "Deletes a branch."
+kind = "change"
+default = "ask"
+fields = ["repo", "branch"]
+
+[[actions]]
+id = "issue_write"
+label = "Open or edit an issue"
+description = "Opens an issue, or changes one's title, text or state."
+kind = "change"
+default = "ask"
+fields = ["repo"]
+
+[[actions]]
+id = "comment"
+label = "Comment"
+description = "Comments on an issue or a pull request."
+kind = "change"
+default = "ask"
+fields = ["repo"]
+
+[[actions]]
+id = "pr_create"
+label = "Open a pull request"
+description = "Opens a pull request."
+kind = "change"
+default = "ask"
+fields = ["repo", "branch"]
+
+[[actions]]
+id = "pr_update"
+label = "Edit a pull request"
+description = "Changes a pull request's title, text, base or state."
+kind = "change"
+default = "ask"
+fields = ["repo"]
+
+[[actions]]
+id = "review"
+label = "Review a pull request"
+description = "Approves a pull request, asks for changes, or comments on it as a review."
+kind = "change"
+default = "ask"
+fields = ["repo"]
+
+[[actions]]
+id = "merge"
+label = "Merge a pull request"
+description = "Merges a pull request at the commit shown."
+kind = "change"
+default = "ask"
+once = true
+fields = ["repo"]
+
+[[actions]]
+id = "workflow_run"
+label = "Run a workflow"
+description = "Starts a GitHub Actions workflow on a branch."
+kind = "change"
+default = "ask"
+fields = ["repo", "branch"]
+
+[[actions]]
+id = "release"
+label = "Make a release"
+description = "Makes a release and its tag."
+kind = "change"
+default = "never"
+once = true
+fields = ["repo"]
+
+[docs]
+readme = "README.md"

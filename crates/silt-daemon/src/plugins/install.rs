@@ -259,8 +259,14 @@ pub fn consent(manifest: &Manifest) -> Vec<String> {
         let opaque = if capability.opaque() { "; Silt can't check what these calls send" } else { "" };
         lines.push(format!("  {}{reach}: {}{opaque}", capability.name(), capability.reason()));
     }
-    for credential in &manifest.credentials {
-        lines.push(format!("  needs {}, sent to {} only, never to the plugin", credential.label, credential.hosts.join(", ")));
+    for credential in manifest.credentials.iter().filter(|credential| credential.same_as.is_none()) {
+        let hosts: Vec<&str> = manifest
+            .credentials
+            .iter()
+            .filter(|other| other.id == credential.id || other.same_as.as_deref() == Some(credential.id.as_str()))
+            .flat_map(|other| other.hosts.iter().map(String::as_str))
+            .collect();
+        lines.push(format!("  needs {}, sent to {} only, never to the plugin", credential.label, hosts.join(", ")));
     }
     for action in &manifest.actions {
         let kind = if action.kind == silt_plugin::ActionKind::Read { "read" } else { "change" };

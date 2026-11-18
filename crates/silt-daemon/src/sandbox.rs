@@ -13,7 +13,12 @@ use crate::CoreError;
 
 /// Variables never passed into a sandbox: what they hold or point to signs
 /// in as the person somewhere.
-const CREDENTIAL_VARIABLES: [&str; 12] = [
+const CREDENTIAL_VARIABLES: [&str; 16] = [
+    // GitHub's: the sandbox reaches GitHub through its plugin (ADR 0099).
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "COPILOT_GITHUB_TOKEN",
     "GOOGLE_APPLICATION_CREDENTIALS",
     "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE",
     "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE",
@@ -207,6 +212,15 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
             std::fs::create_dir_all(&source)?;
             plan.mounts.push(silt_workspace::Mount { kind: silt_workspace::MountKind::ReadOnly, path, source: Some(source) });
         }
+        // Where agents clone what a plugin's mirrors hold (ADR 0099).
+        if let Some(work) = crate::plugins::wasm::work_area(run.data_dir, run.workspace, run.thread) {
+            std::fs::create_dir_all(&work)?;
+            plan.mounts.push(silt_workspace::Mount {
+                kind: silt_workspace::MountKind::ReadWrite,
+                path: PathBuf::from(crate::plugins::wasm::WORK_AREA),
+                source: Some(work),
+            });
+        }
     }
     std::fs::create_dir_all(run.scratch)?;
     let Relays { outside, env: mut extra_env, missing } = relays(run, &mut plan)?;
@@ -301,7 +315,10 @@ struct Relays {
 #[cfg(unix)]
 fn relays(run: &Run<'_>, plan: &mut silt_workspace::SandboxPlan) -> Result<Relays, CoreError> {
     let mut relays = Relays::default();
-    let (mut credentials, mut placeholders, unresolved) = crate::credentials::resolve(run.data_dir, run.workspace);
+    // Where GitHub's plugin is on, GitHub is reached through it alone.
+    let github = crate::plugins::wasm::github_on(run.data_dir, run.workspace);
+    let (mut credentials, mut placeholders, unresolved) =
+        crate::credentials::resolve(run.data_dir, run.workspace, &|host| github && github_host(host));
     relays.missing = unresolved;
     // The agent's own model key goes on at the gateway too, so the sandbox
     // holds a placeholder rather than the key.
@@ -481,6 +498,11 @@ fn listen(socket: &Path) -> std::io::Result<std::os::unix::net::UnixListener> {
     let listener = std::os::unix::net::UnixListener::bind(socket)?;
     std::fs::set_permissions(socket, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
     Ok(listener)
+}
+
+fn github_host(host: &str) -> bool {
+    let host = host.trim_start_matches("*.");
+    host == "github.com" || host.ends_with(".github.com")
 }
 
 /// Whether variable `name` goes into the sandbox.
@@ -849,6 +871,64 @@ mod tests {
         assert_eq!(env("ANDROID_SERIAL").as_deref(), Some("R58M"));
         assert!(!std::fs::read_to_string(scratch.join("sandbox.json")).unwrap().contains("s3cret"));
         assert_eq!(plan.sees(&data.path().join("gateway/ca-key.pem")), None, "the authority's key stays out");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn where_githubs_plugin_is_on_no_github_token_reaches_the_sandbox() {
+        let data = tempfile::tempdir().unwrap();
+        let checkout = tempfile::tempdir().unwrap();
+        crate::credentials::save(
+            data.path(),
+            &[crate::credentials::StoredCredential {
+                name: "gh".into(),
+                workspace: "work".into(),
+                host: "api.github.com".into(),
+                path: "/".into(),
+                header: "authorization".into(),
+                scheme: "Bearer".into(),
+                source: crate::credentials::Source::Command { argv: vec!["echo".into(), "s3cret".into()] },
+                placeholder: Some("GH_TOKEN".into()),
+            }],
+        )
+        .unwrap();
+        crate::plugins::installed::ensure_shipped(data.path()).unwrap();
+        crate::plugins::installed::update(data.path(), "silt.github", |installed| {
+            installed.workspaces.push("work".into());
+            Ok(())
+        })
+        .unwrap();
+        let reach = Reach::of(&silt_workspace::Policy { network: Some(Network::Gateway), ..silt_workspace::Policy::default() });
+        let scratch = data.path().join("runs/z");
+        let run = Run {
+            data_dir: data.path(),
+            thread: "t1",
+            agent: Some(&silt_agents::copilot::Copilot),
+            checkout: checkout.path(),
+            workspace: "work",
+            scratch: &scratch,
+            reach: &reach,
+            token: "t",
+            env: vec![
+                ("PATH".into(), "/usr/bin".into()),
+                ("GH_TOKEN".into(), "ghp_real".into()),
+                ("GITHUB_TOKEN".into(), "ghp_real".into()),
+                ("GH_ENTERPRISE_TOKEN".into(), "ghp_real".into()),
+                ("COPILOT_GITHUB_TOKEN".into(), "ghp_copilot".into()),
+            ],
+            read_only: Vec::new(),
+            relayed: Vec::new(),
+        };
+        let sandboxed = prepare(&run).unwrap();
+        let env = |name: &str| sandboxed.env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone());
+        assert!(!sandboxed.env.iter().any(|(_, value)| value.starts_with("ghp_")), "{:?}", sandboxed.env);
+        assert_eq!(env("GH_TOKEN"), None, "the workspace's GitHub credential is left out where the plugin is on");
+        assert_eq!(env("COPILOT_GITHUB_TOKEN").as_deref(), Some(PLACEHOLDER), "Copilot's key goes on at the gateway");
+        let plan: silt_workspace::SandboxPlan =
+            serde_json::from_slice(&std::fs::read(scratch.join("sandbox.json")).unwrap()).unwrap();
+        assert_eq!(plan.sees(Path::new("/silt/work")), Some(true), "its work area is writable");
+        assert_eq!(plan.sees(Path::new("/silt/github")), Some(false), "its mirrors are read-only");
+        assert!(data.path().join("work/t1").is_dir());
     }
 
     #[cfg(unix)]

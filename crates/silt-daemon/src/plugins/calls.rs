@@ -1190,6 +1190,201 @@ mod tests {
         assert!(core.folder_revoke(&thread, &lib_text).is_err(), "not granted any more");
     }
 
+    fn git(dir: &std::path::Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "-c", "init.defaultBranch=main"])
+            // The test's own git ignores the agent's hostile config, as Silt's does.
+            .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .expect("git runs");
+        assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    /// GitHub's API as far as the plugin's calls here need it, keeping
+    /// what each change was sent with.
+    async fn github_stand_in(sent: Arc<std::sync::Mutex<Vec<(String, String, String)>>>) -> u16 {
+        use axum::routing::{get, post};
+        let kept = sent.clone();
+        let app = axum::Router::new()
+            .route("/repos/acme/api", get(|| async { axum::Json(json!({"default_branch": "main", "full_name": "acme/api"})) }))
+            .route(
+                "/repos/acme/api/branches/{*branch}",
+                get(|axum::extract::Path(branch): axum::extract::Path<String>| async move {
+                    if branch == "main" {
+                        (axum::http::StatusCode::OK, axum::Json(json!({"name": "main", "protected": true})))
+                    } else {
+                        (axum::http::StatusCode::NOT_FOUND, axum::Json(json!({"message": "Branch not found"})))
+                    }
+                }),
+            )
+            .route(
+                "/repos/acme/api/pulls",
+                post(move |headers: axum::http::HeaderMap, body: String| {
+                    let kept = kept.clone();
+                    async move {
+                        let auth =
+                            headers.get("authorization").and_then(|value| value.to_str().ok()).unwrap_or_default().to_owned();
+                        kept.lock().unwrap().push(("POST /pulls".to_owned(), auth, body));
+                        (axum::http::StatusCode::CREATED, axum::Json(json!({"number": 7})))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("binds");
+        let port = listener.local_addr().expect("an address").port();
+        tokio::spawn(async move { axum::serve(listener, app).await.ok() });
+        port
+    }
+
+    async fn github(core: &mut Core, tool: &str, input: Value) -> oneshot::Receiver<Response> {
+        let (reply, answer) = oneshot::channel();
+        core.plugin_call("work-run", tool, input, reply).await;
+        answer
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn github_pushes_exactly_the_approved_commit_from_its_own_mirror() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let remotes = tempfile::tempdir().expect("temp dir");
+        let remotes = std::fs::canonicalize(remotes.path()).expect("real");
+        let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let port = github_stand_in(sent.clone()).await;
+        std::fs::create_dir_all(data.path().join("plugins")).expect("made");
+        std::fs::write(
+            data.path().join("plugins/redirect.json"),
+            json!({"https://api.github.com": format!("http://127.0.0.1:{port}"), "https://github.com": format!("file://{}", remotes.display())})
+                .to_string(),
+        )
+        .expect("written");
+        crate::credentials::save(
+            data.path(),
+            &[crate::credentials::StoredCredential {
+                name: "gh".into(),
+                workspace: "work".into(),
+                host: "api.github.com".into(),
+                path: "/".into(),
+                header: "authorization".into(),
+                scheme: "Bearer".into(),
+                source: crate::credentials::Source::Command { argv: vec!["echo".into(), "s3cret".into()] },
+                placeholder: None,
+            }],
+        )
+        .expect("saved");
+
+        // GitHub's repo, and the agent's clone of it in its work area, whose config is hostile.
+        let seed = remotes.join("seed");
+        std::fs::create_dir_all(&seed).expect("made");
+        git(&seed, &["init", "-q"]);
+        std::fs::write(seed.join("README.md"), "api\n").expect("written");
+        git(&seed, &["add", "."]);
+        git(&seed, &["commit", "-qm", "start"]);
+        git(&remotes, &["clone", "-q", "--bare", "seed", "acme/api.git"]);
+        let bare = remotes.join("acme/api.git");
+        let main = git(&bare, &["rev-parse", "refs/heads/main"]);
+        let thread = ThreadId(7).to_string();
+        let work = data.path().join("work").join(&thread);
+        std::fs::create_dir_all(&work).expect("made");
+        git(&work, &["clone", "-q", &bare.to_string_lossy(), "api"]);
+        let clone = work.join("api");
+        let marker = remotes.join("pwned");
+        for (key, value) in [
+            ("core.fsmonitor", format!("touch {}", marker.display())),
+            ("uploadpack.packObjectsHook", format!("touch {}", marker.display())),
+            ("core.hooksPath", remotes.display().to_string()),
+        ] {
+            git(&clone, &["config", key, &value]);
+        }
+        git(&clone, &["checkout", "-qb", "ada/fix"]);
+        std::fs::write(clone.join("fix.rs"), "fn fix() {}\n").expect("written");
+        git(&clone, &["add", "."]);
+        git(&clone, &["commit", "-qm", "Fix the thing"]);
+        let first = git(&clone, &["rev-parse", "HEAD"]);
+
+        let mut core = core(data.path()).await;
+        installed::update(data.path(), "silt.github", |installed| {
+            installed.workspaces.push("work".into());
+            installed.environments.insert("acme".into(), vec!["acme/*".into()]);
+            installed.credentials.insert("token".into(), "gh".into());
+            Ok(())
+        })
+        .expect("on in work");
+
+        // Reads go: the mirror is made where the agent sees it.
+        let cloned = github(&mut core, "github_clone", json!({"repo": "acme/api"})).await;
+        let Outcome::Done { output } = outcome(cloned.await.expect("answers")) else { panic!("not cloned") };
+        assert!(output.contains("/silt/github/acme/api.git"), "{output}");
+        let mirror = installed::thread_dir(data.path(), "silt.github", &thread).join("agent/acme/api.git");
+        assert!(mirror.join("HEAD").is_file());
+
+        // A push asks, shows its commits, and lands as approved.
+        let push = json!({"repo": "acme/api", "path": "/silt/work/api", "branch": "ada/fix"});
+        let waiting = github(&mut core, "github_push", push.clone()).await;
+        let pending = core.approvals_view(None, false).await.expect("approvals");
+        assert_eq!(pending.len(), 1);
+        let card = pending[0].card.as_ref().expect("a card");
+        assert_eq!(card.title, "Push ada/fix to acme/api");
+        let shown = super::super::wasm::card_text(card);
+        assert!(shown.contains("Fix the thing") && shown.contains("fix.rs  +1 -0"), "{shown}");
+        core.approval_answer(pending[0].id, true, &pending[0].hash, None).await.expect("approves");
+        let Outcome::Done { .. } = outcome(waiting.await.expect("answers")) else { panic!("not pushed") };
+        assert_eq!(git(&bare, &["rev-parse", "refs/heads/ada/fix"]), first);
+
+        // Approved where the branch was: moved meanwhile, nothing is pushed.
+        std::fs::write(clone.join("fix.rs"), "fn fix() { 1 }\n").expect("written");
+        git(&clone, &["commit", "-qam", "Fix it more"]);
+        let waiting = github(&mut core, "github_push", push.clone()).await;
+        let pending = core.approvals_view(None, false).await.expect("approvals");
+        git(&bare, &["update-ref", "refs/heads/ada/fix", &main]);
+        core.approval_answer(pending[0].id, true, &pending[0].hash, None).await.expect("approves");
+        assert!(!matches!(outcome(waiting.await.expect("answers")), Outcome::Done { .. }), "the lease holds");
+        assert_eq!(git(&bare, &["rev-parse", "refs/heads/ada/fix"]), main);
+
+        // A branch rewritten from under what's there is a force-push: never.
+        git(&bare, &["update-ref", "refs/heads/ada/fix", &first]);
+        git(&clone, &["reset", "-q", "--hard", &main]);
+        std::fs::write(clone.join("other.rs"), "fn other() {}\n").expect("written");
+        git(&clone, &["add", "."]);
+        git(&clone, &["commit", "-qm", "Start over"]);
+        let forced = github(&mut core, "github_push", push.clone()).await;
+        let Outcome::Refused { why } = outcome(forced.await.expect("answers")) else { panic!("not refused") };
+        assert!(why.contains("Force-push"), "{why}");
+        assert_eq!(git(&bare, &["rev-parse", "refs/heads/ada/fix"]), first);
+
+        // The default branch asks each time: no grant covers it.
+        git(&clone, &["checkout", "-q", "main"]);
+        git(&clone, &["merge", "-q", "--ff-only", "ada/fix"]);
+        let _waiting =
+            github(&mut core, "github_push", json!({"repo": "acme/api", "path": "/silt/work/api", "branch": "main"})).await;
+        let pending = core.approvals_view(None, false).await.expect("approvals");
+        assert!(pending[0].once, "{:?}", pending[0]);
+        assert!(core.approval_answer(pending[0].id, true, &pending[0].hash, Some(GrantScope::Run)).await.is_err());
+        core.approval_answer(pending[0].id, false, &pending[0].hash, None).await.expect("rejects");
+        assert_eq!(git(&bare, &["rev-parse", "refs/heads/main"]), main);
+
+        // A pull request is opened with exactly the text approved, and the token added on the way.
+        let opened = github(
+            &mut core,
+            "github_pr_create",
+            json!({"repo": "acme/api", "head": "ada/fix", "base": "main", "title": "Fix", "body": "Why\u{202e}"}),
+        )
+        .await;
+        let pending = core.approvals_view(None, false).await.expect("approvals");
+        assert_eq!(pending.len(), 1);
+        core.approval_answer(pending[0].id, true, &pending[0].hash, None).await.expect("approves");
+        assert!(matches!(outcome(opened.await.expect("answers")), Outcome::Done { .. }));
+        let sent = sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0].1, "Bearer s3cret");
+        let body: Value = serde_json::from_str(&sent[0].2).expect("json");
+        assert_eq!(body, json!({"base": "main", "body": "Why\u{202e}", "draft": false, "head": "ada/fix", "title": "Fix"}));
+        assert!(!marker.exists(), "nothing of the agent's repo's config ran");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_never_rule_refuses_before_the_plugin_runs() {
         let data = tempfile::tempdir().expect("temp dir");
