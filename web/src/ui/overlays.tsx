@@ -106,6 +106,12 @@ export interface MenuItem {
   hint?: string
   /** A line above it, starting a group of its own. */
   divided?: boolean
+  /** Shown before the label in place of an icon, such as a status dot. */
+  lead?: ReactNode
+  /** The one chosen, marked with a check after the label. */
+  checked?: boolean
+  /** Undoes something, such as removing. */
+  danger?: boolean
 }
 
 /** A button opening a list of actions; arrow keys move between them. */
@@ -175,11 +181,22 @@ export function Menu({
                   button.current?.focus()
                   item.onSelect()
                 }}
-                className="flex w-full items-center gap-2.5 rounded-sm px-2.5 py-1 text-left text-sm whitespace-nowrap text-fg-1 hover:bg-surface-2 focus:bg-surface-2 disabled:opacity-40 max-md:min-h-11"
+                className={cx(
+                  'flex w-full items-center gap-2.5 rounded-sm px-2.5 py-1 text-left text-sm whitespace-nowrap hover:bg-surface-2 focus:bg-surface-2 max-md:min-h-11',
+                  item.danger ? 'text-danger' : 'text-fg-1',
+                  // The chosen one is disabled, as picking it again does nothing, but reads in full.
+                  !item.checked && 'disabled:opacity-40',
+                )}
               >
-                {item.icon && <Icon name={item.icon} className="h-4 w-4 shrink-0 text-fg-2" />}
+                {item.lead ?? (item.icon && <Icon name={item.icon} className="h-4 w-4 shrink-0 text-fg-2" />)}
                 <span className="flex-1">{item.label}</span>
                 {item.hint && <span className="ml-4 font-mono text-2xs text-fg-3">{item.hint}</span>}
+                {item.checked !== undefined &&
+                  (item.checked ? (
+                    <Icon name="check" label="shown here" className="h-3.5 w-3.5 shrink-0 text-accent-fg" />
+                  ) : (
+                    <span className="h-3.5 w-3.5 shrink-0" />
+                  ))}
               </button>
             </li>
           ))}

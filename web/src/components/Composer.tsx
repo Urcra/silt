@@ -308,7 +308,7 @@ export function ComposerBox({
   commands?: AgentCommand[]
   /** Offers dictation, where this machine can do it. */
   voice?: boolean
-  /** The prompt the agent suggests next, grey in the empty box until Tab or → takes it (ADR 0108). */
+  /** The prompt the agent suggests next, grey in the empty box until Tab or → takes it (ADR 0110). */
   suggestion?: string
   className?: string
 }) {

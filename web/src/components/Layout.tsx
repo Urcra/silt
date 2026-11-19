@@ -16,6 +16,7 @@ import { Dot, Icon, Toaster, cx } from '../ui'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Palette } from './Palette'
 import { Sidebar } from './Sidebar'
+import { SwitchFailures } from './Machines'
 
 /**
  * The themes from the palette (ADR 0098): the next mode, and each theme,
@@ -206,6 +207,7 @@ export function Layout() {
       <TabBar />
       <Palette />
       <Toaster />
+      <SwitchFailures />
     </div>
   )
 }

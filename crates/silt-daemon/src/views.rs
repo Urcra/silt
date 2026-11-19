@@ -170,7 +170,7 @@ impl Core {
                 Op::Lease { device, .. } => Some(device),
                 _ => None,
             }),
-            last_ms: deltas.iter().map(|delta| delta.time_ms).max(),
+            last_ms: deltas.iter().filter(|delta| delta.op.is_activity()).map(|delta| delta.time_ms).max(),
             cloud: silt_proto::view::cloud_session(deltas.iter().copied()),
         }
     }

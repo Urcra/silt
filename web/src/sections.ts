@@ -49,6 +49,23 @@ export function byActivity(a: ThreadSummary, b: ThreadSummary): number {
   return b.last_ms - a.last_ms || b.created_ms - a.created_ms || a.id.localeCompare(b.id)
 }
 
+const BUSY_FOR_MS = 5 * 60 * 1000
+
+/**
+ * The sidebar's order: threads active in the last five minutes, or still at work, by title, so
+ * agents answering in turn don't swap places on every reply; then the rest, newest activity first.
+ */
+export function inListOrder(now: number): (a: ThreadSummary, b: ThreadSummary) => number {
+  const busy = (thread: ThreadSummary) => inProgress(thread) || now - thread.last_ms < BUSY_FOR_MS
+  const title = (thread: ThreadSummary) => thread.title ?? 'Untitled thread'
+  return (a, b) => {
+    const [busyA, busyB] = [busy(a), busy(b)]
+    if (busyA !== busyB) return busyA ? -1 : 1
+    if (!busyA) return byActivity(a, b)
+    return title(a).localeCompare(title(b), undefined, { sensitivity: 'base', numeric: true }) || a.id.localeCompare(b.id)
+  }
+}
+
 /** The threads of each section, newest activity first. */
 export function sections(threads: ThreadSummary[], now: number): Record<Section, ThreadSummary[]> {
   const out: Record<Section, ThreadSummary[]> = { needs_you: [], pinned: [], working: [], active: [], snoozed: [], settled: [] }
