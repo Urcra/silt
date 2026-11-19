@@ -43,7 +43,8 @@ export function threadDoing(thread: ThreadSummary): string | null {
 
 /** Where a thread's work is, as its chip says it. */
 export function threadWhere(thread: ThreadSummary): { label: string; tone: DotTone } {
-  const live = ['working', 'starting', 'awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '') || inBackground(thread)
+  const live =
+    ['working', 'starting', 'awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '') || inBackground(thread)
   if (thread.location === 'moved') return { label: 'Moved to another device', tone: 'idle' }
   if (thread.location === 'remote') return { label: 'On the server', tone: 'info' }
   return { label: live ? 'Here, live' : 'Here', tone: 'ok' }

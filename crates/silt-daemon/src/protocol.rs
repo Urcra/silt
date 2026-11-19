@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 pub use silt_proto::view::{
-    AnswerView, ChoiceView, CommentLocation, CommentOn, CommentView, CommitView, DaemonStatus, DeviceAgent, DeviceChange,
-    DeviceView, FileEdit, HistoryEntry, HistoryPage, ImageView, InboxEntry, LineSpan, Mine, MrDetails, MrFile, MrGuide,
-    MrSummary, NewLink, PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange,
-    TaskView, ThreadLink, ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
+    AnswerView, ChoiceView, CommentLocation, CommentOn, CommentView, CommitView, CutView, DaemonStatus, DeviceAgent,
+    DeviceChange, DeviceView, FileEdit, HistoryEntry, HistoryPage, ImageView, InboxEntry, LineSpan, Mine, MrDetails, MrFile,
+    MrGuide, MrSummary, NewLink, PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine,
+    StateChange, TaskView, ThreadLink, ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
 };
 pub use silt_proto::{ChoiceAsked, QuestionAsked, QuestionFieldAsked, SignInAsked, SignInChoice, SignInShown};
 
@@ -19,6 +19,11 @@ pub enum Request {
     AgentHomes,
     /// Whether this daemon's program was replaced since it started.
     DaemonBuild,
+    /// Runs `exe daemon restart` once no agent works in this daemon, as
+    /// stopping it now would end their turns.
+    RestartWhenIdle {
+        exe: PathBuf,
+    },
     /// Starts recording a new agent session in a new thread. Without a
     /// `session_id` the daemon finds the session once the agent writes it.
     StartSession {
@@ -79,6 +84,19 @@ pub enum Request {
     },
     /// Starts downloading llama.cpp's latest build for this machine.
     RuntimePull,
+    /// Whether a newer Silt is out, and how an update is going (ADR 0100),
+    /// for a page in the desktop app built from `desktop`.
+    Update {
+        #[serde(default)]
+        desktop: Option<String>,
+    },
+    /// Checks for a newer Silt now.
+    UpdateCheck,
+    /// Starts updating this machine's Silt.
+    UpdateStart,
+    /// Whether an installed update waits for agents to finish before the
+    /// daemon restarts.
+    UpdateWaiting,
     /// This machine's settings for chats (ADR 0059).
     ChatSettings,
     SetChatSettings {
@@ -303,6 +321,14 @@ pub enum Request {
         thread: String,
         offset: usize,
         limit: usize,
+        /// The version of the history the asker holds: the page starts
+        /// earlier than `offset` where that changed since.
+        #[serde(default)]
+        known: Option<usize>,
+        /// Long outputs and images left out, as a page of the web UI's
+        /// carries them (`silt_proto::view::cut_for_page`).
+        #[serde(default)]
+        cut: bool,
     },
     /// Search within a thread's history and the threads it came from.
     HistorySearch {
@@ -459,6 +485,36 @@ pub enum Request {
     DesignSystems {
         #[serde(default)]
         clone: Option<PathBuf>,
+    },
+    /// The themes for Silt's UI and the pick (ADR 0098).
+    Themes,
+    /// One theme's page: its tokens, checks, fonts and radii.
+    ThemeDetail {
+        id: String,
+    },
+    SetAppearance {
+        settings: silt_proto::view::AppearanceSettings,
+    },
+    /// A face a theme of the person's ships, for `/theme-fonts/` (ADR 0099).
+    ThemeFont {
+        id: String,
+        file: String,
+    },
+    /// A VS Code theme or a Zed family the person picked, saved as theirs.
+    ImportTheme {
+        text: String,
+    },
+    /// A copy of a theme saved as the person's, to edit.
+    DuplicateTheme {
+        from: String,
+    },
+    /// The CSS for the pick, or for `light` and `dark` in its place, with
+    /// the pick's mode.
+    ThemeCss {
+        #[serde(default)]
+        light: Option<String>,
+        #[serde(default)]
+        dark: Option<String>,
     },
     /// How this machine's web UI loads artifacts' libraries and fonts.
     ArtifactSettings,
@@ -762,12 +818,49 @@ pub enum Request {
     },
     /// This machine's plugins.
     Plugins,
-    /// Adds a plugin, or replaces the one of its name.
-    PluginPut {
-        plugin: Box<crate::plugins::Plugin>,
+    /// Turns a plugin on or off in a workspace.
+    PluginTurn {
+        id: String,
+        workspace: String,
+        on: bool,
     },
     PluginRemove {
         name: String,
+    },
+    /// The person's rule for one of a plugin's actions; `None` takes it away.
+    PluginRule {
+        id: String,
+        action: String,
+        rule: Option<silt_plugin::Rule>,
+        #[serde(default)]
+        field: Option<String>,
+        #[serde(default)]
+        pattern: Option<String>,
+    },
+    /// One of a plugin's settings; `null` resets it.
+    PluginSet {
+        id: String,
+        key: String,
+        value: serde_json::Value,
+        #[serde(default)]
+        environment: Option<String>,
+        #[serde(default)]
+        workspace: Option<String>,
+    },
+    /// The patterns that pick one of a plugin's environments; none removes it.
+    PluginEnvironment {
+        id: String,
+        name: String,
+        patterns: Vec<String>,
+    },
+    /// How a plugin is doing: its build, its tools and its calls.
+    PluginActivity {
+        id: String,
+    },
+    /// Trusts a publisher, or stops trusting it.
+    PluginTrust {
+        publisher: String,
+        trusted: bool,
     },
     /// Plugin calls waiting for the person, a thread's alone when one is
     /// named; with `all`, those answered too.
@@ -806,6 +899,11 @@ pub enum Request {
     /// Ends a grant: calls it covered ask again.
     GrantRevoke {
         id: u64,
+    },
+    /// Takes a folder back from a thread's agents (ADR 0102).
+    FolderRevoke {
+        thread: String,
+        path: String,
     },
     /// What reached a thread's sandboxes through Silt: plugin calls,
     /// grants, and what the gateway refused (ADR 0093).
@@ -974,6 +1072,10 @@ pub enum Request {
     /// (ADR 0053).
     NewProject {
         path: PathBuf,
+    },
+    /// The folders in `dir`, for completing a path as it's typed.
+    Subfolders {
+        dir: PathBuf,
     },
     /// Every workspace, the projects each holds and its rules (ADR 0065).
     Workspaces,
@@ -1773,6 +1875,15 @@ pub struct FoundFolder {
     pub last_ms: Option<i64>,
 }
 
+/// A folder in the one a typed path is in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Subfolder {
+    pub name: String,
+    /// Whether it holds a git repository of its own.
+    pub git: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct FoundSessions {
@@ -2327,6 +2438,9 @@ pub enum BusEvent {
     },
     /// Plugin calls waiting for the person changed.
     Approvals,
+    /// The themes or the pick changed: a file in `themes/` was saved, or
+    /// another page picked (ADR 0098).
+    Appearance,
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
 }
@@ -2356,7 +2470,7 @@ impl BusEvent {
             Self::Sample { ask, .. } | Self::SampleTool { ask, .. } => Some(format!("sample:{ask}")),
             Self::Room { .. } => Some("rooms".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
-            Self::Agents | Self::Approvals | Self::Lagged => None,
+            Self::Agents | Self::Approvals | Self::Appearance | Self::Lagged => None,
         }
     }
 }
@@ -2430,17 +2544,44 @@ mod tests {
             ChoiceAsked::decl(&config),
             BusEvent::decl(&config),
             silt_access::DataClass::decl(&config),
-            crate::plugins::Plugin::decl(&config),
-            crate::plugins::Kind::decl(&config),
-            crate::plugins::Rule::decl(&config),
-            crate::plugins::Environment::decl(&config),
             crate::plugins::Outcome::decl(&config),
             crate::plugins::ApprovalState::decl(&config),
             crate::plugins::ApprovalView::decl(&config),
+            silt_plugin::Card::decl(&config),
+            silt_plugin::Block::decl(&config),
+            silt_plugin::Item::decl(&config),
+            silt_plugin::FileChange::decl(&config),
+            silt_plugin::Tone::decl(&config),
+            silt_plugin::Effect::decl(&config),
+            silt_plugin::Channel::decl(&config),
+            silt_plugin::ScopedRule::decl(&config),
+            silt_plugin::Rule::decl(&config),
+            silt_plugin::RuleSource::decl(&config),
+            silt_plugin::Glob::decl(&config),
             crate::plugins::GrantScope::decl(&config),
             crate::plugins::CallView::decl(&config),
             crate::plugins::GrantView::decl(&config),
             crate::plugins::AccessView::decl(&config),
+            crate::plugins::ThreadCall::decl(&config),
+            crate::plugins::PluginActivity::decl(&config),
+            crate::plugins::installed::Installed::decl(&config),
+            crate::plugins::installed::PluginView::decl(&config),
+            crate::plugins::updates::GitUpdate::decl(&config),
+            crate::plugins::install::Preview::decl(&config),
+            silt_plugin::Manifest::decl(&config),
+            silt_plugin::Build::decl(&config),
+            silt_plugin::Capability::decl(&config),
+            silt_plugin::ActionSpec::decl(&config),
+            silt_plugin::ActionKind::decl(&config),
+            silt_plugin::Environments::decl(&config),
+            silt_plugin::SettingSpec::decl(&config),
+            silt_plugin::SettingKind::decl(&config),
+            silt_plugin::SettingScope::decl(&config),
+            silt_plugin::CredentialSpec::decl(&config),
+            silt_plugin::Send::decl(&config),
+            silt_plugin::Docs::decl(&config),
+            crate::plugins::installed::PluginSource::decl(&config),
+            crate::plugins::FolderView::decl(&config),
             crate::plugins::NetworkRefusal::decl(&config),
             crate::plugins::RelayView::decl(&config),
             BusSubscription::decl(&config),
@@ -2479,6 +2620,7 @@ mod tests {
             ToolView::decl(&config),
             ToolOutcome::decl(&config),
             ImageView::decl(&config),
+            CutView::decl(&config),
             silt_proto::view::ArtifactView::decl(&config),
             silt_proto::artifact::ArtifactFile::decl(&config),
             silt_proto::view::ArtifactListed::decl(&config),
@@ -2486,6 +2628,18 @@ mod tests {
             crate::connectors::ConnectorTool::decl(&config),
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
+            silt_proto::view::AppearanceMode::decl(&config),
+            silt_proto::view::AppearanceSettings::decl(&config),
+            silt_proto::view::ThemeSource::decl(&config),
+            silt_proto::view::ThemeSummary::decl(&config),
+            silt_proto::view::ThemeProblem::decl(&config),
+            silt_proto::view::ThemeCatalog::decl(&config),
+            silt_proto::view::ThemeColorView::decl(&config),
+            silt_proto::view::ThemeSyntaxView::decl(&config),
+            silt_proto::view::ThemeCheckView::decl(&config),
+            silt_proto::view::ThemeDetail::decl(&config),
+            silt_proto::view::ThemeCss::decl(&config),
+            silt_proto::view::ThemeSaved::decl(&config),
             DesignSystemView::decl(&config),
             DesignComponentView::decl(&config),
             DesignCatalog::decl(&config),
@@ -2543,6 +2697,11 @@ mod tests {
             BackendView::decl(&config),
             WorkspaceProject::decl(&config),
             silt_workspace::Workspace::decl(&config),
+            silt_workspace::FolderRule::decl(&config),
+            silt_workspace::PluginPolicy::decl(&config),
+            silt_workspace::OrgPlugin::decl(&config),
+            silt_workspace::OrgPluginRule::decl(&config),
+            silt_workspace::FolderAnswer::decl(&config),
             silt_workspace::Workspaces::decl(&config),
             silt_workspace::ServerBinding::decl(&config),
             silt_workspace::MatchRule::decl(&config),
@@ -2564,6 +2723,7 @@ mod tests {
             TurnInfo::decl(&config),
             FoundFolder::decl(&config),
             FoundSessions::decl(&config),
+            Subfolder::decl(&config),
             VoiceDownload::decl(&config),
             VoiceEvent::decl(&config),
             VoiceStatus::decl(&config),
@@ -2578,6 +2738,18 @@ mod tests {
             ModelFit::decl(&config),
             ModelPull::decl(&config),
             ModelFailure::decl(&config),
+            silt_update::UpdateView::decl(&config),
+            silt_update::BuildView::decl(&config),
+            silt_update::Channel::decl(&config),
+            silt_update::Availability::decl(&config),
+            silt_update::NewCommit::decl(&config),
+            silt_update::Commit::decl(&config),
+            silt_update::OffReason::decl(&config),
+            silt_update::RunView::decl(&config),
+            silt_update::StepView::decl(&config),
+            silt_update::StepStatus::decl(&config),
+            silt_update::Phase::decl(&config),
+            silt_update::Outcome::decl(&config),
         ];
         let generated = format!(
             "// The daemon's API types, written by `UPDATE_API_TYPES=1 cargo test -p silt-daemon api_types`\n// from crates/silt-daemon/src/protocol.rs. Don't edit by hand.\n\n{}\n",

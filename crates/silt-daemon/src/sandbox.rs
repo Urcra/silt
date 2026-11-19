@@ -5,9 +5,9 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use silt_workspace::{ExtraDir, ExtraRepo, PathDir, Reach, RunPaths};
 #[cfg(unix)]
 use silt_workspace::{Mount, MountKind, Network};
-use silt_workspace::{PathDir, Reach, RunPaths};
 
 use crate::CoreError;
 
@@ -104,6 +104,9 @@ pub struct Sandboxed {
     pub outside: Vec<Outside>,
     /// Credentials the workspace names whose secret couldn't be had.
     pub missing: Vec<String>,
+    /// Why each folder the workspace names and the sandbox doesn't get
+    /// was left out.
+    pub refused: Vec<String>,
 }
 
 /// What answers a sandbox's relay outside it. There are none where the
@@ -198,6 +201,9 @@ pub struct Run<'a> {
     pub read_only: Vec<PathBuf>,
     /// The devices Silt relays to the thread's sandbox.
     pub relayed: Vec<Relayed>,
+    /// What the gateway adds instead of the workspace's credentials, such
+    /// as a plugin's own for the MCP server it wraps (ADR 0104).
+    pub gateway_credentials: Option<Vec<silt_gateway::Credential>>,
 }
 
 impl Run<'_> {
@@ -239,7 +245,7 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
         own_project: Vec::new(),
         fresh: Vec::new(),
         path_dirs: lookup("PATH").map(|path| std::env::split_paths(&path).map(path_dir).collect()).unwrap_or_default(),
-        silt: std::env::current_exe()?,
+        silt: silt_program(run.data_dir)?,
         read_only: run.read_only.clone(),
         data_dir: Some(run.data_dir.to_owned()),
         real_data_dir: real_if_linked(run.data_dir),
@@ -249,7 +255,16 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
         #[cfg(not(unix))]
         run_socket: None,
         ssh_agent_socket: lookup("SSH_AUTH_SOCK").map(PathBuf::from),
+        extra: run.reach.paths.iter().map(|(path, writable)| extra_dir(path, *writable, home.as_deref())).collect(),
     };
+    let refused: Vec<String> = paths.extra.iter().filter_map(|dir| paths.extra_refusal(dir)).collect();
+    // As for the checkout below: a hooks folder made in the sandbox would
+    // be writable there.
+    for dir in paths.extra.iter().filter(|dir| dir.writable && paths.extra_refusal(dir).is_none()) {
+        for repo in dir.repos.iter().flatten().filter(|repo| repo.git_dir.join("objects").is_dir()) {
+            std::fs::create_dir_all(repo.git_dir.join("hooks"))?;
+        }
+    }
     // What's mounted must exist: an agent's home it hasn't made yet would
     // otherwise live in the sandbox alone, out of capture's sight, and a
     // missing hooks folder could be made writable there.
@@ -300,6 +315,24 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
         paths.own_project = state.own;
     }
     let mut plan = silt_workspace::plan(&paths, run.reach);
+    // What plugins keep for the thread and show its agents, read-only, at
+    // `/silt/<plugin>`, such as GitHub's mirrors (ADR 0104). Seatbelt can't
+    // show a folder under another name, so it waits for the VM backends.
+    if !run.seatbelt() && !run.thread.is_empty() {
+        for (source, path) in crate::plugins::wasm::agent_folders(run.data_dir, run.workspace, run.thread) {
+            std::fs::create_dir_all(&source)?;
+            plan.mounts.push(silt_workspace::Mount { kind: silt_workspace::MountKind::ReadOnly, path, source: Some(source) });
+        }
+        // Where agents clone what a plugin's mirrors hold (ADR 0103).
+        if let Some(work) = crate::plugins::wasm::work_area(run.data_dir, run.workspace, run.thread) {
+            std::fs::create_dir_all(&work)?;
+            plan.mounts.push(silt_workspace::Mount {
+                kind: silt_workspace::MountKind::ReadWrite,
+                path: PathBuf::from(crate::plugins::wasm::WORK_AREA),
+                source: Some(work),
+            });
+        }
+    }
     let Relays { outside, env: mut extra_env, missing } = relays(run, &mut plan)?;
     extra_env.extend(devices(run, &mut plan));
     if run.seatbelt() {
@@ -336,7 +369,7 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     let added: Vec<&str> = extra_env.iter().map(|(name, _)| name.as_str()).collect();
     env.retain(|(name, _)| !added.contains(&name.as_str()));
     env.extend(extra_env);
-    Ok(Sandboxed { launcher, env, outside, missing })
+    Ok(Sandboxed { launcher, env, outside, missing, refused })
 }
 
 /// What the devices relayed to the run add to its plan, and the variables
@@ -407,7 +440,12 @@ struct Relays {
 #[cfg(unix)]
 fn relays(run: &Run<'_>, plan: &mut silt_workspace::SandboxPlan) -> Result<Relays, CoreError> {
     let mut relays = Relays::default();
-    let (mut credentials, mut placeholders, unresolved) = crate::credentials::resolve(run.data_dir, run.workspace);
+    // Where GitHub's plugin is on, GitHub is reached through it alone.
+    let github = crate::plugins::wasm::github_on(run.data_dir, run.workspace);
+    let (mut credentials, mut placeholders, unresolved) = match &run.gateway_credentials {
+        Some(own) => (own.clone(), Vec::new(), Vec::new()),
+        None => crate::credentials::resolve(run.data_dir, run.workspace, &|host| github && github_host(host)),
+    };
     relays.missing = unresolved;
     // The agent's own model key goes on at the gateway too, so the sandbox
     // holds a placeholder rather than the key.
@@ -590,6 +628,11 @@ fn listen(socket: &Path) -> std::io::Result<std::os::unix::net::UnixListener> {
     Ok(listener)
 }
 
+fn github_host(host: &str) -> bool {
+    let host = host.trim_start_matches("*.");
+    host == "github.com" || host.ends_with(".github.com")
+}
+
 /// Whether variable `name` goes into the sandbox.
 fn keeps(name: &str, reach: &Reach) -> bool {
     if name == "SSH_AUTH_SOCK" {
@@ -606,6 +649,97 @@ fn keeps(name: &str, reach: &Reach) -> bool {
 
 /// Words in a variable's name that say it holds a secret.
 const SECRET_WORDS: [&str; 8] = ["TOKEN", "SECRET", "PASSWORD", "PASSWD", "AUTH", "CREDENTIAL", "APIKEY", "_KEY"];
+
+/// How many entries a writable extra folder is walked through for git
+/// repos; one with more is refused rather than handed over unchecked.
+const EXTRA_WALK_LIMIT: usize = 100_000;
+
+/// A folder as a workspace's rule names it, resolved: where it really is,
+/// and the git repos in it where it's writable.
+pub fn extra_dir(path: &str, writable: bool, home: Option<&Path>) -> ExtraDir {
+    let path = silt_workspace::expand_home(path, home);
+    let real = std::fs::canonicalize(&path).ok().filter(|real| real.is_dir());
+    let repos = match &real {
+        Some(real) if writable => repos_in(real, EXTRA_WALK_LIMIT),
+        _ => Some(Vec::new()),
+    };
+    ExtraDir { path, real, writable, repos }
+}
+
+/// The `silt` a sandbox is launched with and its hooks run: this program,
+/// or in a debug build the one a test names, when the test itself isn't
+/// `silt`.
+fn silt_program(data_dir: &Path) -> std::io::Result<PathBuf> {
+    let named = crate::plugins::capabilities::redirects(data_dir).into_iter().find(|(from, _)| from == "silt");
+    match named {
+        Some((_, path)) => Ok(PathBuf::from(path)),
+        None => std::env::current_exe(),
+    }
+}
+
+/// Why `dir` is never handed to a sandbox, whatever the rules say: the
+/// built-in refusals of ADR 0102, judged by both its names.
+pub fn folder_refusal(data_dir: &Path, dir: &ExtraDir) -> Option<String> {
+    let home = silt_os::home_dir();
+    let paths = RunPaths {
+        real_home: home.as_deref().and_then(real_if_linked),
+        home,
+        data_dir: Some(data_dir.to_owned()),
+        real_data_dir: real_if_linked(data_dir),
+        ..RunPaths::default()
+    };
+    paths.extra_refusal(dir)
+}
+
+/// The git dirs under `root`, never following a link; `None` once more
+/// than `limit` entries have been looked at.
+fn repos_in(root: &Path, limit: usize) -> Option<Vec<ExtraRepo>> {
+    let mut repos = Vec::new();
+    let mut seen = 0usize;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if is_git_dir(&dir) {
+            // A bare repo, a submodule's or a worktree's: only what holds
+            // more of them is looked into, not its objects.
+            stack.extend(["modules", "worktrees"].map(|name| dir.join(name)));
+            repos.push(ExtraRepo { git_dir: dir, pointer: None, work_tree: None });
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > limit {
+                return None;
+            }
+            let Ok(kind) = entry.file_type() else { continue };
+            let path = entry.path();
+            if entry.file_name() == ".git" {
+                if kind.is_dir() {
+                    stack.extend(["modules", "worktrees"].map(|name| path.join(name)));
+                    repos.push(ExtraRepo { git_dir: path, pointer: None, work_tree: Some(dir.clone()) });
+                } else {
+                    let git_dir = pointed_at(&path).unwrap_or_else(|| path.clone());
+                    repos.push(ExtraRepo { git_dir, pointer: Some(path), work_tree: Some(dir.clone()) });
+                }
+            } else if kind.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    Some(repos)
+}
+
+fn is_git_dir(dir: &Path) -> bool {
+    dir.join("HEAD").is_file() && (dir.join("objects").is_dir() || dir.join("commondir").is_file())
+}
+
+/// Where a `.git` file points, resolved.
+fn pointed_at(pointer: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(pointer).ok()?;
+    let target = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
+    let target = if target.is_absolute() { target } else { pointer.parent()?.join(target) };
+    Some(std::fs::canonicalize(&target).unwrap_or(target))
+}
 
 /// A checkout's own git dir when it's elsewhere, as a managed checkout's
 /// is, and the objects it borrows through alternates.
@@ -747,6 +881,49 @@ fn bubblewrap_unavailable() -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&status.stderr));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writable_folders_repos_are_found_without_following_links() {
+        let root = tempfile::tempdir().unwrap();
+        let code = std::fs::canonicalize(root.path()).unwrap().join("code");
+        let (app, lib, tree) = (code.join("app"), code.join("nested/lib"), code.join("app-feature"));
+        for dir in [&app, &lib] {
+            std::fs::create_dir_all(dir).unwrap();
+            git(dir, &["init", "-q"]);
+            git(dir, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        }
+        git(&app, &["worktree", "add", "-q", tree.to_str().unwrap()]);
+        git(&app, &["submodule", "add", "-q", lib.to_str().unwrap(), "vendor/lib"]);
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(outside.join("repo")).unwrap();
+        git(&outside.join("repo"), &["init", "-q"]);
+        std::os::unix::fs::symlink(&outside, code.join("link")).unwrap();
+
+        let dir = extra_dir(code.to_str().unwrap(), true, None);
+        let repos = dir.repos.expect("walked");
+        let git_dirs: Vec<&Path> = repos.iter().map(|repo| repo.git_dir.as_path()).collect();
+        assert!(git_dirs.contains(&app.join(".git").as_path()), "{git_dirs:?}");
+        assert!(git_dirs.contains(&lib.join(".git").as_path()));
+        assert!(git_dirs.contains(&app.join(".git/modules/vendor/lib").as_path()), "the submodule's own");
+        assert!(git_dirs.iter().any(|dir| dir.starts_with(app.join(".git/worktrees"))), "the worktree's own");
+        assert!(repos.iter().any(|repo| repo.pointer.as_deref() == Some(tree.join(".git").as_path())));
+        assert!(!git_dirs.iter().any(|dir| dir.starts_with(&outside)), "links aren't followed");
+
+        assert_eq!(repos_in(&code, 3), None, "too much to look through");
+        assert_eq!(extra_dir(code.to_str().unwrap(), false, None).repos, Some(Vec::new()), "read-only isn't walked");
+        assert_eq!(extra_dir("~/nowhere-at-all", false, Some(root.path())).real, None);
+    }
+
     #[cfg(unix)]
     #[test]
     fn credentials_stay_out_and_the_run_reaches_its_channel() {
@@ -789,6 +966,7 @@ mod tests {
             ],
             read_only: Vec::new(),
             given: Vec::new(),
+            gateway_credentials: None,
         };
         let sandboxed = prepare(&run).unwrap();
         let names: Vec<&str> = sandboxed.env.iter().map(|(name, _)| name.as_str()).collect();
@@ -894,6 +1072,7 @@ mod tests {
             env: vec![("PATH".into(), "/usr/bin".into())],
             read_only: Vec::new(),
             given: Vec::new(),
+            gateway_credentials: None,
             relayed: vec![
                 Relayed::Serial { device: "/dev/cu.usbserial-1".into(), pts: "/dev/ttys012".into() },
                 Relayed::Adb { serial: "R58M".into(), socket: scratch.join("adb.sock") },
@@ -937,6 +1116,7 @@ mod tests {
                 scheme: "Bearer".into(),
                 source: crate::credentials::Source::Command { argv: vec!["echo".into(), "s3cret".into()] },
                 placeholder: Some("GH_TOKEN".into()),
+                plugin: None,
             }],
         )
         .unwrap();
@@ -958,6 +1138,7 @@ mod tests {
             env: vec![("PATH".into(), "/usr/bin".into())],
             read_only: Vec::new(),
             given: Vec::new(),
+            gateway_credentials: None,
             relayed: vec![
                 Relayed::Serial { device: "/dev/ttyUSB0".into(), pts: "/dev/pts/9".into() },
                 Relayed::Adb { serial: "R58M".into(), socket: scratch.join("adb.sock") },
@@ -979,6 +1160,67 @@ mod tests {
         assert_eq!(env("ANDROID_SERIAL").as_deref(), Some("R58M"));
         assert!(!std::fs::read_to_string(scratch.join("sandbox.json")).unwrap().contains("s3cret"));
         assert_eq!(plan.sees(&data.path().join("gateway/ca-key.pem")), None, "the authority's key stays out");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn where_githubs_plugin_is_on_no_github_token_reaches_the_sandbox() {
+        let data = tempfile::tempdir().unwrap();
+        let checkout = tempfile::tempdir().unwrap();
+        crate::credentials::save(
+            data.path(),
+            &[crate::credentials::StoredCredential {
+                name: "gh".into(),
+                workspace: "work".into(),
+                host: "api.github.com".into(),
+                path: "/".into(),
+                header: "authorization".into(),
+                scheme: "Bearer".into(),
+                source: crate::credentials::Source::Command { argv: vec!["echo".into(), "s3cret".into()] },
+                placeholder: Some("GH_TOKEN".into()),
+                plugin: None,
+            }],
+        )
+        .unwrap();
+        crate::plugins::installed::ensure_shipped(data.path()).unwrap();
+        crate::plugins::installed::update(data.path(), "silt.github", |installed| {
+            installed.workspaces.push("work".into());
+            Ok(())
+        })
+        .unwrap();
+        let reach = Reach::of(&silt_workspace::Policy { network: Some(Network::Gateway), ..silt_workspace::Policy::default() });
+        let scratch = data.path().join("runs/z");
+        let run = Run {
+            data_dir: data.path(),
+            thread: "t1",
+            agent: Some(&silt_agents::copilot::Copilot),
+            checkout: checkout.path(),
+            workspace: "work",
+            scratch: &scratch,
+            reach: &reach,
+            token: "t",
+            env: vec![
+                ("PATH".into(), "/usr/bin".into()),
+                ("GH_TOKEN".into(), "ghp_real".into()),
+                ("GITHUB_TOKEN".into(), "ghp_real".into()),
+                ("GH_ENTERPRISE_TOKEN".into(), "ghp_real".into()),
+                ("COPILOT_GITHUB_TOKEN".into(), "ghp_copilot".into()),
+            ],
+            read_only: Vec::new(),
+            given: Vec::new(),
+            gateway_credentials: None,
+            relayed: Vec::new(),
+        };
+        let sandboxed = prepare(&run).unwrap();
+        let env = |name: &str| sandboxed.env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone());
+        assert!(!sandboxed.env.iter().any(|(_, value)| value.starts_with("ghp_")), "{:?}", sandboxed.env);
+        assert_eq!(env("GH_TOKEN"), None, "the workspace's GitHub credential is left out where the plugin is on");
+        assert_eq!(env("COPILOT_GITHUB_TOKEN").as_deref(), Some(PLACEHOLDER), "Copilot's key goes on at the gateway");
+        let plan: silt_workspace::SandboxPlan =
+            serde_json::from_slice(&std::fs::read(scratch.join("sandbox.json")).unwrap()).unwrap();
+        assert_eq!(plan.sees(Path::new("/silt/work")), Some(true), "its work area is writable");
+        assert_eq!(plan.sees(Path::new("/silt/github")), Some(false), "its mirrors are read-only");
+        assert!(data.path().join("work/t1").is_dir());
     }
 
     #[cfg(unix)]

@@ -2,7 +2,7 @@
 // state as it changes, and who else is here with their drafts.
 
 import { useEffect, useRef, useState } from 'react'
-import { api, type AgentStatus, type Presence, type Preset } from './api'
+import { api, type AgentStatus, type BusEvent, type Presence, type Preset } from './api'
 import { useBusEvents, useTopic } from './bus'
 import { NOTHING_SAID, type Said } from './unrecorded'
 
@@ -26,6 +26,50 @@ const NO_TOOL = { id: null, text: '' }
 
 /** How long what the agent said is kept for a history that never brings it, as one that words it otherwise. */
 const SAID_MS = 5000
+
+/** Runs `run` before the next frame is drawn, or soon in a page that draws none, as one hidden. */
+function nextFrame(run: () => void): number {
+  if (typeof requestAnimationFrame === 'function' && document.visibilityState === 'visible') return requestAnimationFrame(run)
+  return -Number(setTimeout(run, 50))
+}
+
+function cancelFrame(frame: number) {
+  if (frame < 0) clearTimeout(-frame)
+  else cancelAnimationFrame(frame)
+}
+
+/** `live` once `event` is heard; `entries` is how many the history has now. */
+export function heard(live: Live, event: BusEvent, entries: number): Live {
+  if (event.event === 'thread') {
+    return live.deltas === event.deltas ? live : { ...live, deltas: event.deltas, changes: live.changes + 1 }
+  }
+  if (event.event === 'agent') {
+    const working = event.status?.state === 'working' || event.status?.state === 'awaiting_permission'
+    const before = live.agent
+    const now = event.status
+    const text = now?.streaming ? '' : before?.streaming || live.said.text
+    const thought = now?.thinking ? '' : before?.thinking || live.said.thought
+    const kept = text === live.said.text && thought === live.said.thought
+    const began = !before?.streaming && !before?.thinking && (now?.streaming || now?.thinking) ? entries : live.began
+    // Words kept across a change to the others keep where they began, or a later turn's thought would lose their entry.
+    const textAfter = text === live.said.text ? live.said.textAfter : began
+    const thoughtAfter = thought === live.said.thought ? live.said.thoughtAfter : began
+    const said = kept ? live.said : text || thought ? { text, thought, textAfter, thoughtAfter } : NOTHING_SAID
+    return { ...live, agent: now, tool: working ? live.tool : NO_TOOL, said, began }
+  }
+  if (event.event !== 'agent_text') return live
+  if (event.kind === 'tool') {
+    const same = !event.restart && live.tool.id === event.tool_use_id
+    return { ...live, tool: { id: event.tool_use_id, text: same ? live.tool.text + event.text : event.text } }
+  }
+  // The daemon sends the agent's whole status only now and then while it streams; the words add up here between.
+  const agent = live.agent
+  if (!agent) return live
+  const began = !agent.streaming && !agent.thinking ? entries : live.began
+  return event.kind === 'message'
+    ? { ...live, agent: { ...agent, streaming: agent.streaming + event.text }, began }
+    : { ...live, agent: { ...agent, thinking: agent.thinking + event.text }, began }
+}
 
 /** The thread's live state: fetched once, then followed on the event bus (ADR 0021). */
 export function useLive(thread: string, total = 0): Live & { heard: boolean; setPreset: (preset: Preset) => void } {
@@ -69,47 +113,52 @@ export function useLive(thread: string, total = 0): Live & { heard: boolean; set
   }, [thread, round])
   useEffect(() => {
     if (live.said === NOTHING_SAID) return
-    const forget = setTimeout(() => setLive((previous) => (previous.said === live.said ? { ...previous, said: NOTHING_SAID } : previous)), SAID_MS)
+    const forget = setTimeout(
+      () => setLive((previous) => (previous.said === live.said ? { ...previous, said: NOTHING_SAID } : previous)),
+      SAID_MS,
+    )
     return () => clearTimeout(forget)
   }, [live.said])
   useTopic(`thread:${thread}`)
+  // Heard events are applied once a frame: an agent streaming a long reply sends hundreds a second, and drawing the
+  // page for each was most of what the browser did.
+  const heldEvents = useRef<BusEvent[]>([])
+  const flushing = useRef<number | null>(null)
+  useEffect(
+    () => () => {
+      if (flushing.current !== null) cancelFrame(flushing.current)
+      flushing.current = null
+      heldEvents.current = []
+    },
+    [thread],
+  )
   useBusEvents((event) => {
     if (event.event === 'lagged') {
       setRound((value) => value + 1)
       return
     }
     if (!('thread' in event) || event.thread !== thread) return
-    if (event.event === 'thread') {
-      setLive((previous) =>
-        previous.deltas === event.deltas ? previous : { ...previous, deltas: event.deltas, changes: previous.changes + 1 },
-      )
-    } else if (event.event === 'agent') {
-      setHeardFor(thread)
-      const working = event.status?.state === 'working' || event.status?.state === 'awaiting_permission'
-      setLive((previous) => {
-        const before = previous.agent
-        const now = event.status
-        const text = now?.streaming ? '' : before?.streaming || previous.said.text
-        const thought = now?.thinking ? '' : before?.thinking || previous.said.thought
-        const kept = text === previous.said.text && thought === previous.said.thought
-        const began = !before?.streaming && !before?.thinking && (now?.streaming || now?.thinking) ? entries.current : previous.began
-        // Words kept across a change to the others keep where they began, or a later turn's thought would lose their entry.
-        const textAfter = text === previous.said.text ? previous.said.textAfter : began
-        const thoughtAfter = thought === previous.said.thought ? previous.said.thoughtAfter : began
-        const said = kept ? previous.said : text || thought ? { text, thought, textAfter, thoughtAfter } : NOTHING_SAID
-        return { ...previous, agent: now, tool: working ? previous.tool : NO_TOOL, said, began }
-      })
-    } else if (event.event === 'agent_text' && event.kind === 'tool') {
-      setLive((previous) => {
-        const same = !event.restart && previous.tool.id === event.tool_use_id
-        return { ...previous, tool: { id: event.tool_use_id, text: same ? previous.tool.text + event.text : event.text } }
-      })
-    }
+    if (event.event !== 'thread' && event.event !== 'agent' && event.event !== 'agent_text') return
+    heldEvents.current.push(event)
+    flushing.current ??= nextFrame(() => {
+      flushing.current = null
+      const events = heldEvents.current
+      heldEvents.current = []
+      if (events.some((held) => held.event === 'agent')) setHeardFor(thread)
+      setLive((previous) => events.reduce((state, held) => heard(state, held, entries.current), previous))
+    })
   })
   return { ...live, heard: heardFor === thread, setPreset: (preset) => setLive((previous) => ({ ...previous, preset })) }
 }
 
-/** Tells the others what this viewer is doing; returns what they are doing. */
+/** How long typing pauses before the draft is sent to the others; the heartbeat sends it too. */
+const DRAFT_SEND_MS = 250
+
+function samePeople(a: Presence[], b: Presence[]): boolean {
+  return a.length === b.length && JSON.stringify(a) === JSON.stringify(b)
+}
+
+/** Tells the others what this viewer is doing; returns what they are doing, the same array until that changes. */
 export function usePresence(
   thread: string,
   file: string | null,
@@ -124,7 +173,10 @@ export function usePresence(
   useEffect(() => {
     heard.current = onPeople
   })
+  const shown = useRef(people)
   const setPeople = (present: Presence[]) => {
+    if (samePeople(shown.current, present)) return
+    shown.current = present
     setPresent(present)
     heard.current?.(present)
   }
@@ -149,9 +201,21 @@ export function usePresence(
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread, enabled])
+  // Each key typed was a request, and a draw of the page for its answer; where the cursor is goes at once.
+  const moved = useRef({ file, line })
   useEffect(() => {
     if (!enabled) return
-    void api.presence(thread, { file, line, draft }).then((reply) => setPeople(reply.people), () => undefined)
+    const typed = moved.current.file === file && moved.current.line === line
+    moved.current = { file, line }
+    const send = setTimeout(
+      () =>
+        void api.presence(thread, { file, line, draft }).then(
+          (reply) => setPeople(reply.people),
+          () => undefined,
+        ),
+      typed ? DRAFT_SEND_MS : 0,
+    )
+    return () => clearTimeout(send)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread, file, line, draft, enabled])
   return people

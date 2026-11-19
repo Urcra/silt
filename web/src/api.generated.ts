@@ -238,58 +238,9 @@ export type ChoiceAsked = {
  */
 value: string, label: string, description: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "approvals" } | { "event": "lagged" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "approvals" } | { "event": "appearance" } | { "event": "lagged" };
 
 export type DataClass = "location";
-
-export type Plugin = { 
-/**
- * Its name, which its tools start with.
- */
-name: string, description: string, kind: Kind, 
-/**
- * The workspaces it's on in, by id.
- */
-workspaces: Array<string>, 
-/**
- * Its environments, such as `staging` and `production`, by name.
- */
-environments: { [key in string]: Environment }, };
-
-export type Kind = { "type": "graphql" } | { "type": "command", argv: Array<string>, } | { "type": "mcp", argv: Array<string>, };
-
-export type Rule = "allow" | "ask";
-
-export type Environment = { 
-/**
- * A GraphQL endpoint's URL, or the targets a command may name, such
- * as `car-*.fleet.vpn`.
- */
-target: string, reads: Rule, changes: Rule, 
-/**
- * What a result may never carry to an agent.
- */
-data: Array<DataClass>, 
-/**
- * A credential of `silt credential` added to its requests, or for a
- * command or MCP server, given to it in `variable`.
- */
-credential: string | null, 
-/**
- * The variable a command or MCP server reads the credential's secret
- * from, such as `FLEET_TOKEN`.
- */
-variable: string | null, 
-/**
- * Each change is approved on its own: no grant covers it.
- */
-once: boolean, 
-/**
- * A GraphQL environment its agents may also query straight through
- * the gateway, which reads each request: reads go, changes only where
- * `changes` allows them, and data rules hold both ways.
- */
-direct: boolean, };
 
 export type Outcome = { "status": "done", output: string, } | { "status": "refused", why: string, } | { "status": "failed", error: string, } | { "status": "unknown", why: string, } | { "status": "pending", approval: number, };
 
@@ -311,9 +262,51 @@ change: boolean,
 /**
  * Its environment allows no grant: each is approved on its own.
  */
-once: boolean, };
+once: boolean, 
+/**
+ * A WebAssembly plugin's card, which Silt draws (ADR 0104).
+ */
+card: Card | null, 
+/**
+ * What it will send, each checked while it runs unless opaque.
+ */
+effects: Array<Effect>, 
+/**
+ * What decided it, such as a rule or an untrusted publisher.
+ */
+why: string | null, };
 
-export type GrantScope = { "for": "run" } | { "for": "thread", minutes: number, };
+export type Card = { title: string, blocks: Array<Block>, };
+
+export type Block = { "type": "fields", pairs: Array<[string, string]>, } | { "type": "list", label: string, items: Array<Item>, } | { "type": "diff", label: string, files: Array<FileChange>, } | { "type": "code", label: string, text: string, } | { "type": "note", tone: Tone, text: string, };
+
+export type Item = { 
+/**
+ * Set apart, such as a commit's id.
+ */
+key?: string | null, text: string, };
+
+export type FileChange = { path: string, added: number, removed: number, };
+
+export type Tone = "neutral" | "good" | "warn" | "danger";
+
+export type Effect = { "type": "http", method: string, url: string, body_sha256?: string | null, } | { "type": "git_push", remote: string, reference: string, old: string, new: string, } | { "type": "reach", path: string, writable: boolean, } | { "type": "opaque", channel: EffectChannel, what: string, };
+
+export type EffectChannel = "sockets" | "ssh" | "mcp-process";
+
+export type ScopedRule = { action: string, field?: string | null, pattern?: Glob | null, rule: Rule, 
+/**
+ * Each call approved on its own; no grant covers it.
+ */
+once: boolean, source: RuleSource, };
+
+export type Rule = "allow" | "ask" | "never";
+
+export type RuleSource = { "from": "built_in" } | { "from": "org", "name": string } | { "from": "yours" } | { "from": "default" } | { "from": "untrusted" };
+
+export type Glob = string;
+
+export type GrantScope = { "for": "run" } | { "for": "thread", minutes: number, } | { "for": "workspace" } | { "for": "always" };
 
 export type CallView = { id: number, plugin: string, tool: string, environment: string, target: string, shown: string, change: boolean, 
 /**
@@ -327,7 +320,7 @@ grant: number | null,
 /**
  * `pending`, `running`, `rejected`, `expired` or `ended`.
  */
-state: string, outcome: Outcome | null, created_ms: number, answered_ms: number | null, };
+state: string, outcome: Outcome | null, created_ms: number, answered_ms: number | null, card: Card | null, effects: Array<Effect>, };
 
 export type GrantView = { id: number, plugin: string, environment: string, change: boolean, 
 /**
@@ -347,7 +340,206 @@ refused: Array<NetworkRefusal>,
 /**
  * The devices Silt holds for the thread's sandboxes.
  */
-devices: Array<RelayView>, };
+devices: Array<RelayView>, 
+/**
+ * The folders granted to its agents (ADR 0102).
+ */
+folders: Array<FolderView>, };
+
+export type ThreadCall = { thread: string, call: CallView, };
+
+export type PluginActivity = { built_ms: number | null, 
+/**
+ * The tools it offers agents, by its own names.
+ */
+tools: Array<string>, 
+/**
+ * Why it doesn't load here, when it doesn't.
+ */
+broken: string | null, 
+/**
+ * Newest first.
+ */
+calls: Array<ThreadCall>, };
+
+export type Installed = { id: string, source: PluginSource, version: string, 
+/**
+ * The capabilities the person granted, by name.
+ */
+granted: Array<string>, 
+/**
+ * The workspaces it's on in, by id.
+ */
+workspaces: Array<string>, 
+/**
+ * Its environments, each with the patterns that pick it.
+ */
+environments: { [key in string]: Array<string> }, 
+/**
+ * Which of `silt credential`'s credentials each of its own is: by the
+ * credential's id, or `id@environment` for one per environment.
+ */
+credentials: { [key in string]: string }, 
+/**
+ * The person's values of its settings; never secrets.
+ */
+settings: Record<string, unknown>, 
+/**
+ * The person's rules for its actions.
+ */
+rules: Array<ScopedRule>, 
+/**
+ * What the person agreed to for this version, in the words they saw:
+ * each capability with its hosts, credential and action.
+ */
+consented: Array<string>, };
+
+export type PluginView = { installed: Installed, 
+/**
+ * `None` when its files can't be read here.
+ */
+manifest: Manifest | null, readme: string | null, trusted: boolean, 
+/**
+ * Its hosts, those its settings name included.
+ */
+hosts: Array<string>, 
+/**
+ * A newer version from its git repository, waiting for the person.
+ */
+update: GitUpdate | null, };
+
+export type GitUpdate = { id: string, 
+/**
+ * The commit installed when it was found.
+ */
+from_commit: string, from: string, to: string, 
+/**
+ * The tag or branch it's at.
+ */
+reference: string, commit: string, 
+/**
+ * What came in since, newest first, as `<short id> <subject>`.
+ */
+commits: Array<string>, 
+/**
+ * What it asks for that the installed version doesn't: updating it
+ * needs agreeing to these.
+ */
+adds: Array<string>, };
+
+export type Preview = { id: string, commit: string, 
+/**
+ * What adding it agrees to, in words.
+ */
+consent: Array<string>, };
+
+export type Manifest = { 
+/**
+ * `publisher.name`, such as `silt.github` or `acme.deploys`.
+ */
+id: string, name: string, version: string, publisher: string, description: string, license: string, repository?: string | null, 
+/**
+ * The WIT world it was built for, such as `silt:plugin@1`.
+ */
+world: string, build: Build, capabilities: Array<Capability>, actions: Array<ActionSpec>, environments?: Environments | null, settings: Array<SettingSpec>, credentials: Array<CredentialSpec>, docs: Docs, };
+
+export type Build = { "cargo": { package: string, toolchain: string, } } | { "asset": { url: string, sha256: string, } } | "shipped";
+
+export type Capability = { "kind": "http", hosts: Array<string>, 
+/**
+ * A setting whose values name more hosts, the person's to set.
+ */
+hosts_from?: string | null, reason: string, } | { "kind": "git", hosts: Array<string>, hosts_from?: string | null, reason: string, } | { "kind": "agent-files", reason: string, } | { "kind": "thread-read", reason: string, } | { "kind": "reach", reason: string, } | { "kind": "sockets", hosts: Array<string>, hosts_from?: string | null, reason: string, } | { "kind": "ssh", hosts: Array<string>, hosts_from?: string | null, reason: string, } | { "kind": "mcp-process", command: Array<string>, 
+/**
+ * A setting holding the command instead, the person's to set.
+ */
+command_from?: string | null, hosts: Array<string>, hosts_from?: string | null, reason: string, };
+
+export type ActionSpec = { id: string, label: string, 
+/**
+ * Markdown.
+ */
+description: string, kind: ActionKind, 
+/**
+ * What it starts as, once the person trusts the publisher.
+ */
+default: Rule, 
+/**
+ * Each call approved on its own; no grant covers it.
+ */
+once: boolean, 
+/**
+ * The call's fields its rules may match on, such as `branch`.
+ */
+fields: Array<string>, };
+
+export type ActionKind = "read" | "change";
+
+export type Environments = { 
+/**
+ * Such as "repos" for GitHub, or "sites".
+ */
+label: string, 
+/**
+ * The prepared call's field matched against each environment's
+ * patterns, such as `repo`.
+ */
+field: string, };
+
+export type SettingSpec = { key: string, label: string, 
+/**
+ * Markdown.
+ */
+description: string, type: SettingKind, scope: SettingScope, default?: unknown, 
+/**
+ * An enum's choices.
+ */
+options?: Array<string>, };
+
+export type SettingKind = "string" | "number" | "boolean" | "enum" | "path" | "list" | "secret";
+
+export type SettingScope = "plugin" | "environment" | "workspace";
+
+export type CredentialSpec = { id: string, label: string, 
+/**
+ * The hosts Silt sends it to, and no others.
+ */
+hosts: Array<string>, 
+/**
+ * A setting naming more hosts it's sent to: one a capability takes its
+ * hosts from too.
+ */
+hosts_from?: string | null, send: Send, 
+/**
+ * Markdown: how a person gets one.
+ */
+how: string, 
+/**
+ * Each environment has its own.
+ */
+per_environment: boolean, 
+/**
+ * Another credential of this plugin whose secret this sends, another
+ * way or to other hosts, such as a token to an API and to git: the
+ * person sets it once.
+ */
+same_as?: string | null, };
+
+export type Send = { "header": { name: string, scheme: string | null, } } | { "basic": { user: string, } } | { "query": { name: string, } };
+
+export type Docs = { readme: string, 
+/**
+ * Folders of skills teaching agents to use it.
+ */
+skills: Array<string>, };
+
+export type PluginSource = { "type": "shipped" } | { "type": "git", url: string, commit: string, follow?: string | null, } | { "type": "dev", path: string, } | { "type": "marketplace", server: string, } | { "type": "org", org: string, commit?: string | null, };
+
+export type FolderView = { path: string, writable: boolean, 
+/**
+ * For the run that asked, rather than the thread on this machine.
+ */
+run_only: boolean, granted_ms: number, until_ms: number | null, };
 
 export type NetworkRefusal = { time_ms: number, host: string, port: number, why: string, };
 
@@ -687,7 +879,12 @@ side: string | null,
 /**
  * On a `task`: news of a subagent or background command.
  */
-task: TaskView | null, };
+task: TaskView | null, 
+/**
+ * What a page of history left out of the entry, read whole with `whole`:
+ * an image's data, or a long output's start.
+ */
+cut: CutView | null, };
 
 export type ToolView = { id: string, name: string, 
 /**
@@ -722,6 +919,12 @@ export type ImageView = { media_type: string,
  * Base64; empty when it was too large to show.
  */
 data: string, };
+
+export type CutView = { 
+/**
+ * The whole text's lines and bytes; its last lines are what the page kept.
+ */
+lines: number, bytes: number, };
 
 export type ArtifactView = { 
 /**
@@ -847,6 +1050,74 @@ export type ArtifactSettings = {
  * the viewer's browser never contacts a CDN; else from the CDNs.
  */
 proxy: boolean, };
+
+export type AppearanceMode = "system" | "light" | "dark";
+
+export type AppearanceSettings = { mode: AppearanceMode, light: string, dark: string, };
+
+export type ThemeSource = "bundled" | "yours" | "replaces_bundled";
+
+export type ThemeSummary = { id: string, name: string, family: string, 
+/**
+ * `light` or `dark`.
+ */
+appearance: string, source: ThemeSource, 
+/**
+ * bg, surface-1, fg-1, accent, ok and danger.
+ */
+swatch: Array<string>, author?: string | null, license?: string | null, 
+/**
+ * The file it's in, for the person's.
+ */
+file?: string | null, 
+/**
+ * What was wrong in its file, which the rest of it loaded despite.
+ */
+warnings: Array<string>, 
+/**
+ * Text pairs below 4.5:1.
+ */
+failing: number, };
+
+export type ThemeProblem = { file: string, message: string, };
+
+export type ThemeCatalog = { themes: Array<ThemeSummary>, problems: Array<ThemeProblem>, 
+/**
+ * Where the person's themes go; none on the hosted app.
+ */
+folder?: string | null, appearance: AppearanceSettings, };
+
+export type ThemeColorView = { token: string, value: string, derived: boolean, about: string, };
+
+export type ThemeSyntaxView = { tag: string, color: string | null, font_style: string | null, font_weight: number | null, about: string, };
+
+export type ThemeCheckView = { pair: string, fore: string, back: string, ratio: number, needs: number, passes: boolean, 
+/**
+ * An icon or dot rather than text: advice, not a failure.
+ */
+mark: boolean, derived: boolean, };
+
+export type ThemeDetail = { summary: ThemeSummary, colors: Array<ThemeColorView>, syntax: Array<ThemeSyntaxView>, checks: Array<ThemeCheckView>, ui_font: string, mono_font: string, 
+/**
+ * sm, md and lg, in pixels.
+ */
+radii: Array<number>, source_url?: string | null, copyright?: string | null, };
+
+export type ThemeCss = { css: string, };
+
+export type ThemeSaved = { 
+/**
+ * The file written, in the person's themes folder.
+ */
+file: string, 
+/**
+ * The ids of its themes.
+ */
+themes: Array<string>, 
+/**
+ * What Silt left out, guessed or derived, for an import.
+ */
+notes: Array<string>, };
 
 export type DesignSystemView = { 
 /**
@@ -1067,7 +1338,17 @@ export type HistoryHit = {
  */
 index: number, kind: string, snippet: string, };
 
-export type HistoryPage = { thread: string, total: number, entries: Array<HistoryEntry>, };
+export type HistoryPage = { thread: string, total: number, entries: Array<HistoryEntry>, 
+/**
+ * Which entry `entries` starts at: the one asked for, or an earlier one
+ * that changed since the history the request named as `known`.
+ */
+from: number | null, 
+/**
+ * The history as it is now, to name as `known` next time; a server's
+ * pages name none, and are read whole again.
+ */
+version: number | null, };
 
 export type InFlight = { thread: string, owner: string, files: Array<string>, last_ms: number, };
 
@@ -1397,6 +1678,54 @@ server: ServerBinding | null, rules: Array<MatchRule>, defaults: Defaults,
  */
 env: { [key in string]: string }, policy: Policy, };
 
+export type FolderRule = { 
+/**
+ * A folder, `~/` for the home folder's.
+ */
+root: string, answer: FolderAnswer, 
+/**
+ * Writing may be given in it.
+ */
+writable: boolean, };
+
+export type PluginPolicy = { install?: Array<OrgPlugin>, 
+/**
+ * Only these may be on: `publisher:<name>`, `git:<url>`, or a plugin's
+ * id; any when unset. Silt's own plugins are named by id like others.
+ */
+allow?: Array<string> | null, 
+/**
+ * The one version each named plugin may run at.
+ */
+pinned?: { [key in string]: string }, 
+/**
+ * No call may have an effect Silt can't check (TCP, SSH, a local MCP
+ * server's).
+ */
+refuse_opaque?: boolean, 
+/**
+ * No plugin may widen an agent's sandbox.
+ */
+refuse_reach?: boolean, rules?: Array<OrgPluginRule>, };
+
+export type OrgPlugin = { id: string, git: string, 
+/**
+ * The commit it's built from, and no other.
+ */
+commit: string, };
+
+export type OrgPluginRule = { plugin: string, 
+/**
+ * An action, or `*` for every one.
+ */
+action: string, field?: string | null, pattern?: string | null, 
+/**
+ * `ask` or `never`: an org's allow would loosen its members' rules.
+ */
+rule: string, };
+
+export type FolderAnswer = "allow" | "ask" | "never";
+
 export type Workspaces = { 
 /**
  * Where projects no rule matches go.
@@ -1511,7 +1840,20 @@ refuse?: Array<Extra>,
 /**
  * The agent's own sandbox may not run inside Silt's.
  */
-no_nested?: boolean, };
+no_nested?: boolean, 
+/**
+ * The folders agents may ask for, and how each is answered (ADR 0102).
+ */
+folders?: Array<FolderRule>, 
+/**
+ * The folder rules of more than one policy, each set judged on its
+ * own, once policies are combined.
+ */
+folder_layers?: Array<Array<FolderRule>>, 
+/**
+ * What plugins may be on, and how their calls are held (ADR 0104).
+ */
+plugins?: PluginPolicy, };
 
 export type Network = "none" | "gateway" | "full" | "host";
 
@@ -1666,6 +2008,12 @@ sessions: Array<FoundSessions>, last_ms: number | null, };
 
 export type FoundSessions = { agent: string, count: number, };
 
+export type Subfolder = { name: string, 
+/**
+ * Whether it holds a git repository of its own.
+ */
+git: boolean, };
+
 export type VoiceDownload = { done: number, total: number, };
 
 export type VoiceEvent = { "kind": "partial", text: string, } | { "kind": "segment", text: string, } | { "kind": "paused" } | { "kind": "done" } | { "kind": "failed", message: string, };
@@ -1793,3 +2141,64 @@ export type ModelPull = { id: string, done: number,
 total: number, };
 
 export type ModelFailure = { id: string, reason: string, };
+
+export type UpdateView = { build: BuildView, 
+/**
+ * The last check's answer, until the first check ends.
+ */
+availability: Availability | null, checked_ms: number | null, checking: boolean, 
+/**
+ * The update running or last run.
+ */
+run: RunView | null, 
+/**
+ * The run's last lines of output.
+ */
+output: Array<string>, 
+/**
+ * Where all of it is.
+ */
+output_path: string, 
+/**
+ * Whether the desktop app showing this needs a relaunch to run what
+ * the update brings, or has brought.
+ */
+relaunch: boolean, };
+
+export type BuildView = { version: string, channel: Channel, commit: Commit | null, branch: string | null, dirty: boolean, 
+/**
+ * The clone it was built from.
+ */
+source: string | null, };
+
+export type Channel = "stable" | "nightly";
+
+export type Availability = { "kind": "up_to_date" } | { "kind": "behind", target: Commit, ahead: number, commits: Array<NewCommit>, } | { "kind": "off", reason: OffReason, } | { "kind": "release", tag: string, url: string, } | { "kind": "failed", message: string, };
+
+export type NewCommit = { hash: Commit, subject: string, 
+/**
+ * Committed at, in seconds since the epoch.
+ */
+time: number, };
+
+export type Commit = string;
+
+export type OffReason = { "kind": "debug_build" } | { "kind": "no_clone" } | { "kind": "clone_gone", path: string, } | { "kind": "built_off_main", branch: string | null, } | { "kind": "built_with_changes" } | { "kind": "off_main", branch: string | null, } | { "kind": "local_changes" } | { "kind": "no_upstream" } | { "kind": "local_commits", count: number, } | { "kind": "unknown_build" };
+
+export type RunView = { outcome: RunOutcome, from: Commit | null, to: Commit | null, started_ms: number, elapsed_ms: number, 
+/**
+ * How long the whole update should take, once a run has said.
+ */
+expected_ms: number | null, percent: number, steps: Array<StepView>, };
+
+export type StepView = { phase: Phase, label: string, status: StepStatus, took_ms: number | null, compiled: number, 
+/**
+ * What it compiled last time, which a bar fills toward.
+ */
+expected_compiled: number | null, };
+
+export type StepStatus = "done" | "active" | "waiting" | "failed" | "todo" | "skipped";
+
+export type Phase = "fetch" | "web_dependencies" | "web_build" | "cli" | "desktop" | "voice" | "windows" | "restart";
+
+export type RunOutcome = { "kind": "running" } | { "kind": "waiting", agents: number, } | { "kind": "done" } | { "kind": "failed", message: string, };

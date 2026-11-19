@@ -774,7 +774,7 @@ fn repo_of(api: &Api, thread: &str) -> Option<String> {
 fn settled_history(api: &Api, thread: &str, last: &str) -> Vec<(String, String)> {
     let mut entries = Vec::new();
     let settled = eventually(|| {
-        let history = api.ok("GET", &format!("/api/threads/{thread}/history"), None);
+        let history = api.ok("GET", &format!("/api/threads/{thread}/history?whole=true"), None);
         entries = history["entries"]
             .as_array()
             .expect("entries")
@@ -870,7 +870,7 @@ fn a_long_reply_reaches_the_web_ui_whole() {
 
 /// The thread's history entries as the API gives them.
 fn history_entries(api: &Api, thread: &str) -> Vec<serde_json::Value> {
-    api.ok("GET", &format!("/api/threads/{thread}/history"), None)["entries"].as_array().cloned().unwrap_or_default()
+    api.ok("GET", &format!("/api/threads/{thread}/history?whole=true"), None)["entries"].as_array().cloned().unwrap_or_default()
 }
 
 /// The commands an agent offers reach the web UI: over v1 once its session
@@ -1067,6 +1067,49 @@ fn a_command_left_running_in_the_background_is_stopped_from_the_web_ui() {
         "{wake}"
     );
     assert!(!entries.iter().any(|entry| entry["text"] == "The kept command ended."), "it was stopped before it went on");
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["stoppable"], serde_json::json!([]), "{live}");
+    assert_eq!(listed_background(&api, &thread), 0, "{live}");
+}
+
+/// A command left running that ended without Silt hearing of it is marked
+/// stopped when the person stops it, rather than shown running for good.
+#[test]
+fn a_command_left_running_that_ended_unheard_is_marked_stopped_when_stopped() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v2", "add acp Unheard");
+    settled_history(&api, &thread, "Done: add acp Unheard");
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["stoppable"], serde_json::json!(["unheard-1"]), "{live}");
+
+    api.ok("POST", &format!("/api/threads/{thread}/agent/tasks/unheard-1/stop"), None);
+    assert_eq!(task_news(&api, &thread, "unheard-1"), ["running", "stopped"]);
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["stoppable"], serde_json::json!([]), "{live}");
+    assert_eq!(listed_background(&api, &thread), 0, "{live}");
+}
+
+/// A shell Copilot detached and never reads ends without Silt hearing of
+/// it: Silt sees its process gone and marks it done, and leaves it running
+/// until then.
+#[test]
+fn a_shell_an_agent_speaking_v1_never_reads_is_done_once_its_process_ended() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_fake_acp(&env, &api, "v1", "add acp Forgotten");
+    settled_history(&api, &thread, "Done: add acp Forgotten");
+    assert!(eventually(|| kept(&env).len() == 1), "the command runs");
+    // Past its first look among the agent's processes.
+    std::thread::sleep(Duration::from_secs(7));
+    assert_eq!(task_news(&api, &thread, "shell-1"), ["running"], "it still runs");
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["stoppable"], serde_json::json!(["shell-1"]), "{live}");
+
+    for pid in kept(&env) {
+        silt_os::kill(pid).expect("ends");
+    }
+    assert!(eventually(|| task_news(&api, &thread, "shell-1") == ["running", "completed"]), "its end was seen");
     let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
     assert_eq!(live["agent"]["stoppable"], serde_json::json!([]), "{live}");
     assert_eq!(listed_background(&api, &thread), 0, "{live}");
@@ -2724,4 +2767,109 @@ fn output_once_released(command: &mut Command) -> std::process::Output {
 fn web_ui(url: &str) -> (&str, &str) {
     let (page, token) = url.trim().split_once("#token=").expect("a URL with a token");
     (page.split_once("/?").map_or(page.trim_end_matches('/'), |(base, _project)| base), token)
+}
+
+/// A sandboxed agent the web UI runs asks for a folder its workspace's
+/// rules allow (ADR 0102): it doesn't see it until its turn ends, when Silt
+/// starts its sandbox again with the folder, read-only, and tells it what's
+/// there. A folder the rules never give stays out.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_sandboxed_agent_asks_for_a_folder_and_is_restarted_with_it() {
+    if silt_daemon::sandbox::unavailable(silt_workspace::Backend::Bubblewrap).is_some() {
+        eprintln!("skipped: this machine can't make Silt's sandbox");
+        return;
+    }
+    let env = Env::new();
+    let shared = tempfile::tempdir().expect("temp dir");
+    let shared_root = silt_os::canonicalize(shared.path()).expect("canonical");
+    let lib = shared_root.join("lib");
+    let secret = shared_root.join("secret");
+    for dir in [&lib, &secret] {
+        fs::create_dir_all(dir).expect("mkdir");
+        fs::write(dir.join("notes.md"), "kept\n").expect("write");
+    }
+    let rules = format!("{}:allow,{}:never", lib.display(), secret.display());
+    let set = env.silt(&["workspace", "policy", "Default", "--silt-sandbox", "on", "--network", "none", "--ask-folders", &rules]);
+    assert!(set.status.success(), "{}", String::from_utf8_lossy(&set.stderr));
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    fs::write(
+        env.silt_home.join("agents.json"),
+        serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]).to_string(),
+    )
+    .expect("write agents.json");
+    let look = format!("Look in {}", lib.display());
+    let started =
+        api.ok("POST", "/api/agents/start", Some(serde_json::json!({"clone": env.repo, "agent": "v1", "prompt": look})));
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    settled_history(&api, &thread, &format!("Done: {look}: nothing there"));
+
+    let ask = format!("Folder {}", lib.display());
+    api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": ask})));
+    // Restarted with it, the agent is told what's there and goes on.
+    let told = format!(
+        "{} is now in your sandbox, read-only, at that path. You were restarted for this; carry on where you left off.",
+        lib.display()
+    );
+    let mut entries = Vec::new();
+    let restarted = eventually(|| {
+        let history = api.ok("GET", &format!("/api/threads/{thread}/history"), None);
+        entries = history["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .map(|entry| entry["text"].as_str().unwrap_or_default().to_owned())
+            .collect();
+        let idle = api.ok("GET", &format!("/api/threads/{thread}/live"), None)["agent"]["state"] == "idle";
+        // The fake can't load its session in a new process, so the note goes with the conversation it's primed with.
+        idle && entries.iter().any(|text| text.starts_with("Done: ") && text.ends_with(&told))
+    });
+    assert!(restarted, "never restarted with the folder: {entries:?}");
+    assert!(entries.iter().any(|text| text == &format!("Done: {ask}")), "{entries:?}");
+    let sent = api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": look})));
+    assert!(sent == "sent" || sent == "queued", "{sent}");
+    settled_history(&api, &thread, &format!("Done: {look}: notes.md"));
+
+    let never = format!("Folder {}", secret.display());
+    api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": never})));
+    settled_history(&api, &thread, &format!("Done: {never}"));
+    let peek = format!("Look in {}", secret.display());
+    api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": peek})));
+    settled_history(&api, &thread, &format!("Done: {peek}: nothing there"));
+}
+
+/// The same from a terminal: `silt claude` stops the agent once the turn
+/// that was granted a folder ends, and starts it again in a sandbox with
+/// the folder, resuming its session (ADR 0102).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_terminals_sandboxed_agent_is_restarted_with_the_folder_it_was_granted() {
+    if silt_daemon::sandbox::unavailable(silt_workspace::Backend::Bubblewrap).is_some() {
+        eprintln!("skipped: this machine can't make Silt's sandbox");
+        return;
+    }
+    let env = Env::with_claude("folder");
+    let shared = tempfile::tempdir().expect("temp dir");
+    let lib = silt_os::canonicalize(shared.path()).expect("canonical").join("lib");
+    fs::create_dir_all(&lib).expect("mkdir");
+    fs::write(lib.join("notes.md"), "kept\n").expect("write");
+    let rules = format!("{}:allow", lib.display());
+    env.silt(&["workspace", "policy", "Default", "--silt-sandbox", "on", "--network", "none", "--ask-folders", &rules]);
+    // The sandbox passes only the variables it knows, and those a person lists.
+    fs::write(env.silt_home.join("agent-env"), "FAKE_SCRIPT\nFAKE_FOLDER\n").expect("writes agent-env");
+    env.silt(&["daemon", "start"]);
+    let started = std::time::Instant::now();
+    let ran = env.run_with(&["claude"], &[("FAKE_FOLDER", &lib.to_string_lossy())]);
+    let said = String::from_utf8_lossy(&ran.stderr).into_owned();
+    assert!(ran.status.success(), "{said}");
+    assert!(
+        said.contains(&format!("restarting Claude Code in its sandbox: {} is now in your sandbox, read-only", lib.display())),
+        "{said}"
+    );
+    assert!(!env.repo.join("folder-not-restarted").exists(), "{said}");
+    assert_eq!(fs::read_to_string(env.repo.join("folder-seen")).expect("resumed"), "notes.md", "{said}");
+    let told = fs::read_to_string(env.repo.join("folder-told")).expect("resumed");
+    assert!(told.starts_with(&format!("{} is now in your sandbox, read-only", lib.display())), "told: {told}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(25), "restarted at the turn's end, not after waiting");
 }

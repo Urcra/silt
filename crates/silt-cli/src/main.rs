@@ -12,6 +12,8 @@ mod recording;
 mod reference;
 mod render;
 mod sandbox;
+mod theme;
+mod update;
 mod workspace;
 
 use std::path::PathBuf;
@@ -23,7 +25,7 @@ use silt_log::Hide;
 use silt_proto::OrgChange;
 
 #[derive(Debug, Parser)]
-#[command(name = "silt", version, about = "Resume, fork and search your agent sessions")]
+#[command(name = "silt", version = silt_update::VERSION, about = "Resume, fork and search your agent sessions")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -223,8 +225,8 @@ enum Command {
         id: u64,
         #[arg(long)]
         reject: bool,
-        /// Also let calls like it run without asking: for the rest of this `run`, or the `thread`
-        #[arg(long, value_parser = ["run", "thread"])]
+        /// Also let calls like it run without asking: for the rest of this `run`, the `thread` a while, or `always`, by a rule of yours; or, for a folder, make it the `workspace`'s own
+        #[arg(long, value_parser = ["run", "thread", "always", "workspace"])]
         grant: Option<String>,
         /// How long a thread's grant lasts, in minutes
         #[arg(long, default_value_t = 60)]
@@ -236,6 +238,11 @@ enum Command {
     Design {
         #[command(subcommand)]
         command: design::DesignCommand,
+    },
+    /// Themes for Silt's UI: list, start, import from VS Code or Zed, and check them
+    Theme {
+        #[command(subcommand)]
+        command: theme::ThemeCommand,
     },
     /// List recorded threads, or with --commit the threads and turns that
     /// made a commit
@@ -377,6 +384,15 @@ enum Command {
         #[arg(long, required = true)]
         once: bool,
     },
+    /// Update Silt: a build of a clone pulls its `main` and builds it again
+    /// with `just update`, then restarts the daemon once no agent is mid-turn
+    Update {
+        /// Only say whether an update is out
+        #[arg(long)]
+        check: bool,
+        #[command(subcommand)]
+        step: Option<UpdateStep>,
+    },
     /// Manage the background daemon
     Daemon {
         #[command(subcommand)]
@@ -440,6 +456,19 @@ enum Command {
     },
 }
 
+/// The steps of an update the daemon starts, run on their own.
+#[derive(Debug, Subcommand)]
+enum UpdateStep {
+    /// Update, writing only to the update's state and output, as the
+    /// daemon runs it detached
+    #[command(hide = true)]
+    Run,
+    /// Restart the daemon on the build just installed, once no agent is
+    /// mid-turn
+    #[command(hide = true)]
+    Restart,
+}
+
 #[derive(Debug, Subcommand)]
 enum DaemonCommand {
     /// Run the daemon in the foreground
@@ -448,6 +477,14 @@ enum DaemonCommand {
     Start,
     /// Stop the daemon
     Stop,
+    /// Restart the daemon on this build: at once when no agent works in
+    /// it, else once none does
+    Restart {
+        /// Only when an install replaced its program since it started, as
+        /// `just install` and closing the desktop app ask
+        #[arg(long)]
+        if_replaced: bool,
+    },
     /// Show whether the daemon is running
     Status,
     /// Give back the space a store from an older Silt holds: compress its
@@ -599,6 +636,7 @@ enum InboxCommand {
     },
 }
 
+#[expect(clippy::large_enum_variant, reason = "parsed once, from the command line")]
 #[derive(Debug, Subcommand)]
 enum OrgCommand {
     /// List your orgs with their members, teams and projects
@@ -664,6 +702,27 @@ enum OrgCommand {
         /// Agents' own sandboxes may not run inside Silt's
         #[arg(long)]
         no_nested: bool,
+        /// The folders agents may ask for, comma-separated, each `root:allow|ask|never`, with `:rw` where writing may be given; members' own rules only tighten these
+        #[arg(long)]
+        ask_folders: Option<String>,
+        /// A plugin the org installs and keeps on in its workspaces, as `<id>=<git-url>#<commit>`; give it again for each
+        #[arg(long)]
+        plugin_install: Vec<String>,
+        /// The only plugins that may be on, comma-separated: an id, `publisher:<name>` or `git:<url>`
+        #[arg(long)]
+        plugin_allow: Option<String>,
+        /// The one version a plugin may run at, as `<id>=<version>`; give it again for each
+        #[arg(long)]
+        plugin_pin: Vec<String>,
+        /// An org's rule on a plugin's action, as `<id>:<action>[:<field>=<pattern>]=ask|never`; give it again for each
+        #[arg(long)]
+        plugin_rule: Vec<String>,
+        /// No plugin call may have an effect Silt can't check, such as TCP, SSH or a local MCP server's
+        #[arg(long)]
+        refuse_opaque: bool,
+        /// No plugin may widen an agent's sandbox, as Folders does
+        #[arg(long)]
+        refuse_reach: bool,
     },
 }
 
@@ -896,6 +955,7 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Revoke { grant } => plugin::revoke(grant),
         Command::Access { command } => access::run(command),
         Command::Design { command } => design::run(command),
+        Command::Theme { command } => theme::run(command),
         Command::Model { command } => model::run(command),
         Command::Claude(run) => commands::run_agent("claude", run.isolated, &run.args),
         Command::Codex(run) => commands::run_agent("codex", run.isolated, &run.args),
@@ -978,7 +1038,23 @@ fn run() -> Result<(), Exn<CliError>> {
                 devices,
                 refuse,
                 no_nested,
+                ask_folders,
+                plugin_install,
+                plugin_allow,
+                plugin_pin,
+                plugin_rule,
+                refuse_opaque,
+                refuse_reach,
             } => {
+                let folders = workspace::folder_rules(ask_folders.as_deref())?;
+                let plugins = plugin::org_policy(
+                    &plugin_install,
+                    plugin_allow.as_deref(),
+                    &plugin_pin,
+                    &plugin_rule,
+                    refuse_opaque,
+                    refuse_reach,
+                )?;
                 let reach = workspace::parse_reach(network.as_deref(), devices.as_deref(), refuse.as_deref())?;
                 let max_preset = match max_preset.as_deref().map(|name| silt_workspace::Preset::parse(name).ok_or(name)) {
                     Some(Err(name)) => return Err(commands::fail(format!("no preset {name}"))),
@@ -1002,10 +1078,12 @@ fn run() -> Result<(), Exn<CliError>> {
                     devices: reach.devices,
                     refuse: reach.refuse,
                     no_nested,
+                    folders,
+                    plugins,
                     // A Local only workspace has no server, so no org's policy reaches it.
                     ..silt_workspace::Policy::default()
                 };
-                admin::org_change(OrgChange::Policy { org, policy })
+                admin::org_change(OrgChange::Policy { org, policy: Box::new(policy) })
             }
         },
         Command::Team { command } => admin::org_change(match command {
@@ -1087,10 +1165,15 @@ fn run() -> Result<(), Exn<CliError>> {
             ServerCommand::Restore { backup, data, replace } => admin::restore(&backup, data, replace),
         },
         Command::Sync { thread, once: _ } => commands::sync_once(thread.as_deref()),
+        Command::Update { check: true, step: None } => update::check(),
+        Command::Update { check: _, step: None } => update::run(true),
+        Command::Update { step: Some(UpdateStep::Run), .. } => update::run(false),
+        Command::Update { step: Some(UpdateStep::Restart), .. } => update::restart(),
         Command::Daemon { command } => match command {
             DaemonCommand::Run => commands::daemon_run(),
             DaemonCommand::Start => commands::ensure_daemon().map(|_| ()),
             DaemonCommand::Stop => commands::daemon_stop(),
+            DaemonCommand::Restart { if_replaced } => commands::daemon_restart(if_replaced),
             DaemonCommand::Status => commands::daemon_status(),
             DaemonCommand::Compact => commands::daemon_compact(),
         },

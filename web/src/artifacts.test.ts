@@ -38,7 +38,17 @@ function artifact(index: number, id: string, version: number, extra: Partial<Art
     plan: null,
     side: null,
     task: null,
-    artifact: { id, version, title: 'Rescan benchmark', kind: 'html', media_type: 'text/html', blob: `blob${index}`, size: 10, inline: false, ...extra },
+    artifact: {
+      id,
+      version,
+      title: 'Rescan benchmark',
+      kind: 'html',
+      media_type: 'text/html',
+      blob: `blob${index}`,
+      size: 10,
+      inline: false,
+      ...extra,
+    },
   } as HistoryEntry
 }
 
@@ -85,7 +95,10 @@ describe('artifacts', () => {
   })
 
   it("gives the frame the design system's tokens and the viewer's theme before the page's own content", () => {
-    const page = sandboxedDocument('<!doctype html><html lang="en"><p>hi</p>', { style: ':root{--bg:#fff}</style><script>x</script>', theme: 'dark' })
+    const page = sandboxedDocument('<!doctype html><html lang="en"><p>hi</p>', {
+      style: ':root{--bg:#fff}</style><script>x</script>',
+      theme: 'dark',
+    })
     const policy = page.indexOf('Content-Security-Policy')
     const script = page.indexOf("root.setAttribute('data-theme','dark')")
     const style = page.indexOf('<style data-silt="design-system">:root{--bg:#fff}<\\/style><script>x<\\/script></style>')
@@ -103,7 +116,12 @@ describe('artifacts', () => {
     const vendor = 'http://127.0.0.1:7777/vendor/'
     expect(framePolicy(vendor)).toContain(`script-src 'unsafe-inline' ${vendor};`)
     expect(framePolicy(vendor)).not.toContain('cdnjs')
-    expect(throughVendor('<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script><link href="//fonts.googleapis.com/css2?family=Inter">', vendor)).toBe(
+    expect(
+      throughVendor(
+        '<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script><link href="//fonts.googleapis.com/css2?family=Inter">',
+        vendor,
+      ),
+    ).toBe(
       `<script src="${vendor}cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script><link href="${vendor}fonts.googleapis.com/css2?family=Inter">`,
     )
     const page = sandboxedDocument('<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>', {
@@ -135,7 +153,9 @@ describe('artifacts', () => {
     expect(file).not.toMatch(/(src|href)="https?:/)
     const html = artifact(2, 'bbbbbbbbbbbb', 1).artifact!
     expect(offlineHtml(html, { media_type: 'text/html', data: base64('<h1>é</h1>') })).toContain('<h1>é</h1>')
-    expect(offlineHtml(html, { media_type: 'text/html', data: base64('<h1>é</h1>') }, undefined, ':root{--bg:#fff}')).toContain(':root{--bg:#fff}</style><h1>é</h1>')
+    expect(offlineHtml(html, { media_type: 'text/html', data: base64('<h1>é</h1>') }, undefined, ':root{--bg:#fff}')).toContain(
+      ':root{--bg:#fff}</style><h1>é</h1>',
+    )
     expect(fileName(view)).toBe('sidebar-scan-v3.png')
     expect(fileName(html, 'html')).toBe('rescan-benchmark-v1.html')
   })
@@ -148,7 +168,16 @@ describe('artifacts', () => {
     const entries = [artifact(1, 'aaaaaaaaaaaa', 1), artifact(4, 'aaaaaaaaaaaa', 2), artifact(6, 'bbbbbbbbbbbb', 1)]
     const group = artifactsOf(entries).find((each) => each.id === 'aaaaaaaaaaaa')!
     const comment = (id: string, index: number, text: string) =>
-      ({ id, by: 'alice', time_ms: 0, text, resolved: false, sent: false, location: { at: 'entry', index, excerpt: '' }, replies: [] }) as unknown as CommentView
+      ({
+        id,
+        by: 'alice',
+        time_ms: 0,
+        text,
+        resolved: false,
+        sent: false,
+        location: { at: 'entry', index, excerpt: '' },
+        replies: [],
+      }) as unknown as CommentView
     const on = commentsOn(group, [comment('c1', 1, 'a'), comment('c2', 4, 'b'), comment('c3', 6, 'c'), comment('c4', 2, 'd')])
     expect(on.map((each) => each.id)).toEqual(['c1', 'c2'])
     expect(quoted('Make it blue', 'the bars\nall of them')).toBe('> the bars\n> all of them\n\nMake it blue')
@@ -177,9 +206,12 @@ describe('the frame contract', () => {
   })
 })
 
-describe("the offline copy of a page with files", () => {
+describe('the offline copy of a page with files', () => {
   it('carries its files inside: as data URIs where named, and answered by fetch', async () => {
-    const files = { 'css/site.css': { media_type: 'text/css; charset=utf-8', data: btoa('h1{}') }, 'data.json': { media_type: 'application/json', data: btoa('{"n":3}') } }
+    const files = {
+      'css/site.css': { media_type: 'text/css; charset=utf-8', data: btoa('h1{}') },
+      'data.json': { media_type: 'application/json', data: btoa('{"n":3}') },
+    }
     const html = withFilesInlined('<!doctype html><link rel="stylesheet" href="./css/site.css"><img src="data.json">', files)
     expect(html.startsWith('<!doctype html><script>')).toBe(true)
     expect(html).toContain(`href="data:text/css;base64,${btoa('h1{}')}"`)
@@ -202,7 +234,17 @@ describe('the Artifacts page', () => {
     repo: '/r/silt',
     owner: 'ann',
     mine: true,
-    artifact: { id: '0123456789ab', version: 2, title: 'Rescan benchmark', kind: 'html', media_type: 'text/html', blob: 'b', size: 1, inline: false, description: 'How long a rescan takes' },
+    artifact: {
+      id: '0123456789ab',
+      version: 2,
+      title: 'Rescan benchmark',
+      kind: 'html',
+      media_type: 'text/html',
+      blob: 'b',
+      size: 1,
+      inline: false,
+      description: 'How long a rescan takes',
+    },
     time_ms: 1,
     pinned: false,
     archived: false,

@@ -1,0 +1,142 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Urcra/silt/main/docs/reference/theme.schema.json",
+  "name": "Ink",
+  "author": "Silt",
+  "license": "AGPL-3.0-only",
+  "themes": [
+    {
+      "id": "ink-light",
+      "name": "Ink Light",
+      "appearance": "light",
+      "colors": {
+        "bg": "#ffffff",
+        "bg-elevated": "#ffffff",
+        "surface-1": "#f2f2f2",
+        "surface-2": "#e3e3e3",
+        "surface-3": "#d1d1d1",
+        "fg-1": "#000000",
+        "fg-2": "#1f1f1f",
+        "fg-3": "#383838",
+        "fg-on-accent": "#ffffff",
+        "border": "#6b6b6b",
+        "border-strong": "#000000",
+        "border-subtle": "#00000033",
+        "accent": "#0b57d0",
+        "accent-fg": "#0b4ab0",
+        "ok": "#155c15",
+        "warn": "#7a4f00",
+        "danger": "#a3001c",
+        "info": "#0b4ab0"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#0b4ab0",
+          "font_weight": 600
+        },
+        "string": {
+          "color": "#155c15"
+        },
+        "string-special": {
+          "color": "#6a1bb3"
+        },
+        "number": {
+          "color": "#8a3a00"
+        },
+        "constant": {
+          "color": "#8a3a00"
+        },
+        "comment": {
+          "color": "#383838",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#6a1bb3"
+        },
+        "macro": {
+          "color": "#6a1bb3"
+        },
+        "operator": {
+          "color": "#1f1f1f"
+        },
+        "punctuation": {
+          "color": "#1f1f1f"
+        },
+        "meta": {
+          "color": "#1f1f1f"
+        }
+      },
+      "radii": {
+        "sm": 0,
+        "md": 0,
+        "lg": 0
+      }
+    },
+    {
+      "id": "ink-dark",
+      "name": "Ink Dark",
+      "appearance": "dark",
+      "colors": {
+        "bg": "#000000",
+        "bg-elevated": "#0d0d0d",
+        "surface-1": "#141414",
+        "surface-2": "#242424",
+        "surface-3": "#333333",
+        "fg-1": "#ffffff",
+        "fg-2": "#e6e6e6",
+        "fg-3": "#c7c7c7",
+        "fg-on-accent": "#000000",
+        "border": "#8a8a8a",
+        "border-strong": "#ffffff",
+        "border-subtle": "#ffffff33",
+        "accent": "#8ab4f8",
+        "accent-fg": "#a8c7fa",
+        "ok": "#7ee787",
+        "warn": "#f2cc60",
+        "danger": "#ff8a80",
+        "info": "#a8c7fa"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#a8c7fa",
+          "font_weight": 600
+        },
+        "string": {
+          "color": "#7ee787"
+        },
+        "string-special": {
+          "color": "#d7aefb"
+        },
+        "number": {
+          "color": "#ffb38a"
+        },
+        "constant": {
+          "color": "#ffb38a"
+        },
+        "comment": {
+          "color": "#c7c7c7",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#d7aefb"
+        },
+        "macro": {
+          "color": "#d7aefb"
+        },
+        "operator": {
+          "color": "#e6e6e6"
+        },
+        "punctuation": {
+          "color": "#e6e6e6"
+        },
+        "meta": {
+          "color": "#e6e6e6"
+        }
+      },
+      "radii": {
+        "sm": 0,
+        "md": 0,
+        "lg": 0
+      }
+    }
+  ]
+}

@@ -455,8 +455,9 @@ impl Following {
 
     /// News of shells an agent detached: "<command started in detached
     /// background with shellId: 0>", and, when it reads one that ended,
-    /// "<detached command with shellId: 0 completed with exit code 0>". The
-    /// news of its end is the call's that started it.
+    /// "<detached command with shellId: 0 completed with exit code 0>", or
+    /// "<command with id: 0 stopped>" when it ends one. The news of its end
+    /// is the call's that started it.
     fn follow_detached(&mut self, mut event: Event) -> Vec<Event> {
         let Event::Update(Update::ToolUpdate { id, status: Some(status), output: Some(output), task, .. }) = &mut event else {
             return vec![event];
@@ -469,6 +470,13 @@ impl Following {
             *task =
                 Some(Box::new(TaskNews { id: Some(shell), kind: Some("background".to_owned()), status: "running".to_owned() }));
             return vec![event];
+        }
+        // Ended by the agent: "<command with id: 0 stopped>".
+        if let Some(shell) =
+            shell_id(output, "<command with id: ").filter(|shell| output.contains(&format!("id: {shell} stopped>")))
+            && let Some(call) = self.detached.remove(&shell)
+        {
+            return vec![news(&call, &shell, "background", "stopped"), event];
         }
         let Some(shell) = shell_id(output, "detached command with shellId: ") else {
             return vec![event];
@@ -663,6 +671,11 @@ mod tests {
         assert_eq!(news(&ended[0]).map(|news| news.2), Some("failed".into()));
         let unknown = following.follow(None, completed("r3", "<detached command with shellId: 9 completed with exit code 0>"));
         assert_eq!(unknown.len(), 1, "a shell it never saw start is left alone");
+        // Copilot (1.0.112) ending one with stop_bash.
+        following.follow(None, completed("t3", "<command started in detached background with shellId: webdev>"));
+        let stopped = following.follow(None, completed("s1", "<command with id: webdev stopped>"));
+        assert_eq!(news(&stopped[0]), Some(("t3".into(), Some("webdev".into()), "stopped".into())));
+        assert_eq!(following.follow(None, completed("s2", "<command with id: webdev stopped>")).len(), 1, "it ends once");
     }
 
     /// Copilot (1.0.104) running an explore subagent, as recorded: its tool

@@ -273,6 +273,8 @@ pub struct Core {
     pub(crate) models: std::sync::Arc<crate::models::LocalModelsHere>,
     /// What each agent's plan has used (ADR 0095).
     pub(crate) usage: std::sync::Arc<crate::usage::Usage>,
+    /// Whether a newer Silt is out, and the update installing it (ADR 0100).
+    pub(crate) updates: std::sync::Arc<crate::updates::Updates>,
     /// Each server's last sync error, by URL.
     pub(crate) sync_errors: HashMap<String, String>,
     /// The HEAD commit each checkout was last seen at.
@@ -295,6 +297,8 @@ pub struct Core {
     /// The program this daemon started from, and that file as it was then,
     /// to tell when an install replaced it.
     pub(crate) exe: Option<(PathBuf, ExeStamp)>,
+    /// The program to restart this daemon on once no agent works in it.
+    pub(crate) restart_when_idle: Option<PathBuf>,
     /// When this daemon last asked each agent what it offers, by registry
     /// id, so one that doesn't answer isn't asked again on every look.
     pub(crate) asked: HashMap<String, i64>,
@@ -319,6 +323,8 @@ pub struct Core {
     pub(crate) sample_stops: HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// What changed, for browsers listening (ADR 0021).
     pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
+    /// The watch on `themes/`, from the first page that asks for a theme.
+    themes_watch: Option<crate::watch::Watched>,
     /// How each thread's agent stands as last stored (ADR 0022).
     pub(crate) agent_runs: HashMap<ThreadId, silt_store::AgentRunRecord>,
     /// What each thread's summary reads from its log, with the family's log
@@ -333,9 +339,9 @@ pub struct Core {
     rename_waits: HashMap<CheckoutId, Vec<RenameWait>>,
     /// Sessions with a backlog whose next chunk is queued.
     pub(crate) draining: HashSet<String>,
-    /// Threads' history entries, with the length of the family's log they
-    /// were read at.
-    pub(crate) history_cache: Mutex<HashMap<ThreadId, (usize, crate::history::HistoryEntries)>>,
+    /// Threads' history entries, as of the length of the family's log they
+    /// were read at, and where they changed between the readings before.
+    pub(crate) history_cache: Mutex<HashMap<ThreadId, crate::history::KeptHistory>>,
     watchers: Arc<Watchers>,
     /// A listing of a checkout's whole worktree taken while the hook that
     /// will compare it loads, for that comparison to take.
@@ -391,6 +397,7 @@ impl Core {
         core.project_homes =
             core.store.project_homes().await?.into_iter().map(|(repo, home)| (repo, Home::from_stored(home))).collect();
         core.load_workspaces().await?;
+        core.install_org_plugins();
         core.follow_clones_to_their_projects().await;
         core.remember_clones_threads_ran_in().await;
         core.share_workspace_homes();
@@ -581,6 +588,7 @@ impl Core {
             notes_settings: crate::notes::NotesSettings::default(),
             models,
             usage: std::sync::Arc::new(crate::usage::Usage::new()),
+            updates: std::sync::Arc::new(crate::updates::Updates::new(data_dir)),
             sync_errors: HashMap::new(),
             heads: HashMap::new(),
             head_stamps: HashMap::new(),
@@ -593,6 +601,7 @@ impl Core {
             registry_checked: false,
             asked: HashMap::new(),
             exe: std::env::current_exe().ok().and_then(|exe| ExeStamp::of(&exe).map(|stamp| (exe, stamp))),
+            restart_when_idle: None,
             resident,
             adopted: HashSet::new(),
             samples: HashMap::new(),
@@ -610,6 +619,7 @@ impl Core {
             draining: HashSet::new(),
             history_cache: Mutex::default(),
             watchers: Watchers::new(),
+            themes_watch: None,
             prelisted: None,
         };
         for thread in core.store.threads().await? {
@@ -812,9 +822,37 @@ impl Core {
             Request::PluginTools | Request::PluginCall { .. } | Request::PluginWait { .. } => {
                 Response::error("only an agent's run calls plugins, with its token")
             }
-            Request::Plugins => Response::ok(crate::plugins::load(&self.data_dir)),
-            Request::PluginPut { plugin } => to_response(crate::plugins::put(&self.data_dir, *plugin).map(|()| "saved")),
-            Request::PluginRemove { name } => to_response(crate::plugins::remove(&self.data_dir, &name).map(|()| "removed")),
+            Request::Plugins => Response::ok(crate::plugins::installed::views(&self.data_dir)),
+            Request::PluginRule { id, action, rule, field, pattern } => {
+                let matching = field.zip(pattern);
+                to_response(crate::plugins::installed::set_rule(&self.data_dir, &id, &action, rule, matching).map(|()| "saved"))
+            }
+            Request::PluginSet { id, key, value, environment, workspace } => to_response(
+                crate::plugins::installed::set_setting(
+                    &self.data_dir,
+                    &id,
+                    &key,
+                    &value,
+                    environment.as_deref(),
+                    workspace.as_deref(),
+                )
+                .map(|()| "saved"),
+            ),
+            Request::PluginEnvironment { id, name, patterns } => {
+                to_response(crate::plugins::installed::set_environment(&self.data_dir, &id, &name, &patterns).map(|()| "saved"))
+            }
+            Request::PluginActivity { id } => to_response(self.plugin_activity(&id).await),
+            Request::PluginTrust { publisher, trusted } => {
+                to_response(crate::plugins::installed::set_trusted(&self.data_dir, &publisher, trusted).map(|()| "saved"))
+            }
+            Request::PluginTurn { id, workspace, on } => {
+                let every: Vec<String> =
+                    self.workspaces().workspaces.iter().map(|workspace| workspace.id.as_str().to_owned()).collect();
+                to_response(crate::plugins::installed::turn(&self.data_dir, &id, &workspace, on, &every).map(|()| "saved"))
+            }
+            Request::PluginRemove { name } => {
+                to_response(crate::plugins::install::remove(&self.data_dir, &name).map(|()| "removed"))
+            }
             Request::Approvals { thread, all } => to_response(self.approvals_view(thread.as_deref(), all).await),
             Request::ApprovalAnswer { id, approve, hash, grant } => to_response(
                 self.approval_answer(id, approve, &hash, grant).await.map(|()| if approve { "approved" } else { "rejected" }),
@@ -852,6 +890,9 @@ impl Core {
                 to_response(released.map(|()| "released"))
             }
             Request::GrantRevoke { id } => to_response(self.grant_revoke(id).await.map(|()| "revoked")),
+            Request::FolderRevoke { thread, path } => {
+                to_response(self.folder_revoke(&thread, &path).map(|()| "taken back; the agent loses it when its turn ends"))
+            }
             Request::Access { thread } => to_response(self.access_view(&thread).await),
             Request::PutArtifact { .. } => Response::error("only an agent's run shows the person something, with its token"),
             Request::ArtifactGuide { .. } => Response::error("only an agent's run asks for its artifact guide, with its token"),
@@ -869,6 +910,36 @@ impl Core {
                 to_response(crate::design::note_design_skill(&self.data_dir, &thread).map(|()| "noted"))
             }
             Request::KeepDesignSystem { thread, name } => to_response(self.keep_design_system(&thread, &name)),
+            Request::Themes => {
+                self.watch_themes();
+                Response::ok(crate::theme::catalog(&self.data_dir))
+            }
+            Request::ThemeDetail { id } => match crate::theme::detail(&self.data_dir, &id) {
+                Some(detail) => Response::ok(detail),
+                None => Response::error(format!("no theme {id}")),
+            },
+            Request::SetAppearance { settings } => {
+                let saved = crate::theme::set_appearance(&self.data_dir, &settings);
+                if saved.is_ok() {
+                    let _ = self.bus.send(crate::protocol::BusEvent::Appearance);
+                }
+                to_response(saved.map(|()| "saved"))
+            }
+            Request::ThemeFont { id, file } => match crate::theme::font(&self.data_dir, &id, &file) {
+                Some((bytes, media_type)) => {
+                    use base64::Engine as _;
+                    let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+                    Response::ok(serde_json::json!({ "media_type": media_type, "data": data }))
+                }
+                None => Response::error("no such font"),
+            },
+            Request::ImportTheme { text } => to_response(crate::theme::import(&self.data_dir, &text)),
+            Request::DuplicateTheme { from } => to_response(crate::theme::duplicate(&self.data_dir, &from)),
+            Request::ThemeCss { light, dark } => {
+                self.watch_themes();
+                let mode = crate::theme::appearance(&self.data_dir).mode;
+                Response::ok(serde_json::json!({ "css": crate::theme::css(&self.data_dir, light, dark), "mode": mode }))
+            }
             Request::ArtifactSettings => Response::ok(crate::design::artifact_settings(&self.data_dir)),
             Request::SetArtifactSettings { settings } => {
                 to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))
@@ -1040,6 +1111,10 @@ impl Core {
             Request::Ping => Response::ok("pong"),
             Request::Compact => to_response(self.compact().await),
             Request::DaemonBuild => Response::ok(self.daemon_build()),
+            Request::RestartWhenIdle { exe } => {
+                self.restart_when_idle = Some(exe);
+                Response::ok(())
+            }
             Request::AgentHomes => {
                 let homes: Vec<(&str, Option<String>)> =
                     silt_agents::HOME_VARIABLES.iter().map(|name| (*name, std::env::var(name).ok())).collect();
@@ -1072,6 +1147,21 @@ impl Core {
             }
             Request::ModelPull { source } => to_response(self.models.start_pull(&source)),
             Request::RuntimePull => to_response(self.models.start_runtime_pull()),
+            Request::Update { desktop } => {
+                // A page opened before the first tick sees that check under way.
+                self.updates.check_if_due();
+                let updates = self.updates.clone();
+                let desktop = desktop.as_deref().and_then(silt_update::Commit::parse);
+                return answer_later(reply, Ok(async move { Ok::<_, CoreError>(updates.view(desktop).await) }));
+            }
+            Request::UpdateCheck => {
+                self.updates.start_check();
+                to_response(Ok::<_, CoreError>("checking"))
+            }
+            Request::UpdateStart => {
+                to_response(self.updates.start(self.exe.as_ref().map(|(exe, _)| exe.as_path())).map(|()| "started"))
+            }
+            Request::UpdateWaiting => to_response(Ok::<_, CoreError>(self.updates.waiting())),
             Request::ModelSearch { query } => {
                 let models = self.models.clone();
                 return answer_later(reply, Ok(async move { models.search(&query).await }));
@@ -1165,7 +1255,7 @@ impl Core {
                     .map(|thread| thread.id.to_string())
                     .collect(),
                 recovered: self.recoveries.clone(),
-                version: env!("CARGO_PKG_VERSION").to_owned(),
+                version: silt_update::VERSION.to_owned(),
                 recoveries: self.recovered.clone(),
             }),
             Request::Resume { thread, cwd, here, agent } => to_response(self.resume(&thread, &cwd, here, agent.as_deref()).await),
@@ -1186,7 +1276,9 @@ impl Core {
             Request::MrRequestChanges { mr, reason } => to_response(self.mr_request_changes(&mr, reason).await),
             Request::MrSeen { mr, path, seen } => to_response(self.mark_seen(&mr, &path, seen).await),
             Request::MrGuide { mr, text } => to_response(self.mr_guide(&mr, text).await),
-            Request::Turns { thread } => to_response(self.find_thread(&thread).map(|thread| self.turns(thread))),
+            Request::Turns { thread } => {
+                to_response(self.find_thread(&thread).map(|thread| self.kept_turns(thread).as_ref().clone()))
+            }
             Request::Unwritten { thread } => to_response(self.find_thread(&thread).map(|thread| self.unwritten(thread))),
             Request::Commits { thread } => to_response(self.find_thread(&thread).map(|thread| self.commits(thread))),
             Request::FindCommit { commit } => to_response(self.find_commit(&commit)),
@@ -1202,8 +1294,8 @@ impl Core {
                 }
                 to_response(self.open_web(once, project.as_deref()).await)
             }
-            Request::HistoryRead { thread, offset, limit } => {
-                to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit)))
+            Request::HistoryRead { thread, offset, limit, known, cut } => {
+                to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit, known, cut)))
             }
             Request::HistorySearch { thread, query, limit } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.history_search(thread, &query, limit).await),
@@ -1297,6 +1389,7 @@ impl Core {
             Request::ThreadState { thread, change } => to_response(self.change_thread_state(&thread, change).await),
             Request::AddClone { path } => to_response(self.add_clone(&path).await),
             Request::NewProject { path } => to_response(self.new_project(&path).await),
+            Request::Subfolders { dir } => return answer_later(reply, Ok(crate::projects::subfolders(dir))),
             Request::CloneProject { url, path } => return answer_later(reply, self.clone_project(&url, &path)),
             Request::ProjectHome { repo, home } => to_response(self.set_project_home(&repo, &home).await),
             Request::Workspaces => to_response(Ok::<_, CoreError>(self.workspaces_view())),
@@ -1395,6 +1488,10 @@ impl Core {
 
     pub async fn tick(&mut self) {
         self.drive_sync();
+        if self.resident {
+            self.updates.check_if_due();
+            crate::plugins::updates::check_if_due(&self.data_dir);
+        }
         self.drive_notes_settings();
         if self.resident {
             self.drive_control().await;
@@ -1403,6 +1500,7 @@ impl Core {
             warn!(%error, "could not record new commits");
         }
         self.end_quiet_own_turns().await;
+        self.notice_ended_background().await;
         self.poll_sessions();
         let ids: Vec<String> = self
             .sessions
@@ -1477,6 +1575,25 @@ impl Core {
     /// transcripts are left to it.
     fn recorded_elsewhere(&self, thread: ThreadId) -> bool {
         !self.adopted.contains(&thread) && crate::capture_lock::RecordingLock::held(&self.data_dir, thread)
+    }
+
+    /// Tells every page when a theme file is saved, so a theme's author sees
+    /// it as they write it (ADR 0098).
+    fn watch_themes(&mut self) {
+        if !self.resident || self.themes_watch.is_some() {
+            return;
+        }
+        let dir = crate::theme::themes_dir(&self.data_dir);
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let bus = self.bus.clone();
+        match self.watchers.watch(&dir, move |_| {
+            let _ = bus.send(crate::protocol::BusEvent::Appearance);
+        }) {
+            Ok(watched) => self.themes_watch = Some(watched),
+            Err(error) => warn!("not watching {}: {error}", dir.display()),
+        }
     }
 
     pub(crate) fn start_checkout(
@@ -3021,6 +3138,24 @@ impl Core {
         // record them meanwhile and hand them to the next daemon (ADR 0018).
         let working = self.acp.values().filter(|run| run.working()).count();
         crate::protocol::DaemonBuild { exe: self.exe.as_ref().map(|(exe, _)| exe.clone()), replaced, working }
+    }
+
+    /// Hands a restart asked for while agents worked to `silt daemon
+    /// restart` once none does. That stops this daemon and starts the new
+    /// one, or asks again if an agent started meanwhile.
+    pub(crate) fn restart_if_idle(&mut self) {
+        if self.restart_when_idle.is_none() || self.acp.values().any(crate::acp::AcpRun::working) {
+            return;
+        }
+        let Some(exe) = self.restart_when_idle.take() else {
+            return;
+        };
+        let mut command = std::process::Command::new(&exe);
+        command.args(["daemon", "restart"]).current_dir("/").stdin(std::process::Stdio::null());
+        match silt_os::spawn_detached(&mut command) {
+            Ok(()) => tracing::info!(exe = %exe.display(), "no agent works now; restarting on the build asked for"),
+            Err(error) => warn!(%error, exe = %exe.display(), "could not restart the daemon; `silt daemon restart` does"),
+        }
     }
 }
 

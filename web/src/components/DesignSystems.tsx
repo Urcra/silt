@@ -1,6 +1,7 @@
 // Design systems in Settings (ADR 0088): every system here, one system's page with its components drawn live, and the
 // threads whose agents make or change one.
 
+import { useSettled } from '../now'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { type RefObject, useEffect, useMemo, useRef, useState } from 'react'
@@ -37,7 +38,11 @@ function Swatches({ colors, size = 18 }: { colors: string[]; size?: number }) {
   return (
     <span aria-hidden="true" className="grid shrink-0 grid-cols-4 gap-[3px]">
       {colors.slice(0, 8).map((color, index) => (
-        <span key={index} className="rounded-sm border border-line-subtle" style={{ width: size, height: size, background: color }} />
+        <span
+          key={index}
+          className="rounded-sm border border-line-subtle"
+          style={{ width: size, height: size, background: color }}
+        />
       ))}
     </span>
   )
@@ -84,19 +89,29 @@ export function DesignSystemsSettings() {
     <section aria-label="Design systems" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className={SETTINGS_HEADING}>
-          Design systems {catalog.data && <span className="ml-1 font-mono text-2xs font-normal text-fg-3">{count === 1 ? '1 system' : `${count} systems`}</span>}
+          Design systems{' '}
+          {catalog.data && (
+            <span className="ml-1 font-mono text-2xs font-normal text-fg-3">{count === 1 ? '1 system' : `${count} systems`}</span>
+          )}
         </h2>
         <Button icon="plus" onClick={() => setMaking(true)}>
           New design system
         </Button>
       </div>
-      <p className="text-sm text-fg-2">What an agent reads before it styles an artifact: rules, tokens and components. A project or workspace picks one; the rest are there to ask for by name.</p>
+      <p className="text-sm text-fg-2">
+        What an agent reads before it styles an artifact: rules, tokens and components. A project or workspace picks one; the rest
+        are there to ask for by name.
+      </p>
       {catalog.isError && <p className="text-sm text-danger">{message(catalog.error)}</p>}
       {groups.map((group) =>
         group.systems.length === 0 && !group.project ? null : (
           <div key={group.project?.repo ?? group.chat?.folder ?? 'yours'} className="flex flex-col gap-2">
             <p className="pt-2 font-mono text-2xs tracking-[0.14em] text-fg-2 uppercase">
-              {group.project ? `${group.project.name} · in the repository` : group.chat ? `${group.chat.title} · in a chat` : 'Yours · synced to your devices'}
+              {group.project
+                ? `${group.project.name} · in the repository`
+                : group.chat
+                  ? `${group.chat.title} · in a chat`
+                  : 'Yours · synced to your devices'}
             </p>
             {group.systems.map((summary) => (
               <SystemRow key={`${summary.name}-${summary.thread ?? ''}`} summary={summary} clone={group.project?.clone} />
@@ -126,7 +141,12 @@ function useAgentChoice() {
 }
 
 const SOURCES: { id: DesignFrom; icon: IconName; title: string; about: string }[] = [
-  { id: 'code', icon: 'code', title: "A project's code", about: 'Its stylesheets, theme files, components, fonts and logos. The most faithful.' },
+  {
+    id: 'code',
+    icon: 'code',
+    title: "A project's code",
+    about: 'Its stylesheets, theme files, components, fonts and logos. The most faithful.',
+  },
   { id: 'website', icon: 'link', title: 'A website, brand guide or screenshots', about: 'A link, a PDF or pictures you attach.' },
   { id: 'description', icon: 'list', title: 'A description', about: 'Start from words: a mood, a few colours, a typeface.' },
 ]
@@ -186,7 +206,10 @@ export function NewDesignSystem({ open, onClose }: { open: boolean; onClose: () 
   return (
     <Dialog open={open} onClose={onClose} title="New design system">
       <div className="flex flex-col gap-3.5 text-sm">
-        <p className="text-fg-2">An agent builds it in a new thread. You watch it take shape beside the conversation, and change it by talking to the agent.</p>
+        <p className="text-fg-2">
+          An agent builds it in a new thread. You watch it take shape beside the conversation, and change it by talking to the
+          agent.
+        </p>
         <label className="flex flex-col gap-1">
           <span className="text-xs text-fg-2">Name</span>
           <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Harbor" />
@@ -198,10 +221,18 @@ export function NewDesignSystem({ open, onClose }: { open: boolean; onClose: () 
               key={source.id}
               className={cx(
                 'flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2.5',
-                from === source.id ? 'border-accent bg-accent-tint shadow-[inset_2px_0_0_var(--accent)]' : 'border-line bg-bg hover:border-line-strong',
+                from === source.id
+                  ? 'border-accent bg-accent-tint shadow-[inset_2px_0_0_var(--accent)]'
+                  : 'border-line bg-bg hover:border-line-strong',
               )}
             >
-              <input type="radio" name="design-from" className="mt-1 accent-[var(--accent)]" checked={from === source.id} onChange={() => setFrom(source.id)} />
+              <input
+                type="radio"
+                name="design-from"
+                className="mt-1 accent-[var(--accent)]"
+                checked={from === source.id}
+                onChange={() => setFrom(source.id)}
+              />
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="flex items-center gap-1.5 font-medium text-fg-1">
                   <Icon name={source.icon} className="text-fg-2" />
@@ -210,12 +241,28 @@ export function NewDesignSystem({ open, onClose }: { open: boolean; onClose: () 
                 <span className="text-xs text-fg-2">{source.about}</span>
                 {from === source.id && source.id === 'website' && (
                   <span className="mt-1.5 flex flex-col gap-1.5">
-                    <Input aria-label="website" value={link} onChange={(event) => setLink(event.target.value)} placeholder="https://acme.example" />
-                    <AttachFiles files={files} onAttach={(list) => void attach(list)} onRemove={(name) => setFiles((was) => was.filter((file) => file.name !== name))} />
+                    <Input
+                      aria-label="website"
+                      value={link}
+                      onChange={(event) => setLink(event.target.value)}
+                      placeholder="https://acme.example"
+                    />
+                    <AttachFiles
+                      files={files}
+                      onAttach={(list) => void attach(list)}
+                      onRemove={(name) => setFiles((was) => was.filter((file) => file.name !== name))}
+                    />
                   </span>
                 )}
                 {from === source.id && source.id === 'description' && (
-                  <Textarea aria-label="description" rows={3} className="mt-1.5" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Calm and nautical: deep navy, one teal accent, a humanist sans." />
+                  <Textarea
+                    aria-label="description"
+                    rows={3}
+                    className="mt-1.5"
+                    value={notes}
+                    onChange={(event) => setNotes(event.target.value)}
+                    placeholder="Calm and nautical: deep navy, one teal accent, a humanist sans."
+                  />
                 )}
               </span>
             </label>
@@ -239,12 +286,21 @@ export function NewDesignSystem({ open, onClose }: { open: boolean; onClose: () 
             <span className="text-xs text-fg-2">
               Anything else <span className="font-mono text-2xs text-fg-3">optional</span>
             </span>
-            <Textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Only the marketing site's look, not the admin app" />
+            <Textarea
+              rows={2}
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              placeholder="Only the marketing site's look, not the admin app"
+            />
           </label>
         )}
         <div className="flex flex-col gap-1">
           <span className="text-xs text-fg-2">Keep it</span>
-          <div role="radiogroup" aria-label="keep it" className="inline-flex self-start overflow-hidden rounded-sm border border-line">
+          <div
+            role="radiogroup"
+            aria-label="keep it"
+            className="inline-flex self-start overflow-hidden rounded-sm border border-line"
+          >
             {(['repo', 'personal'] as const).map((choice) => (
               <button
                 key={choice}
@@ -252,13 +308,18 @@ export function NewDesignSystem({ open, onClose }: { open: boolean; onClose: () 
                 role="radio"
                 aria-checked={keep === choice}
                 onClick={() => setKeep(choice)}
-                className={cx('px-3 py-1 text-xs max-md:min-h-11', keep === choice ? 'bg-surface-2 font-medium text-fg-1' : 'text-fg-2 hover:bg-surface-1')}
+                className={cx(
+                  'px-3 py-1 text-xs max-md:min-h-11',
+                  keep === choice ? 'bg-surface-2 font-medium text-fg-1' : 'text-fg-2 hover:bg-surface-1',
+                )}
               >
                 {choice === 'repo' ? 'In the repository' : 'Yours, on every device'}
               </button>
             ))}
           </div>
-          <span className="font-mono text-2xs text-fg-3">{keep === 'repo' ? `${dir} · part of the thread's changes` : `${dir} · synced`}</span>
+          <span className="font-mono text-2xs text-fg-3">
+            {keep === 'repo' ? `${dir} · part of the thread's changes` : `${dir} · synced`}
+          </span>
         </div>
         {error && <p className="text-xs text-danger">{error}</p>}
         <div className="-mx-5 -mb-4 flex flex-wrap items-center justify-between gap-2 border-t border-line bg-bg px-5 py-3">
@@ -277,14 +338,29 @@ export function NewDesignSystem({ open, onClose }: { open: boolean; onClose: () 
   )
 }
 
-function AttachFiles({ files, onAttach, onRemove }: { files: PromptAttachment[]; onAttach: (files: FileList | null) => void; onRemove: (name: string) => void }) {
+function AttachFiles({
+  files,
+  onAttach,
+  onRemove,
+}: {
+  files: PromptAttachment[]
+  onAttach: (files: FileList | null) => void
+  onRemove: (name: string) => void
+}) {
   const input = useRef<HTMLInputElement>(null)
   return (
     <span className="flex flex-wrap items-center gap-1.5">
       <Button size="sm" icon="attach" onClick={() => input.current?.click()}>
         Attach a guide or screenshots
       </Button>
-      <input ref={input} type="file" multiple accept="image/*,application/pdf" className="hidden" onChange={(event) => onAttach(event.target.files)} />
+      <input
+        ref={input}
+        type="file"
+        multiple
+        accept="image/*,application/pdf"
+        className="hidden"
+        onChange={(event) => onAttach(event.target.files)}
+      />
       {files.map((file) => (
         <Tag key={file.name}>
           {file.name}
@@ -297,7 +373,15 @@ function AttachFiles({ files, onAttach, onRemove }: { files: PromptAttachment[];
   )
 }
 
-function AgentSelect({ agents, agent, onChange }: { agents: { id: string; name: string }[]; agent: string; onChange: (agent: string) => void }) {
+function AgentSelect({
+  agents,
+  agent,
+  onChange,
+}: {
+  agents: { id: string; name: string }[]
+  agent: string
+  onChange: (agent: string) => void
+}) {
   return (
     <label className="flex items-center gap-1.5 text-xs text-fg-2">
       <Icon name="agent" />
@@ -323,7 +407,17 @@ function slug(title: string): string {
 }
 
 /** Asks an agent to change a system, each change in a thread of its own. */
-function ChangeDesignSystem({ open, onClose, detail, search }: { open: boolean; onClose: () => void; detail: DesignDetail; search: DesignSearch }) {
+function ChangeDesignSystem({
+  open,
+  onClose,
+  detail,
+  search,
+}: {
+  open: boolean
+  onClose: () => void
+  detail: DesignDetail
+  search: DesignSearch
+}) {
   const navigate = useNavigate()
   const { agents, agent, setAgent } = useAgentChoice()
   const [change, setChange] = useState('')
@@ -356,8 +450,16 @@ function ChangeDesignSystem({ open, onClose, detail, search }: { open: boolean; 
   return (
     <Dialog open={open} onClose={onClose} title={`Change ${detail.summary.title}`}>
       <div className="flex flex-col gap-3 text-sm">
-        <p className="text-fg-2">A new thread for this change, so it has its own review. The agent reads the system first and changes only what you ask.</p>
-        <Textarea aria-label="what to change" rows={4} value={change} onChange={(event) => setChange(event.target.value)} placeholder="Add a dark theme, and a table component from src/ui/Table.tsx" />
+        <p className="text-fg-2">
+          A new thread for this change, so it has its own review. The agent reads the system first and changes only what you ask.
+        </p>
+        <Textarea
+          aria-label="what to change"
+          rows={4}
+          value={change}
+          onChange={(event) => setChange(event.target.value)}
+          placeholder="Add a dark theme, and a table component from src/ui/Table.tsx"
+        />
         {error && <p className="text-xs text-danger">{error}</p>}
         <div className="-mx-5 -mb-4 flex flex-wrap items-center justify-between gap-2 border-t border-line bg-bg px-5 py-3">
           <AgentSelect agents={agents} agent={agent} onChange={setAgent} />
@@ -393,7 +495,23 @@ function useWidth<T extends HTMLElement>(): [RefObject<T | null>, number] {
  * Markup drawn in a sealed frame with a system's compiled CSS, as an artifact gets it, at `width`, as tall as it
  * says its content is.
  */
-export function SystemFrame({ html, css, theme, width, title, scale = 1, least = 40 }: { html: string; css: string; theme: 'light' | 'dark'; width: number; title: string; scale?: number; least?: number }) {
+export function SystemFrame({
+  html,
+  css,
+  theme,
+  width,
+  title,
+  scale = 1,
+  least = 40,
+}: {
+  html: string
+  css: string
+  theme: 'light' | 'dark'
+  width: number
+  title: string
+  scale?: number
+  least?: number
+}) {
   const frame = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(least)
   useEffect(() => {
@@ -405,7 +523,12 @@ export function SystemFrame({ html, css, theme, width, title, scale = 1, least =
     window.addEventListener('message', heard)
     return () => window.removeEventListener('message', heard)
   }, [least])
-  const document = useMemo(() => (width > 0 ? partDocument(html, undefined, width, least, css, theme, undefined, true) : ''), [html, css, theme, width, least])
+  // Written again for a new width only once the panel stops resizing: each pixel dragged loaded every frame again.
+  const written = useSettled(width, 200) || width
+  const document = useMemo(
+    () => (written > 0 ? partDocument(html, undefined, written, least, css, theme, undefined, true) : ''),
+    [html, css, theme, written, least],
+  )
   if (width <= 0) return null
   return (
     <div style={{ width: width * scale, height: height * scale, overflow: 'hidden' }}>
@@ -415,7 +538,14 @@ export function SystemFrame({ html, css, theme, width, title, scale = 1, least =
         sandbox="allow-scripts"
         referrerPolicy="no-referrer"
         srcDoc={document}
-        style={{ width, height, border: 0, transform: scale === 1 ? undefined : `scale(${scale})`, transformOrigin: '0 0', display: 'block' }}
+        style={{
+          width,
+          height,
+          border: 0,
+          transform: scale === 1 ? undefined : `scale(${scale})`,
+          transformOrigin: '0 0',
+          display: 'block',
+        }}
       />
     </div>
   )
@@ -423,11 +553,24 @@ export function SystemFrame({ html, css, theme, width, title, scale = 1, least =
 
 const PREVIEW_PAD = '<div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">'
 
-function ComponentCard({ component, css, theme, phone }: { component: DesignComponentView; css: string; theme: 'light' | 'dark'; phone: boolean }) {
+function ComponentCard({
+  component,
+  css,
+  theme,
+  phone,
+}: {
+  component: DesignComponentView
+  css: string
+  theme: 'light' | 'dark'
+  phone: boolean
+}) {
   const [box, width] = useWidth<HTMLDivElement>()
   const [shown, setShown] = useState<'preview' | 'markup' | 'guide'>('preview')
   return (
-    <article id={`component-${component.name}`} className="scroll-mt-16 overflow-hidden rounded-md border border-line bg-elevated">
+    <article
+      id={`component-${component.name}`}
+      className="scroll-mt-16 overflow-hidden rounded-md border border-line bg-elevated"
+    >
       <header className="flex items-start gap-2 border-b border-line-subtle px-3 py-2">
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="font-mono text-xs text-fg-1">{component.name}</span>
@@ -446,16 +589,36 @@ function ComponentCard({ component, css, theme, phone }: { component: DesignComp
       </header>
       <div ref={box} className={cx(phone && 'flex justify-center bg-surface-1')}>
         {shown === 'preview' && (
-          <SystemFrame html={`${PREVIEW_PAD}${component.html}</div>`} css={css} theme={theme} width={phone ? Math.min(390, width) : width} title={`${component.name} preview`} />
+          <SystemFrame
+            html={`${PREVIEW_PAD}${component.html}</div>`}
+            css={css}
+            theme={theme}
+            width={phone ? Math.min(390, width) : width}
+            title={`${component.name} preview`}
+          />
         )}
-        {shown === 'markup' && <pre className="max-h-96 overflow-auto px-3 py-2.5 font-mono text-2xs leading-relaxed whitespace-pre-wrap text-fg-1">{component.html}</pre>}
+        {shown === 'markup' && (
+          <pre className="max-h-96 overflow-auto px-3 py-2.5 font-mono text-2xs leading-relaxed whitespace-pre-wrap text-fg-1">
+            {component.html}
+          </pre>
+        )}
         {shown === 'guide' && component.guide && <Markdown text={component.guide} className="px-4 py-3 text-sm" />}
       </div>
     </article>
   )
 }
 
-function Segmented<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: { id: T; label: string }[]; onChange: (value: T) => void }) {
+function Segmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: T
+  options: { id: T; label: string }[]
+  onChange: (value: T) => void
+}) {
   return (
     <span role="radiogroup" aria-label={label} className="inline-flex overflow-hidden rounded-sm border border-line">
       {options.map((option) => (
@@ -465,7 +628,10 @@ function Segmented<T extends string>({ label, value, options, onChange }: { labe
           role="radio"
           aria-checked={value === option.id}
           onClick={() => onChange(option.id)}
-          className={cx('px-2.5 py-0.5 text-xs max-md:min-h-11', value === option.id ? 'bg-surface-2 font-medium text-fg-1' : 'text-fg-2 hover:bg-surface-1')}
+          className={cx(
+            'px-2.5 py-0.5 text-xs max-md:min-h-11',
+            value === option.id ? 'bg-surface-2 font-medium text-fg-1' : 'text-fg-2 hover:bg-surface-1',
+          )}
         >
           {option.label}
         </button>
@@ -485,7 +651,11 @@ function Components({ detail, theme, phone }: { detail: DesignDetail; theme: 'li
     <div className="grid gap-5 md:grid-cols-[180px_minmax(0,1fr)]">
       <nav aria-label="components" className="flex flex-col gap-px self-start max-md:hidden md:sticky md:top-16">
         {detail.components.map((component) => (
-          <a key={component.name} href={`#component-${component.name}`} className="rounded-sm px-2.5 py-1 font-mono text-xs text-fg-2 hover:bg-surface-2 hover:text-fg-1">
+          <a
+            key={component.name}
+            href={`#component-${component.name}`}
+            className="rounded-sm px-2.5 py-1 font-mono text-xs text-fg-2 hover:bg-surface-2 hover:text-fg-1"
+          >
             {component.name}
           </a>
         ))}
@@ -509,7 +679,10 @@ function Tokens({ detail, theme }: { detail: DesignDetail; theme: 'light' | 'dar
   const families = [...new Set(others.map((token) => token.family))]
   const value = (values: Record<string, string>, id: string) => values[id] ?? values['*'] ?? Object.values(values)[0] ?? ''
   const specimen = detail.type_styles
-    .map((style) => `<div style="display:grid;grid-template-columns:130px 1fr;gap:12px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--border-subtle,#8883)"><div style="font:11px/1.4 ui-monospace,monospace;opacity:.75">${escapeHtml(style.name)}<br>${escapeHtml(style.font_size)}${style.font_weight ? ` · ${escapeHtml(style.font_weight)}` : ''}</div><div class="ds-${escapeHtml(style.name)}" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${SPECIMEN}</div></div>`)
+    .map(
+      (style) =>
+        `<div style="display:grid;grid-template-columns:130px 1fr;gap:12px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--border-subtle,#8883)"><div style="font:11px/1.4 ui-monospace,monospace;opacity:.75">${escapeHtml(style.name)}<br>${escapeHtml(style.font_size)}${style.font_weight ? ` · ${escapeHtml(style.font_weight)}` : ''}</div><div class="ds-${escapeHtml(style.name)}" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${SPECIMEN}</div></div>`,
+    )
     .join('')
   return (
     <div className="grid gap-7 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
@@ -519,7 +692,10 @@ function Tokens({ detail, theme }: { detail: DesignDetail; theme: 'light' | 'dar
           <span>{colors.length}</span>
         </p>
         {colors.map((token) => (
-          <div key={token.name} className="grid grid-cols-[72px_minmax(0,140px)_minmax(0,1fr)] items-center gap-3 border-b border-line-subtle py-1.5">
+          <div
+            key={token.name}
+            className="grid grid-cols-[72px_minmax(0,140px)_minmax(0,1fr)] items-center gap-3 border-b border-line-subtle py-1.5"
+          >
             <span className="flex h-7 overflow-hidden rounded-sm border border-line-subtle">
               {(themes.length > 0 ? themes : [{ id: '*', name: '' }]).map((each) => (
                 <span key={each.id} className="flex-1" style={{ background: value(token.values, each.id) }} />
@@ -527,7 +703,9 @@ function Tokens({ detail, theme }: { detail: DesignDetail; theme: 'light' | 'dar
             </span>
             <span className="min-w-0">
               <span className="block truncate font-mono text-xs text-fg-1">{token.name}</span>
-              <span className="block truncate font-mono text-2xs text-fg-3">{(themes.length > 0 ? themes : [{ id: '*', name: '' }]).map((each) => value(token.values, each.id)).join(' · ')}</span>
+              <span className="block truncate font-mono text-2xs text-fg-3">
+                {(themes.length > 0 ? themes : [{ id: '*', name: '' }]).map((each) => value(token.values, each.id)).join(' · ')}
+              </span>
             </span>
             <span className="text-xs text-fg-2">{token.usage}</span>
           </div>
@@ -537,7 +715,13 @@ function Tokens({ detail, theme }: { detail: DesignDetail; theme: 'light' | 'dar
         {detail.type_styles.length > 0 && (
           <div ref={box}>
             <p className="mb-1 font-mono text-2xs tracking-[0.14em] text-fg-2 uppercase">Type</p>
-            <SystemFrame html={`<div style="padding:0 2px">${specimen}</div>`} css={detail.css} theme={theme} width={width} title="type scale" />
+            <SystemFrame
+              html={`<div style="padding:0 2px">${specimen}</div>`}
+              css={detail.css}
+              theme={theme}
+              width={width}
+              title="type scale"
+            />
           </div>
         )}
         {families.map((family) => (
@@ -562,8 +746,10 @@ function Tokens({ detail, theme }: { detail: DesignDetail; theme: 'light' | 'dar
 /** A spacing step as a bar, a radius as a corner, a shadow on a card; anything else as its value alone. */
 function TokenShape({ family, value }: { family: string; value: string }) {
   const px = /^\d+(\.\d+)?px$/.test(value) ? Number.parseFloat(value) : null
-  if (family === 'spacing' && px !== null) return <span className="h-2.5 shrink-0 border border-accent bg-accent-tint" style={{ width: Math.min(px * 2, 160) }} />
-  if (family === 'radius') return <span className="h-6 w-10 shrink-0 border border-fg-2 bg-surface-1" style={{ borderRadius: value }} />
+  if (family === 'spacing' && px !== null)
+    return <span className="h-2.5 shrink-0 border border-accent bg-accent-tint" style={{ width: Math.min(px * 2, 160) }} />
+  if (family === 'radius')
+    return <span className="h-6 w-10 shrink-0 border border-fg-2 bg-surface-1" style={{ borderRadius: value }} />
   if (family === 'shadow') return <span className="h-6 w-10 shrink-0 rounded-sm bg-elevated" style={{ boxShadow: value }} />
   return null
 }
@@ -582,7 +768,11 @@ function Asset({ search, path, mediaType }: { search: DesignSearch; path: string
   return (
     <figure className="m-0 flex min-w-0 flex-col gap-1">
       <span className="flex h-24 items-center justify-center rounded-sm border border-line-subtle bg-surface-1 p-2">
-        {asset.data ? <img src={`data:${asset.data.media_type};base64,${asset.data.data}`} alt={path} className="max-h-full max-w-full" /> : <Icon name="file" className="text-fg-3" />}
+        {asset.data ? (
+          <img src={`data:${asset.data.media_type};base64,${asset.data.data}`} alt={path} className="max-h-full max-w-full" />
+        ) : (
+          <Icon name="file" className="text-fg-3" />
+        )}
       </span>
       <figcaption className="truncate font-mono text-2xs text-fg-2">{path.split('/').pop()}</figcaption>
     </figure>
@@ -590,7 +780,9 @@ function Asset({ search, path, mediaType }: { search: DesignSearch; path: string
 }
 
 function Files({ detail, search }: { detail: DesignDetail; search: DesignSearch }) {
-  const groups = [...new Set(detail.assets.filter((asset) => !asset.path.endsWith('README.md')).map((asset) => asset.path.split('/')[0]))]
+  const groups = [
+    ...new Set(detail.assets.filter((asset) => !asset.path.endsWith('README.md')).map((asset) => asset.path.split('/')[0])),
+  ]
   return (
     <div className="flex flex-col gap-6">
       {groups.map((group) => (
@@ -636,7 +828,15 @@ function Cover({ detail, theme }: { detail: DesignDetail; theme: 'light' | 'dark
   if (!detail.cover) return null
   return (
     <div ref={box} className="overflow-hidden rounded-md border border-line">
-      <SystemFrame html={detail.cover} css={detail.css} theme={theme} width={960} scale={width > 0 ? Math.min(1, width / 960) : 1} least={200} title={`${detail.summary.title} cover`} />
+      <SystemFrame
+        html={detail.cover}
+        css={detail.css}
+        theme={theme}
+        width={960}
+        scale={width > 0 ? Math.min(1, width / 960) : 1}
+        least={200}
+        title={`${detail.summary.title} cover`}
+      />
     </div>
   )
 }
@@ -646,14 +846,24 @@ type SystemTab = 'components' | 'tokens' | 'rules' | 'files'
 /** One system's page: its cover, components drawn live, tokens, rules and files. */
 export function DesignSystemPage() {
   const search = useSearch({ strict: false }) as DesignSearch
-  const page = useQuery({ queryKey: keys.designSystem(search), queryFn: () => api.designSystem(search), refetchInterval: search.thread ? 4000 : false })
+  const page = useQuery({
+    queryKey: keys.designSystem(search),
+    queryFn: () => api.designSystem(search),
+    refetchInterval: search.thread ? 4000 : false,
+  })
   const shown = useShownTheme()
   const [tab, setTab] = useState<SystemTab>('components')
   const [theme, setTheme] = useState<'light' | 'dark' | null>(null)
   const [width, setWidth] = useState<'desktop' | 'phone'>('desktop')
   const [changing, setChanging] = useState(false)
   const detail = page.data
-  const where = detail ? (detail.summary.source === 'personal' ? 'yours' : detail.summary.chat ? 'a chat' : search.clone?.split('/').pop() ?? 'repository') : ''
+  const where = detail
+    ? detail.summary.source === 'personal'
+      ? 'yours'
+      : detail.summary.chat
+        ? 'a chat'
+        : (search.clone?.split('/').pop() ?? 'repository')
+    : ''
   return (
     <Page
       title={
@@ -676,7 +886,11 @@ export function DesignSystemPage() {
             ))}
             {detail.summary.thread && (
               <Link to="/t/$id" params={{ id: detail.summary.thread }} className="text-xs text-accent-fg hover:text-fg-1">
-                {detail.summary.chat ? 'Made in a chat' : detail.summary.unmerged ? 'Being made in a thread' : 'Being changed in a thread'}
+                {detail.summary.chat
+                  ? 'Made in a chat'
+                  : detail.summary.unmerged
+                    ? 'Being made in a thread'
+                    : 'Being changed in a thread'}
               </Link>
             )}
             {detail.summary.chat && detail.summary.thread ? (
@@ -701,7 +915,14 @@ export function DesignSystemPage() {
               <Tabs
                 label="design system"
                 tabs={[
-                  { id: 'components' as const, label: <>Components <span className="font-mono text-2xs text-fg-3">{detail.components.length}</span></> },
+                  {
+                    id: 'components' as const,
+                    label: (
+                      <>
+                        Components <span className="font-mono text-2xs text-fg-3">{detail.components.length}</span>
+                      </>
+                    ),
+                  },
                   { id: 'tokens' as const, label: 'Tokens' },
                   { id: 'rules' as const, label: 'Rules' },
                   { id: 'files' as const, label: 'Files' },
@@ -710,15 +931,38 @@ export function DesignSystemPage() {
                 onChange={setTab}
               />
               <span className="flex flex-wrap items-center gap-2">
-                {tab === 'components' && <Segmented label="width" value={width} options={[{ id: 'desktop', label: 'Desktop' }, { id: 'phone', label: 'Phone' }]} onChange={setWidth} />}
+                {tab === 'components' && (
+                  <Segmented
+                    label="width"
+                    value={width}
+                    options={[
+                      { id: 'desktop', label: 'Desktop' },
+                      { id: 'phone', label: 'Phone' },
+                    ]}
+                    onChange={setWidth}
+                  />
+                )}
                 {(tab === 'components' || tab === 'tokens') && (
-                  <Segmented label="theme" value={theme ?? shown} options={[{ id: 'light', label: 'Light' }, { id: 'dark', label: 'Dark' }]} onChange={setTheme} />
+                  <Segmented
+                    label="theme"
+                    value={theme ?? shown}
+                    options={[
+                      { id: 'light', label: 'Light' },
+                      { id: 'dark', label: 'Dark' },
+                    ]}
+                    onChange={setTheme}
+                  />
                 )}
               </span>
             </div>
             {tab === 'components' && <Components detail={detail} theme={theme ?? shown} phone={width === 'phone'} />}
             {tab === 'tokens' && <Tokens detail={detail} theme={theme ?? shown} />}
-            {tab === 'rules' && (detail.readme.trim() ? <Markdown text={detail.readme} className="max-w-[72ch] text-[14px]" /> : <EmptyState title="No rules yet">Its README.md is where an agent learns how to use it.</EmptyState>)}
+            {tab === 'rules' &&
+              (detail.readme.trim() ? (
+                <Markdown text={detail.readme} className="max-w-[72ch] text-[14px]" />
+              ) : (
+                <EmptyState title="No rules yet">Its README.md is where an agent learns how to use it.</EmptyState>
+              ))}
             {tab === 'files' && <Files detail={detail} search={search} />}
             {detail.made_from && <p className="font-mono text-2xs text-fg-3">made from {detail.made_from}</p>}
             <ChangeDesignSystem open={changing} onClose={() => setChanging(false)} detail={detail} search={search} />
@@ -752,11 +996,22 @@ function KeepAsMine({ thread, name, small = false }: { thread: string; name: str
     <span className="inline-flex items-center gap-2">
       {error && <span className="text-xs text-danger">{error}</span>}
       {small ? (
-        <button type="button" className="text-xs text-accent-fg hover:text-fg-1 disabled:opacity-50" disabled={busy} onClick={() => void keep()} title="Copy it to your own design systems, which every project can use and which sync">
+        <button
+          type="button"
+          className="text-xs text-accent-fg hover:text-fg-1 disabled:opacity-50"
+          disabled={busy}
+          onClick={() => void keep()}
+          title="Copy it to your own design systems, which every project can use and which sync"
+        >
           {busy ? 'Keeping…' : 'Keep as mine'}
         </button>
       ) : (
-        <Button icon="check" onClick={() => void keep()} disabled={busy} title="Copy it to your own design systems, which every project can use and which sync">
+        <Button
+          icon="check"
+          onClick={() => void keep()}
+          disabled={busy}
+          title="Copy it to your own design systems, which every project can use and which sync"
+        >
           {busy ? 'Keeping…' : 'Keep as mine'}
         </Button>
       )}
@@ -766,7 +1021,11 @@ function KeepAsMine({ thread, name, small = false }: { thread: string; name: str
 
 /** The thread's panel while its agent makes or changes a system: each file as it's written, and the latest component. */
 export function ThreadDesignPanel({ thread, working }: { thread: string; working: boolean }) {
-  const design = useQuery({ queryKey: keys.threadDesign(thread), queryFn: () => api.threadDesign(thread), refetchInterval: working ? 3000 : false })
+  const design = useQuery({
+    queryKey: keys.threadDesign(thread),
+    queryFn: () => api.threadDesign(thread),
+    refetchInterval: working ? 3000 : false,
+  })
   const shown = useShownTheme()
   const [box, width] = useWidth<HTMLDivElement>()
   const made = design.data
@@ -790,7 +1049,11 @@ export function ThreadDesignPanel({ thread, working }: { thread: string; working
         {detail && (
           <span className="flex shrink-0 items-center gap-3">
             {detail.summary.chat && <KeepAsMine thread={thread} name={detail.summary.name} small />}
-            <Link to="/settings/design-systems/system" search={search} className="inline-flex items-center gap-1 text-xs text-accent-fg hover:text-fg-1">
+            <Link
+              to="/settings/design-systems/system"
+              search={search}
+              className="inline-flex items-center gap-1 text-xs text-accent-fg hover:text-fg-1"
+            >
               Open <Icon name="chevronRight" />
             </Link>
           </span>
@@ -804,7 +1067,12 @@ export function ThreadDesignPanel({ thread, working }: { thread: string; working
               .filter((token) => token.family === 'color')
               .slice(0, 14)
               .map((token) => (
-                <span key={token.name} title={token.name} className="h-[18px] w-[18px] rounded-sm border border-line-subtle" style={{ background: token.values[detail.themes[0]?.id ?? '*'] ?? token.values['*'] }} />
+                <span
+                  key={token.name}
+                  title={token.name}
+                  className="h-[18px] w-[18px] rounded-sm border border-line-subtle"
+                  style={{ background: token.values[detail.themes[0]?.id ?? '*'] ?? token.values['*'] }}
+                />
               ))}
           </span>
           <ul className="m-0 list-none rounded-md border border-line bg-elevated px-3 py-1">
@@ -821,7 +1089,14 @@ export function ThreadDesignPanel({ thread, working }: { thread: string; working
                 <span className="font-mono text-xs text-fg-1">{latest.name}</span>
                 <span className="font-mono text-2xs text-fg-3">latest</span>
               </p>
-              <SystemFrame html={`${PREVIEW_PAD}${latest.html}</div>`} css={detail.css} theme={shown} width={Math.max(width, 1) / 0.7} scale={0.7} title={`${latest.name} preview`} />
+              <SystemFrame
+                html={`${PREVIEW_PAD}${latest.html}</div>`}
+                css={detail.css}
+                theme={shown}
+                width={Math.max(width, 1) / 0.7}
+                scale={0.7}
+                title={`${latest.name} preview`}
+              />
             </div>
           )}
         </>

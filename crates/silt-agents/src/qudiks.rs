@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn a_workspace_that_keeps_it_asking_sets_its_sandbox_back_too() {
         let plan = |no_bypass| LaunchPlan {
-            start: crate::Start::Resume { id: "s1".into() },
+            start: crate::Start::Resume { id: "s1".into(), prompt: None },
             cwd: "/w".into(),
             mcp: crate::McpServer { command: "silt".into(), args: vec!["mcp".into()] },
             hook_command: String::new(),
@@ -179,6 +179,30 @@ mod tests {
         assert!(asking.contains(&ASKING[0].to_owned()) && asking.contains(&ASKING[1].to_owned()), "{asking:?}");
         assert_eq!(&asking[asking.len() - 2..], ["--github", "s1"], "its own flags, then the session");
         assert!(!args(false).iter().any(|arg| arg.starts_with("approval_policy") || arg.starts_with("sandbox_mode")));
+    }
+
+    #[test]
+    fn a_resumed_session_is_told_first_what_changed() {
+        let plan = LaunchPlan {
+            start: crate::Start::Resume { id: "s1".into(), prompt: Some("/src/lib is now in your sandbox".into()) },
+            cwd: "/w".into(),
+            mcp: crate::McpServer { command: "silt".into(), args: vec!["mcp".into()] },
+            hook_command: String::new(),
+            hook_program: "silt".into(),
+            instructions: None,
+            scratch: "/tmp".into(),
+            skills: Vec::new(),
+            args: vec!["--github".into()],
+            locks: crate::Locks::default(),
+            env: Vec::new(),
+        };
+        let words =
+            |launch: crate::Launch| -> Vec<String> { launch.args.iter().map(|arg| arg.to_string_lossy().into_owned()).collect() };
+        let codex = words(Qudiks.launch(&plan).expect("launches"));
+        assert_eq!(&codex[codex.len() - 3..], ["--github", "s1", "/src/lib is now in your sandbox"], "{codex:?}");
+        let claude = words(crate::claude::ClaudeCode.launch(&plan).expect("launches"));
+        assert_eq!(claude.last().map(String::as_str), Some("/src/lib is now in your sandbox"), "{claude:?}");
+        assert!(claude.windows(2).any(|pair| pair == ["--resume", "s1"]), "{claude:?}");
     }
 
     #[test]

@@ -1,0 +1,7 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 130,
+  "semi": false,
+  "singleQuote": true,
+  "ignorePatterns": ["src/api.generated.ts", "src/frame.generated.ts", "src/wasm/**", "pnpm-lock.yaml"]
+}

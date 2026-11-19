@@ -35,6 +35,9 @@ pub fn load(data_dir: &Path) -> Option<Workspaces> {
 
 fn tidied(mut workspaces: Workspaces) -> Workspaces {
     workspaces.tidy();
+    for dropped in workspaces.drop_refused_folders() {
+        tracing::warn!(%dropped, "leaving out a folder of {FILE}");
+    }
     workspaces
 }
 
@@ -349,10 +352,49 @@ impl Core {
         }
         if changed {
             self.announce(crate::protocol::BusEvent::Threads);
+            self.install_org_plugins();
         }
     }
 
+    /// Installs, in the background, the plugins orgs' policies name for
+    /// their workspaces and this machine lacks at the commit named, on and
+    /// locked in those workspaces (ADR 0104). Built offline in a sandbox,
+    /// as any plugin from git is.
+    pub(crate) fn install_org_plugins(&self) {
+        let mut wanted: Vec<(String, silt_workspace::OrgPlugin, Vec<String>)> = Vec::new();
+        for workspace in &self.workspaces().workspaces {
+            let Some(org) = workspace.server.as_ref().and_then(|binding| binding.org.clone()) else { continue };
+            let Some(Ok(policy)) = self.org_policy(workspace) else { continue };
+            for plugin in &policy.policy.plugins.install {
+                match wanted.iter_mut().find(|(by, kept, _)| *by == org && kept == plugin) {
+                    Some((_, _, workspaces)) => workspaces.push(workspace.id.as_str().to_owned()),
+                    None => wanted.push((org.clone(), plugin.clone(), vec![workspace.id.as_str().to_owned()])),
+                }
+            }
+        }
+        let data_dir = self.data_dir.clone();
+        wanted.retain(|(org, plugin, _)| {
+            !crate::plugins::installed::find(&data_dir, &plugin.id).is_some_and(|installed| {
+                installed.source
+                    == crate::plugins::installed::PluginSource::Org { org: org.clone(), commit: Some(plugin.commit.clone()) }
+            })
+        });
+        if wanted.is_empty() {
+            return;
+        }
+        tokio::spawn(async move {
+            for (org, plugin, workspaces) in wanted {
+                if let Err(error) = crate::plugins::install::install_for_org(&data_dir, &org, &plugin, &workspaces).await {
+                    tracing::warn!(plugin = %plugin.id, %org, %error, "an org's plugin couldn't be installed");
+                }
+            }
+        });
+    }
+
     pub(crate) async fn load_workspaces(&mut self) -> Result<(), CoreError> {
+        if let Err(error) = crate::plugins::installed::ensure_shipped(&self.data_dir) {
+            tracing::warn!(%error, "the plugins shipped with Silt couldn't be put in place");
+        }
         self.workspaces = load(&self.data_dir);
         let ids = |text: String| WorkspaceId::new(text).ok();
         self.project_workspaces =
@@ -638,6 +680,10 @@ pub struct RunRules {
     /// local model's flag goes in its environment instead (ADR 0092).
     #[serde(default)]
     pub args: Option<Vec<String>>,
+    /// The rules in effect, an org's with the workspace's, which folders
+    /// granted to the run are checked against at each start (ADR 0102).
+    #[serde(default)]
+    pub policy: Option<Policy>,
 }
 
 async fn mint_run_token(
@@ -729,11 +775,12 @@ pub async fn run_rules(
         return Err(CoreError::Invalid("a local model runs through Silt's daemon; start it with `silt daemon start`".into()));
     }
     let (locks, env, reach) = check_run(data_dir, &all, &workspace, &rules, agent, args)?;
+    let policy = Some(rules.effective());
     let thread = record.as_ref().map_or(silt_types::ThreadId(0), |record| record.id);
     let project =
         record.as_ref().map(|record| record.repo.clone()).or_else(|| here.as_ref().and_then(|repo| repo.project().ok()));
     let token = mint_run_token(&store, thread, &workspace.id, project.as_deref()).await?;
-    Ok(RunRules { workspace, locks, env, token, reach, args: None })
+    Ok(RunRules { workspace, locks, env, token, reach, args: None, policy })
 }
 
 /// What a run is held to: the agent's own locks, the workspace's
@@ -805,6 +852,7 @@ impl Core {
             (None, None) => return Err(CoreError::Invalid("name the thread or the folder the agent runs in".into())),
         };
         let (locks, mut env, reach) = check_run(&self.data_dir, &all, &workspace, &self.rules(&workspace), agent, args)?;
+        let policy = Some(self.effective_policy(&workspace));
         let local =
             match silt_llm::local_model_in_args(args).filter(|_| silt_workspace::agent_key(agent.id()).as_str() == "claude") {
                 Some((model, rest)) => Some((self.models.installed(&model).await?, rest)),
@@ -818,7 +866,7 @@ impl Core {
             }
             None => None,
         };
-        Ok(RunRules { workspace, locks, env, token, reach, args })
+        Ok(RunRules { workspace, locks, env, token, reach, args, policy })
     }
 }
 

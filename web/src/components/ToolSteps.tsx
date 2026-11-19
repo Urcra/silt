@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useMemo, useState } from 'react'
 import { api, type HistoryEntry, type QuestionAsked, type QuestionView } from '../api'
 import { LiveQuestions } from '../liveQuestions'
 import { message } from '../query'
@@ -9,12 +9,19 @@ import { Button, Dialog, Icon, Kbd, Spinner, cx } from '../ui'
 import { changeOf } from '../edits'
 import { EditCard } from './EditCard'
 import { Markdown } from './Markdown'
+import { linesOf, useWhole } from '../wholeEntry'
 
 /** A picture a prompt or a tool carried, small, opening at full size. */
-export function ImageThumb({ entry, from }: { entry: HistoryEntry; from: string }) {
+export function ImageThumb({ entry: given, from }: { entry: HistoryEntry; from: string }) {
   const [open, setOpen] = useState(false)
+  // A page of history leaves the picture out; it's read once its row is drawn.
+  const entry = useWhole(given, true)
   const image = entry.image
   if (!image) return null
+  if (!image.data && entry.cut)
+    return (
+      <span aria-busy="true" aria-label={`an image ${from}`} className="block h-24 w-40 animate-pulse rounded-md bg-surface-2" />
+    )
   if (!image.data) return <span className="text-2xs text-fg-2">An image too large to show here ({image.media_type})</span>
   const src = `data:${image.media_type};base64,${image.data}`
   const kind = image.media_type.replace(/^image\//, '').toUpperCase()
@@ -50,8 +57,22 @@ function Mark({ step }: { step: ToolStep }) {
   return <Icon name="check" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ok" />
 }
 
-const VERB: Record<string, string> = { read: 'Read', search: 'Searched', edit: 'Edited', execute: 'Ran', question: 'Asked', fetch: 'Fetched' }
-const DOING: Record<string, string> = { read: 'Reading', search: 'Searching', edit: 'Editing', execute: 'Running', question: 'Asking', fetch: 'Fetching' }
+const VERB: Record<string, string> = {
+  read: 'Read',
+  search: 'Searched',
+  edit: 'Edited',
+  execute: 'Ran',
+  question: 'Asked',
+  fetch: 'Fetched',
+}
+const DOING: Record<string, string> = {
+  read: 'Reading',
+  search: 'Searching',
+  edit: 'Editing',
+  execute: 'Running',
+  question: 'Asking',
+  fetch: 'Fetching',
+}
 
 /** What a step did, in its tool's words: `Read src/upload.rs`, `Searched progress in src`; `running`, what it's doing. */
 function Said({ call, running = false }: { call: HistoryEntry; running?: boolean }) {
@@ -67,7 +88,11 @@ function Said({ call, running = false }: { call: HistoryEntry; running?: boolean
       </span>
     )
   }
-  const verb = running ? (DOING[tool.kind] ?? tool.name) : tool.kind === 'edit' && /^write/i.test(tool.name) ? 'Wrote' : (VERB[tool.kind] ?? tool.name)
+  const verb = running
+    ? (DOING[tool.kind] ?? tool.name)
+    : tool.kind === 'edit' && /^write/i.test(tool.name)
+      ? 'Wrote'
+      : (VERB[tool.kind] ?? tool.name)
   return (
     <span className="min-w-0">
       <span className="text-fg-2">{verb}</span> <span className="font-mono break-all text-fg-1">{tool.subject}</span>
@@ -80,11 +105,16 @@ function Said({ call, running = false }: { call: HistoryEntry; running?: boolean
 function measure(step: ToolStep): string | null {
   const text = step.result?.text.trim()
   if (!text || !step.call) return null
-  const lines = text.split('\n').length
+  const lines = linesOf(step.result!)
   const kind = kindOf(step.call)
   if (kind === 'search') return `${lines} ${lines === 1 ? 'match' : 'matches'}`
   if (kind === 'read') return `${lines} ${lines === 1 ? 'line' : 'lines'}`
   return null
+}
+
+function Measure({ step }: { step: ToolStep }) {
+  const said = measure(step)
+  return said && <span className="shrink-0 text-fg-2">{said}</span>
 }
 
 /** A plan the agent put to the person, kept in its turn as it was proposed, folded to its title. */
@@ -108,7 +138,7 @@ export function ProposedPlan({ step }: { step: ToolStep }) {
 /** One step in a run: what it did, with its result, or an edit's diff, a click away. */
 export function StepRow({ step, open: opened = false, running = false }: { step: ToolStep; open?: boolean; running?: boolean }) {
   const [open, setOpen] = useState(opened)
-  const result = step.result
+  const result = useWhole(step.result, open)
   const plan = step.call ? proposedPlan(step.call) : null
   const change = step.call ? changeOf(step.call) : null
   // A plan's result only tells the model it was saved or approved; the plan itself is what to show.
@@ -123,17 +153,24 @@ export function StepRow({ step, open: opened = false, running = false }: { step:
         onClick={() => setOpen(!open)}
         className="group/row flex w-full min-w-0 items-start gap-2 py-px text-left max-md:min-h-11"
       >
-        <Icon name="chevronRight" className={cx('mt-0.5 h-3 w-3 shrink-0 text-fg-2 transition-transform', open && 'rotate-90', !openable && 'invisible')} />
+        <Icon
+          name="chevronRight"
+          className={cx('mt-0.5 h-3 w-3 shrink-0 text-fg-2 transition-transform', open && 'rotate-90', !openable && 'invisible')}
+        />
         {running && !result ? <Spinner className="mt-1" /> : <Mark step={step} />}
         <span className="min-w-0 flex-1 group-enabled/row:group-hover/row:text-accent-fg">
-          {step.call ? <Said call={step.call} running={running && !result} /> : <span className="text-fg-2">A tool&apos;s output</span>}
+          {step.call ? (
+            <Said call={step.call} running={running && !result} />
+          ) : (
+            <span className="text-fg-2">A tool&apos;s output</span>
+          )}
         </span>
         {change ? (
           <span className="shrink-0 font-mono text-2xs">
             <span className="text-ok">+{change.added.length}</span> <span className="text-danger">−{change.removed.length}</span>
           </span>
         ) : (
-          measure(step) && <span className="shrink-0 text-fg-2">{measure(step)}</span>
+          <Measure step={step} />
         )}
       </button>
       {open && change && (
@@ -147,7 +184,9 @@ export function StepRow({ step, open: opened = false, running = false }: { step:
         </div>
       )}
       {open && output && (
-        <pre className="ml-5 max-h-64 overflow-auto rounded-sm bg-bg px-2.5 py-2 font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">{output}</pre>
+        <pre className="ml-5 max-h-64 overflow-auto rounded-sm bg-bg px-2.5 py-2 font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">
+          {output}
+        </pre>
       )}
       {step.images.map((image) => (
         <span key={image.index} className="ml-5">
@@ -183,13 +222,16 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
   const [all, setAll] = useState(false)
   const call = step.call!
   const outcome = step.result?.outcome
-  // Under way, its output so far, as the agent streams it; once it ends, what was recorded.
+  // Under way, its output so far, as the agent streams it; once it ends, what was recorded, whole once all is asked for.
   const live = useContext(LiveTool)
   const under = running && !step.result
-  const output = step.result?.text ?? (under && live.id !== null && live.id === call.tool?.id ? live.text : '')
+  const result = useWhole(step.result, all)
+  const output = result?.text ?? (under && live.id !== null && live.id === call.tool?.id ? live.text : '')
   const verbose = useContext(TranscriptDetail) === 'verbose'
   const [open, setOpen] = useState(verbose)
-  const tail = tailOf(output)
+  const shortened = useMemo(() => tailOf(output), [output])
+  // What its page left out counts among the lines a click shows.
+  const tail = result?.cut ? { ...shortened, hidden: result.cut.lines - shortened.lines.length } : shortened
   const command = call.tool?.subject ?? toolOf(call.text).name
   const action = call.tool?.detail?.trim()
   const waiting = useContext(LiveQuestions)?.awaiting.includes(call.tool?.id ?? '') ?? false
@@ -202,15 +244,37 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
         disabled={!openable}
         onClick={() => setOpen(!open)}
         title={command}
-        className={cx('group/row flex w-full min-w-0 items-center gap-2 text-left max-md:min-h-11', card ? 'px-3 py-1.5' : 'py-px', open && card && 'border-b border-line-subtle')}
+        className={cx(
+          'group/row flex w-full min-w-0 items-center gap-2 text-left max-md:min-h-11',
+          card ? 'px-3 py-1.5' : 'py-px',
+          open && card && 'border-b border-line-subtle',
+        )}
       >
-        <Icon name="chevronRight" className={cx('h-3 w-3 shrink-0 text-fg-2 transition-transform', open && 'rotate-90', !openable && 'invisible')} />
+        <Icon
+          name="chevronRight"
+          className={cx('h-3 w-3 shrink-0 text-fg-2 transition-transform', open && 'rotate-90', !openable && 'invisible')}
+        />
         {running && !step.result ? <Spinner /> : <Mark step={step} />}
-        <span className={cx('min-w-0 shrink truncate group-enabled/row:group-hover/row:text-accent-fg', outcome?.failed ? 'text-danger' : 'text-fg-1', running && 'font-medium')}>
+        <span
+          className={cx(
+            'min-w-0 shrink truncate group-enabled/row:group-hover/row:text-accent-fg',
+            outcome?.failed ? 'text-danger' : 'text-fg-1',
+            running && 'font-medium',
+          )}
+        >
           {action ?? <span className="font-mono">{shortCommand(command.trim().split('\n')[0]!)}</span>}
         </span>
-        {action && <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg-3 max-sm:hidden">{shortCommand(command.trim().split('\n')[0]!)}</span>}
-        <span className={cx('ml-auto min-w-0 shrink truncate tabular-nums', outcome?.failed ? 'text-danger' : waiting ? 'text-warn' : 'text-fg-2')}>
+        {action && (
+          <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg-3 max-sm:hidden">
+            {shortCommand(command.trim().split('\n')[0]!)}
+          </span>
+        )}
+        <span
+          className={cx(
+            'ml-auto min-w-0 shrink truncate tabular-nums',
+            outcome?.failed ? 'text-danger' : waiting ? 'text-warn-fg' : 'text-fg-2',
+          )}
+        >
           {waiting ? 'waiting for you' : under ? <Running since={call.time_ms} /> : commandStatus(step)}
         </span>
       </button>
@@ -221,8 +285,11 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
             {command}
           </pre>
           {output.trim() && (
-            <pre data-testid={under ? 'tool-output' : undefined} className="max-h-80 overflow-auto font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-2">
-              {(all ? output.replace(/\s+$/, '').split('\n') : tail.lines).map((line, index) => (
+            <pre
+              data-testid={under ? 'tool-output' : undefined}
+              className="max-h-80 overflow-auto font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-2"
+            >
+              {(all && !result?.cut ? output.replace(/\s+$/, '').split('\n') : tail.lines).map((line, index) => (
                 <span key={index} className={cx('block', /\b(FAILED|error|panicked)\b/.test(line) && 'bg-danger-tint text-fg-1')}>
                   {line || ' '}
                 </span>
@@ -230,7 +297,11 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
             </pre>
           )}
           {tail.hidden > 0 && (
-            <button type="button" onClick={() => setAll(!all)} className="w-fit text-2xs text-accent-fg hover:text-fg-1 max-md:min-h-11">
+            <button
+              type="button"
+              onClick={() => setAll(!all)}
+              className="w-fit text-2xs text-accent-fg hover:text-fg-1 max-md:min-h-11"
+            >
               {all ? 'Show the last lines' : `Show all ${tail.hidden + tail.lines.length} lines`}
             </button>
           )}
@@ -253,7 +324,10 @@ function Running({ since }: { since: number }) {
   const seconds = Math.max(0, Math.floor((now - since) / 1000))
   return (
     <span>
-      running <span data-volatile>· {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</span>
+      running{' '}
+      <span data-volatile>
+        · {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}
+      </span>
     </span>
   )
 }
@@ -275,7 +349,10 @@ export function AnswerForm({ thread, asked }: { thread: string; asked: QuestionA
   const pick = (key: string, value: string, multi: boolean) => {
     if (single) return send({ [key]: [value] })
     const had = chosen[key] ?? []
-    setChosen({ ...chosen, [key]: multi ? (had.includes(value) ? had.filter((each) => each !== value) : [...had, value]) : [value] })
+    setChosen({
+      ...chosen,
+      [key]: multi ? (had.includes(value) ? had.filter((each) => each !== value) : [...had, value]) : [value],
+    })
   }
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -324,7 +401,7 @@ export function AnswerForm({ thread, asked }: { thread: string; asked: QuestionA
             {optional(field) ? (
               <span className="ml-auto shrink-0 text-fg-2">optional</span>
             ) : (
-              <span className="ml-auto shrink-0 text-warn">
+              <span className="ml-auto shrink-0 text-warn-fg">
                 {questions.length > 1 && (
                   <span className="mr-2 font-mono text-fg-2">
                     {questions.indexOf(field) + 1} of {questions.length}
@@ -356,7 +433,9 @@ export function AnswerForm({ thread, asked }: { thread: string; asked: QuestionA
                       onClick={() => pick(field.key, value, field.multi)}
                       className={cx(
                         'flex w-full items-start gap-2 rounded-sm border px-2 py-1.5 text-left max-md:min-h-11',
-                        picked ? 'border-accent bg-accent-tint' : 'border-line-subtle hover:border-line-strong hover:bg-surface-1',
+                        picked
+                          ? 'border-accent bg-accent-tint'
+                          : 'border-line-subtle hover:border-line-strong hover:bg-surface-1',
                       )}
                     >
                       {fieldIndex === 0 && index < 9 ? <Kbd>{index + 1}</Kbd> : <span className="w-4 shrink-0" />}
@@ -407,9 +486,7 @@ export function AnswerForm({ thread, asked }: { thread: string; asked: QuestionA
           Skip <Kbd>Esc</Kbd>
         </Button>
         {asked.fields[0]!.options.length > 1 && (
-          <span className="text-fg-2 pointer-coarse:hidden">
-            1–{Math.min(asked.fields[0]!.options.length, 9)} to pick
-          </span>
+          <span className="text-fg-2 pointer-coarse:hidden">1–{Math.min(asked.fields[0]!.options.length, 9)} to pick</span>
         )}
         {error && <span className="text-danger">{error}</span>}
       </span>
@@ -428,7 +505,11 @@ export function QuestionCard({ step }: { step: ToolStep }) {
   const asked = !step.result && live?.questions.find((question) => step.call?.tool?.id === `question-${question.id}`)
   if (asked && live)
     return (
-      <section aria-label="question" data-testid="question" className="flex flex-col gap-3 rounded-md border border-warn bg-elevated px-3 py-2.5 text-xs">
+      <section
+        aria-label="question"
+        data-testid="question"
+        className="flex flex-col gap-3 rounded-md border border-warn bg-elevated px-3 py-2.5 text-xs"
+      >
         <span className="flex items-center gap-2 text-fg-2">
           <span className="h-1.5 w-1.5 rounded-full bg-warn" />
           {live.agent} asks
@@ -439,12 +520,18 @@ export function QuestionCard({ step }: { step: ToolStep }) {
   if (questions.length === 0) return <StepRow step={step} />
   if (step.result && !showing)
     return (
-      <section aria-label="question" data-testid="question" className="flex flex-col gap-1 rounded-md border border-line bg-elevated px-3 py-2 text-xs">
+      <section
+        aria-label="question"
+        data-testid="question"
+        className="flex flex-col gap-1 rounded-md border border-line bg-elevated px-3 py-2 text-xs"
+      >
         {questions.map((question) => {
           const answer = answers.find((each) => each.question === question.question)?.answer
           return (
             <div key={question.question} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              {question.header && <span className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{question.header}</span>}
+              {question.header && (
+                <span className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{question.header}</span>
+              )}
               <span className="font-medium">{question.question}</span>
               <span className="ml-auto shrink-0 text-fg-2">{answer !== undefined ? 'answered by you' : 'not answered'}</span>
               {answer !== undefined && (
@@ -456,22 +543,34 @@ export function QuestionCard({ step }: { step: ToolStep }) {
             </div>
           )
         })}
-        <button type="button" onClick={() => setShowing(true)} className="w-fit text-2xs text-accent-fg hover:text-fg-1 max-md:min-h-11">
+        <button
+          type="button"
+          onClick={() => setShowing(true)}
+          className="w-fit text-2xs text-accent-fg hover:text-fg-1 max-md:min-h-11"
+        >
           Show the choices
         </button>
       </section>
     )
   return (
-    <section aria-label="question" data-testid="question" className="flex flex-col gap-3 rounded-md border border-line bg-elevated px-3 py-2.5 text-xs">
+    <section
+      aria-label="question"
+      data-testid="question"
+      className="flex flex-col gap-3 rounded-md border border-line bg-elevated px-3 py-2.5 text-xs"
+    >
       {questions.map((question) => {
         const answer = answers.find((each) => each.question === question.question)?.answer
         const chosen = answer?.split(', ') ?? []
         return (
           <div key={question.question} className="flex flex-col gap-1.5">
             <div className="flex items-baseline gap-2">
-              {question.header && <span className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{question.header}</span>}
+              {question.header && (
+                <span className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{question.header}</span>
+              )}
               <span className="text-sm font-medium">{question.question}</span>
-              <span className="ml-auto shrink-0 text-fg-2">{answer !== undefined ? 'answered by you' : step.result ? 'not answered' : 'waiting'}</span>
+              <span className="ml-auto shrink-0 text-fg-2">
+                {answer !== undefined ? 'answered by you' : step.result ? 'not answered' : 'waiting'}
+              </span>
             </div>
             <ul className="flex flex-col gap-0.5">
               {question.options.map((option) => {
@@ -479,9 +578,16 @@ export function QuestionCard({ step }: { step: ToolStep }) {
                 return (
                   <li
                     key={option.label}
-                    className={cx('flex items-start gap-2 rounded-sm px-2 py-1.5', picked ? 'bg-accent-tint shadow-[inset_2px_0_0_var(--accent)]' : 'text-fg-2')}
+                    className={cx(
+                      'flex items-start gap-2 rounded-sm px-2 py-1.5',
+                      picked ? 'bg-accent-tint shadow-[inset_2px_0_0_var(--accent)]' : 'text-fg-2',
+                    )}
                   >
-                    {picked ? <Icon name="check" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ok" /> : <span className="w-3.5 shrink-0" />}
+                    {picked ? (
+                      <Icon name="check" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ok" />
+                    ) : (
+                      <span className="w-3.5 shrink-0" />
+                    )}
                     <span>
                       <span className={cx(picked && 'font-medium text-fg-1')}>{option.label}</span>
                       {option.description && <span className="block text-fg-2">{option.description}</span>}
@@ -510,7 +616,11 @@ export function PlanSteps({ entry }: { entry: HistoryEntry }) {
   const steps = entry.plan ?? []
   const done = steps.filter((step) => step.status === 'completed').length
   return (
-    <section aria-label="plan steps" data-testid="plan-steps" className="flex flex-col gap-1.5 rounded-md border border-line bg-elevated px-3 py-2.5 text-xs">
+    <section
+      aria-label="plan steps"
+      data-testid="plan-steps"
+      className="flex flex-col gap-1.5 rounded-md border border-line bg-elevated px-3 py-2.5 text-xs"
+    >
       <span className="flex items-center gap-2 text-fg-2">
         <Icon name="list" className="h-3.5 w-3.5" />
         <span className="font-medium text-fg-1">Plan</span>
@@ -528,7 +638,15 @@ export function PlanSteps({ entry }: { entry: HistoryEntry }) {
             ) : (
               <span className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border border-line-strong" />
             )}
-            <span className={cx(step.status === 'completed' ? 'text-fg-2 line-through decoration-fg-3' : step.status === 'in_progress' ? 'font-medium text-fg-1' : 'text-fg-1')}>
+            <span
+              className={cx(
+                step.status === 'completed'
+                  ? 'text-fg-2 line-through decoration-fg-3'
+                  : step.status === 'in_progress'
+                    ? 'font-medium text-fg-1'
+                    : 'text-fg-1',
+              )}
+            >
               {step.text}
               <span className="sr-only"> ({STEP_MARK[step.status] ?? step.status})</span>
             </span>

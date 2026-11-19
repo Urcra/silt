@@ -1,0 +1,310 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Urcra/silt/main/docs/reference/theme.schema.json",
+  "name": "Catppuccin",
+  "author": "Catppuccin",
+  "license": "MIT",
+  "source": "https://github.com/catppuccin/catppuccin",
+  "copyright": "Copyright (c) 2021 Catppuccin. Colours at or below WCAG AA's 4.5:1 for text were moved in lightness, keeping their hue.",
+  "themes": [
+    {
+      "id": "catppuccin-latte",
+      "name": "Catppuccin Latte",
+      "appearance": "light",
+      "colors": {
+        "bg": "#eff1f5",
+        "bg-elevated": "#f7f8fa",
+        "surface-1": "#e6e9ef",
+        "surface-2": "#ccd0da",
+        "surface-3": "#bcc0cc",
+        "fg-1": "#4c4f69",
+        "fg-2": "#5c5f77",
+        "fg-3": "#696c82",
+        "border": "#ccd0da",
+        "border-strong": "#9ca0b0",
+        "accent": "#8839ef",
+        "accent-fg": "#8839ef",
+        "ok": "#187f00",
+        "warn": "#df8e1d",
+        "danger": "#d20f39",
+        "info": "#1b63f1"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#8839ef"
+        },
+        "string": {
+          "color": "#187f00"
+        },
+        "string-special": {
+          "color": "#b24297"
+        },
+        "number": {
+          "color": "#cd3400"
+        },
+        "constant": {
+          "color": "#cd3400"
+        },
+        "comment": {
+          "color": "#696c7f",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#a75a00"
+        },
+        "macro": {
+          "color": "#a55948"
+        },
+        "variable": {
+          "color": "#4c4f69"
+        },
+        "definition": {
+          "color": "#1b63f1"
+        },
+        "property": {
+          "color": "#5363d5"
+        },
+        "operator": {
+          "color": "#0073b0"
+        },
+        "punctuation": {
+          "color": "#696c7f"
+        },
+        "meta": {
+          "color": "#a75a00"
+        },
+        "heading": {
+          "color": "#1b63f1",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#a55948"
+        }
+      }
+    },
+    {
+      "id": "catppuccin-frappe",
+      "name": "Catppuccin Frappé",
+      "appearance": "dark",
+      "colors": {
+        "bg": "#303446",
+        "bg-elevated": "#292c3c",
+        "surface-1": "#292c3c",
+        "surface-2": "#414559",
+        "surface-3": "#51576d",
+        "fg-1": "#c6d0f5",
+        "fg-2": "#b5bfe2",
+        "fg-3": "#a5adce",
+        "border": "#414559",
+        "border-strong": "#737994",
+        "accent": "#ca9ee6",
+        "accent-fg": "#ca9ee6",
+        "ok": "#a6d189",
+        "warn": "#e5c890",
+        "danger": "#e78284",
+        "info": "#8caaee"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#ca9ee6"
+        },
+        "string": {
+          "color": "#a6d189"
+        },
+        "string-special": {
+          "color": "#f4b8e4"
+        },
+        "number": {
+          "color": "#ef9f76"
+        },
+        "constant": {
+          "color": "#ef9f76"
+        },
+        "comment": {
+          "color": "#949cbb",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#e5c890"
+        },
+        "macro": {
+          "color": "#f2d5cf"
+        },
+        "variable": {
+          "color": "#c6d0f5"
+        },
+        "definition": {
+          "color": "#8caaee"
+        },
+        "property": {
+          "color": "#babbf1"
+        },
+        "operator": {
+          "color": "#99d1db"
+        },
+        "punctuation": {
+          "color": "#949cbb"
+        },
+        "meta": {
+          "color": "#e5c890"
+        },
+        "heading": {
+          "color": "#8caaee",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#f2d5cf"
+        }
+      }
+    },
+    {
+      "id": "catppuccin-macchiato",
+      "name": "Catppuccin Macchiato",
+      "appearance": "dark",
+      "colors": {
+        "bg": "#24273a",
+        "bg-elevated": "#1e2030",
+        "surface-1": "#1e2030",
+        "surface-2": "#363a4f",
+        "surface-3": "#494d64",
+        "fg-1": "#cad3f5",
+        "fg-2": "#b8c0e0",
+        "fg-3": "#a5adcb",
+        "border": "#363a4f",
+        "border-strong": "#6e738d",
+        "accent": "#c6a0f6",
+        "accent-fg": "#c6a0f6",
+        "ok": "#a6da95",
+        "warn": "#eed49f",
+        "danger": "#ed8796",
+        "info": "#8aadf4"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#c6a0f6"
+        },
+        "string": {
+          "color": "#a6da95"
+        },
+        "string-special": {
+          "color": "#f5bde6"
+        },
+        "number": {
+          "color": "#f5a97f"
+        },
+        "constant": {
+          "color": "#f5a97f"
+        },
+        "comment": {
+          "color": "#939ab7",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#eed49f"
+        },
+        "macro": {
+          "color": "#f4dbd6"
+        },
+        "variable": {
+          "color": "#cad3f5"
+        },
+        "definition": {
+          "color": "#8aadf4"
+        },
+        "property": {
+          "color": "#b7bdf8"
+        },
+        "operator": {
+          "color": "#91d7e3"
+        },
+        "punctuation": {
+          "color": "#939ab7"
+        },
+        "meta": {
+          "color": "#eed49f"
+        },
+        "heading": {
+          "color": "#8aadf4",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#f4dbd6"
+        }
+      }
+    },
+    {
+      "id": "catppuccin-mocha",
+      "name": "Catppuccin Mocha",
+      "appearance": "dark",
+      "colors": {
+        "bg": "#1e1e2e",
+        "bg-elevated": "#181825",
+        "surface-1": "#181825",
+        "surface-2": "#313244",
+        "surface-3": "#45475a",
+        "fg-1": "#cdd6f4",
+        "fg-2": "#bac2de",
+        "fg-3": "#a6adc8",
+        "border": "#313244",
+        "border-strong": "#6c7086",
+        "accent": "#cba6f7",
+        "accent-fg": "#cba6f7",
+        "ok": "#a6e3a1",
+        "warn": "#f9e2af",
+        "danger": "#f38ba8",
+        "info": "#89b4fa"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#cba6f7"
+        },
+        "string": {
+          "color": "#a6e3a1"
+        },
+        "string-special": {
+          "color": "#f5c2e7"
+        },
+        "number": {
+          "color": "#fab387"
+        },
+        "constant": {
+          "color": "#fab387"
+        },
+        "comment": {
+          "color": "#9399b2",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#f9e2af"
+        },
+        "macro": {
+          "color": "#f5e0dc"
+        },
+        "variable": {
+          "color": "#cdd6f4"
+        },
+        "definition": {
+          "color": "#89b4fa"
+        },
+        "property": {
+          "color": "#b4befe"
+        },
+        "operator": {
+          "color": "#89dceb"
+        },
+        "punctuation": {
+          "color": "#9399b2"
+        },
+        "meta": {
+          "color": "#f9e2af"
+        },
+        "heading": {
+          "color": "#89b4fa",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#f5e0dc"
+        }
+      }
+    }
+  ]
+}

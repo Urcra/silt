@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO plugin_grants\n               (thread_id, run_hash, plugin, environment, change, created_ms, until_ms, revoked_ms, from_call, action)\n               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id AS \"id!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a0f126f71283ca04cbfb5af8cee10bccc68ca034b755feb168c346216081452f"
+}

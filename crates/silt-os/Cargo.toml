@@ -17,7 +17,7 @@ thiserror = "2.0.21"
 # The Keychain on macOS, the Credential Manager on Windows, a Secret Service on Linux.
 keyring = "4.2.0"
 sysinfo = { version = "0.40.1", default-features = false, features = ["system"] }
-tokio = { version = "1.54.0", features = ["process", "net"] }
+tokio = { version = "1.54.0", features = ["process", "net", "macros", "io-util"] }
 which = "8.0.6"
 
 [target.'cfg(unix)'.dependencies]

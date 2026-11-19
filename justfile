@@ -34,7 +34,7 @@ build-desktop: check-webkit
 # Install `silt` into ~/.cargo/bin, and restart its daemon on the new build
 install-cli: build-web
     cargo install --locked --path crates/silt-cli
-    "{{bin_dir}}/silt" log > /dev/null
+    "{{bin_dir}}/silt" daemon restart --if-replaced
 
 # Install `silt-desktop` beside `silt`, with a launcher entry for the silt:// links.
 # Wayland matches a window to its entry by file name, and the window's app id is
@@ -76,6 +76,29 @@ install-wsl: install-cli try-install-voice install-windows
 # From WSL: build with Windows' cargo and install the CLI, the desktop app and the speech helper into %LOCALAPPDATA%\Silt
 install-windows: build-web
     scripts/install-windows.sh
+
+# What updating from the app runs (ADR 0100): `install`, with the desktop app
+# only where WebKitGTK is; in WSL, `install-wsl`, building for Windows only
+# where Silt is installed there
+update:
+    #!/usr/bin/env sh
+    set -eu
+    just="{{just_executable()}}"
+    if [ -n "${WSL_DISTRO_NAME:-}" ]; then
+        "$just" install-cli
+        "$just" try-install-voice
+        if command -v powershell.exe > /dev/null && powershell.exe -NoProfile -NonInteractive -Command 'Test-Path (Join-Path $env:LOCALAPPDATA "Silt\silt.exe")' | grep -q True; then
+            "$just" install-windows
+        fi
+        exit 0
+    fi
+    "$just" install-cli
+    if pkg-config --exists webkit2gtk-4.1 2> /dev/null; then
+        "$just" install-desktop
+    else
+        echo "Skipped the desktop app, which needs WebKitGTK 4.1 (see docs/contributing.md)" >&2
+    fi
+    "$just" try-install-voice
 
 # Remove what `just install` installed
 uninstall:

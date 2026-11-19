@@ -81,14 +81,17 @@ function Lanes({ rows, height }: { rows: GraphRow[]; height: number }) {
 
 /** A row's tag, before its description, for what isn't a plain turn. */
 function KindTag({ row }: { row: GraphRow }) {
-  const tag = (text: string, tone: string) => <span className={cx('shrink-0 rounded-sm px-1.5 text-2xs whitespace-nowrap', tone)}>{text}</span>
+  const tag = (text: string, tone: string) => (
+    <span className={cx('shrink-0 rounded-sm px-1.5 text-2xs whitespace-nowrap', tone)}>{text}</span>
+  )
   if (row.kind === 'commit' && row.commit)
     return (
       <span className="shrink-0 rounded-sm border border-line bg-surface-1 px-1 font-mono text-2xs text-fg-1" data-volatile>
         {row.commit.slice(0, 7)}
       </span>
     )
-  if (row.kind === 'request') return tag(row.status === 'open' ? 'merge request' : `merge request · ${row.status}`, 'bg-accent-tint text-accent-fg')
+  if (row.kind === 'request')
+    return tag(row.status === 'open' ? 'merge request' : `merge request · ${row.status}`, 'bg-accent-tint text-accent-fg')
   if (row.kind === 'merge') return tag('merged', 'bg-ok-tint text-ok')
   if (row.kind === 'fork') return tag('forked', 'bg-surface-2 text-fg-2')
   return null
@@ -153,7 +156,9 @@ function Details({ row, thread, described }: { row: GraphRow; thread: ThreadSumm
               </li>
             ))}
           </ul>
-          {files && files.length > LISTED_FILES && <p className="text-xs text-fg-2">and {(files.length - LISTED_FILES).toLocaleString()} more</p>}
+          {files && files.length > LISTED_FILES && (
+            <p className="text-xs text-fg-2">and {(files.length - LISTED_FILES).toLocaleString()} more</p>
+          )}
         </section>
       )}
       <div className="flex flex-wrap gap-1.5">
@@ -180,7 +185,11 @@ function Details({ row, thread, described }: { row: GraphRow; thread: ThreadSumm
           <>
             <Button
               icon="fork"
-              onClick={() => api.fork(row.thread, row.turn!).then((made) => void navigate({ to: '/t/$id', params: { id: made.thread } }), failed)}
+              onClick={() =>
+                api
+                  .fork(row.thread, row.turn!)
+                  .then((made) => void navigate({ to: '/t/$id', params: { id: made.thread } }), failed)
+              }
             >
               Fork from here
             </Button>
@@ -198,7 +207,12 @@ function Details({ row, thread, described }: { row: GraphRow; thread: ThreadSumm
           </>
         )}
         {row.turn !== null && (
-          <CopyLink path={`/t/${row.thread}#turn-${row.turn}`} thread={row.thread} label="Copy link" className={buttonClass('ghost')} />
+          <CopyLink
+            path={`/t/${row.thread}#turn-${row.turn}`}
+            thread={row.thread}
+            label="Copy link"
+            className={buttonClass('ghost')}
+          />
         )}
       </div>
     </aside>
@@ -244,7 +258,8 @@ export function Graph() {
   )
   const oldest = Math.min(...(graph.data ?? []).map((row) => Number(row.time_ms)))
   // The tag already says it forked; its text says from where, by name.
-  const describe = (row: GraphRow) => (row.kind === 'fork' && row.other ? `from ${threadOf(row.other)?.title ?? short(row.other)}` : plain(row.text))
+  const describe = (row: GraphRow) =>
+    row.kind === 'fork' && row.other ? `from ${threadOf(row.other)?.title ?? short(row.other)}` : plain(row.text)
   const picked = chosen && rows.find((row) => row.id === chosen.id) ? chosen : rows[0]
   // By the table's own width, not the window's: the details panel beside it takes what the person gives it.
   // When is as wide whatever it says, so a row doesn't reflow as "just now" becomes "2m".
@@ -299,19 +314,23 @@ export function Graph() {
       <div className="px-4 pt-2 pb-6 md:px-6">
         {graph.isPending && <Skeleton className="h-40" />}
         {graph.error && <p className="text-danger">{message(graph.error)}</p>}
-        {graph.isSuccess && rows.length === 0 && (wanted ? (
-          <EmptyState title={`No history matches “${text.trim()}”`}>
-            <Button variant="ghost" onClick={() => setText('')}>
-              Clear filter
-            </Button>
-          </EmptyState>
-        ) : (
-          <EmptyState title="Nothing here yet">Turns, commits and forks show up as they happen.</EmptyState>
-        ))}
+        {graph.isSuccess &&
+          rows.length === 0 &&
+          (wanted ? (
+            <EmptyState title={`No history matches “${text.trim()}”`}>
+              <Button variant="ghost" onClick={() => setText('')}>
+                Clear filter
+              </Button>
+            </EmptyState>
+          ) : (
+            <EmptyState title="Nothing here yet">Turns, commits and forks show up as they happen.</EmptyState>
+          ))}
         {rows.length > 0 && (
           <div className="flex min-w-0 overflow-x-auto">
             <div className="min-w-14 shrink-0">
-              <div className="flex h-7 items-center border-b border-line pl-1 font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase">Graph</div>
+              <div className="flex h-7 items-center border-b border-line pl-1 font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase">
+                Graph
+              </div>
               <Lanes rows={rows} height={rowHeight} />
             </div>
             <div className="@container/table min-w-0 flex-1">
@@ -330,16 +349,22 @@ export function Graph() {
                         type="button"
                         aria-label={`${row.kind} ${row.text}`}
                         aria-current={picked?.id === row.id || undefined}
-                        className={cx(grid, 'h-full w-full rounded-sm px-2 text-left text-sm hover:bg-surface-2', picked?.id === row.id && 'bg-accent-tint')}
+                        className={cx(
+                          grid,
+                          'h-full w-full rounded-sm px-2 text-left text-sm hover:bg-surface-2',
+                          picked?.id === row.id && 'bg-accent-tint',
+                        )}
                         onClick={() => setChosen(row)}
                       >
                         <span className="flex min-w-0 items-center gap-2">
                           <KindTag row={row} />
                           <span className="min-w-0 truncate">{describe(row)}</span>
                           {row.turn !== null && <span className="shrink-0 font-mono text-2xs text-fg-2">turn {row.turn}</span>}
-                          {thread && ['awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '') && row.kind === 'turn' && (
-                            <span className="shrink-0 rounded-sm bg-warn-tint px-1.5 text-2xs">waiting on you</span>
-                          )}
+                          {thread &&
+                            ['awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '') &&
+                            row.kind === 'turn' && (
+                              <span className="shrink-0 rounded-sm bg-warn-tint px-1.5 text-2xs">waiting on you</span>
+                            )}
                         </span>
                         <span className="flex min-w-0 items-center gap-1.5 text-xs @max-2xl/table:hidden">
                           {thread && <Dot tone={threadTone(thread)} />}

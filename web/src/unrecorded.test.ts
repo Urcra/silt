@@ -34,5 +34,8 @@ test('words are recorded though the history had them before they were seen to be
 
 test('words and a later thought are each looked for from where they began', () => {
   const history = indexed([user('a'), thought('hm'), said('Done.'), user('queued')])
-  expect(unrecorded({ text: 'Done.', thought: 'hm', textAfter: 1, thoughtAfter: 4 }, history)).toMatchObject({ text: '', thought: 'hm' })
+  expect(unrecorded({ text: 'Done.', thought: 'hm', textAfter: 1, thoughtAfter: 4 }, history)).toMatchObject({
+    text: '',
+    thought: 'hm',
+  })
 })

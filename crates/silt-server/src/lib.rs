@@ -39,7 +39,7 @@ mod collab;
 pub mod config;
 mod control;
 mod devices;
-pub mod forge;
+pub use silt_forge as forge;
 mod git;
 mod inbox;
 mod index;
@@ -374,6 +374,8 @@ impl Server {
                 "/v1/me/design-systems/{name}",
                 put(me::put_design_system).layer(DefaultBodyLimit::max(silt_proto::DESIGN_SYSTEM_BYTES + (64 << 10))),
             )
+            .route("/v1/me/themes", get(me::themes))
+            .route("/v1/me/themes/{name}", put(me::put_theme).layer(DefaultBodyLimit::max(silt_proto::THEME_BYTES + (8 << 20))))
             .route("/v1/orgs/change", post(orgs::change))
             .route("/git/{repo}/{*rest}", get(git::serve).post(git::serve).layer(DefaultBodyLimit::max(LARGE_BODY)))
             .merge(devices::routes())

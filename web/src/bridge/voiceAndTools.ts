@@ -114,8 +114,11 @@ export function ttsHandler(holder: Holder): CapabilityHandler {
         return null
       }
       if (listening) throw new Refusal('busy', 'the viewer is dictating')
-      const lines = (Array.isArray(given.lines) ? given.lines : []).filter((line) => typeof line?.text === 'string' && line.text.trim())
-      if (lines.length === 0 || lines.some((line) => line.text.length > 2000)) throw new Refusal('refused', 'speak takes lines of 1 to 2,000 characters')
+      const lines = (Array.isArray(given.lines) ? given.lines : []).filter(
+        (line) => typeof line?.text === 'string' && line.text.trim(),
+      )
+      if (lines.length === 0 || lines.some((line) => line.text.length > 2000))
+        throw new Refusal('refused', 'speak takes lines of 1 to 2,000 characters')
       if (method === 'speak') reading?.cancel()
       return new Promise((done, fail) => {
         let stopped = false
@@ -181,15 +184,23 @@ export function mcpHandler(thread: string, artifact: ArtifactView, holder: Holde
     if (!described.has(key))
       described.set(
         key,
-        api.pageMcp(thread, artifact.id, { op: 'describe', server, tool }).then((answer) => answer as { read_only: boolean; description: string | null; input_schema: unknown }),
+        api
+          .pageMcp(thread, artifact.id, { op: 'describe', server, tool })
+          .then((answer) => answer as { read_only: boolean; description: string | null; input_schema: unknown }),
       )
     return described.get(key)!
   }
   const consented = consentFor(thread, artifact, holder, 'mcp', () => {
-    const servers = ((artifact.capabilities?.mcp as { servers?: { server: string; tools: string[] }[] } | undefined)?.servers ?? [])
+    const servers = (
+      (artifact.capabilities?.mcp as { servers?: { server: string; tools: string[] }[] } | undefined)?.servers ?? []
+    )
       .map((entry) => `${entry.server}: ${entry.tools.join(', ')}`)
       .join('; ')
-    return { title: `Let ${artifact.title} use your connectors?`, detail: `${servers}. It reads what these return, as you.`, action: 'Allow' }
+    return {
+      title: `Let ${artifact.title} use your connectors?`,
+      detail: `${servers}. It reads what these return, as you.`,
+      action: 'Allow',
+    }
   })
   return {
     methods: ['callTool', 'describeTool', 'listTools', 'cached'],
@@ -199,7 +210,8 @@ export function mcpHandler(thread: string, artifact: ArtifactView, holder: Holde
       const server = String(given.server ?? '')
       const tool = String(given.tool ?? '')
       if (method === 'listTools') {
-        const servers = (artifact.capabilities?.mcp as { servers?: { server: string; tools: string[] }[] } | undefined)?.servers ?? []
+        const servers =
+          (artifact.capabilities?.mcp as { servers?: { server: string; tools: string[] }[] } | undefined)?.servers ?? []
         return servers.find((entry) => entry.server === server)?.tools ?? []
       }
       if (!(await consented())) throw new Refusal('not_granted', 'the viewer chose not to let this page use their connectors')
@@ -210,10 +222,14 @@ export function mcpHandler(thread: string, artifact: ArtifactView, holder: Holde
         about = await describe(server, tool)
       } catch (failure) {
         described.delete(`${server}/${tool}`)
-        throw new Refusal(/not_granted/.test(String(failure)) ? 'not_granted' : 'unavailable', failure instanceof Error ? failure.message : String(failure))
+        throw new Refusal(
+          /not_granted/.test(String(failure)) ? 'not_granted' : 'unavailable',
+          failure instanceof Error ? failure.message : String(failure),
+        )
       }
       if (method === 'describeTool') return about
-      if (given.read === true && !about.read_only) throw new Refusal('refused', `${tool} isn't marked as only reading, so it can't be watched`)
+      if (given.read === true && !about.read_only)
+        throw new Refusal('refused', `${tool} isn't marked as only reading, so it can't be watched`)
       if (!about.read_only) {
         const input = JSON.stringify(given.input ?? {}).slice(0, 400)
         const agreed = await holder.confirm({ title: `Run ${server}'s ${tool}?`, detail: input, action: 'Run' })

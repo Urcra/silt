@@ -5,7 +5,15 @@ import { agentKey, agentRefused, presetRefused, rulesLine, within } from './rule
 function work(org: boolean): WorkspaceView {
   const policy = { agents: ['copilot'], max_preset: 'ask_before_commands' as const }
   return {
-    workspace: { id: 'work', name: 'Work', server: { url: 'https://silt.acme.dev', org: 'acme' }, rules: [], defaults: {}, env: {}, policy: org ? {} : policy },
+    workspace: {
+      id: 'work',
+      name: 'Work',
+      server: { url: 'https://silt.acme.dev', org: 'acme' },
+      rules: [],
+      defaults: {},
+      env: {},
+      policy: org ? {} : policy,
+    },
     org_policy: org ? { org: 'acme', server: 'https://silt.acme.dev', policy } : null,
     waiting_for_policy: false,
     effective: policy,

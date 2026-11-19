@@ -110,8 +110,14 @@ impl Recording {
         self.runtime.handle().clone()
     }
 
-    pub(crate) fn run(&mut self, command: Command) -> io::Result<std::process::ExitStatus> {
-        self.runtime.block_on(run_until_exit(command, &mut self.local, &mut self.signals))
+    /// Runs `command` until it exits, or until `restart` says it should be
+    /// started again, when it's stopped: answers whether it was.
+    pub(crate) fn run_restartable(
+        &mut self,
+        command: Command,
+        restart: &dyn Fn() -> bool,
+    ) -> io::Result<(std::process::ExitStatus, bool)> {
+        self.runtime.block_on(run_until_exit(command, &mut self.local, &mut self.signals, restart))
     }
 
     pub(crate) fn end(mut self) -> Result<(), Exn<CliError>> {
@@ -215,7 +221,12 @@ async fn adopted(thread: &str) -> bool {
 /// wrapper still waits for it to exit. It steps every `STEP_INTERVAL`
 /// meanwhile.
 #[cfg(unix)]
-async fn run_until_exit(command: Command, local: &mut Local, signals: &mut Signals) -> io::Result<std::process::ExitStatus> {
+async fn run_until_exit(
+    command: Command,
+    local: &mut Local,
+    signals: &mut Signals,
+    restart: &dyn Fn() -> bool,
+) -> io::Result<(std::process::ExitStatus, bool)> {
     use tokio::signal::unix::{SignalKind, signal};
     let mut child = tokio::process::Command::from(command).spawn()?;
     let (mut interrupt, mut quit) = (signal(SignalKind::interrupt())?, signal(SignalKind::quit())?);
@@ -229,12 +240,25 @@ async fn run_until_exit(command: Command, local: &mut Local, signals: &mut Signa
     steps.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
-            status = child.wait() => return status,
+            status = child.wait() => return status.map(|status| (status, false)),
             _ = interrupt.recv() => {}
             _ = quit.recv() => {}
             _ = hangup.recv() => pass_on(&child, rustix::process::Signal::HUP),
             _ = terminate.recv() => pass_on(&child, rustix::process::Signal::TERM),
-            _ = steps.tick() => local.step().await,
+            _ = steps.tick() => {
+                local.step().await;
+                if restart() {
+                    pass_on(&child, rustix::process::Signal::TERM);
+                    let status = match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
+                        Ok(status) => status?,
+                        Err(_) => {
+                            child.start_kill()?;
+                            child.wait().await?
+                        }
+                    };
+                    return Ok((status, true));
+                }
+            }
         }
     }
 }
@@ -242,7 +266,12 @@ async fn run_until_exit(command: Command, local: &mut Local, signals: &mut Signa
 /// On Windows, Ctrl-C and Ctrl-Break reach every process on the console,
 /// the agent's too; this wrapper only stays to record the end.
 #[cfg(windows)]
-async fn run_until_exit(command: Command, local: &mut Local, _signals: &mut Signals) -> io::Result<std::process::ExitStatus> {
+async fn run_until_exit(
+    command: Command,
+    local: &mut Local,
+    _signals: &mut Signals,
+    _restart: &dyn Fn() -> bool,
+) -> io::Result<(std::process::ExitStatus, bool)> {
     use tokio::signal::windows::{ctrl_break, ctrl_c};
     let mut child = tokio::process::Command::from(command).spawn()?;
     let (mut interrupt, mut break_key) = (ctrl_c()?, ctrl_break()?);
@@ -250,7 +279,7 @@ async fn run_until_exit(command: Command, local: &mut Local, _signals: &mut Sign
     steps.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
-            status = child.wait() => return status,
+            status = child.wait() => return status.map(|status| (status, false)),
             _ = interrupt.recv() => {}
             _ = break_key.recv() => {}
             _ = steps.tick() => local.step().await,

@@ -1,6 +1,17 @@
 import { expect, test } from 'vitest'
 import { parseFiles } from './diffParse'
-import { defaultTurns, filtered, firstChange, linesNew, nextUnseen, pickTurns, seenOf, stepFile, stepHunk, turnsOfHunk } from './reviewNav'
+import {
+  defaultTurns,
+  filtered,
+  firstChange,
+  linesNew,
+  nextUnseen,
+  pickTurns,
+  seenOf,
+  stepFile,
+  stepHunk,
+  turnsOfHunk,
+} from './reviewNav'
 
 // Three files: two hunks, a binary file with none, and one hunk.
 const HUNKS = [2, 0, 1]
@@ -26,14 +37,18 @@ test('the filter keeps paths holding it, whatever their case', () => {
 })
 
 test('c comments on the first line a hunk changed, a deleted one only where those take comments', () => {
-  const [file] = parseFiles('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,3 +1,3 @@\n fn a() {}\n-old()\n+new()\n fn b() {}\n')
+  const [file] = parseFiles(
+    'diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,3 +1,3 @@\n fn a() {}\n-old()\n+new()\n fn b() {}\n',
+  )
   expect(firstChange(file, 0, true)).toEqual({ path: 'src/a.rs', start: 2, end: 2, side: 'old' })
   expect(firstChange(file, 0, false)).toEqual({ path: 'src/a.rs', start: 2, end: 2, side: 'new' })
   expect(firstChange(file, 1, true)).toBeNull()
 })
 
-test("a hunk names the turns that wrote what it added, or the turn shown when it only deleted", () => {
-  const [file] = parseFiles('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,3 +1,4 @@\n fn a() {}\n-old()\n+new()\n+more()\n fn b() {}\n@@ -9,2 +10,1 @@\n fn c() {}\n-gone()\n')
+test('a hunk names the turns that wrote what it added, or the turn shown when it only deleted', () => {
+  const [file] = parseFiles(
+    'diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,3 +1,4 @@\n fn a() {}\n-old()\n+new()\n+more()\n fn b() {}\n@@ -9,2 +10,1 @@\n fn c() {}\n-gone()\n',
+  )
   const runs = [
     { start: 1, end: 2, turn: 1 },
     { start: 3, end: 3, turn: 3 },
@@ -53,7 +68,17 @@ test('a click picks a turn, and a shift-click the range from the first picked', 
 test('a file reads as seen, changed since with how many lines are new, or unmarked', () => {
   const marks = new Map([
     ['a.rs', { path: 'a.rs', seen: 'seen' as const, new_lines: [] }],
-    ['b.rs', { path: 'b.rs', seen: 'changed' as const, new_lines: [{ start: 3, end: 4 }, { start: 9, end: 9 }] }],
+    [
+      'b.rs',
+      {
+        path: 'b.rs',
+        seen: 'changed' as const,
+        new_lines: [
+          { start: 3, end: 4 },
+          { start: 9, end: 9 },
+        ],
+      },
+    ],
   ])
   expect(['a.rs', 'b.rs', 'c.rs'].map((path) => seenOf(path, marks))).toEqual(['yes', 'changed', 'no'])
   expect(linesNew(marks.get('b.rs'))).toBe(3)

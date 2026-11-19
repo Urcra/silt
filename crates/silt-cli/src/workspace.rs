@@ -13,6 +13,7 @@ use crate::CliError;
 use crate::commands::{call, ensure_daemon, fail};
 
 #[derive(Debug, Subcommand)]
+#[expect(clippy::large_enum_variant, reason = "parsed once, from the command line")]
 pub enum WorkspaceCommand {
     /// List the workspaces, their servers, rules and projects
     List,
@@ -121,6 +122,9 @@ pub enum WorkspaceCommand {
         /// More folders for its sandboxes, comma-separated, each read-only or with `:rw` writable, or `none`
         #[arg(long)]
         paths: Option<String>,
+        /// The folders its agents may ask for, comma-separated, each `root:allow|ask|never`, with `:rw` where writing may be given; or `none`
+        #[arg(long)]
+        ask_folders: Option<String>,
         /// Its sandboxes get the GPU: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
         gpu: Option<bool>,
@@ -278,6 +282,7 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
             ranges,
             ports,
             paths,
+            ask_folders,
             gpu,
             docker,
             ssh_agent,
@@ -325,6 +330,9 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
                         None => (expand_home(path.strip_suffix(":ro").unwrap_or(&path)), false),
                     })
                     .collect();
+            }
+            if ask_folders.is_some() {
+                policy.folders = folder_rules(ask_folders.as_deref())?;
             }
             for (setting, value) in [(&mut policy.gpu, gpu), (&mut policy.docker, docker), (&mut policy.ssh_agent, ssh_agent)] {
                 if let Some(value) = value {
@@ -430,6 +438,11 @@ fn edit(all: &mut Workspaces, change: WorkspaceCommand) -> Result<String, Exn<Cl
 fn entries(text: &str) -> impl Iterator<Item = String> + '_ {
     let text = if text.trim() == "none" { "" } else { text };
     text.split(',').map(str::trim).filter(|entry| !entry.is_empty()).map(str::to_owned)
+}
+
+/// Folder rules as `--ask-folders` takes them; none when not given.
+pub(crate) fn folder_rules(text: Option<&str>) -> Result<Vec<silt_workspace::FolderRule>, Exn<CliError>> {
+    entries(text.unwrap_or("")).map(|entry| silt_workspace::FolderRule::parse(&entry).map_err(fail)).collect()
 }
 
 fn expand_home(path: &str) -> String {

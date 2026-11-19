@@ -1,0 +1,64 @@
+id = "silt.graphql"
+name = "GraphQL API"
+version = "1.0.0"
+publisher = "silt"
+description = "Queries and mutations to a GraphQL API of yours, each environment its own endpoint and token; reads go, changes ask, and location data can be kept from agents."
+license = "AGPL-3.0-only"
+world = "silt:plugin@1"
+build = "shipped"
+environments = { label = "endpoints", field = "environment" }
+
+[[capabilities]]
+kind = "http"
+hosts_from = "endpoint"
+reason = "Sends the agent's queries and mutations to the endpoint you set, and nowhere else."
+
+[[settings]]
+key = "endpoint"
+label = "Endpoint"
+description = "The API's URL, such as `https://api.acme.dev/graphql`."
+type = "string"
+scope = "environment"
+
+[[settings]]
+key = "data"
+label = "Kept from agents"
+description = "What a request may never select and an answer may never carry: `location`."
+type = "list"
+scope = "environment"
+default = []
+
+[[settings]]
+key = "direct"
+label = "Straight from the sandbox"
+description = "Lets the sandbox's own tools send requests to the endpoint through Silt's gateway, read the same way: queries go, mutations only where your rule allows them, and what's kept from agents stays kept."
+type = "boolean"
+scope = "environment"
+default = false
+
+[[credentials]]
+id = "token"
+label = "The API's token"
+hosts_from = "endpoint"
+send = { header = { name = "Authorization", scheme = "Bearer" } }
+how = "A token for the API, kept with `silt plugin secret silt.graphql token --environment <name>`, or one of `silt credential`'s."
+per_environment = true
+
+[[actions]]
+id = "query"
+label = "Query"
+description = "Reads: a document with queries only."
+kind = "read"
+default = "allow"
+fields = ["environment", "operation"]
+
+[[actions]]
+id = "mutate"
+label = "Mutate"
+description = "Changes: a document with a mutation or a subscription."
+kind = "change"
+default = "ask"
+fields = ["environment", "operation"]
+
+[docs]
+readme = "README.md"

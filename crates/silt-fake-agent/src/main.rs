@@ -12,8 +12,9 @@
 //! optional box for an answer of one's own, and none required. A prompt saying `Ponder` makes it think for a while between its
 //! edit and a read. A prompt saying `Later` makes it say more once the prompt was
 //! answered, as an agent going on by itself, without saying it works or
-//! stops, as v1 can't. `Show me`, `Guide` and `Artifact` call Silt's own tools (see `show`). `Detached` makes it leave a shell running and read
-//! it once the turn is over, as Copilot does. With `FAKE_ACP_CRASH` set it dies on a prompt; with
+//! stops, as v1 can't. `Show me`, `Guide` and `Artifact` call Silt's own tools (see `show`); `Folder <path>` asks for a folder with Folders' tool, and `Look in <path>` says what it sees there. `Detached` makes it leave a shell running and read
+//! it once the turn is over, as Copilot does; `Forgotten` leaves a real process,
+//! `silt-fake-agent keep-running <cwd>`, in one it never reads. With `FAKE_ACP_CRASH` set it dies on a prompt; with
 //! `FAKE_ACP_HANG` it never answers at all, as an agent stuck starting.
 //! It speaks ACP v1, as Copilot does, answering a client that asks for v2
 //! with v1; with `FAKE_ACP_V2` it speaks v2 instead, as Claude's adapter
@@ -400,10 +401,18 @@ async fn agent() -> Result<()> {
                         let read = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("fn acp() {}"));
                         notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("read-2", read)))?;
                     }
-                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") || prompt.contains("Read asset") || prompt.contains("Room say") || prompt.contains("Doc edit") || prompt.contains("Sheet set") || prompt.contains("Sheet grow") {
+                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") || prompt.contains("Read asset") || prompt.contains("Room say") || prompt.contains("Doc edit") || prompt.contains("Sheet set") || prompt.contains("Sheet grow") || newest(&prompt).contains("Folder ") {
                         show(&worker, &session, &state, &cwd, &prompt).await?;
                     }
-                    let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
+                    let mut reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
+                    if let Some(path) = newest(&prompt).split_once("Look in ").and_then(|(_, rest)| rest.split_whitespace().next()) {
+                        // What it sees of a folder outside its checkout (ADR 0102).
+                        let mut names: Vec<String> = std::fs::read_dir(path)
+                            .map(|entries| entries.flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+                            .unwrap_or_default();
+                        names.sort();
+                        reply = format!("{reply}: {}", if names.is_empty() { "nothing there".to_owned() } else { names.join(", ") });
+                    }
                     notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
                     let later = prompt.contains("Later");
                     if prompt.contains("Subagent") {
@@ -427,10 +436,25 @@ async fn agent() -> Result<()> {
                         notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("task-1", reported)))?;
                     }
                     let detached = prompt.contains("Detached");
-                    if detached {
+                    // A real process in a shell it never reads, so Silt doesn't hear it end.
+                    let forgotten = prompt.contains("Forgotten");
+                    if detached || forgotten {
+                        let command =
+                            if forgotten { format!("keep-running {}", cwd.display()) } else { "sleep 1 && echo DETACHED".to_owned() };
+                        if forgotten {
+                            let program = std::env::current_exe().map_err(agent_client_protocol::Error::into_internal_error)?;
+                            let mut kept = tokio::process::Command::new(program)
+                                .arg("keep-running")
+                                .arg(&cwd)
+                                .stdin(std::process::Stdio::null())
+                                .stdout(std::process::Stdio::null())
+                                .spawn()
+                                .map_err(agent_client_protocol::Error::into_internal_error)?;
+                            tokio::spawn(async move { kept.wait().await });
+                        }
                         let shell = ToolCall::new("shell-1", "Run a command in the background")
                             .kind(ToolKind::Execute)
-                            .raw_input(serde_json::json!({"command": "sleep 1 && echo DETACHED", "mode": "async", "detach": true}));
+                            .raw_input(serde_json::json!({"command": command, "mode": "async", "detach": true}));
                         notify(&worker, &session, SessionUpdate::ToolCall(shell))?;
                         let started = ToolCallUpdateFields::new()
                             .status(ToolCallStatus::Completed)
@@ -491,7 +515,11 @@ async fn show(
         let state = state.lock().expect("lock");
         (state.mcp.get(&id).cloned().unwrap_or_default(), state.artifact.get(&id).cloned())
     };
-    let (tool, arguments) = if prompt.contains("Show me") {
+    let (tool, arguments) = if let Some(path) =
+        newest(prompt).split_once("Folder ").and_then(|(_, rest)| rest.split_whitespace().next())
+    {
+        ("folders_request", serde_json::json!({"path": path, "reason": "the app uses it"}))
+    } else if prompt.contains("Show me") {
         let path = cwd.join("pixel.png");
         tokio::fs::write(&path, mcp::PIXEL_PNG).await.ok();
         ("silt_show", serde_json::json!({"path": "pixel.png", "caption": "One pixel"}))
@@ -690,6 +718,12 @@ document.getElementById('add').onclick=function(){db.collection('tasks').add({do
     };
     let fields = ToolCallUpdateFields::new().status(status).raw_output(serde_json::json!(text));
     notify(worker, session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("show-1", fields)))
+}
+
+/// A prompt's last paragraph: what was asked, past a conversation primed
+/// before it.
+fn newest(prompt: &str) -> &str {
+    prompt.trim_end().rsplit("\n\n").next().unwrap_or(prompt)
 }
 
 /// The edit a prompt makes: `FAKE_ACP_CONTENT` replaces `src/main.rs`, else

@@ -1,0 +1,18 @@
+[package]
+name = "silt-plugin-graphql"
+description = "GraphQL API: queries and mutations to an API of yours, classified, bound and held by your rules"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+silt-access = { path = "../../crates/silt-access" }
+silt-plugin-api = { path = "../../crates/silt-plugin-api" }

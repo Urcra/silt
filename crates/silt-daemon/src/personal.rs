@@ -279,8 +279,12 @@ impl Core {
             .collect();
         let events = self.events.clone();
         let design = (self.data_dir.clone(), self.remotes.clone());
+        let bus = self.bus.clone();
         tokio::spawn(async move {
-            crate::design_sync::sync(design.0, design.1, now_ms()).await;
+            crate::design_sync::sync(design.0.clone(), design.1.clone(), now_ms()).await;
+            if crate::theme_sync::sync(design.0, design.1, now_ms()).await {
+                let _ = bus.send(crate::protocol::BusEvent::Appearance);
+            }
             let mut synced = Synced {
                 sent: Vec::new(),
                 fetched: Ok(Vec::new()),

@@ -133,6 +133,13 @@ pub fn own_group_std(command: &mut std::process::Command) {
     imp::own_group_std(command);
 }
 
+/// [`own_group_std`], and on Unix a session of its own too, with no
+/// controlling terminal: an interactive shell in a background group of a
+/// terminal's session is stopped when it takes the terminal.
+pub fn own_session_std(command: &mut std::process::Command) {
+    imp::own_session_std(command);
+}
+
 /// Stops the process `pid` started with `own_group`, and everything it
 /// started.
 pub fn kill_tree(pid: u32) {

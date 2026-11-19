@@ -1,0 +1,90 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Urcra/silt/main/docs/reference/theme.schema.json",
+  "name": "Nord",
+  "author": "Sven Greb",
+  "license": "MIT",
+  "source": "https://github.com/nordtheme/nord",
+  "copyright": "Copyright (c) 2016-present Sven Greb. Colours at or below WCAG AA's 4.5:1 for text were moved in lightness, keeping their hue.",
+  "themes": [
+    {
+      "id": "nord",
+      "name": "Nord",
+      "appearance": "dark",
+      "colors": {
+        "bg": "#2e3440",
+        "bg-elevated": "#3b4252",
+        "surface-1": "#3b4252",
+        "surface-2": "#434c5e",
+        "surface-3": "#4c566a",
+        "fg-1": "#eceff4",
+        "fg-2": "#d8dee9",
+        "fg-3": "#a5aebf",
+        "border": "#434c5e",
+        "border-strong": "#4c566a",
+        "accent": "#88c0d0",
+        "accent-fg": "#88c0d0",
+        "ok": "#a3be8c",
+        "warn": "#ebcb8b",
+        "danger": "#f6929a",
+        "info": "#90b1d1"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#90b1d1"
+        },
+        "string": {
+          "color": "#a3be8c"
+        },
+        "string-special": {
+          "color": "#ebcb8b"
+        },
+        "number": {
+          "color": "#c9a2c2"
+        },
+        "constant": {
+          "color": "#90b1d1"
+        },
+        "comment": {
+          "color": "#a1afcb",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#8fbcbb"
+        },
+        "macro": {
+          "color": "#8cb1de"
+        },
+        "variable": {
+          "color": "#d8dee9"
+        },
+        "definition": {
+          "color": "#88c0d0"
+        },
+        "property": {
+          "color": "#d8dee9"
+        },
+        "operator": {
+          "color": "#90b1d1"
+        },
+        "punctuation": {
+          "color": "#eceff4"
+        },
+        "meta": {
+          "color": "#e89d85"
+        },
+        "heading": {
+          "color": "#88c0d0",
+          "font_weight": 600
+        },
+        "link": {
+          "color": "#8fbcbb"
+        }
+      },
+      "radii": {
+        "sm": 3,
+        "md": 4,
+        "lg": 8
+      }
+    }
+  ]
+}

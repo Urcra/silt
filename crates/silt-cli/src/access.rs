@@ -14,6 +14,8 @@ pub enum AccessCommand {
     Show { thread: String },
     /// Let go of a device relayed to a thread's sandboxes, ending its session
     Release { thread: String, device: String },
+    /// Take a folder back from a thread's agents; they lose it when their turn ends
+    Unfolder { thread: String, path: String },
 }
 
 pub fn run(command: AccessCommand) -> Result<(), Exn<CliError>> {
@@ -26,6 +28,11 @@ pub fn run(command: AccessCommand) -> Result<(), Exn<CliError>> {
             }
         }
         AccessCommand::Show { thread } => crate::plugin::access(&thread),
+        AccessCommand::Unfolder { thread, path } => {
+            let said: String = crate::commands::call(&silt_daemon::protocol::Request::FolderRevoke { thread, path })?;
+            println!("{said}");
+            Ok(())
+        }
         AccessCommand::Release { thread, device } => {
             let said: String = crate::commands::call(&silt_daemon::protocol::Request::ReleaseDevice { thread, device })?;
             println!("{said}");
@@ -119,7 +126,7 @@ fn credentials() {
     let mut workspaces: Vec<&str> = all.iter().map(|stored| stored.workspace.as_str()).collect();
     workspaces.dedup();
     for workspace in workspaces {
-        let (_, _, missing) = silt_daemon::credentials::resolve(&data, workspace);
+        let (_, _, missing) = silt_daemon::credentials::resolve(&data, workspace, &|_| false);
         for stored in all.iter().filter(|stored| stored.workspace == workspace) {
             if missing.contains(&stored.name) {
                 line(
