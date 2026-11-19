@@ -317,11 +317,7 @@ pub fn agent_environment(agent_id: &str, data_dir: &Path) -> Vec<(String, String
         id if id.contains("copilot") => &["GITHUB_", "GH_", "COPILOT_"],
         _ => &[],
     };
-    let listed: Vec<String> = std::fs::read_to_string(data_dir.join("agent-env"))
-        .map(|text| {
-            text.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).map(str::to_owned).collect()
-        })
-        .unwrap_or_default();
+    let listed = listed_variables(data_dir);
     // What Windows programs can't start without, or find nothing without.
     const WINDOWS: [&str; 22] = [
         "SystemRoot",
@@ -363,6 +359,16 @@ pub fn agent_environment(agent_id: &str, data_dir: &Path) -> Vec<(String, String
                 || listed.contains(name)
         })
         .collect()
+}
+
+/// The variables named in `<data>/agent-env`, one per line, that the person
+/// gives every agent (ADR 0016).
+pub fn listed_variables(data_dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(data_dir.join("agent-env"))
+        .map(|text| {
+            text.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).map(str::to_owned).collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Agents the user added in `<data>/agents.json`:

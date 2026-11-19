@@ -1,4 +1,4 @@
-// Text and layout (ADR 0102): how big and how dense the UI is, over any
+// Text and layout (ADR 0107): how big and how dense the UI is, over any
 // theme. The daemon keeps it per machine in appearance.json beside the theme
 // pick and compiles its CSS; the hosted app keeps it in this browser. A
 // setting left out is Silt's default.

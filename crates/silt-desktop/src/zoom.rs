@@ -1,4 +1,4 @@
-//! The window's zoom (ADR 0102): the page sends the level text and layout
+//! The window's zoom (ADR 0107): the page sends the level text and layout
 //! set as a `silt://zoom/` link the window catches, and the app keeps it for
 //! its next start, so the window opens at it before the page has loaded.
 

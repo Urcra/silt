@@ -13,7 +13,7 @@ import { hosted } from './served'
 export type Theme = AppearanceMode
 
 const MODE_KEY = 'silt-theme'
-/** The hosted app's light and dark theme, and its text and layout (ADR 0102). */
+/** The hosted app's light and dark theme, and its text and layout (ADR 0107). */
 const PICK_KEY = 'silt-theme-pick'
 /** The last CSS shown, so the hosted app's next page starts in it. */
 const CSS_KEY = 'silt-theme-css'

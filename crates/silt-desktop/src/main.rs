@@ -217,7 +217,7 @@ fn open_window(
                 });
                 return false;
             }
-            // And how far to zoom, as text and layout set it (ADR 0102).
+            // And how far to zoom, as text and layout set it (ADR 0107).
             if let Some(level) = zoom::of_link(to) {
                 let (app, file) = (zoomed.clone(), zoom_file.clone());
                 std::thread::spawn(move || {

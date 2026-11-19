@@ -5,31 +5,90 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use silt_workspace::{ExtraDir, ExtraRepo, PathDir, Reach, RunPaths};
 #[cfg(unix)]
 use silt_workspace::{Mount, MountKind, Network};
-use silt_workspace::{PathDir, Reach, RunPaths};
 
 use crate::CoreError;
 
-/// Variables never passed into a sandbox: what they hold or point to signs
-/// in as the person somewhere.
-const CREDENTIAL_VARIABLES: [&str; 12] = [
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE",
-    "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE",
-    "KUBECONFIG",
-    "DOCKER_HOST",
-    "DOCKER_CONFIG",
-    "VAULT_TOKEN",
-    "NPM_TOKEN",
-    "SSH_AUTH_SOCK",
-    "GPG_AGENT_INFO",
-    "DBUS_SESSION_BUS_ADDRESS",
-    "XDG_RUNTIME_DIR",
+/// The only variables from the launching environment a sandbox gets: locale,
+/// terminal, and the roots of the language toolchains it builds with. An
+/// allowlist, not a denylist, because an unknown variable (`GH_TOKEN`,
+/// `DATABASE_URL`, a company's own) is far likelier to carry a secret than to
+/// be needed, and a denylist can't know every name. A model key or a
+/// workspace's credential comes back as a placeholder the gateway fills, added
+/// separately, so dropping it here is right. `PATH`, `HOME` and the agent's own
+/// home pointers are passed so its tools and sessions are found.
+const ENV_ALLOW: [&str; 44] = [
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "PWD",
+    "OLDPWD",
+    "TERM",
+    "COLORTERM",
+    "TERMINFO",
+    "TZ",
+    "LANG",
+    "LANGUAGE",
+    "TMPDIR",
+    "EDITOR",
+    "VISUAL",
+    "PAGER",
+    "LESS",
+    "HOSTNAME",
+    "CI",
+    "COLUMNS",
+    "LINES",
+    "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "CODEX_HOME",
+    "GEMINI_CLI_HOME",
+    "COPILOT_HOME",
+    "QUDIKS_HOME",
+    "JAVA_HOME",
+    "GOPATH",
+    "GOROOT",
+    "GOMODCACHE",
+    "GOCACHE",
+    "GOFLAGS",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "PKG_CONFIG_PATH",
+    "CC",
+    "CXX",
+    "MAKEFLAGS",
 ];
 
-/// Prefixes of variables never passed into a sandbox.
-const CREDENTIAL_PREFIXES: [&str; 2] = ["AWS_", "AZURE_"];
+/// Prefixes of variables a sandbox also gets (Silt's own, `SILT_`, always): locale categories,
+/// and the per-toolchain settings builds read, but for names that say they
+/// hold a secret ([`SECRET_WORDS`]). Prefixes a credential hides under
+/// (`AWS_`, `GITHUB_`) aren't here at all.
+const ENV_ALLOW_PREFIXES: [&str; 17] = [
+    "LC_",
+    "CARGO_",
+    "RUSTUP_",
+    "RUST_",
+    "RUSTC_",
+    "NODE_",
+    "npm_config_",
+    "PNPM_",
+    "COREPACK_",
+    "YARN_",
+    "PYENV_",
+    "CONDA_",
+    "DENO_",
+    "BUN_",
+    "GRADLE_",
+    "MAVEN_",
+    "CMAKE_",
+];
 
 /// The port the gateway answers on inside a sandbox.
 pub const GATEWAY_PORT: u16 = 3128;
@@ -45,6 +104,9 @@ pub struct Sandboxed {
     pub outside: Vec<Outside>,
     /// Credentials the workspace names whose secret couldn't be had.
     pub missing: Vec<String>,
+    /// Why each folder the workspace names and the sandbox doesn't get
+    /// was left out.
+    pub refused: Vec<String>,
 }
 
 /// What answers a sandbox's relay outside it. There are none where the
@@ -129,12 +191,19 @@ pub struct Run<'a> {
     pub reach: &'a Reach,
     /// The run's token, which the sandbox reaches the daemon with.
     pub token: &'a str,
-    /// The variables the agent would get unsandboxed.
+    /// The variables the agent would get unsandboxed from the environment it
+    /// was started from, which only the allowlist passes.
     pub env: Vec<(String, String)>,
+    /// Those Silt, the agent's adapter or the workspace set for it on
+    /// purpose, which go in as they are, but for model keys.
+    pub given: Vec<(String, String)>,
     /// More that the sandbox shows read-only, such as the agent's program.
     pub read_only: Vec<PathBuf>,
     /// The devices Silt relays to the thread's sandbox.
     pub relayed: Vec<Relayed>,
+    /// What the gateway adds instead of the workspace's credentials, such
+    /// as a plugin's own for the MCP server it wraps (ADR 0104).
+    pub gateway_credentials: Option<Vec<silt_gateway::Credential>>,
 }
 
 impl Run<'_> {
@@ -148,10 +217,12 @@ impl Run<'_> {
 
 /// Writes the run's plan and works out how to start it sandboxed.
 pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
-    let lookup = |name: &str| run.env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone());
+    let lookup = |name: &str| {
+        run.given.iter().rev().chain(run.env.iter().rev()).find(|(key, _)| key == name).map(|(_, value)| value.clone())
+    };
     let home = silt_os::home_dir();
     let (git_dir, git_shared) = git_paths(run.checkout);
-    let paths = RunPaths {
+    let mut paths = RunPaths {
         home: home.clone(),
         real_home: home.as_deref().and_then(real_if_linked),
         checkout: run.checkout.to_owned(),
@@ -161,8 +232,20 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
             (Some(agent), Some(home)) => agent.homes(home, &lookup),
             _ => Vec::new(),
         },
+        hide: match (run.agent, &home) {
+            (Some(agent), Some(home)) => agent.sign_in(home, &lookup),
+            _ => Vec::new(),
+        },
+        pin_config: match (run.agent, &home) {
+            (Some(agent), Some(home)) => agent.read_only_home(home, &lookup),
+            _ => Vec::new(),
+        },
+        git_protect: Vec::new(),
+        other_projects: Vec::new(),
+        own_project: Vec::new(),
+        fresh: Vec::new(),
         path_dirs: lookup("PATH").map(|path| std::env::split_paths(&path).map(path_dir).collect()).unwrap_or_default(),
-        silt: std::env::current_exe()?,
+        silt: silt_program(run.data_dir)?,
         read_only: run.read_only.clone(),
         data_dir: Some(run.data_dir.to_owned()),
         real_data_dir: real_if_linked(run.data_dir),
@@ -172,7 +255,16 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
         #[cfg(not(unix))]
         run_socket: None,
         ssh_agent_socket: lookup("SSH_AUTH_SOCK").map(PathBuf::from),
+        extra: run.reach.paths.iter().map(|(path, writable)| extra_dir(path, *writable, home.as_deref())).collect(),
     };
+    let refused: Vec<String> = paths.extra.iter().filter_map(|dir| paths.extra_refusal(dir)).collect();
+    // As for the checkout below: a hooks folder made in the sandbox would
+    // be writable there.
+    for dir in paths.extra.iter().filter(|dir| dir.writable && paths.extra_refusal(dir).is_none()) {
+        for repo in dir.repos.iter().flatten().filter(|repo| repo.git_dir.join("objects").is_dir()) {
+            std::fs::create_dir_all(repo.git_dir.join("hooks"))?;
+        }
+    }
     // What's mounted must exist: an agent's home it hasn't made yet would
     // otherwise live in the sandbox alone, out of capture's sight, and a
     // missing hooks folder could be made writable there.
@@ -181,13 +273,66 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
             std::fs::create_dir_all(home)?;
         }
     }
+    // A config file that doesn't exist yet would otherwise be the agent's to
+    // create in its writable home and have run on the host later; create an
+    // empty one so pinning it read-only closes that (ADR 0093).
+    for config in &paths.pin_config {
+        if !config.exists() && config.extension().is_none() {
+            std::fs::create_dir_all(config)?;
+        } else if !config.exists() {
+            if let Some(parent) = config.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let empty = if config.extension().is_some_and(|ext| ext == "json") { "{}" } else { "" };
+            std::fs::write(config, empty)?;
+        }
+    }
     let git_dir = paths.git_dir.clone().unwrap_or_else(|| run.checkout.join(".git"));
     if git_dir.is_dir() {
         std::fs::create_dir_all(git_dir.join("hooks"))?;
+        paths.git_protect = git_protect(&git_dir)?;
     }
     std::fs::create_dir_all(run.checkout.join(".silt"))?;
-    let mut plan = silt_workspace::plan(&paths, run.reach);
     std::fs::create_dir_all(run.scratch)?;
+    if let (Some(agent), Some(home)) = (run.agent, &home) {
+        let state = agent.project_state(home, &lookup, run.checkout);
+        // Made now, as what's hidden is hidden only where it exists, and the
+        // run's own folder must be there to show it.
+        for dir in state.hide.iter().chain(&state.own) {
+            std::fs::create_dir_all(dir)?;
+        }
+        for (index, file) in state.fresh.iter().enumerate() {
+            let own = run.scratch.join(format!("fresh-{index}"));
+            std::fs::write(&own, "")?;
+            paths.fresh.push((file.clone(), own));
+        }
+        for (index, file) in state.copied.iter().enumerate().filter(|(_, file)| file.is_file()) {
+            let own = run.scratch.join(format!("copy-{index}"));
+            std::fs::copy(file, &own)?;
+            paths.fresh.push((file.clone(), own));
+        }
+        paths.other_projects = state.hide;
+        paths.own_project = state.own;
+    }
+    let mut plan = silt_workspace::plan(&paths, run.reach);
+    // What plugins keep for the thread and show its agents, read-only, at
+    // `/silt/<plugin>`, such as GitHub's mirrors (ADR 0104). Seatbelt can't
+    // show a folder under another name, so it waits for the VM backends.
+    if !run.seatbelt() && !run.thread.is_empty() {
+        for (source, path) in crate::plugins::wasm::agent_folders(run.data_dir, run.workspace, run.thread) {
+            std::fs::create_dir_all(&source)?;
+            plan.mounts.push(silt_workspace::Mount { kind: silt_workspace::MountKind::ReadOnly, path, source: Some(source) });
+        }
+        // Where agents clone what a plugin's mirrors hold (ADR 0103).
+        if let Some(work) = crate::plugins::wasm::work_area(run.data_dir, run.workspace, run.thread) {
+            std::fs::create_dir_all(&work)?;
+            plan.mounts.push(silt_workspace::Mount {
+                kind: silt_workspace::MountKind::ReadWrite,
+                path: PathBuf::from(crate::plugins::wasm::WORK_AREA),
+                source: Some(work),
+            });
+        }
+    }
     let Relays { outside, env: mut extra_env, missing } = relays(run, &mut plan)?;
     extra_env.extend(devices(run, &mut plan));
     if run.seatbelt() {
@@ -197,10 +342,25 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
         extra_env.push(("TMPDIR".to_owned(), tmp.to_string_lossy().into_owned()));
     }
     let plan_path = run.scratch.join("sandbox.json");
+    // What `silt sandbox-run` reads to make the sandbox, read-only inside it;
+    // the last two it writes there before starting bubblewrap.
+    for file in ["sandbox.json", "seccomp.bpf", "resolv.conf"] {
+        let path = run.scratch.join(file);
+        plan.mounts.push(silt_workspace::Mount { kind: silt_workspace::MountKind::ReadOnly, path, source: None });
+    }
     std::fs::write(&plan_path, serde_json::to_vec(&plan).map_err(|error| CoreError::Invalid(error.to_string()))?)?;
     let launcher =
         vec![paths.silt.into_os_string(), "sandbox-run".into(), "--plan".into(), plan_path.into_os_string(), "--".into()];
-    let mut env: Vec<(String, String)> = run.env.iter().filter(|(name, _)| keeps(name, run.reach)).cloned().collect();
+    // Names the person lists in `<data>/agent-env` go to every agent, here too.
+    let listed = silt_acp::registry::listed_variables(run.data_dir);
+    let mut env: Vec<(String, String)> = run
+        .env
+        .iter()
+        .filter(|(name, _)| keeps(name, run.reach) || listed.contains(name))
+        .filter(|(name, _)| !run.given.iter().any(|(given, _)| given == name))
+        .cloned()
+        .collect();
+    env.extend(run.given.iter().cloned());
     env.retain(|(name, _)| name != "SILT_RUN_SOCKET" && name != "SILT_RUN_TOKEN");
     if let Some(socket) = &paths.run_socket {
         env.push(("SILT_RUN_SOCKET".into(), socket.to_string_lossy().into_owned()));
@@ -209,7 +369,7 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     let added: Vec<&str> = extra_env.iter().map(|(name, _)| name.as_str()).collect();
     env.retain(|(name, _)| !added.contains(&name.as_str()));
     env.extend(extra_env);
-    Ok(Sandboxed { launcher, env, outside, missing })
+    Ok(Sandboxed { launcher, env, outside, missing, refused })
 }
 
 /// What the devices relayed to the run add to its plan, and the variables
@@ -280,13 +440,19 @@ struct Relays {
 #[cfg(unix)]
 fn relays(run: &Run<'_>, plan: &mut silt_workspace::SandboxPlan) -> Result<Relays, CoreError> {
     let mut relays = Relays::default();
-    let (mut credentials, mut placeholders, unresolved) = crate::credentials::resolve(run.data_dir, run.workspace);
+    // Where GitHub's plugin is on, GitHub is reached through it alone.
+    let github = crate::plugins::wasm::github_on(run.data_dir, run.workspace);
+    let (mut credentials, mut placeholders, unresolved) = match &run.gateway_credentials {
+        Some(own) => (own.clone(), Vec::new(), Vec::new()),
+        None => crate::credentials::resolve(run.data_dir, run.workspace, &|host| github && github_host(host)),
+    };
     relays.missing = unresolved;
     // The agent's own model key goes on at the gateway too, so the sandbox
     // holds a placeholder rather than the key.
     if matches!(run.reach.network, Network::Gateway | Network::Full) {
-        let (model_credentials, model_placeholders) =
-            model_keys(run.agent, &|name| run.env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone()));
+        let (model_credentials, model_placeholders) = model_keys(run.agent, &|name| {
+            run.given.iter().rev().chain(run.env.iter().rev()).find(|(key, _)| key == name).map(|(_, value)| value.clone())
+        });
         credentials.extend(model_credentials);
         placeholders.extend(model_placeholders);
     }
@@ -462,12 +628,117 @@ fn listen(socket: &Path) -> std::io::Result<std::os::unix::net::UnixListener> {
     Ok(listener)
 }
 
+fn github_host(host: &str) -> bool {
+    let host = host.trim_start_matches("*.");
+    host == "github.com" || host.ends_with(".github.com")
+}
+
 /// Whether variable `name` goes into the sandbox.
 fn keeps(name: &str, reach: &Reach) -> bool {
     if name == "SSH_AUTH_SOCK" {
         return reach.ssh_agent;
     }
-    !CREDENTIAL_VARIABLES.contains(&name) && !CREDENTIAL_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+    if ENV_ALLOW.contains(&name) || name.starts_with("SILT_") {
+        return true;
+    }
+    // A toolchain's prefix also carries its registry tokens, such as
+    // `CARGO_REGISTRY_TOKEN`, `NODE_AUTH_TOKEN` and `npm_config__authToken`.
+    let upper = name.to_ascii_uppercase();
+    ENV_ALLOW_PREFIXES.iter().any(|prefix| name.starts_with(prefix)) && !SECRET_WORDS.iter().any(|word| upper.contains(word))
+}
+
+/// Words in a variable's name that say it holds a secret.
+const SECRET_WORDS: [&str; 8] = ["TOKEN", "SECRET", "PASSWORD", "PASSWD", "AUTH", "CREDENTIAL", "APIKEY", "_KEY"];
+
+/// How many entries a writable extra folder is walked through for git
+/// repos; one with more is refused rather than handed over unchecked.
+const EXTRA_WALK_LIMIT: usize = 100_000;
+
+/// A folder as a workspace's rule names it, resolved: where it really is,
+/// and the git repos in it where it's writable.
+pub fn extra_dir(path: &str, writable: bool, home: Option<&Path>) -> ExtraDir {
+    let path = silt_workspace::expand_home(path, home);
+    let real = std::fs::canonicalize(&path).ok().filter(|real| real.is_dir());
+    let repos = match &real {
+        Some(real) if writable => repos_in(real, EXTRA_WALK_LIMIT),
+        _ => Some(Vec::new()),
+    };
+    ExtraDir { path, real, writable, repos }
+}
+
+/// The `silt` a sandbox is launched with and its hooks run: this program,
+/// or in a debug build the one a test names, when the test itself isn't
+/// `silt`.
+fn silt_program(data_dir: &Path) -> std::io::Result<PathBuf> {
+    let named = crate::plugins::capabilities::redirects(data_dir).into_iter().find(|(from, _)| from == "silt");
+    match named {
+        Some((_, path)) => Ok(PathBuf::from(path)),
+        None => std::env::current_exe(),
+    }
+}
+
+/// Why `dir` is never handed to a sandbox, whatever the rules say: the
+/// built-in refusals of ADR 0102, judged by both its names.
+pub fn folder_refusal(data_dir: &Path, dir: &ExtraDir) -> Option<String> {
+    let home = silt_os::home_dir();
+    let paths = RunPaths {
+        real_home: home.as_deref().and_then(real_if_linked),
+        home,
+        data_dir: Some(data_dir.to_owned()),
+        real_data_dir: real_if_linked(data_dir),
+        ..RunPaths::default()
+    };
+    paths.extra_refusal(dir)
+}
+
+/// The git dirs under `root`, never following a link; `None` once more
+/// than `limit` entries have been looked at.
+fn repos_in(root: &Path, limit: usize) -> Option<Vec<ExtraRepo>> {
+    let mut repos = Vec::new();
+    let mut seen = 0usize;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if is_git_dir(&dir) {
+            // A bare repo, a submodule's or a worktree's: only what holds
+            // more of them is looked into, not its objects.
+            stack.extend(["modules", "worktrees"].map(|name| dir.join(name)));
+            repos.push(ExtraRepo { git_dir: dir, pointer: None, work_tree: None });
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > limit {
+                return None;
+            }
+            let Ok(kind) = entry.file_type() else { continue };
+            let path = entry.path();
+            if entry.file_name() == ".git" {
+                if kind.is_dir() {
+                    stack.extend(["modules", "worktrees"].map(|name| path.join(name)));
+                    repos.push(ExtraRepo { git_dir: path, pointer: None, work_tree: Some(dir.clone()) });
+                } else {
+                    let git_dir = pointed_at(&path).unwrap_or_else(|| path.clone());
+                    repos.push(ExtraRepo { git_dir, pointer: Some(path), work_tree: Some(dir.clone()) });
+                }
+            } else if kind.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    Some(repos)
+}
+
+fn is_git_dir(dir: &Path) -> bool {
+    dir.join("HEAD").is_file() && (dir.join("objects").is_dir() || dir.join("commondir").is_file())
+}
+
+/// Where a `.git` file points, resolved.
+fn pointed_at(pointer: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(pointer).ok()?;
+    let target = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
+    let target = if target.is_absolute() { target } else { pointer.parent()?.join(target) };
+    Some(std::fs::canonicalize(&target).unwrap_or(target))
 }
 
 /// A checkout's own git dir when it's elsewhere, as a managed checkout's
@@ -490,6 +761,63 @@ fn git_paths(checkout: &Path) -> (Option<PathBuf>, Vec<PathBuf>) {
         })
         .collect();
     (git_dir, shared)
+}
+
+/// The paths under a git dir that decide what git runs, to keep read-only in
+/// the sandbox (B2.3, CVE-2026-25725): `config`, `hooks` and `commondir`, for
+/// the repo and for each submodule and linked worktree. The git dir itself is
+/// writable (objects, refs, the index), so without this an agent could rewrite
+/// a hook, or point `commondir` at a directory it controls to have git read
+/// its `config` and `hooks` from there when the person next runs git outside
+/// the sandbox. A missing `commondir` is created pointing at the dir itself, so
+/// it can't later be made to point elsewhere.
+fn git_protect(git_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    pin_gitdir(git_dir, &mut out)?;
+    for subtree in [git_dir.join("modules"), git_dir.join("worktrees")] {
+        protect_subtree(&subtree, &mut out)?;
+    }
+    Ok(out)
+}
+
+/// Pins one git dir's `commondir`, `config`, `config.worktree` and `hooks`.
+/// An absent `commondir` is written as `.` (the common dir is the git dir
+/// itself, git's own default), so pinning it read-only closes the redirect.
+fn pin_gitdir(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    let commondir = dir.join("commondir");
+    if !commondir.exists() {
+        std::fs::write(&commondir, ".")?;
+    }
+    out.push(commondir);
+    for name in ["config", "config.worktree", "hooks"] {
+        let path = dir.join(name);
+        if path.exists() {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Pins every git dir nested under a `modules` or `worktrees` tree, without
+/// walking into the objects, refs, logs or hooks that make those trees large.
+fn protect_subtree(root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    if !root.is_dir() {
+        return Ok(());
+    }
+    let mut stack = vec![root.to_owned()];
+    while let Some(dir) = stack.pop() {
+        if dir.join("HEAD").exists() {
+            pin_gitdir(&dir, out)?;
+        }
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            let name = path.file_name().and_then(|name| name.to_str());
+            if path.is_dir() && !matches!(name, Some("objects" | "refs" | "logs" | "hooks")) {
+                stack.push(path);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `program` as it runs, and what it links to, for the sandbox to show: a
@@ -553,11 +881,59 @@ fn bubblewrap_unavailable() -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&status.stderr));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writable_folders_repos_are_found_without_following_links() {
+        let root = tempfile::tempdir().unwrap();
+        let code = std::fs::canonicalize(root.path()).unwrap().join("code");
+        let (app, lib, tree) = (code.join("app"), code.join("nested/lib"), code.join("app-feature"));
+        for dir in [&app, &lib] {
+            std::fs::create_dir_all(dir).unwrap();
+            git(dir, &["init", "-q"]);
+            git(dir, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        }
+        git(&app, &["worktree", "add", "-q", tree.to_str().unwrap()]);
+        git(&app, &["submodule", "add", "-q", lib.to_str().unwrap(), "vendor/lib"]);
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(outside.join("repo")).unwrap();
+        git(&outside.join("repo"), &["init", "-q"]);
+        std::os::unix::fs::symlink(&outside, code.join("link")).unwrap();
+
+        let dir = extra_dir(code.to_str().unwrap(), true, None);
+        let repos = dir.repos.expect("walked");
+        let git_dirs: Vec<&Path> = repos.iter().map(|repo| repo.git_dir.as_path()).collect();
+        assert!(git_dirs.contains(&app.join(".git").as_path()), "{git_dirs:?}");
+        assert!(git_dirs.contains(&lib.join(".git").as_path()));
+        assert!(git_dirs.contains(&app.join(".git/modules/vendor/lib").as_path()), "the submodule's own");
+        assert!(git_dirs.iter().any(|dir| dir.starts_with(app.join(".git/worktrees"))), "the worktree's own");
+        assert!(repos.iter().any(|repo| repo.pointer.as_deref() == Some(tree.join(".git").as_path())));
+        assert!(!git_dirs.iter().any(|dir| dir.starts_with(&outside)), "links aren't followed");
+
+        assert_eq!(repos_in(&code, 3), None, "too much to look through");
+        assert_eq!(extra_dir(code.to_str().unwrap(), false, None).repos, Some(Vec::new()), "read-only isn't walked");
+        assert_eq!(extra_dir("~/nowhere-at-all", false, Some(root.path())).real, None);
+    }
+
     #[cfg(unix)]
     #[test]
     fn credentials_stay_out_and_the_run_reaches_its_channel() {
         let data = tempfile::tempdir().unwrap();
         let checkout = tempfile::tempdir().unwrap();
+        // Claude's folder of its own, so the test leaves the person's alone.
+        let claude = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(claude.path().join("projects/-elsewhere")).unwrap();
+        std::fs::write(claude.path().join(".claude.json"), r#"{"mcpServers":{}}"#).unwrap();
+        let claude_dir = claude.path().to_string_lossy().into_owned();
         let reach = Reach::of(&silt_workspace::Policy::default());
         let run = Run {
             data_dir: data.path(),
@@ -571,16 +947,30 @@ mod tests {
             relayed: Vec::new(),
             env: vec![
                 ("PATH".into(), "/usr/bin:/bin".into()),
+                ("CLAUDE_CONFIG_DIR".into(), claude_dir.clone()),
+                ("LANG".into(), "en_US.UTF-8".into()),
+                ("CARGO_HOME".into(), "/home/a/.cargo".into()),
                 ("ANTHROPIC_API_KEY".into(), "sk".into()),
                 ("AWS_SECRET_ACCESS_KEY".into(), "s".into()),
                 ("GOOGLE_APPLICATION_CREDENTIALS".into(), "/k.json".into()),
+                ("GH_TOKEN".into(), "ghp_secret".into()),
+                ("DATABASE_URL".into(), "postgres://u:p@prod/db".into()),
+                ("MY_COMPANY_SECRET".into(), "s3cr3t".into()),
+                ("CARGO_REGISTRY_TOKEN".into(), "cio".into()),
+                ("CARGO_REGISTRIES_ACME_TOKEN".into(), "acme".into()),
+                ("NODE_AUTH_TOKEN".into(), "npm".into()),
+                ("npm_config__authToken".into(), "npm".into()),
+                ("YARN_NPM_AUTH_TOKEN".into(), "yarn".into()),
+                ("NODE_OPTIONS".into(), "--max-old-space-size=4096".into()),
                 ("SSH_AUTH_SOCK".into(), "/run/agent".into()),
             ],
             read_only: Vec::new(),
+            given: Vec::new(),
+            gateway_credentials: None,
         };
         let sandboxed = prepare(&run).unwrap();
         let names: Vec<&str> = sandboxed.env.iter().map(|(name, _)| name.as_str()).collect();
-        assert!(names.contains(&"PATH"), "{names:?}");
+        assert!(names.contains(&"PATH") && names.contains(&"LANG") && names.contains(&"CARGO_HOME"), "{names:?}");
         #[cfg(unix)]
         {
             // The agent's key goes on at the gateway: the sandbox holds a placeholder.
@@ -588,6 +978,21 @@ mod tests {
             assert!(sandboxed.outside.iter().any(|outside| matches!(outside, Outside::Gateway { .. })));
         }
         assert!(!names.contains(&"AWS_SECRET_ACCESS_KEY") && !names.contains(&"GOOGLE_APPLICATION_CREDENTIALS"));
+        // The allowlist drops a token or URL from the launching shell, named or
+        // not, rather than trusting a denylist to know every secret's name.
+        assert!(names.contains(&"NODE_OPTIONS"), "a toolchain's own settings still go in: {names:?}");
+        for dropped in [
+            "GH_TOKEN",
+            "DATABASE_URL",
+            "MY_COMPANY_SECRET",
+            "CARGO_REGISTRY_TOKEN",
+            "CARGO_REGISTRIES_ACME_TOKEN",
+            "NODE_AUTH_TOKEN",
+            "npm_config__authToken",
+            "YARN_NPM_AUTH_TOKEN",
+        ] {
+            assert!(!names.contains(&dropped), "{dropped} leaked into the sandbox: {names:?}");
+        }
         assert!(!names.contains(&"SSH_AUTH_SOCK"), "only when the rules hand ssh-agent over");
         assert!(sandboxed.env.contains(&("SILT_RUN_TOKEN".into(), "t0k".into())));
         assert_eq!(sandboxed.launcher[1], "sandbox-run");
@@ -597,6 +1002,51 @@ mod tests {
         assert_eq!(plan.sees(&socket), Some(true));
         assert_eq!(plan.sees(&crate::paths::socket_path_in(data.path())), None, "never the person's socket");
         assert_eq!(plan.sees(&data.path().join("silt.sqlite")), None);
+        assert_eq!(plan.sees(&data.path().join("runs/x/sandbox.json")), Some(false), "its own plan can't be rewritten");
+        assert_eq!(plan.sees(&data.path().join("runs/x/settings.json")), Some(true));
+        let claude = claude.path();
+        assert_eq!(plan.sees(&claude.join(".credentials.json")), None, "the agent's sign-in is hidden");
+        assert_eq!(plan.sees(&claude.join("settings.json")), Some(false), "the agent's hooks config is read-only");
+        for pinned in ["CLAUDE.md", "plugins/x/hooks.json", "hooks/on-stop.sh", "commands/x.md", "skills/x/SKILL.md"] {
+            assert_eq!(plan.sees(&claude.join(pinned)), Some(false), "{pinned}");
+        }
+        assert_eq!(plan.sees(&claude.join("projects/-elsewhere/s.jsonl")), None, "another project's sessions");
+        let own = claude.join("projects").join(silt_agents::claude::project_slug(checkout.path()));
+        assert_eq!(plan.sees(&own.join("s.jsonl")), Some(true));
+        assert!(own.is_dir(), "made, so it's there to show");
+        let copy = plan.mounts.iter().find(|mount| mount.path == claude.join(".claude.json")).expect("its own copy");
+        assert_eq!(copy.kind, MountKind::ReadWrite);
+        let copied = copy.source.as_deref().expect("a copy");
+        assert!(copied.starts_with(data.path().join("runs/x")));
+        assert_eq!(std::fs::read_to_string(copied).unwrap(), r#"{"mcpServers":{}}"#);
+    }
+
+    #[test]
+    fn git_protect_pins_config_hooks_and_commondir() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = dir.path().join(".git");
+        std::fs::create_dir_all(git.join("hooks")).unwrap();
+        std::fs::write(git.join("config"), "[core]\n").unwrap();
+        // A submodule's own git dir, with its own config and hooks.
+        let sub = git.join("modules/libs/a");
+        std::fs::create_dir_all(sub.join("hooks")).unwrap();
+        std::fs::write(sub.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(sub.join("config"), "[core]\n").unwrap();
+
+        let protect = git_protect(&git).unwrap();
+
+        // An absent commondir is created pointing at the git dir itself, and
+        // pinned, so it can't later be made to redirect config and hooks.
+        assert_eq!(std::fs::read_to_string(git.join("commondir")).unwrap(), ".");
+        for pinned in [git.join("commondir"), git.join("config"), git.join("hooks")] {
+            assert!(protect.contains(&pinned), "{pinned:?} not pinned: {protect:?}");
+        }
+        // The submodule gets the same treatment, so its config and hooks can't
+        // be rewritten to run on the host either.
+        assert_eq!(std::fs::read_to_string(sub.join("commondir")).unwrap(), ".");
+        for pinned in [sub.join("commondir"), sub.join("config"), sub.join("hooks")] {
+            assert!(protect.contains(&pinned), "{pinned:?} not pinned: {protect:?}");
+        }
     }
 
     #[cfg(unix)]
@@ -621,6 +1071,8 @@ mod tests {
             token: "t",
             env: vec![("PATH".into(), "/usr/bin".into())],
             read_only: Vec::new(),
+            given: Vec::new(),
+            gateway_credentials: None,
             relayed: vec![
                 Relayed::Serial { device: "/dev/cu.usbserial-1".into(), pts: "/dev/ttys012".into() },
                 Relayed::Adb { serial: "R58M".into(), socket: scratch.join("adb.sock") },
@@ -664,6 +1116,7 @@ mod tests {
                 scheme: "Bearer".into(),
                 source: crate::credentials::Source::Command { argv: vec!["echo".into(), "s3cret".into()] },
                 placeholder: Some("GH_TOKEN".into()),
+                plugin: None,
             }],
         )
         .unwrap();
@@ -684,6 +1137,8 @@ mod tests {
             token: "t",
             env: vec![("PATH".into(), "/usr/bin".into())],
             read_only: Vec::new(),
+            given: Vec::new(),
+            gateway_credentials: None,
             relayed: vec![
                 Relayed::Serial { device: "/dev/ttyUSB0".into(), pts: "/dev/pts/9".into() },
                 Relayed::Adb { serial: "R58M".into(), socket: scratch.join("adb.sock") },
@@ -705,6 +1160,67 @@ mod tests {
         assert_eq!(env("ANDROID_SERIAL").as_deref(), Some("R58M"));
         assert!(!std::fs::read_to_string(scratch.join("sandbox.json")).unwrap().contains("s3cret"));
         assert_eq!(plan.sees(&data.path().join("gateway/ca-key.pem")), None, "the authority's key stays out");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn where_githubs_plugin_is_on_no_github_token_reaches_the_sandbox() {
+        let data = tempfile::tempdir().unwrap();
+        let checkout = tempfile::tempdir().unwrap();
+        crate::credentials::save(
+            data.path(),
+            &[crate::credentials::StoredCredential {
+                name: "gh".into(),
+                workspace: "work".into(),
+                host: "api.github.com".into(),
+                path: "/".into(),
+                header: "authorization".into(),
+                scheme: "Bearer".into(),
+                source: crate::credentials::Source::Command { argv: vec!["echo".into(), "s3cret".into()] },
+                placeholder: Some("GH_TOKEN".into()),
+                plugin: None,
+            }],
+        )
+        .unwrap();
+        crate::plugins::installed::ensure_shipped(data.path()).unwrap();
+        crate::plugins::installed::update(data.path(), "silt.github", |installed| {
+            installed.workspaces.push("work".into());
+            Ok(())
+        })
+        .unwrap();
+        let reach = Reach::of(&silt_workspace::Policy { network: Some(Network::Gateway), ..silt_workspace::Policy::default() });
+        let scratch = data.path().join("runs/z");
+        let run = Run {
+            data_dir: data.path(),
+            thread: "t1",
+            agent: Some(&silt_agents::copilot::Copilot),
+            checkout: checkout.path(),
+            workspace: "work",
+            scratch: &scratch,
+            reach: &reach,
+            token: "t",
+            env: vec![
+                ("PATH".into(), "/usr/bin".into()),
+                ("GH_TOKEN".into(), "ghp_real".into()),
+                ("GITHUB_TOKEN".into(), "ghp_real".into()),
+                ("GH_ENTERPRISE_TOKEN".into(), "ghp_real".into()),
+                ("COPILOT_GITHUB_TOKEN".into(), "ghp_copilot".into()),
+            ],
+            read_only: Vec::new(),
+            given: Vec::new(),
+            gateway_credentials: None,
+            relayed: Vec::new(),
+        };
+        let sandboxed = prepare(&run).unwrap();
+        let env = |name: &str| sandboxed.env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone());
+        assert!(!sandboxed.env.iter().any(|(_, value)| value.starts_with("ghp_")), "{:?}", sandboxed.env);
+        assert_eq!(env("GH_TOKEN"), None, "the workspace's GitHub credential is left out where the plugin is on");
+        assert_eq!(env("COPILOT_GITHUB_TOKEN").as_deref(), Some(PLACEHOLDER), "Copilot's key goes on at the gateway");
+        let plan: silt_workspace::SandboxPlan =
+            serde_json::from_slice(&std::fs::read(scratch.join("sandbox.json")).unwrap()).unwrap();
+        assert_eq!(plan.sees(Path::new("/silt/work")), Some(true), "its work area is writable");
+        assert_eq!(plan.sees(Path::new("/silt/github")), Some(false), "its mirrors are read-only");
+        assert!(data.path().join("work/t1").is_dir());
     }
 
     #[cfg(unix)]

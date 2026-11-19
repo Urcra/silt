@@ -171,7 +171,7 @@
 }
 
 /* Nous's type scale: the UI's base (13 px unless the person's settings say
-   otherwise, ADR 0102), 11 px its metadata, each step a share of the base.
+   otherwise, ADR 0107), 11 px its metadata, each step a share of the base.
    The conversation and code have their own sizes. Sizes without a line
    height set only the size, for headings and labels that keep their own.
    The fonts and easing repeat nous.css's, which Tailwind's own variables

@@ -6,6 +6,8 @@ use silt_acp::registry::{self, AgentCommand};
 use silt_acp::{SignInHow, SignInMethod};
 use silt_agents::sign_in::{Login, LoginEvent, LoginScreen};
 use silt_proto::{AgentState, SignInAsked, SignInChoice, SignInShown};
+use std::collections::BTreeMap;
+
 use silt_types::ThreadId;
 
 use super::{AcpEvent, AcpRun, send, spawn_agent};
@@ -329,8 +331,14 @@ impl Core {
         run.load = load;
         run.state = AgentState::Starting;
         run.queued.clear();
+        let folders = match run.sandbox.clone() {
+            Some((_, run_token, workspace)) => self.folders_for(thread, &run_token, &workspace),
+            None => BTreeMap::new(),
+        };
+        let run = self.acp.get_mut(&thread).expect("caller checked");
+        run.folders = folders.clone();
         let sandbox = run.sandbox.clone().map(|(reach, run_token, workspace)| super::AcpSandbox {
-            reach,
+            reach: crate::folders::widened(reach, &folders),
             token: run_token,
             scratch: super::run_scratch(&self.data_dir, thread, token),
             workspace,
@@ -339,6 +347,32 @@ impl Core {
         });
         spawn_agent(self.events.clone(), thread, token, run.info.clone(), self.data_dir.clone(), start, sandbox);
         self.agent_changed(thread).await;
+    }
+
+    /// Restarts the agent in a sandbox with the folders granted to it, at
+    /// the end of a turn in which they changed, telling it what's now there
+    /// once its session resumes (ADR 0102). Answers whether it did.
+    pub(super) async fn restart_for_folders(&mut self, thread: ThreadId) -> bool {
+        let Some(run) = self.acp.get(&thread) else { return false };
+        let Some((_, token, workspace)) = &run.sandbox else { return false };
+        // The turn's end may have reached Silt as a hook first.
+        let thread_id = thread.to_string();
+        let asked = crate::folders::take_pending(&self.data_dir, &thread_id)
+            | crate::folders::take_restart(&self.data_dir, &thread_id, 0);
+        if !asked {
+            return false;
+        }
+        let now = self.folders_for(thread, token, workspace);
+        let (added, removed) = crate::folders::difference(&run.folders, &now);
+        if added.is_empty() && removed.is_empty() {
+            return false;
+        }
+        let note = crate::folders::resume_note(&added, &removed);
+        self.restart_agent(thread, None).await;
+        if let Some(run) = self.acp.get_mut(&thread) {
+            run.resume_note = Some(note);
+        }
+        true
     }
 
     /// Sends a prompt the agent refused for want of a sign-in, as it was:

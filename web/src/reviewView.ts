@@ -20,7 +20,7 @@ const FRESH: Kept = { view: 'thread', other: 'merge-base', commit: '', layout: '
 
 const keyOf = (thread: string) => `silt-review-view-${thread}`
 
-/** What the review last showed for `thread`, or a fresh view in `layout`, the one text and layout set if any (ADR 0102). */
+/** What the review last showed for `thread`, or a fresh view in `layout`, the one text and layout set if any (ADR 0107). */
 export function keptView(thread: string, layout?: DiffLayout | null): Kept {
   const fresh = layout ? { ...FRESH, layout } : FRESH
   try {

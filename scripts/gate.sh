@@ -82,6 +82,7 @@ step "formatting"
 cargo fmt --all -- --check
 if $has_voice; then (cd crates/silt-voice && cargo fmt -- --check); fi
 if $has_desktop; then (cd crates/silt-desktop && cargo fmt -- --check); fi
+(cd plugins && cargo fmt --all -- --check)
 if $has_web; then pnpm -C web fmt:check; fi
 
 if $has_web; then
@@ -96,6 +97,10 @@ fi
 
 step "clippy"
 cargo clippy --workspace --all-targets -- -D warnings
+# The plugins Silt ships, and the probe its host is tested with (ADR 0104),
+# a workspace of their own built for wasm32-wasip2.
+(cd plugins && cargo clippy --workspace --target wasm32-wasip2 --target-dir ../target/plugins -- -D warnings)
+(cd plugins && cargo test --workspace --target-dir ../target/plugins --quiet)
 
 # Windows (ADR 0045), cross-checked when its target and MinGW are installed;
 # CI's Windows job runs the tests there.
@@ -109,7 +114,7 @@ fi
 if ! $quick; then
     # The pure crates build for the browser (ADR 0004).
     step "wasm32 build of the pure crates"
-    cargo build -p silt-types -p silt-sumtree -p silt-crdt -p silt-log -p silt-checkout -p silt-wasm -p silt-workspace -p silt-design -p silt-theme -p silt-sheet -p silt-access --target wasm32-unknown-unknown
+    cargo build -p silt-types -p silt-sumtree -p silt-crdt -p silt-log -p silt-checkout -p silt-wasm -p silt-workspace -p silt-design -p silt-theme -p silt-sheet -p silt-access -p silt-plugin -p silt-forge --target wasm32-unknown-unknown
 fi
 
 if $has_web; then

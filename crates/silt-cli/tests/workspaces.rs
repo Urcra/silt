@@ -85,6 +85,14 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
 
     // A personal thread, in the default workspace, as before.
     laptop.silt(&["claude"]);
+    let personal_session = fs::read_dir(laptop.claude_dir.join("projects"))
+        .expect("projects")
+        .flatten()
+        .flat_map(|project| fs::read_dir(project.path()).into_iter().flatten().flatten())
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|extension| extension == "jsonl"))
+        .and_then(|path| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()))
+        .expect("the personal session");
 
     let in_work = |args: &[&str]| laptop.command(args, &[]).current_dir(&work).output().expect("silt runs");
     let which = String::from_utf8_lossy(&in_work(&["workspace", "which"]).stdout).into_owned();
@@ -102,15 +110,9 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     );
 
     // A plugin on in Work: its runs' calls are kept with their thread (ADR 0093).
-    let plugin = root.path().join("fleet.json");
-    let definition = serde_json::json!({
-        "name": "fleet",
-        "kind": {"type": "command", "argv": ["echo", "ran on {target}"]},
-        "environments": {"lab": {"target": "car-*.fleet.test", "changes": "ask"}}
-    });
-    fs::write(&plugin, definition.to_string()).expect("writes the plugin");
-    assert!(laptop.silt(&["plugin", "add", &plugin.to_string_lossy()]).status.success());
-    assert!(laptop.silt(&["plugin", "enable", "fleet", "--workspace", "work"]).status.success());
+    assert!(laptop.silt(&["plugin", "enable", "silt.ssh-commands", "--workspace", "work"]).status.success());
+    assert!(laptop.silt(&["plugin", "set", "silt.ssh-commands", "targets", r#"["car-*.fleet.test"]"#]).status.success());
+    assert!(laptop.silt(&["plugin", "environment", "silt.ssh-commands", "lab", "car-*.fleet.test"]).status.success());
     let ran = in_work(&["claude"]);
     let said = String::from_utf8_lossy(&ran.stderr).into_owned();
     assert!(ran.status.success(), "{said}");
@@ -126,6 +128,9 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     assert!(settings["hooks"]["Stop"].is_array(), "the hooks are still there: {settings}");
 
     laptop.silt(&["workspace", "policy", "Work", "--silt-sandbox", "on"]);
+    // The stand-in's log folder, given to agents as a person gives one a
+    // variable: Silt's sandbox passes the shell's others by an allowlist.
+    fs::write(laptop.silt_home.join("agent-env"), "FAKE_LOG_DIR\n").expect("writes agent-env");
     let ran = in_work(&["claude"]);
     let said = String::from_utf8_lossy(&ran.stderr).into_owned();
     if ran.status.success() {
@@ -163,6 +168,26 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     let forged = mcp_answer(&laptop, work_id, "not-a-token", "silt_history_read", serde_json::json!({}));
     assert!(forged.contains("this run's token isn't known here"), "{forged}");
 
+    // Nor can its run's channel send hooks for the personal thread's session (ADR 0093).
+    #[cfg(unix)]
+    {
+        assert!(laptop.silt(&["daemon", "start"]).status.success());
+        let mut hook = Command::new(env!("CARGO_BIN_EXE_silt"))
+            .args(["hook", "UserPromptSubmit"])
+            .env("SILT_HOME", &laptop.silt_home)
+            .env("SILT_RUN_SOCKET", silt_daemon::paths::agents_socket_in(&laptop.silt_home))
+            .env("SILT_RUN_TOKEN", &token)
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("silt hook runs");
+        let input =
+            serde_json::json!({"session_id": personal_session, "hook_event_name": "UserPromptSubmit", "prompt": "from Work"});
+        writeln!(hook.stdin.take().expect("stdin"), "{input}").expect("write");
+        let said = String::from_utf8_lossy(&hook.wait_with_output().expect("hook exits").stderr).into_owned();
+        assert!(said.contains("a run's hooks speak for its own thread's sessions only"), "{said}");
+    }
+
     // A terminal run's token can't show the person anything, even through a server offering the tools (ADR 0068).
     let page = serde_json::json!({"title": "Page", "kind": "html", "content": "<p>hi</p>"});
     let shown = mcp_answer_with(&laptop, &["mcp", "--thread", work_id, "--token", &token, "--ui"], "silt_artifact", page.clone());
@@ -171,13 +196,13 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     assert!(forged.contains("this run's token isn't known here"), "{forged}");
 
     // The plugin on in Work waits for the person on a change, and its run hears how they answered (ADR 0093).
-    let arguments = serde_json::json!({"environment": "lab", "target": "car-1.fleet.test", "args": ["now"]});
+    let arguments = serde_json::json!({"target": "car-1.fleet.test", "command": "uptime"});
     let said = std::thread::scope(|scope| {
-        let call = scope.spawn(|| mcp_answer(&laptop, work_id, &token, "fleet_run", arguments.clone()));
+        let call = scope.spawn(|| mcp_answer(&laptop, work_id, &token, "ssh_commands_run", arguments.clone()));
         let mut waiting = None;
         for _ in 0..200 {
             let listed = String::from_utf8_lossy(&laptop.silt(&["approvals"]).stdout).into_owned();
-            if let Some(line) = listed.lines().find(|line| line.contains("fleet fleet_run")) {
+            if let Some(line) = listed.lines().find(|line| line.contains("silt.ssh-commands run in lab")) {
                 waiting = line.split_whitespace().next().map(str::to_owned);
                 break;
             }
@@ -191,5 +216,5 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     // Kept with the run's own thread.
     let run_thread = args.iter().skip_while(|arg| *arg != "--thread").nth(1).cloned().expect("the run's thread");
     let access = String::from_utf8_lossy(&laptop.silt(&["access", "show", &run_thread]).stdout).into_owned();
-    assert!(access.contains("fleet fleet_run in lab  refused"), "{access}");
+    assert!(access.contains("silt.ssh-commands run in lab  refused"), "{access}");
 }

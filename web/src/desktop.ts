@@ -94,7 +94,7 @@ export function relaunchDesktop() {
   window.location.href = 'silt://relaunch'
 }
 
-/** The link that tells the desktop app's window how far to zoom, in percent (ADR 0102). */
+/** The link that tells the desktop app's window how far to zoom, in percent (ADR 0107). */
 export function zoomLink(percent: number): string {
   return `silt://zoom/?${new URLSearchParams({ percent: String(percent) })}`
 }

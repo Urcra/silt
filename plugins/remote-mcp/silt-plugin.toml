@@ -1,0 +1,44 @@
+id = "silt.remote-mcp"
+name = "Remote MCP"
+version = "1.0.0"
+publisher = "silt"
+description = "Gives agents a remote MCP server's tools over HTTP, through Silt with your token: listing them goes, and each call asks until you allow its tool."
+license = "AGPL-3.0-only"
+world = "silt:plugin@1"
+build = "shipped"
+
+[[capabilities]]
+kind = "http"
+hosts_from = "url"
+reason = "Talks MCP to the server you set, and nowhere else; each request is the one shown."
+
+[[settings]]
+key = "url"
+label = "Server"
+description = "The MCP server's URL, such as `https://mcp.acme.dev/mcp`."
+type = "string"
+
+[[credentials]]
+id = "token"
+label = "The server's token"
+hosts_from = "url"
+send = { header = { name = "Authorization", scheme = "Bearer" } }
+how = "A token for the server, kept with `silt plugin secret silt.remote-mcp token`."
+
+[[actions]]
+id = "list"
+label = "List its tools"
+description = "Asks the server which tools it has."
+kind = "read"
+default = "allow"
+
+[[actions]]
+id = "call"
+label = "Call a tool"
+description = "Calls one of the server's tools, with the arguments shown. Each asks until you allow its tool: `--where tool=<name>`."
+kind = "change"
+default = "ask"
+fields = ["tool"]
+
+[docs]
+readme = "README.md"

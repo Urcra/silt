@@ -32,7 +32,7 @@ export const LiveTool = createContext<{ id: string | null; text: string }>({ id:
 /** What the agent is thinking now, not recorded yet, for the running turn's card to show where it will land. */
 export const LiveThought = createContext('')
 
-/** The detail the person chose, kept for this machine with text and layout (ADR 0102). */
+/** The detail the person chose, kept for this machine with text and layout (ADR 0107). */
 export function useDetailChoice(): [Detail, (detail: Detail) => void] {
   const { shown, set } = useTextSettings()
   return [shown.detail, (detail) => void set('detail', detail).catch((failure: unknown) => toast(message(failure), 'danger'))]

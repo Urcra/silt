@@ -56,7 +56,7 @@ export const DiffPanel = memo(function DiffPanel({
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
-  // Unified if text and layout ask for it; else side by side where it fits (ADR 0102).
+  // Unified if text and layout ask for it; else side by side where it fits (ADR 0107).
   const preferred = useTextSettings().shown.diff_layout
   const layout: DiffLayout = picked ?? (preferred !== 'unified' && wide && fits ? 'split' : 'unified')
   const [reviewed] = useState(() => keptView(thread).file)

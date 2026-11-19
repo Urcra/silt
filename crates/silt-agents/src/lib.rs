@@ -163,6 +163,9 @@ pub enum Start {
     },
     Resume {
         id: String,
+        /// What to tell it first, where the agent takes a prompt as it
+        /// resumes, such as what changed in its sandbox (ADR 0102).
+        prompt: Option<String>,
     },
     /// A new session whose first prompt carries the earlier conversation.
     Primed {
@@ -288,6 +291,20 @@ pub struct OnDisk {
 }
 
 /// One agent CLI.
+/// What [`Agent::project_state`] keeps from a sandboxed run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectState {
+    /// Folders holding every project's state, hidden.
+    pub hide: Vec<PathBuf>,
+    /// This project's own folders inside them, shown again.
+    pub own: Vec<PathBuf>,
+    /// Files every project writes to, each run given an empty one of its own.
+    pub fresh: Vec<PathBuf>,
+    /// Files each run gets its own copy of, never written back: what it
+    /// writes there would otherwise configure later runs outside the sandbox.
+    pub copied: Vec<PathBuf>,
+}
+
 pub trait Agent: Send + Sync {
     /// The name recorded with its sessions.
     fn id(&self) -> &'static str;
@@ -365,6 +382,28 @@ pub trait Agent: Send + Sync {
     /// writable (ADR 0093). `env` reads the run's variables.
     fn homes(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         Vec::new()
+    }
+    /// The files in its homes that hold its stored sign-in, hidden in Silt's
+    /// sandbox so the agent's own credential never enters it (ADR 0093): the
+    /// gateway adds what it needs to reach its model instead. `env` reads the
+    /// run's variables.
+    fn sign_in(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        Vec::new()
+    }
+    /// The files in its homes that configure what it runs — hooks, MCP server
+    /// commands, and the like — kept read-only in Silt's sandbox so an agent
+    /// can't plant one that runs on the host the next time it starts outside a
+    /// sandbox (ADR 0093, CVE-2026-25725). The daemon creates an absent one
+    /// first, so pinning it closes the gap either way. Its sessions and other
+    /// state stay writable. `env` reads the run's variables.
+    fn read_only_home(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        Vec::new()
+    }
+    /// What in its homes belongs to every project, which a run in `cwd`
+    /// mustn't read: other projects' sessions are another workspace's history
+    /// (ADR 0065). `env` reads the run's variables.
+    fn project_state(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>, _cwd: &Path) -> ProjectState {
+        ProjectState::default()
     }
     /// The model APIs it calls with a key from a variable, which Silt's
     /// gateway adds instead, so its sandbox never holds the key (ADR 0093).

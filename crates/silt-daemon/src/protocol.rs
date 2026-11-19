@@ -516,7 +516,7 @@ pub enum Request {
         #[serde(default)]
         dark: Option<String>,
         /// Text and layout in place of what's saved, so a page changing it
-        /// never gets the CSS of what was saved before (ADR 0102).
+        /// never gets the CSS of what was saved before (ADR 0107).
         #[serde(default)]
         text: Option<silt_theme::TextSettings>,
     },
@@ -822,12 +822,49 @@ pub enum Request {
     },
     /// This machine's plugins.
     Plugins,
-    /// Adds a plugin, or replaces the one of its name.
-    PluginPut {
-        plugin: Box<crate::plugins::Plugin>,
+    /// Turns a plugin on or off in a workspace.
+    PluginTurn {
+        id: String,
+        workspace: String,
+        on: bool,
     },
     PluginRemove {
         name: String,
+    },
+    /// The person's rule for one of a plugin's actions; `None` takes it away.
+    PluginRule {
+        id: String,
+        action: String,
+        rule: Option<silt_plugin::Rule>,
+        #[serde(default)]
+        field: Option<String>,
+        #[serde(default)]
+        pattern: Option<String>,
+    },
+    /// One of a plugin's settings; `null` resets it.
+    PluginSet {
+        id: String,
+        key: String,
+        value: serde_json::Value,
+        #[serde(default)]
+        environment: Option<String>,
+        #[serde(default)]
+        workspace: Option<String>,
+    },
+    /// The patterns that pick one of a plugin's environments; none removes it.
+    PluginEnvironment {
+        id: String,
+        name: String,
+        patterns: Vec<String>,
+    },
+    /// How a plugin is doing: its build, its tools and its calls.
+    PluginActivity {
+        id: String,
+    },
+    /// Trusts a publisher, or stops trusting it.
+    PluginTrust {
+        publisher: String,
+        trusted: bool,
     },
     /// Plugin calls waiting for the person, a thread's alone when one is
     /// named; with `all`, those answered too.
@@ -866,6 +903,11 @@ pub enum Request {
     /// Ends a grant: calls it covered ask again.
     GrantRevoke {
         id: u64,
+    },
+    /// Takes a folder back from a thread's agents (ADR 0102).
+    FolderRevoke {
+        thread: String,
+        path: String,
     },
     /// What reached a thread's sandboxes through Silt: plugin calls,
     /// grants, and what the gateway refused (ADR 0093).
@@ -2506,17 +2548,44 @@ mod tests {
             ChoiceAsked::decl(&config),
             BusEvent::decl(&config),
             silt_access::DataClass::decl(&config),
-            crate::plugins::Plugin::decl(&config),
-            crate::plugins::Kind::decl(&config),
-            crate::plugins::Rule::decl(&config),
-            crate::plugins::Environment::decl(&config),
             crate::plugins::Outcome::decl(&config),
             crate::plugins::ApprovalState::decl(&config),
             crate::plugins::ApprovalView::decl(&config),
+            silt_plugin::Card::decl(&config),
+            silt_plugin::Block::decl(&config),
+            silt_plugin::Item::decl(&config),
+            silt_plugin::FileChange::decl(&config),
+            silt_plugin::Tone::decl(&config),
+            silt_plugin::Effect::decl(&config),
+            silt_plugin::Channel::decl(&config),
+            silt_plugin::ScopedRule::decl(&config),
+            silt_plugin::Rule::decl(&config),
+            silt_plugin::RuleSource::decl(&config),
+            silt_plugin::Glob::decl(&config),
             crate::plugins::GrantScope::decl(&config),
             crate::plugins::CallView::decl(&config),
             crate::plugins::GrantView::decl(&config),
             crate::plugins::AccessView::decl(&config),
+            crate::plugins::ThreadCall::decl(&config),
+            crate::plugins::PluginActivity::decl(&config),
+            crate::plugins::installed::Installed::decl(&config),
+            crate::plugins::installed::PluginView::decl(&config),
+            crate::plugins::updates::GitUpdate::decl(&config),
+            crate::plugins::install::Preview::decl(&config),
+            silt_plugin::Manifest::decl(&config),
+            silt_plugin::Build::decl(&config),
+            silt_plugin::Capability::decl(&config),
+            silt_plugin::ActionSpec::decl(&config),
+            silt_plugin::ActionKind::decl(&config),
+            silt_plugin::Environments::decl(&config),
+            silt_plugin::SettingSpec::decl(&config),
+            silt_plugin::SettingKind::decl(&config),
+            silt_plugin::SettingScope::decl(&config),
+            silt_plugin::CredentialSpec::decl(&config),
+            silt_plugin::Send::decl(&config),
+            silt_plugin::Docs::decl(&config),
+            crate::plugins::installed::PluginSource::decl(&config),
+            crate::plugins::FolderView::decl(&config),
             crate::plugins::NetworkRefusal::decl(&config),
             crate::plugins::RelayView::decl(&config),
             BusSubscription::decl(&config),
@@ -2646,6 +2715,11 @@ mod tests {
             BackendView::decl(&config),
             WorkspaceProject::decl(&config),
             silt_workspace::Workspace::decl(&config),
+            silt_workspace::FolderRule::decl(&config),
+            silt_workspace::PluginPolicy::decl(&config),
+            silt_workspace::OrgPlugin::decl(&config),
+            silt_workspace::OrgPluginRule::decl(&config),
+            silt_workspace::FolderAnswer::decl(&config),
             silt_workspace::Workspaces::decl(&config),
             silt_workspace::ServerBinding::decl(&config),
             silt_workspace::MatchRule::decl(&config),

@@ -1,4 +1,4 @@
-//! Text and layout (ADR 0102): how big and how dense Silt's UI is, over any
+//! Text and layout (ADR 0107): how big and how dense Silt's UI is, over any
 //! theme. Each setting left out is Silt's default, so a default can change
 //! later without rewriting anyone's file.
 //!

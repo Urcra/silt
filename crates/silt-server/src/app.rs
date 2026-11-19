@@ -231,7 +231,7 @@ struct ThemeQuery {
     light: Option<String>,
     #[serde(default)]
     dark: Option<String>,
-    /// Text and layout as JSON, which the hosted app keeps in the browser (ADR 0102).
+    /// Text and layout as JSON, which the hosted app keeps in the browser (ADR 0107).
     #[serde(default)]
     text: Option<String>,
 }

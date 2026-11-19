@@ -1,0 +1,18 @@
+[package]
+name = "silt-plugin-github"
+description = "GitHub: an agent's clones, pushes and API calls, each by the person's rules"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+silt-forge = { path = "../../crates/silt-forge" }
+silt-plugin-api = { path = "../../crates/silt-plugin-api" }

@@ -1,0 +1,38 @@
+id = "silt.local-mcp"
+name = "Local MCP"
+version = "1.0.0"
+publisher = "silt"
+description = "Gives agents a local MCP server's tools, the server run by Silt in a sandbox of its own; each tool call is asked until you allow it, and Silt can't check what it does."
+license = "AGPL-3.0-only"
+world = "silt:plugin@1"
+build = "shipped"
+
+[[capabilities]]
+kind = "mcp-process"
+command_from = "command"
+hosts_from = "hosts"
+reason = "Runs the MCP server you name in its own sandbox: its own folder, and a network only to the hosts you set, through Silt's gateway."
+
+[[settings]]
+key = "command"
+label = "Command"
+description = "What starts the server, such as `npx -y @acme/mcp-server`."
+type = "string"
+
+[[settings]]
+key = "hosts"
+label = "Hosts it reaches"
+description = "The hosts the server may reach; none by default."
+type = "list"
+default = []
+
+[[actions]]
+id = "call"
+label = "Call a tool"
+description = "Calls one of the server's tools. Its publisher's annotations aren't trusted, so each tool asks until you allow it, by tool: `--where tool=<name>`."
+kind = "change"
+default = "ask"
+fields = ["tool"]
+
+[docs]
+readme = "README.md"

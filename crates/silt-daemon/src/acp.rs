@@ -34,6 +34,11 @@ pub(crate) struct AcpRun {
     /// What its sandbox reaches and the run's token, when it runs in Silt's
     /// sandbox, for starting it again the same way (ADR 0093).
     sandbox: Option<(silt_workspace::Reach, String, String)>,
+    /// The folders granted to it that its sandbox was started with
+    /// (ADR 0102).
+    folders: std::collections::BTreeMap<String, bool>,
+    /// What to tell it once it's restarted with other folders.
+    resume_note: Option<String>,
     checkout_id: CheckoutId,
     checkout: PathBuf,
     handle: Option<AgentHandle>,
@@ -690,8 +695,9 @@ impl Core {
             Some(reach) => self.relayed_for(thread, reach).await?,
             None => Vec::new(),
         };
+        let folders = self.folders_for(thread, &token, workspace.id.as_str());
         let sandbox = reach.map(|reach| AcpSandbox {
-            reach,
+            reach: crate::folders::widened(reach, &folders),
             token,
             scratch: run_scratch(&self.data_dir, thread, run),
             workspace: workspace.id.as_str().to_owned(),
@@ -705,6 +711,8 @@ impl Core {
                 run,
                 info,
                 sandbox: kept,
+                folders,
+                resume_note: None,
                 checkout_id,
                 checkout,
                 handle: None,
@@ -919,6 +927,10 @@ impl Core {
         let Some(run) = self.acp.get_mut(&thread).filter(|run| run.state == AgentState::Idle) else {
             return Ok(());
         };
+        if let Some(note) = run.resume_note.take() {
+            let me = self.own_user(thread);
+            return self.send_prompt(thread, &me, &note, Vec::new()).await;
+        }
         if let Some(steer) = run.steering.take() {
             let me = self.own_user(thread);
             let said = format!("I interrupted your last turn to say: {steer}");
@@ -1570,6 +1582,9 @@ impl Core {
                 run.calls_running.clear();
                 let signing_in = run.sign_in.is_some();
                 self.questions_dropped(thread).await?;
+                if !signing_in && self.restart_for_folders(thread).await {
+                    return Ok(());
+                }
                 // The queue waits for the sign-in, as the agent would refuse it too.
                 if !signing_in {
                     self.next_prompt(thread).await?;
@@ -2080,6 +2095,7 @@ impl Drop for Aborting {
 
 fn sandboxed(
     start: &mut Start,
+    given: Vec<(String, String)>,
     info: &AgentInfo,
     thread: ThreadId,
     data_dir: &Path,
@@ -2103,7 +2119,9 @@ fn sandboxed(
         reach: &sandbox.reach,
         token: &sandbox.token,
         env: std::mem::take(&mut start.env),
+        given,
         read_only,
+        gateway_credentials: None,
         relayed: sandbox.relayed.clone(),
     })?;
     let all = prepared.command(&start.program, &start.args);
@@ -2115,6 +2133,9 @@ fn sandboxed(
     start.env = prepared.env;
     if !prepared.missing.is_empty() {
         tracing::warn!(missing = ?prepared.missing, "credentials the workspace names had no secret to add");
+    }
+    if !prepared.refused.is_empty() {
+        tracing::warn!(refused = ?prepared.refused, "folders the workspace names were left out of the sandbox");
     }
     let handle = tokio::runtime::Handle::current();
     let mut tasks = Vec::new();
@@ -2491,6 +2512,20 @@ fn send(run: &mut AcpRun, command: Command) {
 
 /// Finds the agent's command, downloading it if needed, then runs it and
 /// forwards what it does to the daemon's event loop.
+impl Core {
+    /// The folders granted to the run holding `token` that the rules in
+    /// force in `workspace` still allow (ADR 0102).
+    pub(crate) fn folders_for(&self, thread: ThreadId, token: &str, workspace: &str) -> std::collections::BTreeMap<String, bool> {
+        let granted =
+            crate::folders::granted(&self.data_dir, &thread.to_string(), Some(&crate::folders::run_of_token(token)), now_ms());
+        let policy = silt_workspace::WorkspaceId::new(workspace)
+            .ok()
+            .and_then(|id| self.workspaces().get(&id).cloned())
+            .map(|workspace| self.effective_policy(&workspace));
+        crate::folders::still_allowed(granted, policy.as_ref(), &self.data_dir)
+    }
+}
+
 /// Where an ACP run's sandbox keeps its plan and files.
 fn run_scratch(data_dir: &Path, thread: ThreadId, run: u64) -> PathBuf {
     data_dir.join("runs").join(format!("acp-{}-{run}", thread.short()))
@@ -2550,12 +2585,17 @@ pub(crate) fn spawn_agent(
         start.program = program;
         start.args = args;
         let workspace_env = std::mem::take(&mut start.env);
-        start.env = registry::agent_environment(&info.id, &data_dir).into_iter().chain(env).chain(workspace_env).collect();
+        // The registry's and the workspace's variables are meant for the agent;
+        // the rest come from the daemon's own environment.
+        let given: Vec<(String, String)> = env.into_iter().chain(workspace_env).collect();
+        let inherited = registry::agent_environment(&info.id, &data_dir);
+        start.env = inherited.iter().chain(&given).cloned().collect();
         // What answers the sandbox's relays, such as its gateway, for as
         // long as the agent runs.
         let mut outside = Vec::new();
         if let Some(sandbox) = sandbox {
-            match sandboxed(&mut start, &info, thread, &data_dir, &sandbox) {
+            start.env = inherited;
+            match sandboxed(&mut start, given, &info, thread, &data_dir, &sandbox) {
                 Ok(started) => outside = started,
                 Err(error) => {
                     let message = format!("couldn't start {} in Silt's sandbox: {error}", info.name);

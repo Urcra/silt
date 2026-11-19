@@ -1,0 +1,17 @@
+[package]
+name = "silt-plugin-remote-mcp"
+description = "remote-mcp, shipped with Silt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+silt-plugin-api = { path = "../../crates/silt-plugin-api" }

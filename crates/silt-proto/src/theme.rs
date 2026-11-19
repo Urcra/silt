@@ -37,7 +37,7 @@ pub struct AppearanceSettings {
     pub light: String,
     #[serde(default = "default_dark")]
     pub dark: String,
-    /// Sizes, fonts and spacing over the theme (ADR 0102).
+    /// Sizes, fonts and spacing over the theme (ADR 0107).
     #[serde(default, deserialize_with = "silt_theme::text::lenient_settings")]
     pub text: TextSettings,
 }
@@ -371,7 +371,7 @@ fn nous(appearance: Appearance) -> &'static Theme {
 }
 
 /// The CSS for the light and dark themes `settings` pick.
-/// The picked themes' CSS, then the text and layout over them (ADR 0102).
+/// The picked themes' CSS, then the text and layout over them (ADR 0107).
 pub fn css(entries: &[ThemeEntry], settings: &AppearanceSettings) -> String {
     let themes =
         silt_theme::theme_css(pick(entries, &settings.light, Appearance::Light), pick(entries, &settings.dark, Appearance::Dark));

@@ -75,7 +75,7 @@ export function CodeBlock({ text, language }: { text: string; language: string }
 
 const PROSE = 'min-w-0 leading-(--chat-leading) break-words text-fg-1 [&>:first-child]:mt-0 [&>:last-child]:mb-0'
 
-/** Whether the caller gave a size of its own; else the conversation's, as text and layout set it (ADR 0102). */
+/** Whether the caller gave a size of its own; else the conversation's, as text and layout set it (ADR 0107). */
 const sized = (className?: string) => /(^|\s)text-(2xs|xs|sm|base|lg|ui|ui-lg|label)(\s|$)/.test(className ?? '')
 
 /**

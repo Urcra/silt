@@ -315,12 +315,38 @@ pub fn event_lines(messages: &[(Role, String)], cwd: &Path, id: &str) -> Vec<Str
 /// The GitHub Copilot CLI adapter.
 pub struct Copilot;
 
+/// Copilot's token, added at the gateway for its model's API only, never
+/// held in a sandbox (ADR 0103).
+const COPILOT_APIS: [crate::ModelApi; 2] = [
+    crate::ModelApi {
+        variable: "COPILOT_GITHUB_TOKEN",
+        host: "api.githubcopilot.com",
+        header: "authorization",
+        scheme: "Bearer",
+    },
+    crate::ModelApi {
+        variable: "COPILOT_GITHUB_TOKEN",
+        host: "api.individual.githubcopilot.com",
+        header: "authorization",
+        scheme: "Bearer",
+    },
+];
+
 impl Agent for Copilot {
+    fn model_apis(&self) -> &'static [crate::ModelApi] {
+        &COPILOT_APIS
+    }
+
     fn model_hosts(&self) -> &'static [&'static str] {
         &["api.githubcopilot.com", "api.individual.githubcopilot.com", "api.github.com", "github.com"]
     }
     fn homes(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         vec![crate::home_from(home, env, "COPILOT_HOME", ".copilot")]
+    }
+
+    fn sign_in(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        let config = crate::home_from(home, env, "COPILOT_HOME", ".copilot");
+        ["apps.json", "hosts.json"].iter().map(|file| config.join(file)).collect()
     }
 
     fn id(&self) -> &'static str {
@@ -405,7 +431,7 @@ impl Agent for Copilot {
                 launch.arg("--session-id").arg(id);
             }
             Start::New { id: None } => {}
-            Start::Resume { id } => {
+            Start::Resume { id, .. } => {
                 launch.arg("--resume").arg(id);
             }
             Start::Primed { id, prompt: text } => {

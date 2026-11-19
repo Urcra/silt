@@ -30,6 +30,9 @@ silt-sheet = { path = "../silt-sheet" }
 silt-design = { path = "../silt-design" }
 silt-vendor = { path = "../silt-vendor" }
 silt-access = { path = "../silt-access" }
+silt-plugin = { path = "../silt-plugin" }
+silt-plugin-host = { path = "../silt-plugin-host" }
+silt-shipped = { path = "../silt-shipped" }
 silt-gateway = { path = "../silt-gateway" }
 silt-git = { path = "../silt-git" }
 silt-llm = { path = "../silt-llm" }
@@ -56,6 +59,7 @@ tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"]
 [dev-dependencies]
 silt-proto = { path = "../silt-proto", features = ["ts"] }
 silt-access = { path = "../silt-access", features = ["ts"] }
+silt-plugin = { path = "../silt-plugin", features = ["ts"] }
 silt-workspace = { path = "../silt-workspace", features = ["ts"] }
 silt-update = { path = "../silt-update", features = ["ts"] }
 tempfile = "3.27.0"

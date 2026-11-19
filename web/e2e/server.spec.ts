@@ -187,7 +187,7 @@ test('the hosted app lists the threads a device shared', async ({ page }) => {
   expect(key.length).toBeGreaterThan(80)
 })
 
-test('the hosted app keeps text and layout in the browser and sizes the page by it (ADR 0102)', async ({ page }) => {
+test('the hosted app keeps text and layout in the browser and sizes the page by it (ADR 0107)', async ({ page }) => {
   await page.goto(`${base}/app/settings/text`)
   await page.getByLabel('User').fill('alice')
   await page.getByLabel('Password').fill('correct horse battery')

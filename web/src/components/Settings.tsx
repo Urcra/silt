@@ -19,12 +19,14 @@ import { ThemeSettings } from './Themes'
 import { AddProjectPage, Projects } from './Projects'
 import { UpdatesSettings } from './Updates'
 import { WorkspacesSettings } from './Workspaces'
+import { PluginsSettings } from './Plugins'
 
 const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
   {
     label: 'Workspace',
     sections: [
       ...(hosted() ? [] : [{ id: 'workspaces', label: 'Workspaces' }]),
+      ...(hosted() ? [] : [{ id: 'plugins', label: 'Plugins' }]),
       { id: 'projects', label: 'Projects' },
       { id: 'orgs', label: 'Orgs' },
       ...(hosted() ? [] : [{ id: 'design-systems', label: 'Design systems' }]),
@@ -378,6 +380,7 @@ export function Settings() {
     chats: <Chats />,
     models: <LocalModelsSettings />,
     workspaces: <WorkspacesSettings />,
+    plugins: <PluginsSettings />,
     appearance: <Appearance />,
     text: <TextLayoutSettings />,
     update: <UpdatesSettings />,

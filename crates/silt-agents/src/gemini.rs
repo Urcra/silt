@@ -491,6 +491,14 @@ impl Agent for Gemini {
         homes
     }
 
+    fn sign_in(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        self.homes(home, env).into_iter().map(|dir| dir.join("oauth_creds.json")).collect()
+    }
+
+    fn read_only_home(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        self.homes(home, env).into_iter().map(|dir| dir.join("settings.json")).collect()
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }
@@ -577,7 +585,7 @@ impl Agent for Gemini {
                 launch.arg("--session-id").arg(id);
             }
             Start::New { id: None } => {}
-            Start::Resume { id } => {
+            Start::Resume { id, .. } => {
                 launch.arg("--resume").arg(id);
             }
             Start::Primed { id, prompt: text } => {

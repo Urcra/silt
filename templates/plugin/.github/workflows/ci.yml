@@ -1,0 +1,10 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install 1.99.1 --profile minimal --target wasm32-wasip2 && rustup default 1.99.1
+      # Builds the plugin for wasm32-wasip2 and runs it in Silt's stand-in host.
+      - run: cargo test --locked

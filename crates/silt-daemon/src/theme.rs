@@ -298,7 +298,7 @@ pub fn duplicate(data_dir: &Path, from: &str) -> Result<ThemeSaved, CoreError> {
     Ok(saved(&path, &family, Vec::new()))
 }
 
-/// What `<html>` says of motion, as text and layout set it (ADR 0102).
+/// What `<html>` says of motion, as text and layout set it (ADR 0107).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MotionAttribute {
     Reduced,

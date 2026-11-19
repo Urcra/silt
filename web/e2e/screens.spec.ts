@@ -121,7 +121,7 @@ test('Settings › Appearance, and a thread in a bundled pair (ADR 0098)', async
   }
 })
 
-test('Settings › Text and layout, and a thread at larger sizes (ADR 0102)', async ({ page }) => {
+test('Settings › Text and layout, and a thread at larger sizes (ADR 0107)', async ({ page }) => {
   await open(page, '/settings/text')
   await shoot(page, 'text-layout', async (shown) => {
     await expect(shown.getByRole('region', { name: 'preview' }).getByText('whitespace-pre-wrap').first()).toBeVisible()
@@ -145,7 +145,7 @@ test('Settings › Text and layout, and a thread at larger sizes (ADR 0102)', as
   }
 })
 
-test('text and layout set in Settings reach the page, are kept, and reset (ADR 0102)', async ({ page }) => {
+test('text and layout set in Settings reach the page, are kept, and reset (ADR 0107)', async ({ page }) => {
   await open(page, '/settings/text')
   const section = page.getByRole('region', { name: 'Text and layout' })
   const variable = (name: string) =>

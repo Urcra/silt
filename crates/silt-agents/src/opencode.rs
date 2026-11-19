@@ -312,6 +312,10 @@ impl Agent for OpenCode {
         [".local/share/opencode", ".config/opencode", ".local/state/opencode"].iter().map(|dir| home.join(dir)).collect()
     }
 
+    fn sign_in(&self, home: &Path, _env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        vec![home.join(".local/share/opencode/auth.json")]
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }
@@ -418,7 +422,7 @@ impl Agent for OpenCode {
     fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError> {
         let mut launch = Launch::new(self.command());
         match &plan.start {
-            Start::Resume { id } => {
+            Start::Resume { id, .. } => {
                 launch.arg("--session").arg(id);
             }
             Start::Primed { prompt, .. } => {

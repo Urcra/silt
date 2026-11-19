@@ -32,8 +32,10 @@ pub mod view;
 /// clone, or by one of several (`Author::Others`, `Author::Agents`,
 /// ADR 0089). 19: what a workspace's sandboxed agents may reach (ADR 0093).
 /// 20: a person's own themes for Silt's UI, synced through each server
-/// they use (ADR 0099).
-pub const PROTOCOL: u32 = 20;
+/// they use (ADR 0099). 21: the folders an org lets its members' agents
+/// ask for, and the plugins it installs, allows and holds (ADR 0102,
+/// ADR 0104).
+pub const PROTOCOL: u32 = 21;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -1094,7 +1096,7 @@ pub enum OrgChange {
     /// What agents started in the org's projects may do (ADR 0065).
     Policy {
         org: String,
-        policy: silt_workspace::Policy,
+        policy: Box<silt_workspace::Policy>,
     },
     /// Moves the project (a normalized remote) into `org`.
     MoveProject {

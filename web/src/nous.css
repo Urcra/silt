@@ -87,7 +87,7 @@
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   --ease: cubic-bezier(0.2, 0, 0, 1);
 
-  /* Text and layout (ADR 0102): Silt's defaults, which a person's settings
+  /* Text and layout (ADR 0107): Silt's defaults, which a person's settings
      replace in a later, more specific block. */
   --ui-size: 13px;
   --chat-size: 13px;
@@ -148,7 +148,7 @@
   }
 }
 
-/* As the system asks, unless the person's settings say otherwise (ADR 0102). */
+/* As the system asks, unless the person's settings say otherwise (ADR 0107). */
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-motion='full']) *,
   :root:not([data-motion='full']) *::before,

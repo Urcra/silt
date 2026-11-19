@@ -397,6 +397,7 @@ impl Core {
         core.project_homes =
             core.store.project_homes().await?.into_iter().map(|(repo, home)| (repo, Home::from_stored(home))).collect();
         core.load_workspaces().await?;
+        core.install_org_plugins();
         core.follow_clones_to_their_projects().await;
         core.remember_clones_threads_ran_in().await;
         core.share_workspace_homes();
@@ -652,6 +653,11 @@ impl Core {
             // shows it's a run Silt started (ADR 0093).
             if let Request::Hook { event, input } = *asking {
                 let answer = match self.run_thread(&token).await {
+                    // Only for its own thread's sessions: another's would hand
+                    // it that thread's messages, and mark the session for others.
+                    Ok(thread) if self.hook_session_elsewhere(&input, &thread) => {
+                        Response::error("a run's hooks speak for its own thread's sessions only")
+                    }
                     Ok(_) => self.hook(&event, input).await,
                     Err(error) => to_response::<()>(Err(error)),
                 };
@@ -816,9 +822,37 @@ impl Core {
             Request::PluginTools | Request::PluginCall { .. } | Request::PluginWait { .. } => {
                 Response::error("only an agent's run calls plugins, with its token")
             }
-            Request::Plugins => Response::ok(crate::plugins::load(&self.data_dir)),
-            Request::PluginPut { plugin } => to_response(crate::plugins::put(&self.data_dir, *plugin).map(|()| "saved")),
-            Request::PluginRemove { name } => to_response(crate::plugins::remove(&self.data_dir, &name).map(|()| "removed")),
+            Request::Plugins => Response::ok(crate::plugins::installed::views(&self.data_dir)),
+            Request::PluginRule { id, action, rule, field, pattern } => {
+                let matching = field.zip(pattern);
+                to_response(crate::plugins::installed::set_rule(&self.data_dir, &id, &action, rule, matching).map(|()| "saved"))
+            }
+            Request::PluginSet { id, key, value, environment, workspace } => to_response(
+                crate::plugins::installed::set_setting(
+                    &self.data_dir,
+                    &id,
+                    &key,
+                    &value,
+                    environment.as_deref(),
+                    workspace.as_deref(),
+                )
+                .map(|()| "saved"),
+            ),
+            Request::PluginEnvironment { id, name, patterns } => {
+                to_response(crate::plugins::installed::set_environment(&self.data_dir, &id, &name, &patterns).map(|()| "saved"))
+            }
+            Request::PluginActivity { id } => to_response(self.plugin_activity(&id).await),
+            Request::PluginTrust { publisher, trusted } => {
+                to_response(crate::plugins::installed::set_trusted(&self.data_dir, &publisher, trusted).map(|()| "saved"))
+            }
+            Request::PluginTurn { id, workspace, on } => {
+                let every: Vec<String> =
+                    self.workspaces().workspaces.iter().map(|workspace| workspace.id.as_str().to_owned()).collect();
+                to_response(crate::plugins::installed::turn(&self.data_dir, &id, &workspace, on, &every).map(|()| "saved"))
+            }
+            Request::PluginRemove { name } => {
+                to_response(crate::plugins::install::remove(&self.data_dir, &name).map(|()| "removed"))
+            }
             Request::Approvals { thread, all } => to_response(self.approvals_view(thread.as_deref(), all).await),
             Request::ApprovalAnswer { id, approve, hash, grant } => to_response(
                 self.approval_answer(id, approve, &hash, grant).await.map(|()| if approve { "approved" } else { "rejected" }),
@@ -856,6 +890,9 @@ impl Core {
                 to_response(released.map(|()| "released"))
             }
             Request::GrantRevoke { id } => to_response(self.grant_revoke(id).await.map(|()| "revoked")),
+            Request::FolderRevoke { thread, path } => {
+                to_response(self.folder_revoke(&thread, &path).map(|()| "taken back; the agent loses it when its turn ends"))
+            }
             Request::Access { thread } => to_response(self.access_view(&thread).await),
             Request::PutArtifact { .. } => Response::error("only an agent's run shows the person something, with its token"),
             Request::ArtifactGuide { .. } => Response::error("only an agent's run asks for its artifact guide, with its token"),
@@ -1455,6 +1492,7 @@ impl Core {
         self.drive_sync();
         if self.resident {
             self.updates.check_if_due();
+            crate::plugins::updates::check_if_due(&self.data_dir);
         }
         self.drive_notes_settings();
         if self.resident {

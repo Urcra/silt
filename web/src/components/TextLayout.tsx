@@ -1,4 +1,4 @@
-// Settings › Text and layout (ADR 0102): how big and how dense the UI is,
+// Settings › Text and layout (ADR 0107): how big and how dense the UI is,
 // over any theme, with a preview drawn by the components the app uses.
 
 import { type ReactNode, useState } from 'react'

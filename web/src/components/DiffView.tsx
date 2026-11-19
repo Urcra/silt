@@ -82,7 +82,7 @@ const SHEET_BUTTON = 'justify-center max-md:text-sm'
 /** A row's height at code's size, as `leading-code` draws it, for what isn't drawn yet. */
 const rowPx = (codeSize: number) => (codeSize * 20) / 12
 
-/** How a diff draws code, from text and layout (ADR 0102): whether long lines wrap, and a row's height. */
+/** How a diff draws code, from text and layout (ADR 0107): whether long lines wrap, and a row's height. */
 const DiffText = createContext({ wrap: true, row: rowPx(12) })
 /** Past this many rows, a diff draws only what's near the view: 30,000 lines drawn at once were half a million
  * elements, seconds to open and to scroll. */
