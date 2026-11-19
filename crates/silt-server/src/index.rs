@@ -137,7 +137,8 @@ impl Index {
             self.histories.entry(thread).or_default().pulled = true;
         }
         let time_ms = delta.time_ms;
-        let mut rows = vec![Row::Activity { thread, time_ms, branch: None }];
+        let active_ms = if delta.op.is_activity() { time_ms } else { 0 };
+        let mut rows = vec![Row::Activity { thread, time_ms: active_ms, branch: None }];
         let stamp = (delta.span.first().lamport, delta.span.actor);
         let placements = self.placements.entry(family).or_default();
         let touched = match &delta.op {
@@ -212,7 +213,7 @@ impl Index {
                 None
             }
             Op::Git(GitOp::Genesis { branch, .. } | GitOp::Committed { branch, .. }) => {
-                rows[0] = Row::Activity { thread, time_ms, branch: branch.clone() };
+                rows[0] = Row::Activity { thread, time_ms: active_ms, branch: branch.clone() };
                 None
             }
             _ => None,
@@ -443,6 +444,26 @@ mod tests {
         assert_eq!(conversation.messages, 3, "two prompts and a reply; the tool call isn't a message");
         assert_eq!(conversation.first_prompt.as_deref(), Some("fix the parser\nthen test it"));
         assert_eq!(index.conversation(ThreadId(2)), Conversation::default());
+    }
+
+    #[test]
+    fn a_commit_or_a_lease_names_the_branch_but_isnt_activity() {
+        let family = Family::new();
+        let mut index = Index::default();
+        let mut rows = Vec::new();
+        let ops = [
+            (5, Op::Comment(CommentOp::Sent { comments: Vec::new() })),
+            (9, Op::Git(GitOp::Committed { commit: silt_types::GitOid([1; 20]), branch: Some("main".into()) })),
+            (9, Op::Lease { device: silt_types::DeviceId(1), epoch: 1 }),
+        ];
+        for (time_ms, op) in ops {
+            let delta = family.delta(ActorId(1), ThreadId(1), Author::User, time_ms, family.thread_head(ThreadId(1)), op);
+            rows.extend(index.observe(FamilyId(1), &delta));
+        }
+        assert_eq!(
+            fold(&rows).activity,
+            BTreeMap::from([(ThreadId(1), Activity { last_ms: 5, branch: Some("main"), merged: false })])
+        );
     }
 
     #[test]

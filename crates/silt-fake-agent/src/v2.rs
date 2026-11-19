@@ -14,6 +14,7 @@
 //! `Present` makes it put a plan to the person, as Claude's ExitPlanMode
 //! does, by asking leave to quit its plan mode. Its session offers the commands
 //! `count` and `compact` as it opens, and drops `compact` on a prompt.
+//! `Which model` and `FAKE_ACP_SLOW_SETTINGS` work as over v1.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -108,18 +109,22 @@ pub async fn main() -> Result<()> {
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: v2::SetSessionConfigOptionRequest, responder: Responder<v2::SetSessionConfigOptionResponse>, _connection: V2ConnectionTo<Client>| {
+            async move |request: v2::SetSessionConfigOptionRequest, responder: Responder<v2::SetSessionConfigOptionResponse>, connection: V2ConnectionTo<Client>| {
                 let value = serde_json::to_value(&request.value)?.get("value").and_then(Value::as_str).unwrap_or_default().to_owned();
                 let (id, config) = (request.session_id.to_string(), request.config_id.to_string());
-                let mut state = configured.lock().expect("lock");
-                match (config.as_str(), value.as_str()) {
-                    ("mode", "code" | "plan") => state.mode.insert(id.clone(), value),
-                    ("model", "fast" | "smart") => state.model.insert(id.clone(), value),
-                    _ => return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such setting")),
-                };
-                let mode = state.mode.get(&id).cloned().unwrap_or_else(|| "code".into());
-                let model = state.model.get(&id).cloned().unwrap_or_else(|| "fast".into());
-                responder.respond(parse(json!({"configOptions": options(&mode, &model)}))?)
+                if !matches!((config.as_str(), value.as_str()), ("mode", "code" | "plan") | ("model", "fast" | "smart")) {
+                    return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such setting"));
+                }
+                let configured = configured.clone();
+                connection.spawn(async move {
+                    crate::settle().await;
+                    let mut state = configured.lock().expect("lock");
+                    let kept = if config == "mode" { &mut state.mode } else { &mut state.model };
+                    kept.insert(id.clone(), value);
+                    let mode = state.mode.get(&id).cloned().unwrap_or_else(|| "code".into());
+                    let model = state.model.get(&id).cloned().unwrap_or_else(|| "fast".into());
+                    responder.respond(parse(json!({"configOptions": options(&mode, &model)}))?)
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -142,6 +147,11 @@ pub async fn main() -> Result<()> {
                     let cwd = state.lock().expect("lock").cwd.get(&session.to_string()).cloned().unwrap_or_default();
                     say(&worker, &session, json!({"sessionUpdate": "available_commands_update", "availableCommands": commands(true)}))?;
                     say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "running"}))?;
+                    if prompt.contains("Which model") {
+                        let model = state.lock().expect("lock").model.get(&session.to_string()).cloned().unwrap_or_else(|| "fast".into());
+                        say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "model-1", "content": {"type": "text", "text": format!("Model: {model}")}}))?;
+                        return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}));
+                    }
                     // As Claude's adapter ends a turn its expired sign-in failed.
                     if !crate::signed_in() {
                         say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "failed-1", "content": {"type": "text", "text": "Failed to authenticate."}}))?;

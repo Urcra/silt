@@ -313,6 +313,36 @@ async fn modes_and_settings_come_with_the_session_and_change_on_request() {
     agent.send(Command::Stop);
 }
 
+/// Copilot takes a while to change its model and handles a prompt sent
+/// meanwhile at once: the prompt waits, so its turn runs on the model chosen
+/// rather than on the agent's own default.
+#[tokio::test]
+async fn a_prompt_right_after_a_change_of_model_runs_on_it() {
+    for v2 in [false, true] {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut env = vec![("FAKE_ACP_SLOW_SETTINGS".to_owned(), "1".to_owned())];
+        if v2 {
+            env.push(("FAKE_ACP_V2".into(), "1".into()));
+        }
+        let (sender, mut events) = mpsc::unbounded_channel();
+        let agent = start(options(dir.path(), env), sender);
+        assert!(matches!(next(&mut events).await, Event::Ready { .. }));
+        agent.send(Command::SetSetting { id: "model".into(), value: "smart".into() });
+        agent.send(prompt("Which model"));
+        let mut said = Vec::new();
+        loop {
+            match next(&mut events).await {
+                Event::Update(Update::AgentText(text)) => said.push(text),
+                Event::TurnEnded { .. } => break,
+                _ => {}
+            }
+        }
+        assert_eq!(said, ["Model: smart"], "v2: {v2}");
+        agent.send(Command::Stop);
+        while !matches!(next(&mut events).await, Event::Exited) {}
+    }
+}
+
 #[tokio::test]
 async fn an_agent_without_modes_says_so() {
     let dir = tempfile::tempdir().expect("temp dir");

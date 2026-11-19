@@ -13,7 +13,7 @@ use agent_client_protocol::{ByteStreams, Client};
 use futures::io::{AsyncRead, AsyncWrite};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::modes::{Modes, Setting};
@@ -447,6 +447,33 @@ pub fn start(start: Start, events: mpsc::UnboundedSender<Event>) -> AgentHandle 
         let _ = events.send(Event::Exited);
     });
     AgentHandle { commands, stop: Arc::new(stop), pid }
+}
+
+/// How long a prompt waits on the agent to take the modes and settings
+/// asked for before it, so one that never answers doesn't hold it forever.
+const SETTLING: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The mode and setting changes the agent hasn't answered yet. A prompt
+/// waits for them: an agent that handles requests at once, as Copilot does,
+/// would otherwise start the turn on what it had, such as its own default
+/// model, which the person may not have access to.
+#[derive(Default)]
+pub(crate) struct Changing(Vec<oneshot::Receiver<()>>);
+
+impl Changing {
+    /// A change asked for, taken as answered once the sender it gives is dropped.
+    pub(crate) fn asked(&mut self) -> oneshot::Sender<()> {
+        let (answered, waited) = oneshot::channel();
+        self.0.push(waited);
+        answered
+    }
+
+    pub(crate) async fn settled(&mut self) {
+        let all = futures::future::join_all(self.0.drain(..));
+        if tokio::time::timeout(SETTLING, all).await.is_err() {
+            tracing::warn!("the agent didn't answer a change of mode or setting; prompting all the same");
+        }
+    }
 }
 
 pub(crate) fn label<T: serde::Serialize>(value: &T) -> String {
