@@ -21,6 +21,8 @@ pub enum DesktopError {
     Run(String),
     #[error("{0}")]
     Silt(String),
+    #[error("Couldn't connect to {name}: {reason}")]
+    Machine { name: String, reason: String },
     #[error("`silt open` answered with something other than the web UI's address: {0:?}")]
     NotTheUi(String),
 }
@@ -91,7 +93,7 @@ fn silt_output(mut command: Command) -> Result<String, Exn<DesktopError>> {
 }
 
 /// A window app's console programs would each open a console window.
-fn hide_console(command: &mut Command) {
+pub(crate) fn hide_console(command: &mut Command) {
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;

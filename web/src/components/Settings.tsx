@@ -8,6 +8,8 @@ import { hosted, serverName } from '../served'
 import { Button, Dot, EmptyState, Input, cx, toast } from '../ui'
 import { ChipSelect } from './ChipSelect'
 import { Devices } from './Devices'
+import { inDesktop } from '../desktop'
+import { MachinesSettings } from './Machines'
 import { LocalModelsSettings } from './LocalModels'
 import { NotificationBanner, NotificationSettings } from './Inbox'
 import { Orgs } from './Orgs'
@@ -36,6 +38,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
     label: 'You',
     sections: [
       { id: 'devices', label: 'Devices and sync' },
+      ...(inDesktop() ? [{ id: 'machines', label: 'Machines' }] : []),
       ...(hosted() ? [] : [{ id: 'chats', label: 'Chats' }]),
       ...(hosted() ? [] : [{ id: 'models', label: 'Local models' }]),
       { id: 'notifications', label: 'Notifications' },
@@ -375,6 +378,7 @@ export function Settings() {
   const bodies: Record<string, ReactNode> = {
     projects: section === 'add' ? <AddProjectPage /> : <Projects />,
     devices: <Devices>{!hosted() && <Sync />}</Devices>,
+    machines: <MachinesSettings />,
     orgs: <Orgs />,
     notifications: <Notifications />,
     chats: <Chats />,
