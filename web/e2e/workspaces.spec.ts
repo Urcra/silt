@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
 import { stopAgent, teardown } from './fixture'
@@ -345,4 +346,52 @@ test('a plugin from git says when a newer version is out, asks for what it adds,
   await expect(page.getByLabel('update to 1.1.0')).toHaveCount(0)
   expect(ada(['plugin', 'list'])).toContain('test.probe 1.1.0')
   await shoot(page, '6-plugin-status', 1400)
+})
+
+/** Whether this machine can make Silt's sandbox, which Folders gives folders into. */
+function sandboxed(): boolean {
+  try {
+    execFileSync('bwrap', ['--ro-bind', '/', '/', 'true'])
+    return true
+  } catch {
+    return false
+  }
+}
+
+test('an agent asks for a folder on a card, and goes on with it once approved (ADR 0101)', async ({ page }) => {
+  test.skip(!sandboxed(), "this machine can't make Silt's sandbox")
+  test.setTimeout(120_000)
+  const shared = join(fixture.dir, 'shared-lib')
+  mkdirSync(shared, { recursive: true })
+  writeFileSync(join(shared, 'notes.md'), 'kept\n')
+  // Personal runs its agents in Silt's sandbox (set above); no network, which they don't need here.
+  ada(['workspace', 'policy', 'Personal', '--silt-sandbox', 'on', '--network', 'none'], 'tools')
+
+  await page.goto(fixture.ada)
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
+  const form = page.getByRole('form', { name: 'new thread' })
+  await page.getByRole('button', { name: /^project:/ }).click()
+  await page.getByRole('dialog', { name: 'Pick a project' }).getByRole('option', { name: /tools/ }).click()
+  await form.getByLabel('first prompt').fill(`Folder ${shared}`)
+  await form.getByRole('radio', { name: 'Worktree' }).click()
+  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await form.getByLabel('first prompt').press('Enter')
+
+  // No folder rule names it, so it's asked, on a card Silt draws.
+  const card = page.getByRole('group', { name: 'approval' }).first()
+  await expect(card).toContainText('silt.folders', { timeout: 30_000 })
+  await expect(card).toContainText(shared)
+  await expect(card).toContainText('Prepared by the plugin, drawn by Silt')
+  await shoot(page, '7-folder-request')
+  await card.getByRole('button', { name: /^Approve/ }).click()
+
+  // The agent is restarted in a sandbox with it, told what's there, and goes on.
+  await expect(page.getByText(/is now in your sandbox, read-only, at that path/)).toBeVisible({ timeout: 60_000 })
+  await page.getByRole('tab', { name: 'Access' }).click()
+  const folders = page.getByRole('region', { name: 'folders' })
+  await expect(folders).toContainText(shared)
+  await shoot(page, '8-folder-granted')
+  await folders.getByRole('button', { name: `unfolder ${shared}` }).click()
+  await expect(folders).toHaveCount(0)
+  await stopAgent(page)
 })

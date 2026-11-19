@@ -229,7 +229,7 @@ export function ApprovalCard({ approval, first, title }: { approval: ApprovalVie
       </span>
       <span className="flex flex-wrap items-center gap-1.5">
         <Button variant="primary" disabled={sending} onClick={() => answer(true)}>
-          Approve and send once {first && <Kbd onAccent>⏎</Kbd>}
+          {approval.card ? 'Approve once' : 'Approve and send once'} {first && <Kbd onAccent>⏎</Kbd>}
         </Button>
         <Button disabled={sending} onClick={() => answer(false)}>
           Reject
