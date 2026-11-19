@@ -31,7 +31,7 @@ import { isChat } from '../chats'
 import { CloudSession } from './Cloud'
 import { useTopic } from '../bus'
 import { readWhole } from '../diffParse'
-import { useHideGit, useHideOthers } from '../hideGit'
+import { useHideGit, useHideOthers, useShared } from '../hideGit'
 import { useHistory } from '../historyLoad'
 import { appHref, filePath } from '../permalink'
 import { forgeOf, projectName } from '../projects'
@@ -2212,7 +2212,13 @@ function ThreadBody({
   const comments = useQuery({ queryKey: keys.comments(id), queryFn: () => api.comments(id) })
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   // The thread's files and counts, without their lines: a thread that took in thousands of files must still open.
-  const stats = useQuery({ queryKey: keys.diffStats(thread, { base: '' }), queryFn: () => api.diffStats(thread, { base: '' }) })
+  // They leave out what the Changes panel's boxes hide, so the counts match the diff below them.
+  const [hideGit] = useHideGit()
+  const [hideOthersSetting] = useHideOthers()
+  const shared = useShared(thread)
+  const hideOthers = hideOthersSetting && shared
+  const statsOf = { base: '', hideGit, hideOthers }
+  const stats = useQuery({ queryKey: keys.diffStats(thread, statsOf), queryFn: () => api.diffStats(thread, statsOf) })
   const reloadComments = useCallback(() => queries.invalidateQueries({ queryKey: keys.comments(id) }), [queries, id])
   const summary = threads.data?.find((candidate) => candidate.id === thread)
   const [tab, setTab] = useState<InspectorTab>('changes')
