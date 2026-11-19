@@ -117,6 +117,13 @@ pub enum Edit {
         add: bool,
     },
     Disconnect(String),
+    /// Puts this computer's `silt` there, in place of the one it has if
+    /// any (ADR 0109), and connects; adds the machine once it's connected
+    /// when `add` is set.
+    Install {
+        machine: Machine,
+        add: bool,
+    },
 }
 
 /// The edit a link asks for, if it's one and its fields pass the checks.
@@ -144,6 +151,7 @@ pub fn edit_of(link: &Url) -> Option<Edit> {
         "/remove" => name().map(Edit::Remove),
         "/test" => Some(Edit::Test { machine: machine()?, add: field("add").as_deref() == Some("1") }),
         "/disconnect" => name().map(Edit::Disconnect),
+        "/install" => Some(Edit::Install { machine: machine()?, add: field("add").as_deref() == Some("1") }),
         _ => None,
     }
 }
@@ -192,11 +200,12 @@ pub fn run_on(machine: &Machine, control: Option<&Path>, line: &str) -> Command 
     command
 }
 
-/// Signs in, says as whom, and looks for `silt` where the person's
-/// terminal finds it, and its version. The lines are marked, as shell
-/// startup files may print their own.
+/// Signs in, says as whom, on what, and where home is, and looks for
+/// `silt` where the person's terminal finds it, else where Silt installs
+/// it, and its version. The lines are marked, as shell startup files may
+/// print their own.
 pub fn probe_line() -> String {
-    let probe = r#"printf 'silt-user %s\n' "$(id -un)"; p=$(command -v silt) || exit 0; printf 'silt-path %s\n' "$p"; printf 'silt-version %s\n' "$("$p" --version 2>/dev/null)""#;
+    let probe = r#"printf 'silt-user %s\n' "$(id -un)"; printf 'silt-system %s\n' "$(uname -sm)"; printf 'silt-home %s\n' "$HOME"; p=$(command -v silt) || p=$HOME/.local/bin/silt; [ -x "$p" ] || exit 0; printf 'silt-path %s\n' "$p"; printf 'silt-version %s\n' "$("$p" --version 2>/dev/null)""#;
     in_their_shell("sh", &["-c", probe])
 }
 
@@ -204,6 +213,8 @@ pub fn probe_line() -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Probed {
     pub user: Option<String>,
+    pub platform: Option<Platform>,
+    pub home: Option<String>,
     pub silt: Option<String>,
     pub version: Option<String>,
 }
@@ -216,6 +227,10 @@ pub fn probed(stdout: &str) -> Probed {
         };
         if let Some(user) = value("silt-user ") {
             found.user = Some(user.to_owned());
+        } else if let Some(system) = value("silt-system ") {
+            found.platform = Platform::of_uname(system);
+        } else if let Some(home) = value("silt-home ") {
+            found.home = Some(home.trim_end_matches('/').to_owned()).filter(|home| is_silt_path(home));
         } else if let Some(path) = value("silt-path ") {
             found.silt = Some(path.to_owned()).filter(|path| is_silt_path(path));
         } else if let Some(version) = value("silt-version ") {
@@ -241,16 +256,237 @@ pub fn tunnel(machine: &Machine, port: u16) -> Command {
     command
 }
 
+/// What to say when neither this computer's build nor a release runs there.
+const BUILD_THERE: &str =
+    "Build it there with `cargo install --locked --git https://github.com/Urcra/silt silt-cli`, then try again.";
+
+/// An OS and a CPU, named as Rust names them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Platform {
+    pub os: String,
+    pub arch: String,
+}
+
+impl Platform {
+    /// The one this program was built for.
+    pub fn here() -> Self {
+        Self { os: std::env::consts::OS.to_owned(), arch: std::env::consts::ARCH.to_owned() }
+    }
+
+    /// The one `uname -sm` names, such as `Linux x86_64` or `Darwin arm64`.
+    pub fn of_uname(text: &str) -> Option<Self> {
+        let (os, arch) = text.trim().split_once(' ')?;
+        let os = match os {
+            "Linux" => "linux".to_owned(),
+            "Darwin" => "macos".to_owned(),
+            os => os.to_lowercase(),
+        };
+        let arch = match arch.trim() {
+            "arm64" | "aarch64" => "aarch64".to_owned(),
+            "amd64" | "x86_64" => "x86_64".to_owned(),
+            arch => arch.to_owned(),
+        };
+        let plain = |part: &str| !part.is_empty() && part.chars().all(|char| char.is_ascii_alphanumeric() || char == '_');
+        (plain(&os) && plain(&arch)).then_some(Self { os, arch })
+    }
+}
+
+impl std::fmt::Display for Platform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let os = match &*self.os {
+            "linux" => "Linux",
+            "macos" => "macOS",
+            "windows" => "Windows",
+            os => os,
+        };
+        write!(f, "{os} {}", self.arch)
+    }
+}
+
+/// `silt --version`'s answer without its `silt `.
+pub fn version_of(stdout: &str) -> Option<String> {
+    // The last line, past whatever the login shell's startup files print.
+    let line = stdout.lines().map(str::trim).rfind(|line| !line.is_empty())?;
+    let version = line.strip_prefix("silt ").unwrap_or(line);
+    (!version.chars().any(char::is_control)).then(|| version.to_owned())
+}
+
+/// The release a stable build's version names, such as `v0.3.0` for
+/// `0.3.0 (stable a1b2c3d)`; none for a nightly build, which has none.
+pub fn release_of(version: &str) -> Option<String> {
+    let (number, label) = version.split_once(" (")?;
+    let plain = !number.is_empty() && number.chars().all(|char| char.is_ascii_alphanumeric() || matches!(char, '.' | '-'));
+    (plain && label.starts_with("stable")).then(|| format!("v{number}"))
+}
+
+/// How a machine gets this computer's build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Plan {
+    /// Copied as it is: the machine has this computer's OS and CPU.
+    Copy,
+    /// The release of the same version, built for the machine, by
+    /// install.sh there.
+    Release(String),
+    /// Neither: why, and what to do instead.
+    Cannot(String),
+}
+
+pub fn plan(here: &Platform, there: &Platform, version: &str, host: &str) -> Plan {
+    if here == there {
+        return Plan::Copy;
+    }
+    // The platforms install.sh has release binaries for.
+    let released = there.os == "linux" && matches!(&*there.arch, "x86_64" | "aarch64");
+    match release_of(version) {
+        Some(tag) if released => Plan::Release(tag),
+        Some(_) => Plan::Cannot(format!(
+            "`{host}` runs {there}, and Silt has release builds only for Linux on x86_64 and aarch64, while this computer’s `silt` is built for {here}. {BUILD_THERE}"
+        )),
+        None => Plan::Cannot(format!(
+            "`{host}` runs {there}, and this computer’s `silt` is a nightly build for {here}, which has no release to download. {BUILD_THERE}"
+        )),
+    }
+}
+
+/// `path` with the home directory as `~`, as messages show it.
+pub fn shown_path(path: &str, home: Option<&str>) -> String {
+    match home.and_then(|home| path.strip_prefix(home)).filter(|rest| rest.starts_with('/')) {
+        Some(rest) => format!("~{rest}"),
+        None => path.to_owned(),
+    }
+}
+
+/// How far a copy got, as `41 of 96 MB`.
+pub fn progress(sent: u64, total: u64) -> String {
+    let megabytes = |bytes: u64| bytes.div_ceil(1_000_000);
+    format!("{} of {} MB", megabytes(sent).min(megabytes(total)), megabytes(total))
+}
+
+/// `script` run by `sh` there with `args`, whatever the login shell: these
+/// need nothing of the person's own.
+fn plain_sh(script: &str, args: &[&str]) -> String {
+    let mut line = format!("exec sh -c {} sh", sh_quote(script));
+    for arg in args {
+        line.push(' ');
+        line.push_str(&sh_quote(arg));
+    }
+    line
+}
+
+/// Each program goes to `.<name>.new` beside where it belongs, and is
+/// renamed into place only once it ran there, so a running `silt` keeps
+/// its old binary and a copy that fails leaves nothing behind.
+const BESIDE: &str = r#"d=${t%/*}; n=${t##*/}; new="$d/.$n.new""#;
+
+/// Writes stdin to beside `target`, refusing a directory the person
+/// can't write to: Silt never uses `sudo`.
+pub fn copy_line(target: &str) -> String {
+    let script = format!(
+        r#"t=$1; {BESIDE}; mkdir -p "$d" 2>/dev/null; [ -w "$d" ] || {{ echo silt-unwritable >&2; exit 3; }}; cat > "$new" && chmod 755 "$new""#
+    );
+    plain_sh(&script, &[target])
+}
+
+/// The copy beside `target` says its version.
+pub fn check_line(target: &str) -> String {
+    plain_sh(&format!(r#"t=$1; {BESIDE}; exec "$new" --version"#), &[target])
+}
+
+/// Renames each copy over what it replaces.
+pub fn place_line(targets: &[&str]) -> String {
+    plain_sh(&format!(r#"for t in "$@"; do {BESIDE}; mv -f "$new" "$t" || exit 1; done"#), targets)
+}
+
+/// Removes the copies, as a check that failed leaves them.
+pub fn discard_line(targets: &[&str]) -> String {
+    plain_sh(&format!(r#"for t in "$@"; do {BESIDE}; rm -f "$new"; done"#), targets)
+}
+
+/// Runs install.sh, given on stdin, for the release `tag`, into `dir`.
+pub fn release_line(tag: &str, dir: &str) -> String {
+    format!("exec env {} {} sh -s", sh_quote(&format!("SILT_VERSION={tag}")), sh_quote(&format!("SILT_INSTALL_DIR={dir}")))
+}
+
+/// What install.sh said went wrong, from its `silt install: ` lines.
+pub fn release_failure(stderr: &str) -> String {
+    let said = stderr.lines().filter_map(|line| line.trim().strip_prefix("silt install: ")).next_back();
+    said.unwrap_or_else(|| stderr.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("it failed")).to_owned()
+}
+
+/// Why a copy didn't run there, from what running it said: most often a C
+/// library older than the one it was built against.
+pub fn wont_run_of(stderr: &str) -> String {
+    let needs = stderr.split(|char: char| !(char.is_ascii_alphanumeric() || matches!(char, '_' | '.'))).find(|word| {
+        word.strip_prefix("GLIBC_")
+            .is_some_and(|version| !version.is_empty() && version.chars().all(|char| char.is_ascii_digit() || char == '.'))
+    });
+    if let Some(needs) = needs {
+        return format!("it needs `{needs}`, newer than the system there");
+    }
+    let last = stderr.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("it didn’t start");
+    let last = last.rsplit_once(": ").map_or(last, |(_, reason)| reason);
+    last.chars().filter(|char| !matches!(char, '`' | '\'')).collect::<String>().trim_end_matches('.').to_lowercase()
+}
+
+/// What `silt daemon restart --if-replaced` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Restarted {
+    Now,
+    /// Once the agents working in it finish, this many.
+    Waiting(usize),
+    NotRunning,
+    /// Left as it was, with what it said.
+    Unchanged(String),
+}
+
+pub fn restarted(stdout: &str) -> Restarted {
+    let line = stdout.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or_default();
+    if line == "restarted" {
+        Restarted::Now
+    } else if line == "not running" {
+        Restarted::NotRunning
+    } else if let Some(working) = line.strip_prefix("restarts once no agent works in it: ") {
+        let agents =
+            if working.starts_with("an agent") { 1 } else { working.split(' ').next().and_then(|n| n.parse().ok()).unwrap_or(1) };
+        Restarted::Waiting(agents)
+    } else {
+        Restarted::Unchanged(line.to_owned())
+    }
+}
+
+impl Restarted {
+    pub fn said(&self) -> String {
+        match self {
+            Self::Now => "Restarted its daemon on it".to_owned(),
+            Self::Waiting(1) => "Its daemon restarts on it once its agent finishes".to_owned(),
+            Self::Waiting(agents) => format!("Its daemon restarts on it once its {agents} agents finish"),
+            Self::NotRunning => "Its daemon wasn’t running".to_owned(),
+            Self::Unchanged(said) if said.is_empty() => "Left its daemon as it was".to_owned(),
+            Self::Unchanged(said) => format!("Left its daemon as it was: {said}"),
+        }
+    }
+}
+
 /// The steps of reaching a machine, as a test shows them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     SignIn,
     Find,
+    /// What the machine runs, and so how it gets this computer's build.
+    Platform,
+    Copy,
+    Check,
     Start,
+    Restart,
     Forward,
 }
 
+/// A test's steps.
 pub const STEPS: [Step; 4] = [Step::SignIn, Step::Find, Step::Start, Step::Forward];
+/// Installing `silt` where there's none.
+pub const INSTALL_STEPS: [Step; 6] = [Step::SignIn, Step::Platform, Step::Copy, Step::Check, Step::Start, Step::Forward];
+/// Replacing the `silt` there.
+pub const UPDATE_STEPS: [Step; 6] = [Step::SignIn, Step::Find, Step::Copy, Step::Check, Step::Restart, Step::Forward];
 
 impl Step {
     /// The step while it's to come or under way.
@@ -259,6 +495,10 @@ impl Step {
             Self::SignIn => format!("Signing in to `{}`", machine.host()),
             Self::Find => "Finding `silt` there".to_owned(),
             Self::Start => "Starting its daemon".to_owned(),
+            Self::Platform => format!("Checking what `{}` runs", machine.host()),
+            Self::Copy => "Installing this computer’s `silt` there".to_owned(),
+            Self::Check => "Checking it runs there".to_owned(),
+            Self::Restart => "Restarting its daemon on it".to_owned(),
             Self::Forward => "Forwarding its port to this computer".to_owned(),
         }
     }
@@ -267,32 +507,69 @@ impl Step {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepState {
     Running,
+    /// Under way, saying how far it got.
+    Doing(String),
     Done(String),
     Failed(String),
 }
 
-/// What a test of a machine shows: each step as it stands.
+/// What a test of a machine, or an install there, shows: each step as it
+/// stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestReport {
     machine: Machine,
-    steps: Vec<(&'static str, String)>,
+    action: &'static str,
+    steps: Vec<(Step, &'static str, String)>,
     done: bool,
     ok: bool,
+    /// It failed for want of `silt` there, which Silt can install.
+    can_install: bool,
 }
 
 impl TestReport {
     pub fn new(machine: &Machine) -> Self {
-        let steps = STEPS.iter().map(|step| ("waiting", step.doing(machine))).collect();
-        Self { machine: machine.clone(), steps, done: false, ok: false }
+        Self::of("test", machine, &STEPS)
+    }
+
+    pub fn install(machine: &Machine) -> Self {
+        Self::of("install", machine, &UPDATE_STEPS)
+    }
+
+    fn of(action: &'static str, machine: &Machine, steps: &[Step]) -> Self {
+        let mut report = Self { machine: machine.clone(), action, steps: Vec::new(), done: false, ok: false, can_install: false };
+        report.lay_out(steps);
+        report
+    }
+
+    /// Shows `steps`, keeping how the ones shown already stand.
+    pub fn lay_out(&mut self, steps: &[Step]) {
+        let was = std::mem::take(&mut self.steps);
+        self.steps = steps
+            .iter()
+            .map(|step| {
+                was.iter()
+                    .find(|(each, ..)| each == step)
+                    .cloned()
+                    .unwrap_or_else(|| (*step, "waiting", step.doing(&self.machine)))
+            })
+            .collect();
     }
 
     pub fn update(&mut self, step: Step, state: StepState) {
-        let at = STEPS.iter().position(|each| *each == step).expect("a step");
-        self.steps[at] = match state {
-            StepState::Running => ("running", format!("{}…", step.doing(&self.machine))),
-            StepState::Done(text) => ("done", text),
-            StepState::Failed(text) => ("failed", text),
+        let entry = match state {
+            StepState::Running => (step, "running", format!("{}…", step.doing(&self.machine))),
+            StepState::Doing(text) => (step, "running", text),
+            StepState::Done(text) => (step, "done", text),
+            StepState::Failed(text) => (step, "failed", text),
         };
+        match self.steps.iter_mut().find(|(each, ..)| *each == step) {
+            Some(shown) => *shown = entry,
+            None => self.steps.push(entry),
+        }
+    }
+
+    pub fn offer_install(&mut self) {
+        self.can_install = true;
     }
 
     pub fn finish(&mut self, ok: bool) {
@@ -301,14 +578,17 @@ impl TestReport {
     }
 
     pub fn json(&self) -> serde_json::Value {
-        let steps: Vec<_> = self.steps.iter().map(|(state, text)| serde_json::json!({ "state": state, "text": text })).collect();
+        let steps: Vec<_> =
+            self.steps.iter().map(|(_, state, text)| serde_json::json!({ "state": state, "text": text })).collect();
         serde_json::json!({
             "name": self.machine.name,
             "destination": self.machine.destination,
             "port": self.machine.port,
+            "action": self.action,
             "steps": steps,
             "done": self.done,
             "ok": self.ok,
+            "canInstall": self.can_install,
         })
     }
 }
@@ -330,6 +610,10 @@ pub enum Failure {
     NoSilt,
     /// The daemon's port is taken here.
     PortInUse(u16),
+    /// The signed-in user can't write where `silt` goes, at `path`.
+    NotWritable { path: String, user: Option<String> },
+    /// This computer's `silt` didn't run there, and why.
+    WontRun(String),
     /// Anything else, as ssh or `silt` said it.
     Other(String),
 }
@@ -395,8 +679,17 @@ impl Failure {
             }
             Self::NoSsh => "`ssh` isn't installed on this computer. Install OpenSSH's client, then retry.".to_owned(),
             Self::NoSilt => format!(
-                "Signed in, but `silt` isn't installed on `{host}`. Install it there with `curl -fsSL https://raw.githubusercontent.com/Urcra/silt/main/scripts/install.sh | sh`, then retry."
+                "Signed in, but `silt` isn’t installed on `{host}`. Silt can install this computer’s build there, or install it yourself with `curl -fsSL https://raw.githubusercontent.com/Urcra/silt/main/scripts/install.sh | sh`."
             ),
+            Self::NotWritable { path, user } => {
+                let whose = user.as_deref().map_or_else(|| "yours".to_owned(), |user| format!("`{user}`’s"));
+                format!(
+                    "`{path}` on `{host}` isn’t {whose} to replace, and Silt won’t use `sudo`. Update it there as its owner, or remove it so Silt installs its own in `~/.local/bin`."
+                )
+            }
+            Self::WontRun(why) => {
+                format!("This computer’s `silt` doesn’t run on `{host}`: {why}. Nothing was installed. {BUILD_THERE}")
+            }
             Self::PortInUse(port) => format!(
                 "Port {port} is already in use on this computer, so the daemon on `{host}` can't be forwarded to it. Run `silt daemon restart` there to have it pick another, then retry."
             ),
@@ -465,6 +758,10 @@ mod tests {
         );
         assert_eq!(edit_of(&link("silt://machines/remove?name=vps")), Some(Edit::Remove("vps".into())));
         assert_eq!(edit_of(&link("silt://machines/disconnect?name=vps")), Some(Edit::Disconnect("vps".into())));
+        assert_eq!(
+            edit_of(&link("silt://machines/install?name=vps&destination=me@vps.example.com&add=1")),
+            Some(Edit::Install { machine: vps(), add: true })
+        );
         for wrong in [
             "silt://machines/add?name=vps&destination=-oProxyCommand=x",
             "silt://machines/add?name=vps&destination=vps&port=0",
@@ -553,8 +850,15 @@ mod tests {
         assert!(found.user.is_some());
         assert_eq!(found.silt.as_deref(), Some(&*silt.to_string_lossy()));
         assert_eq!(found.version.as_deref(), Some("0.0.1 (nightly abc1234)"));
+        assert_eq!(found.platform, Some(Platform::here()));
+        assert_eq!(found.home.as_deref(), Some(&*with.to_string_lossy()));
         let missing = run(&without);
         assert!(missing.user.is_some() && missing.silt.is_none(), "{missing:?}");
+        // Where Silt installs it, though a non-interactive shell's PATH lacks it.
+        std::fs::create_dir_all(without.join(".local/bin")).expect("a temporary dir");
+        let installed = without.join(".local/bin/silt");
+        std::fs::copy(&silt, &installed).expect("installed");
+        assert_eq!(run(&without).silt.as_deref(), Some(&*installed.to_string_lossy()));
         std::fs::remove_dir_all(&dir).expect("cleaned up");
     }
 
@@ -563,7 +867,12 @@ mod tests {
         let found = probed("Welcome!\nsilt-user me\nsilt-path /home/me/.local/bin/silt\nsilt-version silt 0.0.1\n");
         assert_eq!(
             found,
-            Probed { user: Some("me".into()), silt: Some("/home/me/.local/bin/silt".into()), version: Some("0.0.1".into()) }
+            Probed {
+                user: Some("me".into()),
+                silt: Some("/home/me/.local/bin/silt".into()),
+                version: Some("0.0.1".into()),
+                ..Probed::default()
+            }
         );
         assert_eq!(probed("silt-path silt\n").silt, None, "not a path");
         assert_eq!(probed("silt-path /a\\b\n").silt, None);
@@ -602,5 +911,132 @@ mod tests {
         assert!(
             Failure::UnknownHost.explain(&Machine { port: Some(2222), ..vps() }).contains("`ssh -p 2222 me@vps.example.com`")
         );
+    }
+
+    #[test]
+    fn a_machine_gets_this_computer_s_build_a_release_or_how_to_build_it() {
+        let linux = |arch: &str| Platform { os: "linux".into(), arch: arch.into() };
+        assert_eq!(Platform::of_uname("Linux x86_64\n"), Some(linux("x86_64")));
+        assert_eq!(Platform::of_uname("Linux aarch64"), Some(linux("aarch64")));
+        assert_eq!(Platform::of_uname("Darwin arm64"), Some(Platform { os: "macos".into(), arch: "aarch64".into() }));
+        assert_eq!(Platform::of_uname("Linux"), None);
+        assert_eq!(Platform::of_uname("Linux x86_64; rm"), None);
+        assert_eq!(linux("aarch64").to_string(), "Linux aarch64");
+
+        assert_eq!(version_of("silt 0.0.1 (nightly a1b2c3d)\n").as_deref(), Some("0.0.1 (nightly a1b2c3d)"));
+        assert_eq!(version_of("Welcome!\nsilt 0.0.1 (nightly a1b2c3d)\n\n").as_deref(), Some("0.0.1 (nightly a1b2c3d)"));
+        assert_eq!(release_of("0.3.0 (stable a1b2c3d)").as_deref(), Some("v0.3.0"));
+        assert_eq!(release_of("0.3.0 (stable)").as_deref(), Some("v0.3.0"));
+        assert_eq!(release_of("0.0.1 (nightly a1b2c3d, with changes)"), None);
+
+        let (nightly, stable) = ("0.0.1 (nightly a1b2c3d)", "0.3.0 (stable a1b2c3d)");
+        assert_eq!(plan(&linux("x86_64"), &linux("x86_64"), nightly, "vps"), Plan::Copy);
+        assert_eq!(plan(&linux("x86_64"), &linux("aarch64"), stable, "vps"), Plan::Release("v0.3.0".into()));
+        let windows = Platform { os: "windows".into(), arch: "x86_64".into() };
+        assert_eq!(plan(&windows, &linux("x86_64"), stable, "vps"), Plan::Release("v0.3.0".into()));
+        let Plan::Cannot(why) = plan(&linux("x86_64"), &linux("aarch64"), nightly, "vps") else { panic!("no plan") };
+        assert!(
+            why.starts_with("`vps` runs Linux aarch64, and this computer’s `silt` is a nightly build for Linux x86_64"),
+            "{why}"
+        );
+        assert!(why.contains("`cargo install --locked --git https://github.com/Urcra/silt silt-cli`"));
+        let mac = Platform { os: "macos".into(), arch: "aarch64".into() };
+        assert!(matches!(plan(&linux("x86_64"), &mac, stable, "mini"), Plan::Cannot(why) if why.contains("only for Linux")));
+    }
+
+    #[test]
+    fn what_an_install_says() {
+        assert_eq!(shown_path("/home/me/.local/bin/silt", Some("/home/me")), "~/.local/bin/silt");
+        assert_eq!(shown_path("/home/meg/silt", Some("/home/me")), "/home/meg/silt");
+        assert_eq!(progress(41_000_000, 95_100_000), "41 of 96 MB");
+        assert_eq!(progress(0, 0), "0 of 0 MB");
+        assert_eq!(
+            wont_run_of(
+                "/home/me/.local/bin/.silt.new: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found (required by /home/me/.local/bin/.silt.new)\n"
+            ),
+            "it needs `GLIBC_2.39`, newer than the system there"
+        );
+        assert_eq!(wont_run_of("sh: 1: /home/me/.local/bin/.silt.new: Exec format error\n"), "exec format error");
+        assert_eq!(
+            release_failure("silt install: downloading x\nsilt install: no release binary for riscv64\n"),
+            "no release binary for riscv64"
+        );
+        assert_eq!(restarted("restarted\n"), Restarted::Now);
+        assert_eq!(restarted("restarts once no agent works in it: 2 agents work in it now\n"), Restarted::Waiting(2));
+        assert_eq!(restarted("restarts once no agent works in it: an agent works in it now\n"), Restarted::Waiting(1));
+        assert_eq!(restarted("not running\n"), Restarted::NotRunning);
+        assert_eq!(
+            restarted("the daemon runs the build installed\n"),
+            Restarted::Unchanged("the daemon runs the build installed".into())
+        );
+        assert_eq!(Restarted::Waiting(2).said(), "Its daemon restarts on it once its 2 agents finish");
+        let wont = Failure::WontRun("it needs `GLIBC_2.39`, newer than the system there".into()).explain(&vps());
+        assert!(wont.starts_with("This computer’s `silt` doesn’t run on `vps.example.com`: it needs `GLIBC_2.39`"), "{wont}");
+        let unwritable = Failure::NotWritable { path: "/usr/local/bin/silt".into(), user: Some("ubuntu".into()) }.explain(&vps());
+        assert!(unwritable.starts_with("`/usr/local/bin/silt` on `vps.example.com` isn’t `ubuntu`’s to replace"), "{unwritable}");
+    }
+
+    #[test]
+    fn an_install_s_report_lays_out_its_steps_as_it_learns_what_it_does() {
+        let mut report = TestReport::install(&vps());
+        report.update(Step::SignIn, StepState::Done("Signed in".into()));
+        report.lay_out(&INSTALL_STEPS);
+        report.update(Step::Copy, StepState::Doing("Copying… 1 of 2 MB".into()));
+        let json = report.json();
+        assert_eq!(json["action"], "install");
+        let steps: Vec<_> =
+            json["steps"].as_array().expect("steps").iter().map(|step| (step["state"].clone(), step["text"].clone())).collect();
+        assert_eq!(steps.len(), 6);
+        assert_eq!(steps[0], ("done".into(), "Signed in".into()));
+        assert_eq!(steps[1], ("waiting".into(), "Checking what `vps.example.com` runs".into()));
+        assert_eq!(steps[2], ("running".into(), "Copying… 1 of 2 MB".into()));
+        assert_eq!(json["canInstall"], false);
+    }
+
+    /// The scripts an install runs there, run here by `sh` as ssh would.
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_is_checked_beside_its_place_then_renamed_into_it() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("silt-desktop-copy-{}", std::process::id()));
+        let target = dir.join("home/.local/bin/silt");
+        let target_text = target.to_string_lossy().into_owned();
+        let sh = |line: &str, input: &[u8]| {
+            let mut child = Command::new("sh")
+                .args(["-c", line])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .expect("sh runs");
+            let _ = child.stdin.take().expect("stdin").write_all(input);
+            child.wait_with_output().expect("sh ran")
+        };
+        let copied = sh(&copy_line(&target_text), b"#!/bin/sh\necho 'silt 0.0.2 (nightly b2c3d4e)'\n");
+        assert!(copied.status.success(), "{copied:?}");
+        let new = dir.join("home/.local/bin/.silt.new");
+        assert!(new.is_file() && !target.exists(), "copied beside it, not over it");
+        let checked = sh(&check_line(&target_text), b"");
+        assert_eq!(version_of(&String::from_utf8_lossy(&checked.stdout)).as_deref(), Some("0.0.2 (nightly b2c3d4e)"));
+        assert!(sh(&place_line(&[&target_text]), b"").status.success());
+        assert!(target.is_file() && !new.exists());
+
+        sh(&copy_line(&target_text), b"x");
+        assert!(sh(&discard_line(&[&target_text]), b"").status.success());
+        assert!(!new.exists(), "discarded");
+
+        let locked = dir.join("locked");
+        std::fs::create_dir_all(&locked).expect("a temporary dir");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).expect("read-only");
+        let refused = sh(&copy_line(&locked.join("silt").to_string_lossy()), b"x");
+        // Root writes anywhere, so only someone else sees it refused.
+        if !String::from_utf8_lossy(&sh("id -u", b"").stdout).trim().eq("0") {
+            assert_eq!(refused.status.code(), Some(3));
+            assert!(String::from_utf8_lossy(&refused.stderr).contains("silt-unwritable"));
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("writable");
+        std::fs::remove_dir_all(&dir).expect("cleaned up");
     }
 }
