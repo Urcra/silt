@@ -17,7 +17,9 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Responder};
 use serde_json::Value;
 
-use crate::host::{Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label};
+use crate::host::{
+    Changing, Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label,
+};
 use crate::modes::{commands_of, modes_of, settings_of};
 use crate::prompt::{Accepts, blocks};
 use crate::sign_in::{SignInHow, SignInMethod};
@@ -237,9 +239,11 @@ impl ConnectTo<Agent> for V1 {
                 for event in early.lock().expect("lock").take().unwrap_or_default() {
                     let _ = events.send(event);
                 }
+                let mut changing = Changing::default();
                 while let Some(command) = commands.recv().await {
                     match command {
                         Command::Prompt { text, attachments } => {
+                            changing.settled().await;
                             let request = PromptRequest::new(session.clone(), blocks(&text, &attachments, accepts));
                             let ended = events.clone();
                             let methods = methods.clone();
@@ -305,6 +309,7 @@ impl ConnectTo<Agent> for V1 {
                         Command::SetMode(mode) => {
                             let request = SetSessionModeRequest::new(session.clone(), SessionModeId::new(mode.clone()));
                             let told = events.clone();
+                            let answered = changing.asked();
                             let sent = connection.send_request(request);
                             connection.spawn(async move {
                                 let event = match sent.block_task().await {
@@ -312,6 +317,7 @@ impl ConnectTo<Agent> for V1 {
                                     Err(error) => Event::Refused(format!("the agent kept its mode: {error}")),
                                 };
                                 let _ = told.send(event);
+                                drop(answered);
                                 Ok(())
                             })?;
                         }
@@ -322,6 +328,7 @@ impl ConnectTo<Agent> for V1 {
                                 SessionConfigValueId::new(value),
                             );
                             let told = events.clone();
+                            let answered = changing.asked();
                             let sent = connection.send_request(request);
                             connection.spawn(async move {
                                 let event = match sent.block_task().await {
@@ -329,6 +336,7 @@ impl ConnectTo<Agent> for V1 {
                                     Err(error) => Event::Refused(format!("the agent kept its setting: {error}")),
                                 };
                                 let _ = told.send(event);
+                                drop(answered);
                                 Ok(())
                             })?;
                         }
