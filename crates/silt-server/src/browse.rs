@@ -380,7 +380,7 @@ fn summary(
         collaborators,
         agent_state: running.get(&row.id).map(|(_, agent)| agent.state),
         background: running.get(&row.id).map_or(0, |(_, agent)| agent.background),
-        last_ms: own.iter().map(|delta| delta.time_ms).max().unwrap_or(row.created_ms),
+        last_ms: own.iter().filter(|delta| delta.op.is_activity()).map(|delta| delta.time_ms).max().unwrap_or(row.created_ms),
         merged: requests.iter().any(|(_, request)| request.fork == row.id && request.status == MrStatus::Approved),
         review: row.owner == readable.me
             && requests.iter().any(|(_, request)| request.target == row.id && request.status == MrStatus::Open),
