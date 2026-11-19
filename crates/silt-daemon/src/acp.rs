@@ -120,6 +120,9 @@ pub(crate) struct AcpRun {
     subagents: HashSet<String>,
     /// How many commands and subagents the thread list was last told of.
     background_listed: usize,
+    /// When its background commands were last looked for among its
+    /// processes.
+    background_checked: Instant,
     /// Background commands the person stopped, by the call that started
     /// each: the agent's later news of their end is no news.
     stopped_tasks: HashSet<String>,
@@ -152,6 +155,11 @@ struct Background {
 /// is quiet, with no tool call running and nothing asked, before its turn
 /// is taken to have ended. Copilot and Claude pause 2–4s between steps.
 const OWN_TURN_QUIET: Duration = Duration::from_secs(5);
+
+/// How often, and how long after it started, a command an agent that won't
+/// say when it ends left in the background is looked for among its
+/// processes.
+const BACKGROUND_CHECK: Duration = Duration::from_secs(3);
 
 /// A prompt an agent was started with.
 struct First {
@@ -739,6 +747,7 @@ impl Core {
                 background: HashMap::new(),
                 subagents: HashSet::new(),
                 background_listed: 0,
+                background_checked: Instant::now(),
                 stopped_tasks: HashSet::new(),
                 hush: None,
                 stopped: false,
@@ -1318,7 +1327,9 @@ impl Core {
 
     /// Ends a command the thread's agent left running in the background,
     /// started by the call `call`: ACP has no way to ask the agent to, so
-    /// Silt ends its processes, and the agent hears that it ended.
+    /// Silt ends its processes, and the agent hears that it ended. One that
+    /// none of the agent's processes runs any more ended without Silt hearing
+    /// of it, and is only marked stopped.
     pub(crate) async fn stop_task(&mut self, selector: &str, call: &str) -> Result<&'static str, CoreError> {
         let thread = self.find_thread(selector)?;
         let run = self.running(thread)?;
@@ -1331,13 +1342,10 @@ impl Core {
         // The same command left running twice is told apart by age.
         let nth = run.background.values().filter(|other| other.started < kept.started && other.command == command).count();
         let handle = run.handle.clone().ok_or_else(not_running)?;
-        let ended = tokio::task::spawn_blocking(move || handle.stop_command(&command, nth))
+        tokio::task::spawn_blocking(move || handle.stop_command(&command, nth))
             .await
             .map_err(|error| CoreError::Invalid(format!("could not look for the command: {error}")))?
             .map_err(|error| CoreError::Invalid(format!("could not read this machine's processes: {error}")))?;
-        if ended == 0 {
-            return Err(CoreError::Invalid("none of the agent's processes runs that command; it may have just ended".into()));
-        }
         let run = self.acp.get_mut(&thread).expect("checked above");
         run.background.remove(&task);
         run.stopped_tasks.insert(call.to_owned());
@@ -1832,6 +1840,68 @@ impl Core {
             }
             self.agent_changed(thread).await;
         }
+    }
+
+    /// Marks done what agents that don't say when their background commands
+    /// end, as Copilot, left running and none of their processes runs any
+    /// more: Copilot hears of a detached shell's end and may never read it,
+    /// which is all Silt would hear.
+    pub(crate) async fn notice_ended_background(&mut self) {
+        let mut due = Vec::new();
+        for (thread, run) in &mut self.acp {
+            if run.reports_work || run.background.is_empty() || run.background_checked.elapsed() < BACKGROUND_CHECK {
+                continue;
+            }
+            run.background_checked = Instant::now();
+            let Some(handle) = run.handle.clone() else { continue };
+            let tasks: Vec<(String, String)> = run
+                .background
+                .iter()
+                .filter(|(_, kept)| !kept.command.trim().is_empty() && kept.started.elapsed() >= BACKGROUND_CHECK)
+                .map(|(task, kept)| (task.clone(), kept.command.clone()))
+                .collect();
+            if !tasks.is_empty() {
+                due.push((*thread, handle, tasks));
+            }
+        }
+        for (thread, handle, tasks) in due {
+            let commands: Vec<String> = tasks.iter().map(|(_, command)| command.clone()).collect();
+            let running = match tokio::task::spawn_blocking(move || handle.commands_running(&commands)).await {
+                Ok(Ok(running)) => running,
+                Ok(Err(error)) => {
+                    warn!(%error, "could not read this machine's processes");
+                    continue;
+                }
+                Err(error) => {
+                    warn!(%error, "could not look for the agent's background commands");
+                    continue;
+                }
+            };
+            let ended: Vec<String> =
+                tasks.into_iter().zip(running).filter(|(_, running)| !running).map(|((task, _), _)| task).collect();
+            if ended.is_empty() {
+                continue;
+            }
+            for task in ended {
+                if let Err(error) = self.background_ended(thread, &task).await {
+                    warn!(%error, %thread, "could not record that a background command ended");
+                }
+            }
+            self.agent_changed(thread).await;
+        }
+    }
+
+    /// Records that the background command `task` ended, as Silt saw rather
+    /// than heard: done, until the agent says how it ended.
+    async fn background_ended(&mut self, thread: ThreadId, task: &str) -> Result<(), CoreError> {
+        let Some(run) = self.acp.get_mut(&thread) else { return Ok(()) };
+        let Some(kept) = run.background.remove(task) else { return Ok(()) };
+        if run.state == AgentState::Idle {
+            let label = run.labels.get(&kept.call).cloned();
+            run.woke_by.push(ended(Some("background"), label.as_deref(), "ended"));
+        }
+        self.flush_acp(thread).await?;
+        self.record_acp(thread, &acp::task(&kept.call, Some(task), Some("background"), "completed")).await
     }
 
     /// Records what a subagent did, inside the call `parent` that started

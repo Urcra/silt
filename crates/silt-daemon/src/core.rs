@@ -1462,6 +1462,7 @@ impl Core {
             warn!(%error, "could not record new commits");
         }
         self.end_quiet_own_turns().await;
+        self.notice_ended_background().await;
         self.poll_sessions();
         let ids: Vec<String> = self
             .sessions
