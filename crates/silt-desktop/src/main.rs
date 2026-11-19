@@ -85,7 +85,16 @@ impl State {
         let mut list: Vec<serde_json::Value> = backends
             .fixed
             .iter()
-            .map(|backend| serde_json::json!({ "id": backend.id(), "label": backend.label(), "kind": backend.kind() }))
+            .map(|backend| {
+                let mut entry = serde_json::json!({ "id": backend.id(), "label": backend.label(), "kind": backend.kind() });
+                // What a machine over SSH is offered to update to (ADR 0109).
+                if *backend == Backend::Native
+                    && let Some(version) = backends.machines.local_version()
+                {
+                    entry["version"] = version.into();
+                }
+                entry
+            })
             .collect();
         list.extend(backends.machines.entries());
         if shown.is_some_and(|shown| shown != target) {
@@ -170,6 +179,8 @@ fn main() {
             let told = state.clone();
             machines.on_event(move |event| told.on_machines(event));
             machines.watch();
+            let learning = machines.clone();
+            std::thread::spawn(move || learning.learn_local(&native_silt()));
             let _ = state.backends.set(Arc::new(Backends { fixed, machines }));
             let known = state.known();
             let asked = link_in(args, &known);
@@ -418,6 +429,7 @@ fn edit_machines(state: &State, edit: Edit) {
             machines.disconnect(&name);
         }
         Edit::Test { machine, add } => machines.test(&machine, add),
+        Edit::Install { machine, add } => machines.install(&machine, add),
     }
     state.tell();
 }
