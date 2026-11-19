@@ -1,30 +1,135 @@
 import { useEffect, useState } from 'react'
 
-/** Where the desktop app can show Silt from: this computer, and each WSL distribution (ADR 0045). */
+/** Where the desktop app can show Silt from: this computer, each WSL distribution (ADR 0045), and each machine over SSH (ADR 0108). */
 export interface Backend {
   id: string
   label: string
+  kind?: 'native' | 'wsl' | 'ssh'
+  /** A machine's `user@host`, or a `Host` from `~/.ssh/config`. */
+  destination?: string
+  port?: number | null
+  state?: 'idle' | 'connecting' | 'connected' | 'failed'
+  /** Why it couldn't connect, when `state` is failed. */
+  reason?: string | null
+  /** What it's doing, when `state` is connecting. */
+  step?: string | null
+  /** When `state` last changed, in milliseconds since the epoch. */
+  since?: number | null
+  lastShown?: number | null
+  /** The `silt --version` it answered with. */
+  version?: string | null
+  /** The window is switching to it, and still shows another. */
+  switching?: boolean
+}
+
+/** A machine as the add and edit form fills it in. */
+export interface MachineFields {
+  name: string
+  destination: string
+  port?: number | null
+}
+
+/** One step of testing a machine, as the desktop app reports it. */
+export interface TestStep {
+  state: 'waiting' | 'running' | 'done' | 'failed'
+  text: string
+}
+
+export interface MachineTest extends MachineFields {
+  steps: TestStep[]
+  done: boolean
+  ok: boolean
+}
+
+/** Why switching to a backend failed, which leaves the window where it was. */
+export interface SwitchFailure {
+  id: string
+  label: string
+  reason: string
 }
 
 declare global {
   interface Window {
-    /** Set by the desktop app's window when it has more than one place to show Silt from. */
+    /** Set by the desktop app's window: where it can show Silt from, sent again as that changes. */
     __siltBackends?: Backend[]
     __siltBackend?: string
-    /** Set by the desktop app's window: the commit it was built from (ADR 0100). */
-    __siltDesktop?: { commit?: string }
+    /** Set by the desktop app's window: the commit it was built from (ADR 0100), and the key its machines links carry. */
+    __siltDesktop?: { commit?: string; key?: string }
   }
 }
 
-/** The backends the desktop app offers and the one it shows, or none outside the app or with nothing to choose. */
+function useEvent<T>(name: string, heard: (detail: T) => void) {
+  useEffect(() => {
+    const listener = (event: Event) => heard((event as CustomEvent<T>).detail)
+    window.addEventListener(name, listener)
+    return () => window.removeEventListener(name, listener)
+  }, [name, heard])
+}
+
+/** The backends the desktop app offers and the one it shows, or none outside the app. */
 export function useBackends(): { backends: Backend[]; current: string | undefined } {
   const [current, setCurrent] = useState(() => window.__siltBackend)
+  const [backends, setBackends] = useState(() => window.__siltBackends ?? [])
   useEffect(() => {
     const shown = (event: Event) => setCurrent((event as CustomEvent<string>).detail)
+    const listed = () => setBackends(window.__siltBackends ?? [])
     window.addEventListener('silt-backend', shown)
-    return () => window.removeEventListener('silt-backend', shown)
+    window.addEventListener('silt-backends', listed)
+    return () => {
+      window.removeEventListener('silt-backend', shown)
+      window.removeEventListener('silt-backends', listed)
+    }
   }, [])
-  return { backends: window.__siltBackends ?? [], current }
+  return { backends, current }
+}
+
+/** Calls `heard` when switching backends fails and the window stays where it was. */
+export function useSwitchFailed(heard: (failure: SwitchFailure) => void) {
+  useEvent('silt-backend-failed', heard)
+}
+
+/** The latest report of testing a machine, as its steps go by. */
+export function useMachineTest(): [MachineTest | undefined, (test: MachineTest | undefined) => void] {
+  const [test, setTest] = useState<MachineTest>()
+  useEvent('silt-machine-test', setTest)
+  return [test, setTest]
+}
+
+/** The link asking the desktop app to change its machines; it carries the window's key, so another page's can't (ADR 0108). */
+export function machinesLink(
+  action: 'add' | 'change' | 'remove' | 'test' | 'disconnect',
+  fields: Record<string, string | number | null | undefined>,
+  key: string | undefined = window.__siltDesktop?.key,
+): string {
+  const query = new URLSearchParams()
+  for (const [name, value] of Object.entries(fields)) {
+    if (value !== undefined && value !== null && value !== '') query.set(name, String(value))
+  }
+  query.set('key', key ?? '')
+  return `silt://machines/${action}?${query}`
+}
+
+const asFields = (machine: MachineFields) => ({ name: machine.name, destination: machine.destination, port: machine.port })
+
+export function addMachine(machine: MachineFields) {
+  tellWindow(machinesLink('add', asFields(machine)))
+}
+
+export function changeMachine(was: string, machine: MachineFields) {
+  tellWindow(machinesLink('change', { ...asFields(machine), was }))
+}
+
+export function removeMachine(name: string) {
+  tellWindow(machinesLink('remove', { name }))
+}
+
+export function disconnectMachine(name: string) {
+  tellWindow(machinesLink('disconnect', { name }))
+}
+
+/** Tests reaching `machine`, reported through `useMachineTest`; `add` adds it once it passes. */
+export function testMachine(machine: MachineFields, add: boolean) {
+  tellWindow(machinesLink('test', { ...asFields(machine), add: add ? 1 : undefined }))
 }
 
 /** Asks the desktop app's window to show Silt from `backend`, which it does in place of opening the link. */
