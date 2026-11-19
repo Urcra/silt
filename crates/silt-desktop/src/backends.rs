@@ -1,11 +1,14 @@
-//! The daemons one window can show (ADR 0045): this machine's, and on
-//! Windows each WSL distribution's, reached through `wsl.exe`.
+//! The daemons one window can show (ADR 0045): this machine's, on Windows
+//! each WSL distribution's, reached through `wsl.exe`, and the machines the
+//! person added, reached over SSH (ADR 0108).
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
 use tauri::Url;
+
+use crate::machines;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Backend {
@@ -14,22 +17,27 @@ pub enum Backend {
     Native,
     /// The `silt` inside a WSL distribution, by its name.
     Wsl(String),
+    /// The `silt` on a machine reached over SSH, by its name.
+    Ssh(String),
 }
 
 impl Backend {
-    /// `native`, or `wsl:<distribution>` as links name them.
+    /// `native`, `wsl:<distribution>` or `ssh:<machine>` as links name them.
     pub fn parse(text: &str) -> Option<Self> {
-        match text.strip_prefix("wsl:") {
-            Some(name) if is_distribution_name(name) => Some(Self::Wsl(name.to_owned())),
-            Some(_) => None,
-            None => (text == "native").then_some(Self::Native),
+        if let Some(name) = text.strip_prefix("wsl:") {
+            return is_distribution_name(name).then(|| Self::Wsl(name.to_owned()));
         }
+        if let Some(name) = text.strip_prefix("ssh:") {
+            return machines::is_machine_name(name).then(|| Self::Ssh(name.to_owned()));
+        }
+        (text == "native").then_some(Self::Native)
     }
 
     pub fn id(&self) -> String {
         match self {
             Self::Native => "native".to_owned(),
             Self::Wsl(name) => format!("wsl:{name}"),
+            Self::Ssh(name) => format!("ssh:{name}"),
         }
     }
 
@@ -37,6 +45,16 @@ impl Backend {
         match self {
             Self::Native => "This computer".to_owned(),
             Self::Wsl(name) => format!("WSL: {name}"),
+            Self::Ssh(name) => name.clone(),
+        }
+    }
+
+    /// `native`, `wsl` or `ssh`, as the page tells them apart.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Wsl(_) => "wsl",
+            Self::Ssh(_) => "ssh",
         }
     }
 }
@@ -52,7 +70,8 @@ pub struct Target {
 /// What a `silt://open/?project=<dir>&backend=<backend>` link asks for, as
 /// `silt open` in WSL sends it. A web page can open such a link too, so it
 /// only chooses among the backends the app knows, and a directory, which
-/// that backend's `silt` checks like any other.
+/// that backend's `silt` checks like any other. No `silt open` on a machine
+/// over SSH reaches this window, so none picks a project there.
 pub fn target_of(link: &Url, known: &[Backend]) -> Option<Target> {
     if link.scheme() != "silt" || link.host_str() != Some("open") || !matches!(link.path(), "" | "/") {
         return None;
@@ -68,7 +87,7 @@ pub fn target_of(link: &Url, known: &[Backend]) -> Option<Target> {
     let plain = |project: &String| {
         project.len() <= 4096 && !project.chars().any(char::is_control) && !project.split(['/', '\\']).any(|part| part == "..")
     };
-    if !target.project.as_ref().is_none_or(plain) {
+    if !target.project.as_ref().is_none_or(plain) || matches!(target.backend, Backend::Ssh(_)) && target.project.is_some() {
         return None;
     }
     Some(target)
@@ -139,48 +158,50 @@ pub fn remember_silts(silts: &HashMap<String, String>) -> String {
 /// so a daemon it starts finds the agents their terminal does: `wsl.exe
 /// --exec` alone gives the distribution's bare `PATH`, without `~/.local/bin`
 /// or nvm's node. Shells that don't take `$0` and `$@` so get `sh -l`.
-const IN_THEIR_SHELL: &str = r#"case "${SHELL##*/}" in bash|zsh|ksh|dash|sh) shell=$SHELL ;; *) shell=/bin/sh ;; esac
+pub const IN_THEIR_SHELL: &str = r#"case "${SHELL##*/}" in bash|zsh|ksh|dash|sh) shell=$SHELL ;; *) shell=/bin/sh ;; esac
 exec "$shell" -lic 'exec "$0" "$@"' "$0" "$@""#;
 
 /// The command that attaches to the backend's daemon, starting it if none
 /// runs, and prints its web UI's address: in the project's directory, or
-/// in `/`, not a clone of any repository.
-pub fn open_web(target: &Target, native: &Path, wsl_silt: &str) -> Command {
-    let mut command = silt_in(target, native, wsl_silt);
+/// in `/`, not a clone of any repository. None for a machine over SSH,
+/// which is reached otherwise.
+pub fn open_web(target: &Target, native: &Path, wsl_silt: &str) -> Option<Command> {
+    let mut command = silt_in(target, native, wsl_silt)?;
     command.args(["open", "--no-browser"]);
-    command
+    Some(command)
 }
 
 /// The command that starts the backend's daemon unless one runs, outside
 /// any repository, so its watchers and sync run before it's shown.
-pub fn start_daemon(backend: &Backend, native: &Path, wsl_silt: &str) -> Command {
-    let mut command = silt_in(&Target { backend: backend.clone(), project: None }, native, wsl_silt);
+pub fn start_daemon(backend: &Backend, native: &Path, wsl_silt: &str) -> Option<Command> {
+    let mut command = silt_in(&Target { backend: backend.clone(), project: None }, native, wsl_silt)?;
     command.args(["daemon", "start"]);
-    command
+    Some(command)
 }
 
 /// The command that restarts the backend's daemon on the build installed
 /// since it started, if one was, once no agent works in it.
-pub fn restart_replaced_daemon(backend: &Backend, native: &Path, wsl_silt: &str) -> Command {
-    let mut command = silt_in(&Target { backend: backend.clone(), project: None }, native, wsl_silt);
+pub fn restart_replaced_daemon(backend: &Backend, native: &Path, wsl_silt: &str) -> Option<Command> {
+    let mut command = silt_in(&Target { backend: backend.clone(), project: None }, native, wsl_silt)?;
     command.args(["daemon", "restart", "--if-replaced"]);
-    command
+    Some(command)
 }
 
-fn silt_in(target: &Target, native: &Path, wsl_silt: &str) -> Command {
+fn silt_in(target: &Target, native: &Path, wsl_silt: &str) -> Option<Command> {
     let dir = target.project.as_deref().unwrap_or("/");
     match &target.backend {
         Backend::Native => {
             let mut command = Command::new(native);
             command.current_dir(dir);
-            command
+            Some(command)
         }
         Backend::Wsl(distribution) => {
             let mut command = Command::new("wsl.exe");
             command.args(["-d", distribution, "--cd", dir, "--exec", "sh", "-c"]);
             command.args([IN_THEIR_SHELL, wsl_silt]);
-            command
+            Some(command)
         }
+        Backend::Ssh(_) => None,
     }
 }
 
@@ -194,7 +215,7 @@ mod tests {
 
     #[test]
     fn links_pick_a_known_backend_and_a_directory() {
-        let known = [Backend::Native, Backend::Wsl("Ubuntu".into())];
+        let known = [Backend::Native, Backend::Wsl("Ubuntu".into()), Backend::Ssh("home gpu".into())];
         assert_eq!(
             target_of(&link("silt://open/?project=/home/me/a%20b&backend=wsl:Ubuntu"), &known),
             Some(Target { backend: Backend::Wsl("Ubuntu".into()), project: Some("/home/me/a b".into()) })
@@ -207,6 +228,12 @@ mod tests {
         assert_eq!(target_of(&link("silt://elsewhere/?backend=native"), &known), None);
         assert_eq!(target_of(&link("https://open/?backend=native"), &known), None);
         assert_eq!(target_of(&link("silt://open/t/abc"), &known), None, "permalinks are for later");
+        assert_eq!(
+            target_of(&link("silt://open/?backend=ssh:home%20gpu"), &known),
+            Some(Target { backend: Backend::Ssh("home gpu".into()), project: None })
+        );
+        assert_eq!(target_of(&link("silt://open/?backend=ssh:vps"), &known), None, "not a machine here");
+        assert_eq!(target_of(&link("silt://open/?project=/srv&backend=ssh:home%20gpu"), &known), None, "no project there");
     }
 
     #[test]
@@ -220,11 +247,13 @@ mod tests {
 
     #[test]
     fn backends_round_trip_through_their_ids() {
-        for backend in [Backend::Native, Backend::Wsl("Ubuntu-24.04".into())] {
+        for backend in [Backend::Native, Backend::Wsl("Ubuntu-24.04".into()), Backend::Ssh("home gpu".into())] {
             assert_eq!(Backend::parse(&backend.id()), Some(backend));
         }
         assert_eq!(Backend::parse("wsl:"), None);
         assert_eq!(Backend::parse("local"), None);
+        assert_eq!(Backend::parse("ssh:"), None);
+        assert_eq!(Backend::parse("ssh: x"), None);
     }
 
     #[test]
@@ -256,7 +285,7 @@ mod tests {
     #[test]
     fn a_distribution_s_silt_runs_in_the_project_in_the_person_s_shell() {
         let target = Target { backend: Backend::Wsl("Ubuntu".into()), project: Some("/home/me/repo".into()) };
-        let command = open_web(&target, Path::new("silt"), "/usr/local/bin/silt");
+        let command = open_web(&target, Path::new("silt"), "/usr/local/bin/silt").expect("a command");
         let args: Vec<_> = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
         assert_eq!(command.get_program(), "wsl.exe");
         assert_eq!(
@@ -275,21 +304,22 @@ mod tests {
                 "--no-browser"
             ]
         );
-        let native = open_web(&Target::default(), Path::new("/opt/silt"), "silt");
+        let native = open_web(&Target::default(), Path::new("/opt/silt"), "silt").expect("a command");
         assert_eq!(native.get_program(), "/opt/silt");
         assert_eq!(native.get_current_dir(), Some(Path::new("/")));
     }
 
     #[test]
     fn a_daemon_starts_outside_any_repository_in_the_person_s_shell() {
-        let command = start_daemon(&Backend::Wsl("Ubuntu".into()), Path::new("silt"), "/usr/local/bin/silt");
+        let command = start_daemon(&Backend::Wsl("Ubuntu".into()), Path::new("silt"), "/usr/local/bin/silt").expect("a command");
         let args: Vec<_> = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
         assert_eq!(command.get_program(), "wsl.exe");
         assert_eq!(
             args,
             ["-d", "Ubuntu", "--cd", "/", "--exec", "sh", "-c", IN_THEIR_SHELL, "/usr/local/bin/silt", "daemon", "start"]
         );
-        let native = start_daemon(&Backend::Native, Path::new("/opt/silt"), "");
+        let native = start_daemon(&Backend::Native, Path::new("/opt/silt"), "").expect("a command");
+        assert!(start_daemon(&Backend::Ssh("vps".into()), Path::new("/opt/silt"), "").is_none(), "reached otherwise");
         assert_eq!(native.get_program(), "/opt/silt");
         assert!(native.get_args().eq(["daemon", "start"]));
         assert_eq!(native.get_current_dir(), Some(Path::new("/")));

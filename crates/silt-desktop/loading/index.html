@@ -43,6 +43,9 @@
       p.error {
         color: var(--error);
       }
+      a {
+        color: var(--fg);
+      }
     </style>
   </head>
   <body>
@@ -50,6 +53,7 @@
       <h1>Silt</h1>
       <p id="status" role="status">Finding the Silt daemon…</p>
       <p id="retry" hidden>Trying again in the background.</p>
+      <p id="instead" hidden><a href="silt://open/?backend=native">Show This computer instead</a></p>
     </main>
     <script>
       // The theme Silt last showed, which the app keeps, so this page opens in it.
@@ -62,12 +66,24 @@
         root.setProperty('--muted', `color-mix(in oklab, ${theme.fg} 70%, ${theme.bg})`)
       }
 
-      // Called by the app when it can't reach the daemon.
-      function showError(message) {
+      // Called by the app while it reaches a machine over SSH.
+      function showStatus(message) {
         const status = document.getElementById('status')
         status.textContent = message
+        status.className = ''
+        document.getElementById('retry').hidden = true
+        document.getElementById('instead').hidden = true
+      }
+
+      // Called by the app when it can't reach the daemon. Commands come in
+      // backticks, which the Silt UI shows as code. `elsewhere` is whether it
+      // tried another machine than this one, which can be shown instead.
+      function showError(message, elsewhere) {
+        const status = document.getElementById('status')
+        status.textContent = message.replaceAll('`', '')
         status.className = 'error'
         document.getElementById('retry').hidden = false
+        document.getElementById('instead').hidden = !elsewhere
       }
     </script>
   </body>
