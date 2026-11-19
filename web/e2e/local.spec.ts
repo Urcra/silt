@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { stopAgent } from './fixture'
+import { runFixture, stopAgent } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -22,10 +22,7 @@ const machine = () => ({
 })
 
 test.beforeAll(() => {
-  const output = execFileSync(join(import.meta.dirname, 'local-fixture.sh'), {
-    encoding: 'utf8',
-  })
-  fixture = JSON.parse(output.trim().split('\n').pop() ?? '{}') as Fixture
+  fixture = JSON.parse(runFixture('local-fixture.sh') || '{}') as Fixture
 })
 
 test.afterAll(() => {

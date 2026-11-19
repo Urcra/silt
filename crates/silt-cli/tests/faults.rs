@@ -8,6 +8,7 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use common::{Machine, Server, eventually, origin, thread_of};
 
@@ -232,7 +233,13 @@ fn install(bin: &Path) -> PathBuf {
     fs::create_dir_all(bin).expect("mkdir");
     let installed = bin.join(Path::new(env!("CARGO_BIN_EXE_silt")).file_name().expect("a file name"));
     if installed.exists() {
-        fs::rename(&installed, bin.join("silt.old")).expect("moves the old one aside");
+        // Windows refuses to move a file another process holds for a moment,
+        // as a virus scanner does one just written.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while let Err(error) = fs::rename(&installed, bin.join("silt.old")) {
+            assert!(Instant::now() < deadline, "moves the old one aside: {error}");
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
     fs::write(&installed, fs::read(env!("CARGO_BIN_EXE_silt")).expect("reads silt")).expect("installs");
     silt_os::make_executable(&installed).expect("executable");

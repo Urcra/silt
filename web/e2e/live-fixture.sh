@@ -7,6 +7,8 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 silt="$root/target/debug/silt"
 work=$(mktemp -d /tmp/silt-live-XXXXXX)
+# A failure partway leaves nothing running or on disk.
+trap 'status=$?; [ "$status" -eq 0 ] || "$root/web/e2e/abandon.sh" "$work" "$silt"; exit "$status"' EXIT
 free_port() {
     python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
 }

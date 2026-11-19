@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Locator, Page } from '@playwright/test'
@@ -16,9 +16,22 @@ const FILE = join(import.meta.dirname, '.fixture.json')
  * on an optimized build, else the debug build. */
 export const SILT = process.env.SILT ?? join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
+/**
+ * Runs the fixture script `script` in this folder and gives the last line it printed, the world it made. When it
+ * fails, the error says why: execFileSync's names only the command, its stderr gone to the run's output, apart.
+ */
+export function runFixture(script: string, env: NodeJS.ProcessEnv = process.env): string {
+  const ran = spawnSync(join(import.meta.dirname, script), { encoding: 'utf8', env, maxBuffer: 64 << 20 })
+  if (ran.error) throw ran.error
+  if (ran.status !== 0) {
+    const said = ran.stderr.trim().split('\n').slice(-40).join('\n')
+    throw new Error(`${script} failed (${ran.signal ?? `exit ${ran.status}`}):\n${said}`)
+  }
+  return ran.stdout.trim().split('\n').pop() ?? ''
+}
+
 export function createFixture(): void {
-  const output = execFileSync(join(import.meta.dirname, 'fixture.sh'), { encoding: 'utf8' })
-  writeFileSync(FILE, output.trim().split('\n').pop() ?? '')
+  writeFileSync(FILE, runFixture('fixture.sh'))
 }
 
 export function fixture(): Fixture {

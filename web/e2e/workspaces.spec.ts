@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
-import { stopAgent, teardown } from './fixture'
+import { runFixture, stopAgent, teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -15,9 +15,12 @@ interface Fixture {
 
 let fixture: Fixture
 
+// Each test goes on from what the ones before it set up, such as the Personal workspace: after a failure, a new
+// worker's fixture would have none of it, so the rest don't run.
+test.describe.configure({ mode: 'serial' })
+
 test.beforeAll(() => {
-  const output = execFileSync(join(import.meta.dirname, 'workspaces-fixture.sh'), { encoding: 'utf8' })
-  fixture = JSON.parse(output.trim().split('\n').pop() ?? '{}') as Fixture
+  fixture = JSON.parse(runFixture('workspaces-fixture.sh') || '{}') as Fixture
 })
 
 test.afterAll(() => {
@@ -280,7 +283,8 @@ test("Settings › Plugins lists the plugins here, and a plugin's page sets what
   const push = actions.getByLabel("Push a branch's rule")
   await expect(push).toHaveValue('ask')
   await push.selectOption('allow')
-  await expect(actions).toContainText('your rule')
+  // Once the daemon has the rule and the page has read it again.
+  await expect(actions).toContainText('your rule', { timeout: 15_000 })
   await page.reload()
   await expect(push).toHaveValue('allow')
   await shoot(page, '10-plugin-page', 1800)

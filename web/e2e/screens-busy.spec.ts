@@ -3,18 +3,16 @@
 // question answered, a plan, edits and a screenshot back, as a thread shows it,
 // grouped by run and by turn (ADR 0049).
 
-import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
-import { teardown } from './fixture'
+import { runFixture, teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
 let world: { url: string; thread: string; work: string }
 
 test.beforeAll(() => {
-  const output = execFileSync(join(import.meta.dirname, 'busy-fixture.sh'), { encoding: 'utf8' })
-  world = JSON.parse(output.trim().split('\n').pop() ?? '{}') as typeof world
+  world = JSON.parse(runFixture('busy-fixture.sh') || '{}') as typeof world
 })
 
 test.afterAll(() => {

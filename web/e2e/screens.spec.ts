@@ -3,11 +3,10 @@
 // deliberate change rewrites them with `pnpm e2e:update`, and review then
 // compares the new one with its board.
 
-import { execFileSync } from 'node:child_process'
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
-import { teardown } from './fixture'
+import { runFixture, teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -27,8 +26,7 @@ let started: number
 
 test.beforeAll(() => {
   started = Date.now()
-  const output = execFileSync(join(import.meta.dirname, 'screens-fixture.sh'), { encoding: 'utf8' })
-  world = JSON.parse(output.trim().split('\n').pop() ?? '{}') as World
+  world = JSON.parse(runFixture('screens-fixture.sh') || '{}') as World
 })
 
 test.afterAll(() => {
@@ -290,6 +288,8 @@ test('the command palette', async ({ page }) => {
     await shown.getByRole('button', { name: 'command palette' }).click()
     await shown.getByLabel('command', { exact: true }).fill('farewell')
     await expect(shown.getByText('In history, including before compaction')).toBeVisible()
+    // The group shows at once, with Search everything; its hits come once the search answers.
+    await expect(shown.getByRole('option', { name: /^“/ }).first()).toBeVisible()
   })
 })
 

@@ -5,6 +5,8 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 silt="$root/target/debug/silt"
 work=$(mktemp -d /tmp/silt-workspaces-XXXXXX)
+# A failure partway leaves nothing running or on disk.
+trap 'status=$?; [ "$status" -eq 0 ] || "$root/web/e2e/abandon.sh" "$work" "$silt"; exit "$status"' EXIT
 free_port() {
     python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
 }
@@ -42,10 +44,11 @@ export CLAUDE_CONFIG_DIR="$work/ada/claude"
 # Agent sessions on the machine running the tests would show in the import
 # offer, and agent CLIs installed in its home would count as installed here,
 # so each machine here has a home of its own.
-# The Rust toolchain stays, for plugins built from git.
-toolchain=$(dirname "$(command -v cargo)")
+# The Rust toolchain stays, for plugins built from git, and comes first: a
+# system cargo that isn't rustup's, as Arch's, doesn't take `cargo +<toolchain>`.
+toolchain=$(dirname "$(command -v rustup || command -v cargo)")
 export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
-PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v "^$HOME/" | paste -sd:):$toolchain
+PATH=$toolchain:$(printf '%s' "$PATH" | tr ':' '\n' | grep -v "^$HOME/" | paste -sd:)
 export HOME="$work/ada/home"
 unset CODEX_HOME GEMINI_CLI_HOME COPILOT_HOME XDG_DATA_HOME XDG_CONFIG_HOME
 mkdir -p "$HOME"

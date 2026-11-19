@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import AxeBuilder from '@axe-core/playwright'
 import { type Page, expect, test } from '@playwright/test'
-import { stopAgent, teardown } from './fixture'
+import { runFixture, stopAgent, teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -21,8 +21,7 @@ interface Live {
 let live: Live
 
 test.beforeAll(() => {
-  const output = execFileSync(join(import.meta.dirname, 'live-fixture.sh'), { encoding: 'utf8' })
-  live = JSON.parse(output.trim().split('\n').pop() ?? '{}') as Live
+  live = JSON.parse(runFixture('live-fixture.sh') || '{}') as Live
 })
 
 test.afterAll(() => {
@@ -256,7 +255,8 @@ async function startInNewThread(page: Page, agent: string) {
   await page.getByRole('radio', { name: 'Worktree' }).click()
   await page.getByLabel('agent to start').selectOption({ label: agent })
   await page.getByLabel('first prompt').press('Enter')
-  await expect(page.getByTestId('agent-state')).toHaveText(`${agent} is ready`)
+  // Making the worktree and starting the agent take more than the default 5 s under the gate's load.
+  await expect(page.getByTestId('agent-state')).toHaveText(`${agent} is ready`, { timeout: 20_000 })
 }
 
 test('the server-hosted app shows an agent waiting on the machine running it', async ({ browser }) => {
@@ -1014,7 +1014,8 @@ test('a thread started in the background from a branch plans its first prompt an
   await form.getByLabel('permissions').selectOption('plan')
   await startInTheBackground(page)
 
-  await expect(page.getByText('Fake agent started in a new thread')).toBeVisible()
+  // Once its worktree is made and the agent started, as `startInNewThread` waits for.
+  await expect(page.getByText('Fake agent started in a new thread')).toBeVisible({ timeout: 20_000 })
   await expect(form.getByLabel('first prompt')).toHaveValue('')
   const waiting = page.getByRole('region', { name: 'needs you' })
   await waiting.getByRole('group').first().getByRole('link').first().click()
@@ -1335,7 +1336,8 @@ test('a file marked seen comes back when the agent changes it, and the next revi
   await expect(files).toContainText(/new since you saw it|changed since you saw it/)
   await expect(main).not.toBeChecked()
   await expect(page.getByTestId('seen-count')).toHaveText('0/1 seen')
-  // v ticks it off again.
+  // v ticks it off again, with nothing focused that would take the keys as typing.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('j')
   await page.keyboard.press('v')
   await expect(page.getByTestId('seen-count')).toHaveText('1/1 seen')
@@ -1919,7 +1921,8 @@ test('a doc and a sheet are edited in place, and what was typed is kept (ADR 007
   await sheet.getByRole('row').nth(3).getByRole('gridcell').nth(1).dblclick()
   await sheet.getByLabel('cell B3').fill('=SUM(B1:B2)')
   await sheet.getByLabel('cell B3').press('Enter')
-  await expect(sheet.getByRole('row').nth(3).getByRole('gridcell').nth(1)).toHaveText('8')
+  // Its value comes once the daemon has the formula and the sheet is read again, two round trips under load.
+  await expect(sheet.getByRole('row').nth(3).getByRole('gridcell').nth(1)).toHaveText('8', { timeout: 15_000 })
 
   // A second sheet, in its own tab; the first keeps its cells.
   await sheet.getByRole('button', { name: 'Add a sheet' }).click()
@@ -2064,7 +2067,8 @@ test('each artifact viewer has no serious accessibility problem axe finds', asyn
           ? page.getByRole('button', { name: /^Open the artifact Settings screen/ }).first()
           : page.getByTestId('artifact-card').last()
       ).click()
-    await expect(page.getByTestId(viewer)).toBeVisible()
+    // The artifact is read from the daemon once its card is clicked, longer than the default 5 s under load.
+    await expect(page.getByTestId(viewer)).toBeVisible({ timeout: 15_000 })
     const checked = await new AxeBuilder({ page }).include(`[data-testid="${viewer}"]`).withTags(['wcag2a', 'wcag2aa']).analyze()
     for (const violation of checked.violations.filter((one) => one.impact === 'serious' || one.impact === 'critical'))
       found.push(
