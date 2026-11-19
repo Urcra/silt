@@ -2856,6 +2856,8 @@ fn a_terminals_sandboxed_agent_is_restarted_with_the_folder_it_was_granted() {
     fs::write(lib.join("notes.md"), "kept\n").expect("write");
     let rules = format!("{}:allow", lib.display());
     env.silt(&["workspace", "policy", "Default", "--silt-sandbox", "on", "--network", "none", "--ask-folders", &rules]);
+    // The sandbox passes only the variables it knows, and those a person lists.
+    fs::write(env.silt_home.join("agent-env"), "FAKE_SCRIPT\nFAKE_FOLDER\n").expect("writes agent-env");
     env.silt(&["daemon", "start"]);
     let started = std::time::Instant::now();
     let ran = env.run_with(&["claude"], &[("FAKE_FOLDER", &lib.to_string_lossy())]);

@@ -21,8 +21,11 @@ pub enum AccessCommand {
 pub fn run(command: AccessCommand) -> Result<(), Exn<CliError>> {
     match command {
         AccessCommand::Doctor => {
-            doctor();
-            Ok(())
+            if doctor() {
+                Ok(())
+            } else {
+                Err(crate::commands::fail("Silt's sandbox can't run here; the checks above say what to fix"))
+            }
         }
         AccessCommand::Show { thread } => crate::plugin::access(&thread),
         AccessCommand::Unfolder { thread, path } => {
@@ -42,24 +45,34 @@ fn line(ok: bool, said: &str) {
     println!("{} {said}", if ok { "✓" } else { "✗" });
 }
 
+/// Whether Silt's sandbox can be made on this machine. Prints each check,
+/// and returns false when the sandbox itself can't run, so scripts and the
+/// gate can tell a working machine from one that needs fixing.
 #[cfg(target_os = "linux")]
-fn doctor() {
+fn doctor() -> bool {
     use silt_os::sandbox;
     use silt_workspace::Network;
 
+    let mut ok = true;
     match sandbox::tools(Network::None) {
         Ok(tools) => {
             line(true, &format!("bubblewrap: {}", tools.bwrap.display()));
             match sandbox::check(&tools) {
                 Ok(()) => line(true, "a sandbox can be made here"),
-                Err(error) => line(false, &error.to_string()),
+                Err(error) => {
+                    line(false, &error.to_string());
+                    ok = false;
+                }
             }
             match &tools.pasta {
                 Some(pasta) => line(true, &format!("pasta, for full internet: {}", pasta.display())),
                 None => line(false, "no pasta: full internet needs it (the `passt` package); other networks work without it"),
             }
         }
-        Err(error) => line(false, &error.to_string()),
+        Err(error) => {
+            line(false, &error.to_string());
+            ok = false;
+        }
     }
     let restricted =
         std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").is_ok_and(|value| value.trim() == "1");
@@ -74,28 +87,37 @@ fn doctor() {
         );
     }
     credentials();
+    ok
 }
 
 #[cfg(target_os = "macos")]
-fn doctor() {
-    match silt_os::seatbelt::check() {
-        Ok(()) => println!("✓ Seatbelt (sandbox-exec) applies a profile here"),
-        Err(error) => println!(
-            "✗ Seatbelt can't apply a profile here: {error}. Inside another sandbox, an agent's own included, it can't nest; run Silt outside it"
-        ),
-    }
+fn doctor() -> bool {
+    let ok = match silt_os::seatbelt::check() {
+        Ok(()) => {
+            println!("✓ Seatbelt (sandbox-exec) applies a profile here");
+            true
+        }
+        Err(error) => {
+            println!(
+                "✗ Seatbelt can't apply a profile here: {error}. Inside another sandbox, an agent's own included, it can't nest; run Silt outside it"
+            );
+            false
+        }
+    };
     println!(
         "! On macOS full internet goes through Silt's gateway, as HTTP(S) only, and agents' own sandboxes can't run inside Silt's"
     );
     credentials();
+    ok
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn doctor() {
+fn doctor() -> bool {
     println!(
         "Silt's own sandbox runs on Linux and macOS; here, agents don't start in a workspace that runs them in it, and the agent's own sandbox is what a workspace can require."
     );
     credentials();
+    true
 }
 
 fn credentials() {

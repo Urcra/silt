@@ -85,6 +85,14 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
 
     // A personal thread, in the default workspace, as before.
     laptop.silt(&["claude"]);
+    let personal_session = fs::read_dir(laptop.claude_dir.join("projects"))
+        .expect("projects")
+        .flatten()
+        .flat_map(|project| fs::read_dir(project.path()).into_iter().flatten().flatten())
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|extension| extension == "jsonl"))
+        .and_then(|path| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()))
+        .expect("the personal session");
 
     let in_work = |args: &[&str]| laptop.command(args, &[]).current_dir(&work).output().expect("silt runs");
     let which = String::from_utf8_lossy(&in_work(&["workspace", "which"]).stdout).into_owned();
@@ -120,6 +128,9 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     assert!(settings["hooks"]["Stop"].is_array(), "the hooks are still there: {settings}");
 
     laptop.silt(&["workspace", "policy", "Work", "--silt-sandbox", "on"]);
+    // The stand-in's log folder, given to agents as a person gives one a
+    // variable: Silt's sandbox passes the shell's others by an allowlist.
+    fs::write(laptop.silt_home.join("agent-env"), "FAKE_LOG_DIR\n").expect("writes agent-env");
     let ran = in_work(&["claude"]);
     let said = String::from_utf8_lossy(&ran.stderr).into_owned();
     if ran.status.success() {
@@ -156,6 +167,26 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
     assert!(other.contains("no thread matches"), "another workspace's thread is out of reach: {other}");
     let forged = mcp_answer(&laptop, work_id, "not-a-token", "silt_history_read", serde_json::json!({}));
     assert!(forged.contains("this run's token isn't known here"), "{forged}");
+
+    // Nor can its run's channel send hooks for the personal thread's session (ADR 0093).
+    #[cfg(unix)]
+    {
+        assert!(laptop.silt(&["daemon", "start"]).status.success());
+        let mut hook = Command::new(env!("CARGO_BIN_EXE_silt"))
+            .args(["hook", "UserPromptSubmit"])
+            .env("SILT_HOME", &laptop.silt_home)
+            .env("SILT_RUN_SOCKET", silt_daemon::paths::agents_socket_in(&laptop.silt_home))
+            .env("SILT_RUN_TOKEN", &token)
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("silt hook runs");
+        let input =
+            serde_json::json!({"session_id": personal_session, "hook_event_name": "UserPromptSubmit", "prompt": "from Work"});
+        writeln!(hook.stdin.take().expect("stdin"), "{input}").expect("write");
+        let said = String::from_utf8_lossy(&hook.wait_with_output().expect("hook exits").stderr).into_owned();
+        assert!(said.contains("a run's hooks speak for its own thread's sessions only"), "{said}");
+    }
 
     // A terminal run's token can't show the person anything, even through a server offering the tools (ADR 0068).
     let page = serde_json::json!({"title": "Page", "kind": "html", "content": "<p>hi</p>"});

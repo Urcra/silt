@@ -193,6 +193,7 @@ impl Server<'_> {
             token: "",
             env,
             read_only,
+            given: Vec::new(),
             relayed: Vec::new(),
             gateway_credentials: Some(self.credentials(scope)),
         })

@@ -183,6 +183,38 @@ impl Agent for ClaudeCode {
         }
     }
 
+    fn sign_in(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        self.homes(home, env).first().map(|dir| dir.join(".credentials.json")).into_iter().collect()
+    }
+
+    fn read_only_home(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        let Some(dir) = self.homes(home, env).into_iter().find(|dir| dir.extension().is_none()) else { return Vec::new() };
+        // Its memory, and the folders of what it loads and runs: plugins
+        // bring hooks and MCP servers, and hooks' scripts are run by name.
+        ["settings.json", "settings.local.json", "CLAUDE.md", "plugins", "hooks", "commands", "agents", "skills"]
+            .iter()
+            .map(|name| dir.join(name))
+            .collect()
+    }
+
+    fn project_state(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>, cwd: &Path) -> crate::ProjectState {
+        let Some(dir) = self.homes(home, env).into_iter().find(|dir| dir.extension().is_none()) else {
+            return crate::ProjectState::default();
+        };
+        // Sessions and the copies of files its edits replaced are kept per
+        // project; the prompt history isn't.
+        crate::ProjectState {
+            hide: vec![dir.join("projects"), dir.join("file-history")],
+            own: vec![dir.join("projects").join(project_slug(cwd))],
+            fresh: vec![dir.join("history.jsonl")],
+            // Its MCP servers, which it and Silt's connectors start outside.
+            copied: vec![match env("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
+                Some(_) => dir.join(".claude.json"),
+                None => home.join(".claude.json"),
+            }],
+        }
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }

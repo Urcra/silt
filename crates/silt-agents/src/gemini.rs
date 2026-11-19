@@ -491,6 +491,14 @@ impl Agent for Gemini {
         homes
     }
 
+    fn sign_in(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        self.homes(home, env).into_iter().map(|dir| dir.join("oauth_creds.json")).collect()
+    }
+
+    fn read_only_home(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        self.homes(home, env).into_iter().map(|dir| dir.join("settings.json")).collect()
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }

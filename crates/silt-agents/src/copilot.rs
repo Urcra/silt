@@ -344,6 +344,11 @@ impl Agent for Copilot {
         vec![crate::home_from(home, env, "COPILOT_HOME", ".copilot")]
     }
 
+    fn sign_in(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        let config = crate::home_from(home, env, "COPILOT_HOME", ".copilot");
+        ["apps.json", "hosts.json"].iter().map(|file| config.join(file)).collect()
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }

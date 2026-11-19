@@ -574,16 +574,23 @@ impl Run<'_> {
         let launch = self.agent.launch(&plan).or_raise(|| CliError(format!("cannot prepare {}", self.agent.display_name())))?;
         let mut command = match reach {
             Some(reach) => {
-                let env: Vec<(String, String)> = env::vars()
-                    .chain(held.env.iter().cloned())
+                let allowed = |(key, _): &(String, String)| !(held.locks.no_bypass && key == "COPILOT_ALLOW_ALL");
+                let inherited: Vec<(String, String)> = env::vars().filter(allowed).collect();
+                // The workspace's variables and the adapter's own are meant for
+                // the agent, unlike the rest of the shell's.
+                let given: Vec<(String, String)> = held
+                    .env
+                    .iter()
+                    .cloned()
                     .chain(
                         launch
                             .envs
                             .iter()
                             .map(|(key, value)| (key.to_string_lossy().into_owned(), value.to_string_lossy().into_owned())),
                     )
-                    .filter(|(key, _)| !(held.locks.no_bypass && key == "COPILOT_ALLOW_ALL"))
+                    .filter(allowed)
                     .collect();
+                let env: Vec<(String, String)> = inherited.iter().chain(&given).cloned().collect();
                 // The daemon holds the devices, so their sessions outlive this run.
                 let relayed: Vec<silt_daemon::sandbox::Relayed> = if reach.devices == silt_workspace::Devices::Relayed {
                     ensure_daemon()?;
@@ -603,7 +610,8 @@ impl Run<'_> {
                     read_only: silt_daemon::sandbox::program_paths(&launch.program, &env),
                     gateway_credentials: None,
                     relayed,
-                    env,
+                    env: inherited,
+                    given,
                 })
                 .map_err(|error| fail(format!("cannot prepare the sandbox: {error}")))?;
                 for name in &sandboxed.missing {

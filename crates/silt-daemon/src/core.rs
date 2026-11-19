@@ -653,6 +653,11 @@ impl Core {
             // shows it's a run Silt started (ADR 0093).
             if let Request::Hook { event, input } = *asking {
                 let answer = match self.run_thread(&token).await {
+                    // Only for its own thread's sessions: another's would hand
+                    // it that thread's messages, and mark the session for others.
+                    Ok(thread) if self.hook_session_elsewhere(&input, &thread) => {
+                        Response::error("a run's hooks speak for its own thread's sessions only")
+                    }
                     Ok(_) => self.hook(&event, input).await,
                     Err(error) => to_response::<()>(Err(error)),
                 };

@@ -2095,6 +2095,7 @@ impl Drop for Aborting {
 
 fn sandboxed(
     start: &mut Start,
+    given: Vec<(String, String)>,
     info: &AgentInfo,
     thread: ThreadId,
     data_dir: &Path,
@@ -2118,6 +2119,7 @@ fn sandboxed(
         reach: &sandbox.reach,
         token: &sandbox.token,
         env: std::mem::take(&mut start.env),
+        given,
         read_only,
         gateway_credentials: None,
         relayed: sandbox.relayed.clone(),
@@ -2583,12 +2585,17 @@ pub(crate) fn spawn_agent(
         start.program = program;
         start.args = args;
         let workspace_env = std::mem::take(&mut start.env);
-        start.env = registry::agent_environment(&info.id, &data_dir).into_iter().chain(env).chain(workspace_env).collect();
+        // The registry's and the workspace's variables are meant for the agent;
+        // the rest come from the daemon's own environment.
+        let given: Vec<(String, String)> = env.into_iter().chain(workspace_env).collect();
+        let inherited = registry::agent_environment(&info.id, &data_dir);
+        start.env = inherited.iter().chain(&given).cloned().collect();
         // What answers the sandbox's relays, such as its gateway, for as
         // long as the agent runs.
         let mut outside = Vec::new();
         if let Some(sandbox) = sandbox {
-            match sandboxed(&mut start, &info, thread, &data_dir, &sandbox) {
+            start.env = inherited;
+            match sandboxed(&mut start, given, &info, thread, &data_dir, &sandbox) {
                 Ok(started) => outside = started,
                 Err(error) => {
                     let message = format!("couldn't start {} in Silt's sandbox: {error}", info.name);

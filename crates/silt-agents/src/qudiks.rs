@@ -70,6 +70,14 @@ impl Agent for Qudiks {
         resolve(value, Some(home.to_owned())).into_iter().collect()
     }
 
+    fn sign_in(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        self.homes(home, env).into_iter().map(|dir| dir.join("auth.json")).collect()
+    }
+
+    fn read_only_home(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+        self.homes(home, env).into_iter().map(|dir| dir.join("config.toml")).collect()
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }
