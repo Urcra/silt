@@ -20,7 +20,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use exn::Exn;
@@ -37,22 +37,32 @@ fn main() {
     // Shared by the window's handlers: where the daemon's UI is, once known,
     // and which backend and project the window should show.
     let ui: Arc<Mutex<Option<Url>>> = Arc::default();
-    let known = Arc::new(known_backends());
-    let asked = link_in(env::args(), &known);
-    let opened_by_link = asked.is_some();
-    let target = Arc::new(Mutex::new(asked.unwrap_or_default()));
-    let (linked, linked_known, closing_known) = (target.clone(), known.clone(), known.clone());
+    // WSL's distributions are listed while the window's own start goes on:
+    // `wsl.exe` can take a second, before anything showed.
+    let finding = std::thread::spawn(known_backends);
+    let found: Arc<OnceLock<Arc<Vec<Backend>>>> = Arc::default();
+    let args: Vec<String> = env::args().collect();
+    let target = Arc::new(Mutex::new(Target::default()));
+    let (linked, linked_known, closing_known) = (target.clone(), found.clone(), found.clone());
     tauri::Builder::default()
         // A second launch, a `silt://` link among them, shows the window
         // that's already open.
         .plugin(tauri_plugin_single_instance::init(move |app, argv, _| {
-            if let Some(wanted) = link_in(argv, &linked_known) {
+            let known = linked_known.get().map_or_else(|| vec![Backend::Native], |known| known.to_vec());
+            if let Some(wanted) = link_in(argv, &known) {
                 *linked.lock().expect("lock") = wanted;
             }
             show(app);
         }))
         .plugin(tauri_plugin_deep_link::init())
         .setup(move |app| {
+            let known = Arc::new(finding.join().unwrap_or_else(|_| vec![Backend::Native]));
+            let _ = found.set(known.clone());
+            let asked = link_in(args, &known);
+            let opened_by_link = asked.is_some();
+            if let Some(asked) = asked {
+                *target.lock().expect("lock") = asked;
+            }
             // Opened by itself, the window shows where it last did, not this computer every time.
             if !opened_by_link
                 && let Some(backend) =
@@ -74,8 +84,9 @@ fn main() {
         .run(move |app, event| {
             if let tauri::RunEvent::Exit = event
                 && let Some(silts) = app.try_state::<Arc<Silts>>()
+                && let Some(known) = closing_known.get()
             {
-                restart_replaced(&closing_known, &native_silt(), &silts);
+                restart_replaced(known, &native_silt(), &silts);
             }
         });
 }

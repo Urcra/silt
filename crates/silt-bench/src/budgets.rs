@@ -184,6 +184,20 @@ pub const BUDGETS: &[Budget] = &[
         status: Status::Elsewhere("enforced by web/e2e/perf.spec.ts on the perf build"),
     },
     Budget {
+        name: "web.scroll",
+        measures: "long tasks over 100 wheel notches up that thread (ADR 0101)",
+        dev: Limit::Described("< 500 ms blocked"),
+        cloud: Limit::Described("< 1 s blocked"),
+        status: Status::Elsewhere("enforced by web/e2e/perf.spec.ts on the perf build"),
+    },
+    Budget {
+        name: "web.change",
+        measures: "history read again after one change to that thread, open (ADR 0101)",
+        dev: Limit::Described("< 64 KB"),
+        cloud: Limit::Described("< 64 KB"),
+        status: Status::Elsewhere("enforced by web/e2e/perf.spec.ts on any build"),
+    },
+    Budget {
         name: SYNC_PUSH,
         measures: "`silt sync --once` pushing a family holding 100 MB of transcript to a server, at 100 MB/s",
         dev: Limit::Time(Duration::from_secs(1)),

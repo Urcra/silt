@@ -53,28 +53,48 @@ function useFolded() {
   return { room, content, folded }
 }
 
+/** The pane each box is in, found once: looking for it walked every ancestor's style at each key. */
+const panes = new WeakMap<HTMLElement, HTMLElement | null>()
+
 /** Half the pane the composer is in, past which the box scrolls rather than grows. */
 function growLimit(element: HTMLElement): number {
-  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
-    const { overflowY } = getComputedStyle(parent)
-    if (overflowY === 'auto' || overflowY === 'scroll') return parent.clientHeight / 2
+  let pane = panes.get(element)
+  if (pane === undefined || (pane && !pane.contains(element))) {
+    pane = null
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const { overflowY } = getComputedStyle(parent)
+      if (overflowY === 'auto' || overflowY === 'scroll') {
+        pane = parent
+        break
+      }
+    }
+    panes.set(element, pane)
   }
-  return window.innerHeight / 2
+  return (pane?.clientHeight ?? window.innerHeight) / 2
 }
+
+/** How long each box's text was when it was last fitted. */
+const fitted = new WeakMap<HTMLTextAreaElement, number>()
 
 /** Makes `element` as tall as its text, from its `rows` up to half the pane, and keeps it so as the pane resizes. */
 function growWithText(element: HTMLTextAreaElement): () => void {
-  const fit = () => {
+  const fit = (force = true) => {
     // Hidden during a take, it measures nothing and would collapse.
     if (element.offsetParent === null) return
+    // Text added that still fits needs no measuring: shrinking the box to measure it laid out the whole page at
+    // each key, which beside a large diff took tens of milliseconds.
+    const before = fitted.get(element)
+    fitted.set(element, element.value.length)
+    if (!force && before !== undefined && element.value.length >= before && element.scrollHeight <= element.clientHeight) return
     element.style.height = 'auto'
     const limit = growLimit(element)
     element.style.height = `${Math.min(element.scrollHeight, limit)}px`
     element.style.overflowY = element.scrollHeight > limit ? 'auto' : 'hidden'
   }
-  fit()
-  window.addEventListener('resize', fit)
-  if (typeof ResizeObserver === 'undefined') return () => window.removeEventListener('resize', fit)
+  fit(false)
+  const resized = () => fit()
+  window.addEventListener('resize', resized)
+  if (typeof ResizeObserver === 'undefined') return () => window.removeEventListener('resize', resized)
   let width = element.clientWidth
   const rewrapped = new ResizeObserver(() => {
     if (element.clientWidth === width) return
@@ -84,7 +104,7 @@ function growWithText(element: HTMLTextAreaElement): () => void {
   rewrapped.observe(element)
   return () => {
     rewrapped.disconnect()
-    window.removeEventListener('resize', fit)
+    window.removeEventListener('resize', resized)
   }
 }
 

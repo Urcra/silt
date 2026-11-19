@@ -22,10 +22,18 @@ export function dbHandler(thread: string, artifact: ArtifactView): CapabilityHan
   let pending: number | null = null
 
   const ask = (request: Record<string, unknown>) => api.pageData(thread, artifact.id, request)
+  // One round of reads at a time: while an agent works, the thread changes faster than a large watch reads.
+  let reading = false
+  let again = false
   const refresh = () => {
     pending = null
-    for (const [id, watch] of watches) {
-      void ask(watch.request).then(
+    if (reading) {
+      again = true
+      return
+    }
+    reading = true
+    const reads = [...watches].map(([id, watch]) =>
+      ask(watch.request).then(
         (data) => {
           const text = JSON.stringify(data)
           if (text === watch.last || !watches.has(id)) return
@@ -33,8 +41,14 @@ export function dbHandler(thread: string, artifact: ArtifactView): CapabilityHan
           emit?.('snapshot', { watch: id, data })
         },
         () => undefined,
-      )
-    }
+      ),
+    )
+    void Promise.all(reads).then(() => {
+      reading = false
+      if (!again) return
+      again = false
+      pending ??= window.setTimeout(refresh, 150)
+    })
   }
   const listen = () => {
     if (unsubscribe) return

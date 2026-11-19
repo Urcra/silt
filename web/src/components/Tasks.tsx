@@ -4,6 +4,7 @@ import { SessionLive, StoppableTasks, type TaskState, type Tasks, TasksContext, 
 import { type ToolStep, duration, kindOf, shortCommand, toolOf } from '../transcript'
 import { Button, Icon, Spinner, Tag, cx } from '../ui'
 import { Markdown } from './Markdown'
+import { useWhole } from '../wholeEntry'
 
 /** What a call left running: its task's news, else what its call and result say. */
 function stateOf(step: ToolStep, tasks: Tasks): { task: TaskState | null; subagent: boolean; status: string } {
@@ -37,10 +38,12 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
   const tasks = useContext(TasksContext)
   const live = useContext(SessionLive)
   const stoppable = useContext(StoppableTasks)
-  const now = useNow(1000)
   const call = step.call!
   const { task, subagent, status } = stateOf(step, tasks)
+  // Only a task still running counts the seconds: every card in a long thread ticked once a second, for good.
+  const now = useNow(status === 'running' ? 1000 : 0)
   const [open, setOpen] = useState(false)
+  const result = useWhole(step.result, open)
   const quiet = status === 'running' && !live
   const shown = quiet ? { label: 'no word since', tone: 'neutral' as const } : (STATUS[status] ?? STATUS.running)
   const ended = task?.ended_ms ?? (task ? null : (step.result?.time_ms ?? null))
@@ -48,7 +51,7 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
     status === 'running' ? (quiet ? null : duration(call.time_ms, now)) : ended !== null ? duration(call.time_ms, ended) : null
   const kind = subagent ? call.tool?.detail?.trim() || 'Subagent' : 'In the background'
   // What came back: a subagent's report, or a background command's launch message and what it said when it ended.
-  const report = subagent && status !== 'running' ? step.result?.text.trim() : undefined
+  const report = subagent && status !== 'running' ? result?.text.trim() : undefined
   const said = task?.summary?.trim()
   const canStop = status === 'running' && call.tool !== null && stoppable.calls.has(call.tool.id)
   return (
@@ -108,9 +111,9 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
             <p className="whitespace-pre-wrap text-fg-2">{call.tool.subject}</p>
           )}
           {children}
-          {!subagent && step.result?.text.trim() && (
+          {!subagent && result?.text.trim() && (
             <pre className="max-h-40 overflow-auto font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">
-              {step.result.text.trim()}
+              {result.text.trim()}
             </pre>
           )}
           {said && (

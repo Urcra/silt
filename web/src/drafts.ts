@@ -18,13 +18,24 @@ function read(): Record<string, string> {
   }
 }
 
-function write() {
+let writing: ReturnType<typeof setTimeout> | null = null
+
+function flush() {
+  if (writing) clearTimeout(writing)
+  writing = null
   try {
     sessionStorage.setItem(KEY, JSON.stringify(drafts))
   } catch {
     // Kept for this page only, then.
   }
 }
+
+/** Kept a moment after typing stops rather than at each key, which wrote every draft each time; and as the page goes. */
+function write() {
+  writing ??= setTimeout(flush, 300)
+}
+
+if (typeof window !== 'undefined') window.addEventListener('pagehide', flush)
 
 export const threadDraft = (thread: string) => `thread:${thread}`
 export const NEW_THREAD_DRAFT = 'new-thread'

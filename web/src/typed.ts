@@ -517,11 +517,17 @@ export function drawnSeries(chart: string, series: Series[]): Series[] {
 }
 
 export function chartTable(series: Series[]): { columns: string[]; rows: unknown[][] } {
-  const xs: (string | number)[] = []
-  for (const one of series) for (const [x] of one.points) if (!xs.includes(x)) xs.push(x)
+  // By lookup, not search: thousands of points in a few series took seconds, at each hover.
+  const xs = new Set<string | number>()
+  for (const one of series) for (const [x] of one.points) xs.add(x)
+  const values = series.map((one) => {
+    const at = new Map<string | number, unknown>()
+    for (const [x, y] of one.points) if (!at.has(x)) at.set(x, y)
+    return at
+  })
   return {
     columns: ['x', ...series.map((one) => one.name)],
-    rows: xs.map((x) => [x, ...series.map((one) => one.points.find(([px]) => px === x)?.[1] ?? null)]),
+    rows: [...xs].map((x) => [x, ...values.map((at) => at.get(x) ?? null)]),
   }
 }
 

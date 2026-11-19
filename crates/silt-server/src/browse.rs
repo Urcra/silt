@@ -424,6 +424,9 @@ struct Page {
     offset: Option<usize>,
     #[serde(default)]
     limit: Option<usize>,
+    /// Entries as they were recorded, with images and long outputs whole.
+    #[serde(default)]
+    whole: bool,
 }
 
 async fn history(
@@ -441,24 +444,24 @@ async fn history(
         let limit = page.limit.unwrap_or(total);
         let entries = (offset..)
             .zip(all.iter().skip(offset).take(limit))
-            .map(|(index, (delta, entry))| HistoryEntry {
-                index,
-                rewound: rewound.map_or(entry.rewound, |rewound| rewound.contains(delta)),
-                ..entry.clone()
+            .map(|(index, (delta, entry))| {
+                let entry = if page.whole { entry.clone() } else { silt_proto::view::cut_for_page(entry) };
+                HistoryEntry { index, rewound: rewound.map_or(entry.rewound, |rewound| rewound.contains(delta)), ..entry }
             })
             .collect();
         (total, entries)
     };
+    let from = Some(page.offset.unwrap_or(0));
     if let Some(entries) = lineage_entries(&server, &viewer, row).await {
         let (total, entries) = total_and_entries(&entries, None);
-        return Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries }));
+        return Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries, from, version: None }));
     }
     let index = server.shared.index.lock().await;
     let Some(history) = index.history(row.id) else {
-        return Ok(Json(HistoryPage { thread: row.id.to_string(), total: 0, entries: Vec::new() }));
+        return Ok(Json(HistoryPage { thread: row.id.to_string(), total: 0, entries: Vec::new(), from, version: None }));
     };
     let (total, entries) = total_and_entries(&history.entries, Some(&history.rewound));
-    Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries }))
+    Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries, from, version: None }))
 }
 
 /// A fork's or a thread that pulled's whole history, worked out from what

@@ -781,7 +781,11 @@ function ArtifactPage({
         keep(thread, artifact.id, stored.kind, stored.items)
       }
       if (said?.silt === 'hot' && (said as { keeps?: unknown }).keeps === true && snapshots.current === null) {
-        snapshots.current = window.setInterval(() => send.current({ silt: 'snapshot' }), 2000)
+        // Not while the window is hidden, when nothing on the page changes.
+        snapshots.current = window.setInterval(
+          () => document.visibilityState === 'visible' && send.current({ silt: 'snapshot' }),
+          2000,
+        )
       }
       if (said?.silt === 'snapshotted') rememberSnapshot(thread, artifact.id, (said as { data?: unknown }).data)
       if (said?.silt === 'mermaid' && Array.isArray((said as { diagrams?: unknown }).diagrams)) {

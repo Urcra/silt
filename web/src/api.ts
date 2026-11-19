@@ -360,9 +360,17 @@ export const api = {
     artifact: string,
     ask: { version: number; theme: 'light' | 'dark'; parent: string; boot?: unknown },
   ) => request<{ path: string; expires_in_ms: number }>('POST', `${thread(id)}/artifacts/${artifact}/frame`, ask),
-  /** A thread's history; with `limit`, only that many entries from the `offset`th. */
-  history: (id: string, offset?: number, limit?: number) =>
-    request<HistoryPage>('GET', `${thread(id)}/history${limit === undefined ? '' : `?offset=${offset ?? 0}&limit=${limit}`}`),
+  /** A thread's history; with `limit`, only that many entries from the `offset`th, or from where it changed since
+   * the version `known`. A page leaves out images and the start of long outputs unless asked for `whole`. */
+  history: (id: string, offset?: number, limit?: number, options: { known?: number | null; whole?: boolean } = {}) => {
+    const query = new URLSearchParams()
+    if (limit !== undefined) query.set('offset', String(offset ?? 0))
+    if (limit !== undefined) query.set('limit', String(limit))
+    if (options.known !== undefined && options.known !== null) query.set('known', String(options.known))
+    if (options.whole) query.set('whole', 'true')
+    const asked = query.toString()
+    return request<HistoryPage>('GET', `${thread(id)}/history${asked ? `?${asked}` : ''}`)
+  },
   turns: (id: string) => request<TurnInfo[]>('GET', `${thread(id)}/turns`),
   commits: (id: string) => request<CommitView[]>('GET', `${thread(id)}/commits`),
   /** The thread's files this machine's checkouts don't write (ADR 0045); a daemon's only. */
@@ -559,8 +567,11 @@ export const api = {
   share: (id: string, user: string, remove: boolean) => request<string>('POST', `${thread(id)}/share`, { user, remove }),
   offerMergeRequest: (id: string, title: string) => request<MrSummary>('POST', `${thread(id)}/mrs`, { title }),
   mergeRequests: () => request<MrSummary[]>('GET', '/api/mrs'),
-  mergeRequest: (id: string, hidden: Hidden = {}) => {
-    const query = hiddenParams(new URLSearchParams(), hidden).toString()
+  /** A merge request; `brief` leaves out its diff and the fork's conversation. */
+  mergeRequest: (id: string, hidden: Hidden = {}, brief = false) => {
+    const params = hiddenParams(new URLSearchParams(), hidden)
+    if (brief) params.set('brief', 'true')
+    const query = params.toString()
     return request<MrDetails>('GET', `/api/mrs/${encodeURIComponent(id)}${query ? `?${query}` : ''}`)
   },
   approve: (id: string) => request<MrSummary>('POST', `/api/mrs/${encodeURIComponent(id)}/approve`),
