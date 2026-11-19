@@ -10,7 +10,7 @@ import { useNow } from '../now'
 import { openPalette } from '../palette'
 import { projectName, projects } from '../projects'
 import { keys } from '../query'
-import { type Section, byActivity, old, section, sections, unread } from '../sections'
+import { type Section, inListOrder, old, section, sections, unread } from '../sections'
 import { hosted } from '../served'
 import { formatKeys } from '../shortcuts'
 import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
@@ -141,8 +141,8 @@ function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
 }
 
 /**
- * One project's threads, newest first, folded away by its name, with what's old, settled or
- * snoozed behind a count. An older project is one row until opened, and then has nothing to hold back.
+ * One project's threads, those busy in the last few minutes by title and then newest first, folded away
+ * by its name, with what's old, settled or snoozed behind a count. An older project is one row until opened, and then has nothing to hold back.
  */
 function ProjectGroup({
   repo,
@@ -161,10 +161,10 @@ function ProjectGroup({
 }) {
   const [open, setOpen] = useState(!older)
   const [showRest, setShowRest] = useState(false)
-  const newest = [...threads].sort(byActivity)
+  const ordered = [...threads].sort(inListOrder(now))
   const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
-  const shown = newest.filter((thread) => !held(thread))
-  const rest = newest.filter(held)
+  const shown = ordered.filter((thread) => !held(thread))
+  const rest = ordered.filter(held)
   const restKinds = new Set(rest.map((thread) => (old(thread, now) ? 'older' : section(thread, now))))
   const restSaid = restKinds.size > 1 ? 'more' : [...restKinds][0]
   const working = threads.filter(inProgress).length
@@ -218,13 +218,13 @@ function ProjectGroup({
   )
 }
 
-/** The chats, newest first, with what's old, settled or snoozed behind a count, as a project's threads are (ADR 0059). */
+/** The chats, in a project's order, with what's old, settled or snoozed behind a count, as a project's threads are (ADR 0059). */
 function ChatGroup({ threads, now }: { threads: ThreadSummary[]; now: number }) {
   const [showRest, setShowRest] = useState(false)
-  const newest = [...threads].sort(byActivity)
+  const ordered = [...threads].sort(inListOrder(now))
   const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
-  const shown = newest.filter((thread) => !held(thread))
-  const rest = newest.filter(held)
+  const shown = ordered.filter((thread) => !held(thread))
+  const rest = ordered.filter(held)
   return (
     <section aria-label="chats" className="mt-2">
       <SectionLabel
@@ -518,7 +518,7 @@ export function Sidebar() {
           <section aria-label="pinned" className="mt-2">
             <SectionLabel className="px-2">Pinned</SectionLabel>
             <ul>
-              {grouped.pinned.map((thread) => (
+              {[...grouped.pinned].sort(inListOrder(now)).map((thread) => (
                 <ThreadItem key={thread.id} thread={thread} />
               ))}
             </ul>

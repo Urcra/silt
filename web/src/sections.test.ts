@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { ThreadSummary } from './api'
-import { byActivity, old, section, sections, unread } from './sections'
+import { byActivity, inListOrder, old, section, sections, unread } from './sections'
 
 function thread(id: string, overrides: Partial<ThreadSummary> = {}, mine: Partial<ThreadSummary['mine']> = {}): ThreadSummary {
   return {
@@ -94,4 +94,19 @@ test('a thread is old after two weeks untouched, unless something runs or waits 
   expect(old(thread('e', { last_ms, agent_state: 'awaiting_input' }), now)).toBe(false)
   expect(old(thread('f', { last_ms, review: true }), now)).toBe(false)
   expect(old(thread('g', { last_ms }, { pinned: true }), now)).toBe(false)
+})
+
+test('threads busy in the last five minutes keep their place by title, and the rest go newest first', () => {
+  const minute = 60_000
+  const now = 60 * minute
+  const ordered = [
+    thread('b', { title: 'Beta', last_ms: now - minute }),
+    thread('a', { title: 'alpha', last_ms: now - 2 * minute }),
+    thread('old', { title: 'Aardvark', last_ms: now - 10 * minute }),
+    thread('older', { title: 'Zebra', last_ms: now - 6 * minute }),
+    thread('working', { title: 'Omega', last_ms: now - 30 * minute, agent_state: 'working' }),
+  ].sort(inListOrder(now))
+  expect(ordered.map((one) => one.id)).toEqual(['a', 'b', 'working', 'older', 'old'])
+  const later = [thread('b', { title: 'Beta', last_ms: now }), thread('a', { title: 'alpha', last_ms: now - minute })]
+  expect(later.sort(inListOrder(now)).map((one) => one.id)).toEqual(['a', 'b'])
 })
