@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn auth_required_is_a_sign_in_in_either_protocol() {
         assert!(needed(&agent_client_protocol::Error::auth_required()));
-        assert!(needed(&agent_client_protocol::schema::v2::Error::auth_required()));
+        assert!(needed(&agent_client_protocol::v2::schema::Error::auth_required()));
         assert!(!needed(&agent_client_protocol::Error::internal_error()));
     }
 

@@ -158,6 +158,11 @@ takes_files: boolean,
  */
 commands: Array<AgentCommand>, 
 /**
+ * The prompt the agent predicts the person sends next, which the
+ * composer offers while it's empty.
+ */
+suggestion: string | null, 
+/**
  * The calls whose commands still run in the background, which Stop
  * ends.
  */

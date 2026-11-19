@@ -2106,6 +2106,10 @@ pub struct AgentStatus {
     /// The commands it offers, which a prompt starting with `/` runs.
     #[serde(default)]
     pub commands: Vec<AgentCommand>,
+    /// The prompt the agent predicts the person sends next, which the
+    /// composer offers while it's empty.
+    #[serde(default)]
+    pub suggestion: Option<String>,
     /// The calls whose commands still run in the background, which Stop
     /// ends.
     #[serde(default)]
