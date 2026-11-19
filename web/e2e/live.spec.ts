@@ -932,6 +932,29 @@ test('an agent that goes on by itself once its turn ended, as Claude does after 
   await expect(turns.nth(0)).not.toContainText('Went on by itself.')
 })
 
+test('the prompt an agent suggests is grey in the empty composer until Tab puts it there', async ({ page }) => {
+  await startInNewThread(page, 'Fake v2 agent')
+  const draft = page.getByLabel('draft')
+  await draft.fill('add acp Suggest')
+  await draft.press('Enter')
+  await expect(page.getByText('Done: add acp Suggest')).toBeVisible()
+  const suggestion = page.locator('[id$="-suggestion"]')
+  await expect(suggestion).toHaveText(/^Add a test for it/)
+  await expect(page.getByText('use the suggestion')).toBeVisible()
+  await draft.press('Tab')
+  await expect(draft).toHaveValue('Add a test for it')
+  await expect(draft).toBeFocused()
+  await expect(suggestion).toHaveCount(0)
+  // Emptied again, the box offers it again until the next prompt goes.
+  await draft.fill('')
+  await expect(suggestion).toBeVisible()
+  await draft.fill('add acp')
+  await draft.press('Enter')
+  await expect(page.getByText('Done: add acp', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('agent-state')).toHaveText('Fake v2 agent is ready')
+  await expect(suggestion).toHaveCount(0)
+})
+
 test("an agent's subagent and the command it left running show as cards, and the agent goes on once the command ends", async ({
   page,
 }) => {

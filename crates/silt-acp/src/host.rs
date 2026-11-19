@@ -13,7 +13,7 @@ use agent_client_protocol::{ByteStreams, Client};
 use futures::io::{AsyncRead, AsyncWrite};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::modes::{Modes, Setting};
@@ -342,6 +342,9 @@ pub enum Event {
     Settings(Vec<Setting>),
     /// The commands the agent offers as they now stand.
     Commands(Vec<crate::SlashCommand>),
+    /// The prompt the agent predicts the person sends next, or none once it
+    /// takes it back. Claude's adapter sends one after a turn.
+    Suggestion(Option<String>),
     /// The agent turned down a mode or setting.
     Refused(String),
     Permission(Permission),
@@ -449,8 +452,41 @@ pub fn start(start: Start, events: mpsc::UnboundedSender<Event>) -> AgentHandle 
     AgentHandle { commands, stop: Arc::new(stop), pid }
 }
 
+/// How long a prompt waits on the agent to take the modes and settings
+/// asked for before it, so one that never answers doesn't hold it forever.
+const SETTLING: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The mode and setting changes the agent hasn't answered yet. A prompt
+/// waits for them: an agent that handles requests at once, as Copilot does,
+/// would otherwise start the turn on what it had, such as its own default
+/// model, which the person may not have access to.
+#[derive(Default)]
+pub(crate) struct Changing(Vec<oneshot::Receiver<()>>);
+
+impl Changing {
+    /// A change asked for, taken as answered once the sender it gives is dropped.
+    pub(crate) fn asked(&mut self) -> oneshot::Sender<()> {
+        let (answered, waited) = oneshot::channel();
+        self.0.push(waited);
+        answered
+    }
+
+    pub(crate) async fn settled(&mut self) {
+        let all = futures::future::join_all(self.0.drain(..));
+        if tokio::time::timeout(SETTLING, all).await.is_err() {
+            tracing::warn!("the agent didn't answer a change of mode or setting; prompting all the same");
+        }
+    }
+}
+
 pub(crate) fn label<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_value(value).ok().and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_default()
+}
+
+/// A suggested prompt's text, or none when it says nothing.
+pub(crate) fn suggested(text: String) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 /// What a session in either protocol starts from: how the agent was

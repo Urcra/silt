@@ -16,6 +16,8 @@
 //! it once the turn is over, as Copilot does; `Forgotten` leaves a real process,
 //! `silt-fake-agent keep-running <cwd>`, in one it never reads. With `FAKE_ACP_CRASH` set it dies on a prompt; with
 //! `FAKE_ACP_HANG` it never answers at all, as an agent stuck starting.
+//! `Which model` makes it answer with its model, which `FAKE_ACP_SLOW_SETTINGS`
+//! makes it take only a while after it's asked for (see `settle`).
 //! It speaks ACP v1, as Copilot does, answering a client that asks for v2
 //! with v1; with `FAKE_ACP_V2` it speaks v2 instead, as Claude's adapter
 //! does (see `v2`). With `FAKE_ACP_SIGN_IN` naming a file, it needs a sign-in
@@ -33,7 +35,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     AgentCapabilities, ContentBlock, ContentChunk, CreateElicitationRequest, EmbeddedResourceResource, Implementation,
     InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
     PermissionOption, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome,
@@ -42,7 +45,7 @@ use agent_client_protocol::schema::v1::{
     SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
     ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo, Result, Stdio};
+use agent_client_protocol::{Agent, Client, Result, Stdio};
 
 #[derive(Default)]
 struct State {
@@ -51,9 +54,17 @@ struct State {
     mode: HashMap<String, String>,
     model: HashMap<String, String>,
     /// The MCP servers each session was given.
-    mcp: HashMap<String, Vec<agent_client_protocol::schema::v1::McpServer>>,
+    mcp: HashMap<String, Vec<agent_client_protocol::v1::schema::McpServer>>,
     /// The artifact each session made last, to add a version of.
     artifact: HashMap<String, String>,
+}
+
+/// With `FAKE_ACP_SLOW_SETTINGS`, a change of mode or setting takes a while
+/// to take, as Copilot's model does, while the agent goes on with other requests.
+pub(crate) async fn settle() {
+    if std::env::var_os("FAKE_ACP_SLOW_SETTINGS").is_some() {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
 }
 
 fn has_modes() -> bool {
@@ -159,7 +170,7 @@ async fn agent() -> Result<()> {
     let moded = state.clone();
     let configured = state.clone();
     Agent
-        .builder()
+        .v1()
         .name("silt-fake-agent")
         .on_receive_request(
             async move |initialize: InitializeRequest, responder, _connection| {
@@ -210,18 +221,22 @@ async fn agent() -> Result<()> {
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: SetSessionModeRequest, responder, _connection| {
+            async move |request: SetSessionModeRequest, responder, connection| {
                 let mode = request.mode_id.to_string();
                 if !has_modes() || !["code", "plan"].contains(&mode.as_str()) {
                     return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such mode"));
                 }
-                moded.lock().expect("lock").mode.insert(request.session_id.to_string(), mode);
-                responder.respond(SetSessionModeResponse::new())
+                let moded = moded.clone();
+                connection.spawn(async move {
+                    settle().await;
+                    moded.lock().expect("lock").mode.insert(request.session_id.to_string(), mode);
+                    responder.respond(SetSessionModeResponse::new())
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: SetSessionConfigOptionRequest, responder, _connection| {
+            async move |request: SetSessionConfigOptionRequest, responder, connection| {
                 let value = match &request.value {
                     SessionConfigOptionValue::ValueId { value } => value.to_string(),
                     _ => String::new(),
@@ -229,8 +244,12 @@ async fn agent() -> Result<()> {
                 if !has_modes() || request.config_id.to_string() != "model" || !["fast", "smart"].contains(&value.as_str()) {
                     return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such setting"));
                 }
-                configured.lock().expect("lock").model.insert(request.session_id.to_string(), value.clone());
-                responder.respond(SetSessionConfigOptionResponse::new(settings(&value).unwrap_or_default()))
+                let configured = configured.clone();
+                connection.spawn(async move {
+                    settle().await;
+                    configured.lock().expect("lock").model.insert(request.session_id.to_string(), value.clone());
+                    responder.respond(SetSessionConfigOptionResponse::new(settings(&value).unwrap_or_default()))
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -288,18 +307,19 @@ async fn agent() -> Result<()> {
                         })
                         .collect();
                     let prompt = if attached.is_empty() { prompt } else { format!("{prompt} (with {})", attached.join(", ")) };
-                    let (cwd, planning) = {
+                    let (cwd, planning, model) = {
                         let state = state.lock().expect("lock");
                         let id = session.to_string();
-                        (state.cwd.get(&id).cloned().unwrap_or_default(), state.mode.get(&id).is_some_and(|mode| mode == "plan"))
+                        let model = state.model.get(&id).cloned().unwrap_or_else(|| "fast".into());
+                        (state.cwd.get(&id).cloned().unwrap_or_default(), state.mode.get(&id).is_some_and(|mode| mode == "plan"), model)
                     };
                     if std::env::var_os("FAKE_ACP_CRASH").is_some() {
                         std::process::exit(9);
                     }
                     notify(&worker, &session, SessionUpdate::AgentThoughtChunk(text("Thinking about the prompt.")))?;
                     notify(&worker, &session, SessionUpdate::UsageUpdate(UsageUpdate::new(53_000, 200_000)))?;
-                    if planning {
-                        let reply = format!("Plan: {prompt}");
+                    if planning || prompt.contains("Which model") {
+                        let reply = if planning { format!("Plan: {prompt}") } else { format!("Model: {model}") };
                         notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
                         state.lock().expect("lock").said.entry(session.to_string()).or_default().extend([(true, prompt), (false, reply)]);
                         return responder.respond(PromptResponse::new(StopReason::EndTurn));

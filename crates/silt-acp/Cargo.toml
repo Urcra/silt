@@ -11,7 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-agent-client-protocol = { version = "3.4", features = ["process", "unstable_end_turn_token_usage", "unstable_protocol_v2", "unstable_subagents"] }
+agent-client-protocol = { version = "5.4", features = ["process", "unstable_end_turn_token_usage", "unstable_protocol_v2", "unstable_subagents", "unstable_prompt_suggestions"] }
 base64 = "0.23.1"
 futures = "0.3.34"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -19,7 +19,7 @@ serde_json = "1.0.154"
 sha2 = "0.11.1"
 silt-os = { path = "../silt-os" }
 thiserror = "2.0.21"
-tokio = { version = "1.54.0", features = ["macros", "rt", "sync", "process", "fs"] }
+tokio = { version = "1.54.0", features = ["macros", "rt", "sync", "process", "fs", "time"] }
 tokio-util = { version = "0.7.20", features = ["compat"] }
 tracing = "0.1.44"
 

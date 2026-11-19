@@ -10,11 +10,12 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, TextContent,
 };
-use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo};
+use agent_client_protocol::{AcpAgent, Agent, Client};
 
 const DEFAULT_AGENT: &str = "npx -y @agentclientprotocol/claude-agent-acp@0.94.0";
 
@@ -29,7 +30,7 @@ async fn main() -> agent_client_protocol::Result<()> {
     let agent = AcpAgent::from_str(&command)?;
 
     Client
-        .builder()
+        .v1()
         .name("silt-acp-smoke")
         .on_receive_notification(
             async move |notification: SessionNotification, _cx| {

@@ -872,6 +872,7 @@ export function AgentDock({
         attach={ATTACH}
         commands={(live ? status.commands : undefined) ?? seen?.commands}
         voice={!hosted()}
+        suggestion={live && ready(status) ? (status.suggestion ?? undefined) : undefined}
         placeholder={
           !live
             ? startable

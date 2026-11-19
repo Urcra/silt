@@ -904,6 +904,20 @@ fn the_commands_an_agent_offers_reach_the_web_ui_and_are_kept_for_new_threads() 
     assert_eq!((kept("v1"), kept("v2")), (vec!["count".to_owned(), "compact".to_owned()], vec!["count".to_owned()]), "{choices}");
 }
 
+/// The prompt Claude's adapter predicts once a turn ends reaches the web UI
+/// for the composer to offer, and the next prompt spends it.
+#[test]
+fn the_prompt_an_agent_suggests_reaches_the_web_ui_until_the_next_prompt() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let suggested = |thread: &str| api.ok("GET", &format!("/api/threads/{thread}/live"), None)["agent"]["suggestion"].clone();
+    let thread = start_fake_acp(&env, &api, "v2", "add acp Suggest");
+    assert!(eventually(|| suggested(&thread) == "Add a test for it"), "{}", suggested(&thread));
+    api.ok("POST", &format!("/api/threads/{thread}/agent/prompt"), Some(serde_json::json!({"text": "and then"})));
+    settled_history(&api, &thread, "Done: and then");
+    assert_eq!(suggested(&thread), serde_json::Value::Null);
+}
+
 /// An agent that puts its plan to the person itself, as Claude does with
 /// ExitPlanMode, is the one to say when there's a plan: a plan turn it ends,
 /// here with its plan sent back and a command left running, isn't one to
