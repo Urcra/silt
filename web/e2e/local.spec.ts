@@ -50,7 +50,8 @@ test('a local model answers in a Local only workspace, and its thread can be era
   await expect(quantizations).toContainText('Q4_K_M')
   await expect(quantizations).toContainText('Fits')
   await quantizations.getByRole('button', { name: 'Download' }).click()
-  await expect(models.getByRole('list', { name: 'models here' })).toContainText('tiny-q4_k_m')
+  // A download ends with an fsync, which a disk as busy as the gate's can hold for seconds.
+  await expect(models.getByRole('list', { name: 'models here' })).toContainText('tiny-q4_k_m', { timeout: 20_000 })
 
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })

@@ -463,6 +463,7 @@ impl Core {
         let installed = agents_here(&self.data_dir);
         // What each offers as last seen here, else as Silt knows it; one not asked lately is asked again, behind the answer.
         let asking = std::env::var_os("SILT_ASK_AGENTS").is_none_or(|value| value != "0");
+        while self.probes.try_join_next().is_some() {}
         // One that didn't answer isn't asked again before then either, rather than on every look.
         for agent in installed.iter().filter(|agent| agent.id != registry::LOCAL_AGENT) {
             if asking
@@ -470,7 +471,9 @@ impl Core {
                 && self.asked.get(&agent.id).is_none_or(|asked| now - asked > ASK_AGAIN_MS)
             {
                 self.asked.insert(agent.id.clone(), now);
-                probe_agent(self.events.clone(), agent.clone(), self.data_dir.clone());
+                let (events, info, data_dir, ending) =
+                    (self.events.clone(), agent.clone(), self.data_dir.clone(), self.ending.subscribe());
+                self.probes.spawn(probe_agent(events, info, data_dir, ending));
             }
         }
         AgentChoices {
@@ -1323,6 +1326,10 @@ impl Core {
     /// Ends every agent running here, with what they left running, as the
     /// daemon exits: nothing would be left to hear them end.
     pub(crate) async fn end_agents(&mut self) {
+        self.ending.send_replace(true);
+        if tokio::time::timeout(PROBES_ENDING, async { while self.probes.join_next().await.is_some() {} }).await.is_err() {
+            warn!("an agent asked what it offers didn't stop in time");
+        }
         let threads: Vec<ThreadId> = self.acp.iter().filter(|(_, run)| run.handle.is_some()).map(|(thread, _)| *thread).collect();
         for thread in threads {
             let run = &self.acp[&thread];
@@ -2280,6 +2287,8 @@ const ASK_AGAIN_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// How long an agent asked what it offers may take to open its session.
 const PROBE_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
+/// How long a daemon ending waits for the agents it was asking to stop.
+const PROBES_ENDING: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Where in a checkout a chat's files may be copied: a relative path of
 /// plain names, as it may come from another person's browser.
@@ -2348,16 +2357,23 @@ fn ended(kind: Option<&str>, label: Option<&str>, status: &str) -> String {
 }
 
 /// Asks `info`'s agent what it offers: opens a session in a folder of the daemon's own, which nothing is
-/// prompted in, takes the modes and settings it lists, and stops it.
-fn probe_agent(events: mpsc::UnboundedSender<Event>, info: AgentInfo, data_dir: PathBuf) {
-    tokio::spawn(async move {
-        let offered = ask_agent(&info, &data_dir).await;
-        let _ = events.send(Event::AgentProbed { agent: info.id, offered });
-    });
+/// prompted in, takes the modes and settings it lists, and stops it; it gives up once `ending` turns true.
+async fn probe_agent(
+    events: mpsc::UnboundedSender<Event>,
+    info: AgentInfo,
+    data_dir: PathBuf,
+    ending: tokio::sync::watch::Receiver<bool>,
+) {
+    let offered = ask_agent(&info, &data_dir, ending).await;
+    let _ = events.send(Event::AgentProbed { agent: info.id, offered });
 }
 
-async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<Offered> {
-    let registry::AgentCommand { program, args, env } = registry::command(info, data_dir).await.ok()?;
+async fn ask_agent(info: &AgentInfo, data_dir: &Path, mut ending: tokio::sync::watch::Receiver<bool>) -> Option<Offered> {
+    let command = tokio::select! {
+        command = registry::command(info, data_dir) => command.ok()?,
+        _ = ending.wait_for(|ending| *ending) => return None,
+    };
+    let registry::AgentCommand { program, args, env } = command;
     let cwd = data_dir.join("asking-agents");
     std::fs::create_dir_all(&cwd).ok()?;
     let start = Start {
@@ -2371,7 +2387,7 @@ async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<Offered> {
     };
     let (sender, mut receiver) = mpsc::unbounded_channel();
     let handle = silt_acp::start(start, sender);
-    let offered = tokio::time::timeout(PROBE_WAIT, async {
+    let ready = tokio::time::timeout(PROBE_WAIT, async {
         while let Some(event) = receiver.recv().await {
             match event {
                 silt_acp::Event::Ready { modes, settings, accepts, .. } => return Some(Offered { modes, settings, accepts }),
@@ -2380,11 +2396,22 @@ async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<Offered> {
             }
         }
         None
-    })
-    .await
-    .ok()
-    .flatten();
+    });
+    let offered = tokio::select! {
+        offered = ready => offered.ok().flatten(),
+        _ = ending.wait_for(|ending| *ending) => None,
+    };
     handle.send(Command::Stop);
+    // Its processes are ended before it says it exited: `npx`'s `npm exec`
+    // outlives the daemon otherwise, still writing to `HOME`.
+    let exited = async {
+        while let Some(event) = receiver.recv().await {
+            if matches!(event, silt_acp::Event::Exited) {
+                break;
+            }
+        }
+    };
+    let _ = tokio::time::timeout(PROBES_ENDING, exited).await;
     offered
 }
 

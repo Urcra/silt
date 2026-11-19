@@ -51,6 +51,12 @@ if ! grep -qs 'silt cloud-setup' "$config"; then
     step "line tables only for debug builds, in $config"
     printf '\n# silt cloud-setup: smaller debug builds, to fit the disk\n[profile.dev]\ndebug = "line-tables-only"\n' >>"$config"
 fi
+# Incremental builds keep several gigabytes beside each build, which a full
+# gate ran out of disk on; nobody edits and rebuilds in a loop here.
+if ! grep -qs 'silt cloud-setup: no incremental' "$config"; then
+    step "no incremental builds, in $config"
+    printf '\n# silt cloud-setup: no incremental builds, to fit the disk\n[build]\nincremental = false\n' >>"$config"
+fi
 
 # Only needed to add migrations or change `query!`s; slow to build, so opt in.
 if [ "${SILT_SETUP_SQLX:-0}" = 1 ] && ! command -v sqlx >/dev/null; then

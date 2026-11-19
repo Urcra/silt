@@ -89,20 +89,24 @@ export function useLive(thread: string, total = 0): Live & { heard: boolean; set
   // `agent` is null both before the page hears and when no agent runs; only the second may start one.
   const [heardFor, setHeardFor] = useState<string>()
   const [round, setRound] = useState(0)
+  // Subscribed before the fetch, so what changes once the daemon has answered it is heard.
+  useTopic(`thread:${thread}`)
+  const agentEvents = useRef(0)
   useEffect(() => {
     let current = true
+    const before = agentEvents.current
     api.live(thread).then(
       (state) => {
         if (!current) return
         setHeardFor(thread)
+        // A status heard since the fetch went out is at least as new as its answer, which can come after it.
+        const newer = agentEvents.current !== before
         setLive((previous) => ({
           ...previous,
           changes: previous.deltas !== null && previous.deltas !== state.deltas ? previous.changes + 1 : previous.changes,
           deltas: state.deltas,
-          agent: state.agent,
           preset: state.preset,
-          said: NOTHING_SAID,
-          began: entries.current,
+          ...(newer ? {} : { agent: state.agent, said: NOTHING_SAID, began: entries.current }),
         }))
       },
       () => current && setHeardFor(thread),
@@ -119,7 +123,6 @@ export function useLive(thread: string, total = 0): Live & { heard: boolean; set
     )
     return () => clearTimeout(forget)
   }, [live.said])
-  useTopic(`thread:${thread}`)
   // Heard events are applied once a frame: an agent streaming a long reply sends hundreds a second, and drawing the
   // page for each was most of what the browser did.
   const heldEvents = useRef<BusEvent[]>([])
@@ -139,6 +142,7 @@ export function useLive(thread: string, total = 0): Live & { heard: boolean; set
     }
     if (!('thread' in event) || event.thread !== thread) return
     if (event.event !== 'thread' && event.event !== 'agent' && event.event !== 'agent_text') return
+    if (event.event === 'agent') agentEvents.current += 1
     heldEvents.current.push(event)
     flushing.current ??= nextFrame(() => {
       flushing.current = null

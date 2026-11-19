@@ -122,6 +122,8 @@ test('following a co-viewer shows their file and line', async ({ browser }) => {
 })
 
 test("an agent started from the web UI takes everyone's drafts and asks before editing", async ({ browser }) => {
+  // Two agent starts and several turns, which can take more than 30 s on a loaded machine.
+  test.slow()
   const alice = await (await browser.newContext()).newPage()
   const bob = await (await browser.newContext()).newPage()
   // Alice runs the agent from the thread's page; Bob edits on its Live page.

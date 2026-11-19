@@ -19,7 +19,10 @@ const HELPER = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt-fa
 let started: Fixture | undefined
 
 function start(env: Record<string, string> = {}, helper = HELPER): Fixture {
-  started = JSON.parse(runFixture('fixture.sh', { ...process.env, SILT_VOICE_BIN: helper, ...env })) as Fixture
+  // Asking the agents what they offer would fetch them through `npx` into the fixture's home, which no test here needs.
+  started = JSON.parse(
+    runFixture('fixture.sh', { ...process.env, SILT_VOICE_BIN: helper, SILT_ASK_AGENTS: '0', ...env }),
+  ) as Fixture
   return started
 }
 

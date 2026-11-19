@@ -81,6 +81,23 @@ fn kill_daemon(machine: &Machine) {
     assert!(eventually(|| machine.stdout(&["daemon", "status"]).trim() == "not running"));
 }
 
+/// Whether every thread of `pid` has stopped. A stop is sent to one thread,
+/// which stops the others once it runs: on a busy machine the rest go on
+/// for a while after `suspend` returns, and may take the capture lock.
+#[cfg(target_os = "linux")]
+fn stopped(pid: u32) -> bool {
+    fs::read_dir(format!("/proc/{pid}/task")).expect("lists threads").flatten().all(|task| {
+        let stat = fs::read_to_string(task.path().join("stat")).unwrap_or_default();
+        stat.rsplit_once(')').is_some_and(|(_, rest)| rest.trim_start().starts_with('T'))
+    })
+}
+
+/// Taken as stopped once `suspend` returns, where threads can't be read as on Linux.
+#[cfg(not(target_os = "linux"))]
+fn stopped(_pid: u32) -> bool {
+    true
+}
+
 /// Whether anyone holds the capture lock right now.
 fn capture_lock_free(machine: &Machine) -> bool {
     let file = fs::OpenOptions::new().write(true).open(machine.silt_home.join("capture.lock")).expect("opens");
@@ -124,6 +141,7 @@ fn a_daemon_stopped_while_a_tool_runs_loses_nothing() {
     let pid = daemon_pid(laptop);
     loop {
         silt_os::suspend(pid).expect("stops");
+        assert!(eventually(|| stopped(pid)), "the daemon stops");
         if capture_lock_free(laptop) {
             break;
         }

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Locator, Page } from '@playwright/test'
 
@@ -27,7 +27,35 @@ export function runFixture(script: string, env: NodeJS.ProcessEnv = process.env)
     const said = ran.stderr.trim().split('\n').slice(-40).join('\n')
     throw new Error(`${script} failed (${ran.signal ?? `exit ${ran.status}`}):\n${said}`)
   }
-  return ran.stdout.trim().split('\n').pop() ?? ''
+  const line = ran.stdout.trim().split('\n').pop() ?? ''
+  try {
+    const { work, dir } = JSON.parse(line) as { work?: unknown; dir?: unknown }
+    const folder = work ?? dir
+    if (typeof folder === 'string') appendFileSync(MADE, `${folder}\n`)
+  } catch {
+    // Not a world, which the spec says when it reads it.
+  }
+  return line
+}
+
+/** The folders the fixtures made in this run, so what a spec didn't tear down is ended anyway. */
+const MADE = join(import.meta.dirname, '.fixtures-made')
+
+/**
+ * Stops the daemons and servers the fixtures left running and removes their folders. A worker whose test ran out
+ * of time can be ended before its `afterAll` tears its fixture down, leaving a server, its daemons and a gigabyte
+ * or more behind; this runs before and after the whole run.
+ */
+export function abandonFixtures(): void {
+  let made: string[] = []
+  try {
+    made = readFileSync(MADE, 'utf8').split('\n').filter(Boolean)
+  } catch {
+    return
+  }
+  for (const folder of made.filter((folder) => existsSync(folder)))
+    spawnSync(join(import.meta.dirname, 'abandon.sh'), [folder, SILT], { stdio: 'ignore' })
+  rmSync(MADE, { force: true })
 }
 
 export function createFixture(): void {
