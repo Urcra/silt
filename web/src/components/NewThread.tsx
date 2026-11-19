@@ -2,7 +2,16 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useEffect, useId, useRef, useState } from 'react'
 import { PRESETS, permissionModes, startSettings, startingValue } from '../agentState'
-import { type AgentSetting, api, type CloneInfo, type FoundFolder, type Preset, type Project, type ThreadSummary, type WorkspaceView } from '../api'
+import {
+  type AgentSetting,
+  api,
+  type CloneInfo,
+  type FoundFolder,
+  type Preset,
+  type Project,
+  type ThreadSummary,
+  type WorkspaceView,
+} from '../api'
 import { agentRefused, modeRefused, presetRefused, rulesLine, serverLine, within, workspaceOf } from '../rules'
 import { threadDoing } from '../threadLook'
 import { useNow } from '../now'
@@ -56,7 +65,8 @@ const WHERE: { id: Where; label: string; says: string }[] = [
 ]
 
 function whereSays(where: Where, clone: string, base: string, device: string | null): string {
-  if (where === 'local') return `Works in your clone at ${shortPath(clone)}${device ? ` on ${device}` : ''}; edits land in your working tree.`
+  if (where === 'local')
+    return `Works in your clone at ${shortPath(clone)}${device ? ` on ${device}` : ''}; edits land in your working tree.`
   if (where === 'worktree')
     return `Gets its own checkout under .silt/checkouts${base ? ` from ${base}` : ''}; your clone stays as it is. Bring it back with a merge request.`
   return "Runs claude --cloud from the project's GitHub remote with your own sign-in; it records into a thread here."
@@ -80,10 +90,15 @@ function OpenFolder({ found, onAdded }: { found: FoundFolder[]; onAdded: (path: 
     setBusy(true)
     api
       .addClone(chosen)
-      .then(() => onAdded(chosen), (failure: unknown) => setError(message(failure)))
+      .then(
+        () => onAdded(chosen),
+        (failure: unknown) => setError(message(failure)),
+      )
       .finally(() => setBusy(false))
   }
-  const suggested = found.filter((folder) => !folder.added && folder.git && folder.path.toLowerCase().includes(path.trim().toLowerCase())).slice(0, 5)
+  const suggested = found
+    .filter((folder) => !folder.added && folder.git && folder.path.toLowerCase().includes(path.trim().toLowerCase()))
+    .slice(0, 5)
   const foundAt = new Map(found.map((folder) => [folder.path, folder]))
   return (
     <form
@@ -115,12 +130,23 @@ function OpenFolder({ found, onAdded }: { found: FoundFolder[]; onAdded: (path: 
         </Button>
       </span>
       {completing.matches.length > 0 ? (
-        <ul id={listId} role="listbox" aria-label={`folders in ${completing.dir}`} className="flex max-h-60 flex-col overflow-y-auto">
+        <ul
+          id={listId}
+          role="listbox"
+          aria-label={`folders in ${completing.dir}`}
+          className="flex max-h-60 flex-col overflow-y-auto"
+        >
           {completing.matches.map((folder, index) => {
             const known = foundAt.get(`${completing.dir}${folder.name}`)
             const said = known ? sessionsSaid(known) : ''
             return (
-              <li key={folder.name} id={`${listId}-${index}`} ref={index === completing.active ? activeOption : undefined} role="option" aria-selected={index === completing.active}>
+              <li
+                key={folder.name}
+                id={`${listId}-${index}`}
+                ref={index === completing.active ? activeOption : undefined}
+                role="option"
+                aria-selected={index === completing.active}
+              >
                 <button
                   type="button"
                   tabIndex={-1}
@@ -147,9 +173,15 @@ function OpenFolder({ found, onAdded }: { found: FoundFolder[]; onAdded: (path: 
           <ul aria-label="folders found on this machine" className="flex flex-col">
             {suggested.map((folder) => (
               <li key={folder.path}>
-                <button type="button" onClick={() => open(folder.path)} className="flex w-full flex-col rounded-sm px-2 py-1.5 text-left hover:bg-surface-2 max-md:min-h-11">
+                <button
+                  type="button"
+                  onClick={() => open(folder.path)}
+                  className="flex w-full flex-col rounded-sm px-2 py-1.5 text-left hover:bg-surface-2 max-md:min-h-11"
+                >
                   <span className="font-mono text-xs">{folder.path}</span>
-                  <span className="text-2xs text-fg-2">{[folder.repo || 'no remote', sessionsSaid(folder)].filter(Boolean).join(' · ')}</span>
+                  <span className="text-2xs text-fg-2">
+                    {[folder.repo || 'no remote', sessionsSaid(folder)].filter(Boolean).join(' · ')}
+                  </span>
                 </button>
               </li>
             ))}
@@ -188,18 +220,38 @@ function NewProject({ near, onAdded }: { near?: string; onAdded: (path: string) 
         setBusy(true)
         api
           .newProject(path)
-          .then(() => onAdded(path), (failure: unknown) => setError(message(failure)))
+          .then(
+            () => onAdded(path),
+            (failure: unknown) => setError(message(failure)),
+          )
           .finally(() => setBusy(false))
       }}
     >
-      <Input aria-label="project name" autoFocus placeholder="my-app" value={name} onChange={(event) => setName(event.target.value)} className="font-mono text-xs" />
+      <Input
+        aria-label="project name"
+        autoFocus
+        placeholder="my-app"
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+        className="font-mono text-xs"
+      />
       <span className="flex gap-1.5">
-        <Input aria-label="in the folder" placeholder="/home/me/code" value={parent} onChange={(event) => setParent(event.target.value)} className="min-w-0 flex-1 font-mono text-xs" />
+        <Input
+          aria-label="in the folder"
+          placeholder="/home/me/code"
+          value={parent}
+          onChange={(event) => setParent(event.target.value)}
+          className="min-w-0 flex-1 font-mono text-xs"
+        />
         <Button type="submit" variant="primary" disabled={busy || !path}>
           {busy ? 'Creating…' : 'Create'}
         </Button>
       </span>
-      <p className="text-2xs text-fg-2">{path ? `Makes ${path} with an empty git repository; no remote until you add one.` : 'A new folder with an empty git repository, for the agent to start from.'}</p>
+      <p className="text-2xs text-fg-2">
+        {path
+          ? `Makes ${path} with an empty git repository; no remote until you add one.`
+          : 'A new folder with an empty git repository, for the agent to start from.'}
+      </p>
       {error && <p className="text-xs text-danger">{error}</p>}
     </form>
   )
@@ -220,13 +272,29 @@ function CloneRepository({ onAdded }: { onAdded: (path: string) => void }) {
         setBusy(true)
         api
           .cloneProject(url.trim(), into.trim())
-          .then(() => onAdded(into.trim()), (failure: unknown) => setError(message(failure)))
+          .then(
+            () => onAdded(into.trim()),
+            (failure: unknown) => setError(message(failure)),
+          )
           .finally(() => setBusy(false))
       }}
     >
-      <Input aria-label="remote URL" autoFocus placeholder="git@github.com:acme/app.git" value={url} onChange={(event) => setUrl(event.target.value)} className="font-mono text-xs" />
+      <Input
+        aria-label="remote URL"
+        autoFocus
+        placeholder="git@github.com:acme/app.git"
+        value={url}
+        onChange={(event) => setUrl(event.target.value)}
+        className="font-mono text-xs"
+      />
       <span className="flex gap-1.5">
-        <Input aria-label="where to clone it" placeholder="/home/me/code/app" value={into} onChange={(event) => setInto(event.target.value)} className="min-w-0 flex-1 font-mono text-xs" />
+        <Input
+          aria-label="where to clone it"
+          placeholder="/home/me/code/app"
+          value={into}
+          onChange={(event) => setInto(event.target.value)}
+          className="min-w-0 flex-1 font-mono text-xs"
+        />
         <Button type="submit" variant="primary" disabled={busy || !url.trim() || !into.trim()}>
           {busy ? 'Cloning…' : 'Clone'}
         </Button>
@@ -250,7 +318,12 @@ function cloneName(clone: CloneInfo): string {
 /** This machine's projects, the one picked focused as they open so typing its first letters moves to another. */
 function ProjectList({ clones, value, onPick }: { clones: CloneInfo[]; value: string; onPick: (path: string) => void }) {
   const list = useRef<HTMLUListElement>(null)
-  const [opened] = useState(() => Math.max(0, clones.findIndex((clone) => clone.path === value)))
+  const [opened] = useState(() =>
+    Math.max(
+      0,
+      clones.findIndex((clone) => clone.path === value),
+    ),
+  )
   useEffect(() => {
     const box = list.current
     // Back from another tab, focus stays on the tabs.
@@ -308,7 +381,10 @@ function ProjectPicker({
     onPick(path)
     close()
   }
-  const typeTo = useTypeahead((panel) => [...panel.querySelectorAll<HTMLButtonElement>('[aria-label=projects] button')], clones.map(cloneName))
+  const typeTo = useTypeahead(
+    (panel) => [...panel.querySelectorAll<HTMLButtonElement>('[aria-label=projects] button')],
+    clones.map(cloneName),
+  )
   return (
     <Popover
       label="Pick a project"
@@ -326,7 +402,11 @@ function ProjectPicker({
       {(close) => (
         // The picker sits in the new thread's form, and React carries a
         // portal's events to it: its own forms' submits stop here.
-        <div className="flex flex-col gap-2 font-sans text-sm font-normal" onSubmit={(event) => event.stopPropagation()} onKeyDown={tab === 'projects' ? typeTo : undefined}>
+        <div
+          className="flex flex-col gap-2 font-sans text-sm font-normal"
+          onSubmit={(event) => event.stopPropagation()}
+          onKeyDown={tab === 'projects' ? typeTo : undefined}
+        >
           <Tabs
             label="open from"
             tabs={[
@@ -354,11 +434,16 @@ function ProjectPicker({
           {tab === 'clone' && <CloneRepository onAdded={(path) => added(path, close)} />}
           {tab === 'workspace' && (
             <ul className="flex flex-col gap-2">
-              {elsewhere.length === 0 && <li className="px-2 py-1.5 text-xs text-fg-2">Every project in your workspace has a clone here.</li>}
+              {elsewhere.length === 0 && (
+                <li className="px-2 py-1.5 text-xs text-fg-2">Every project in your workspace has a clone here.</li>
+              )}
               {elsewhere.map((project) => (
                 <li key={`${project.server ?? ''}:${project.repo}`} className="flex flex-col gap-1 px-1">
                   <span className="font-mono text-xs font-medium">
-                    {project.name} <span className="font-normal text-fg-2">· {project.threads === 1 ? '1 thread' : `${project.threads} threads`}</span>
+                    {project.name}{' '}
+                    <span className="font-normal text-fg-2">
+                      · {project.threads === 1 ? '1 thread' : `${project.threads} threads`}
+                    </span>
                   </span>
                   <CloneHere project={project} projects={projects} />
                 </li>
@@ -395,13 +480,18 @@ function Welcome() {
   }
   const start = (path: string) => {
     setError(undefined)
-    api.addClone(path).then(() => added(path), (failure: unknown) => setError(message(failure)))
+    api.addClone(path).then(
+      () => added(path),
+      (failure: unknown) => setError(message(failure)),
+    )
   }
   return (
     <div className="mx-auto flex w-full max-w-[720px] flex-col gap-5 px-4 py-10 md:py-16">
       <div>
         <h2 className="text-[26px] font-medium tracking-[-0.015em]">Pick a folder to start in</h2>
-        <p className="mt-1.5 text-fg-2">Silt records what your agent does there, so you can search it, fork it, or carry on from another machine.</p>
+        <p className="mt-1.5 text-fg-2">
+          Silt records what your agent does there, so you can search it, fork it, or carry on from another machine.
+        </p>
       </div>
       <section aria-labelledby="found" className="flex flex-col gap-1.5">
         <h3 id="found" className="flex items-baseline gap-2 px-0.5 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">
@@ -410,11 +500,16 @@ function Welcome() {
         </h3>
         {found.isPending && <Skeleton className="h-24" />}
         {found.error && <p className="text-xs text-danger">{message(found.error)}</p>}
-        {found.isSuccess && folders.length === 0 && <p className="text-xs text-fg-2">No agent sessions on this machine yet. Open a folder, or clone a repository.</p>}
+        {found.isSuccess && folders.length === 0 && (
+          <p className="text-xs text-fg-2">No agent sessions on this machine yet. Open a folder, or clone a repository.</p>
+        )}
         {folders.length > 0 && (
           <ul className="overflow-hidden rounded-md border border-line bg-elevated">
             {folders.map((folder) => (
-              <li key={folder.path} className="flex flex-wrap items-center gap-3 border-b border-line-subtle px-3.5 py-2.5 last:border-b-0">
+              <li
+                key={folder.path}
+                className="flex flex-wrap items-center gap-3 border-b border-line-subtle px-3.5 py-2.5 last:border-b-0"
+              >
                 <span className="flex min-w-[220px] flex-1 flex-col">
                   <span className="font-mono font-medium">{folder.path}</span>
                   <span className="text-xs text-fg-2">
@@ -426,7 +521,11 @@ function Welcome() {
                       .filter(Boolean)
                       .join(' · ')}
                   </span>
-                  {!startable(folder) && <span className="text-xs text-fg-3">Threads need git: ask an agent to run git init here. Its sessions can be imported now.</span>}
+                  {!startable(folder) && (
+                    <span className="text-xs text-fg-3">
+                      Threads need git: ask an agent to run git init here. Its sessions can be imported now.
+                    </span>
+                  )}
                 </span>
                 {startable(folder) && (
                   <Button variant={folder.path === firstStartable ? 'primary' : 'secondary'} onClick={() => start(folder.path)}>
@@ -443,10 +542,18 @@ function Welcome() {
         <Button icon="plus" aria-expanded={opening === 'new'} onClick={() => setOpening(opening === 'new' ? null : 'new')}>
           New project
         </Button>
-        <Button icon="folder" aria-expanded={opening === 'folder'} onClick={() => setOpening(opening === 'folder' ? null : 'folder')}>
+        <Button
+          icon="folder"
+          aria-expanded={opening === 'folder'}
+          onClick={() => setOpening(opening === 'folder' ? null : 'folder')}
+        >
           Open another folder
         </Button>
-        <Button icon="branch" aria-expanded={opening === 'clone'} onClick={() => setOpening(opening === 'clone' ? null : 'clone')}>
+        <Button
+          icon="branch"
+          aria-expanded={opening === 'clone'}
+          onClick={() => setOpening(opening === 'clone' ? null : 'clone')}
+        >
           Clone a repository
         </Button>
       </div>
@@ -455,7 +562,8 @@ function Welcome() {
       {opening === 'clone' && <CloneRepository onAdded={added} />}
       <ImportOffer />
       <p className="text-xs text-fg-2">
-        Prefer the terminal? Run <code className="font-mono text-fg-1">silt claude</code> in any clone. It shows up here as it works.
+        Prefer the terminal? Run <code className="font-mono text-fg-1">silt claude</code> in any clone. It shows up here as it
+        works.
       </p>
     </div>
   )
@@ -466,7 +574,10 @@ function pickUpSays(thread: ThreadSummary): string {
   if (thread.location === 'moved') return 'Last on another device · resume here or fork'
   const doing = threadDoing(thread)
   if (doing) return doing.charAt(0).toUpperCase() + doing.slice(1)
-  const said = [thread.messages > 0 && `${thread.messages} ${thread.messages === 1 ? 'message' : 'messages'}`, thread.edits > 0 && `${thread.edits} ${thread.edits === 1 ? 'edit' : 'edits'}`].filter(Boolean)
+  const said = [
+    thread.messages > 0 && `${thread.messages} ${thread.messages === 1 ? 'message' : 'messages'}`,
+    thread.edits > 0 && `${thread.edits} ${thread.edits === 1 ? 'edit' : 'edits'}`,
+  ].filter(Boolean)
   return said.length > 0 ? said.join(' · ') : 'Nothing said yet'
 }
 
@@ -527,10 +638,14 @@ function PickUp({ repo, drafts, onDraft }: { repo: string; drafts: Draft[]; onDr
 export function WorkspaceLine({ view }: { view: WorkspaceView }) {
   const rules = rulesLine(view.effective)
   return (
-    <p aria-label="workspace" className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-1 px-3 py-2 text-xs">
+    <p
+      aria-label="workspace"
+      className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-1 px-3 py-2 text-xs"
+    >
       <Icon name="lock" className="h-3.5 w-3.5 text-fg-2" />
       <span className="min-w-0 flex-1">
-        In <b className="font-medium">{view.workspace.name}</b> · syncs {view.workspace.server ? `with ${serverLine(view)}` : 'nowhere: this machine only'}
+        In <b className="font-medium">{view.workspace.name}</b> · syncs{' '}
+        {view.workspace.server ? `with ${serverLine(view)}` : 'nowhere: this machine only'}
         {rules && ` · ${rules}`} · sees only {view.workspace.name}'s history
       </span>
       <Link to="/settings/$section" params={{ section: 'workspaces' }} className="text-accent-fg hover:underline">
@@ -578,10 +693,17 @@ export function NewThread() {
     agents.find((candidate) => !agentRefused(workspace, candidate.id))?.id ??
     ''
   const wanted: Preset =
-    chosenPreset ?? PRESETS.find((choice) => choice.id === defaults?.default_preset)?.id ?? workspace?.workspace.defaults.preset ?? 'ask_before_commands'
+    chosenPreset ??
+    PRESETS.find((choice) => choice.id === defaults?.default_preset)?.id ??
+    workspace?.workspace.defaults.preset ??
+    'ask_before_commands'
   const cap = workspace?.effective.max_preset
   const preset: Preset = within(wanted, cap) ? wanted : cap!
-  const branches = useQuery({ queryKey: keys.branches(project), queryFn: () => api.branches(project), enabled: project !== '' && chosenWhere === 'worktree' })
+  const branches = useQuery({
+    queryKey: keys.branches(project),
+    queryFn: () => api.branches(project),
+    enabled: project !== '' && chosenWhere === 'worktree',
+  })
   const agentName = agents.find((candidate) => candidate.id === agent)?.name ?? ''
   // As this browser last saw the agent run; its mode is the permissions chip's to say.
   // As the agent last ran on this machine, kept by the daemon: its modes and its model, effort and the rest.
@@ -592,7 +714,8 @@ export function NewThread() {
   const agentDefaults = workspace?.workspace.defaults.agents?.[agent]
   const defaultMode = modes?.find((choice) => choice.id === agentDefaults?.mode && !modeRefused(workspace, agent, choice.id))?.id
   const chosenMode = mode ?? defaultMode ?? seen?.modes?.current
-  const settingValue = (setting: AgentSetting) => startingValue(setting, chosenSettings[setting.id], agentDefaults?.settings?.[setting.id])
+  const settingValue = (setting: AgentSetting) =>
+    startingValue(setting, chosenSettings[setting.id], agentDefaults?.settings?.[setting.id])
   // Claude's modes (Manual, Accept edits, Plan, Auto) are its permissions, which then stand in for the preset (ADR 0048).
   const modesArePermissions = permissionModes(modes)
   const { attached, add, remove, clear } = useAttachments()
@@ -636,7 +759,10 @@ export function NewThread() {
         .cloudStart(project, prompt.trim())
         .then(
           (launch) => {
-            toast(launch.warnings.length > 0 ? `Cloud session started. ${launch.warnings.join(' ')}` : 'Cloud session started', 'ok')
+            toast(
+              launch.warnings.length > 0 ? `Cloud session started. ${launch.warnings.join(' ')}` : 'Cloud session started',
+              'ok',
+            )
             setPrompt('')
           },
           (failure: unknown) => setError(message(failure)),
@@ -666,7 +792,13 @@ export function NewThread() {
       .then(
         (thread) => {
           // The agent takes the first prompt once it's up, seconds later; the thread shows it as sent meanwhile.
-          if (!background && prompt.trim()) addSending(thread, prompt, attached.map((file) => file.name), 0)
+          if (!background && prompt.trim())
+            addSending(
+              thread,
+              prompt,
+              attached.map((file) => file.name),
+              0,
+            )
           clear()
           // The draft was this one's; New thread opens empty next time.
           setPrompt('')
@@ -701,7 +833,13 @@ export function NewThread() {
           {choices.isPending ? (
             <Skeleton className="h-8 w-24" />
           ) : (
-            <ProjectPicker clones={clones} projects={projectsQuery.data ?? []} value={project} onPick={pick} opening={search.pick} />
+            <ProjectPicker
+              clones={clones}
+              projects={projectsQuery.data ?? []}
+              value={project}
+              onPick={pick}
+              opening={search.pick}
+            />
           )}
           <span className="-ml-1.5">?</span>
         </h2>
@@ -721,10 +859,15 @@ export function NewThread() {
             onChange={setPrompt}
             onSend={send}
             onCycle={() => {
-              if (modesArePermissions && modes) setMode(modes[(modes.findIndex((choice) => choice.id === chosenMode) + 1) % modes.length]!.id)
+              if (modesArePermissions && modes)
+                setMode(modes[(modes.findIndex((choice) => choice.id === chosenMode) + 1) % modes.length]!.id)
               else setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)
             }}
-            placeholder={chosenWhere === 'cloud' ? 'Describe the task for the cloud session.' : 'Describe the task. You can also start the agent and prompt it later.'}
+            placeholder={
+              chosenWhere === 'cloud'
+                ? 'Describe the task for the cloud session.'
+                : 'Describe the task. You can also start the agent and prompt it later.'
+            }
             onFiles={chosenWhere === 'cloud' ? undefined : attach}
             commands={chosenWhere === 'cloud' ? undefined : seen?.commands}
             voice={!hosted()}
@@ -733,7 +876,9 @@ export function NewThread() {
               chosenWhere !== 'cloud' && (
                 <>
                   {agents.length > 0 && !agent && workspace ? (
-                    <span className="px-2 text-xs text-warn-fg">No agent installed here is allowed in {workspace.workspace.name}</span>
+                    <span className="px-2 text-xs text-warn-fg">
+                      No agent installed here is allowed in {workspace.workspace.name}
+                    </span>
                   ) : agents.length > 0 ? (
                     <ChipSelect
                       ghost
@@ -744,7 +889,12 @@ export function NewThread() {
                         setMode(undefined)
                         setChosenSettings({})
                       }}
-                      options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description, refused: agentRefused(workspace, choice.id) }))}
+                      options={agents.map((choice) => ({
+                        id: choice.id,
+                        name: choice.name,
+                        description: choice.description,
+                        refused: agentRefused(workspace, choice.id),
+                      }))}
                     />
                   ) : (
                     choices.isSuccess && <span className="px-2 text-xs text-fg-2">No agent found</span>
@@ -765,7 +915,12 @@ export function NewThread() {
                       icon="lock"
                       value={preset}
                       onChange={(chosen) => setPreset(chosen as Preset)}
-                      options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says, refused: presetRefused(workspace, choice.id) }))}
+                      options={PRESETS.map((choice) => ({
+                        id: choice.id,
+                        name: choice.label,
+                        description: choice.says,
+                        refused: presetRefused(workspace, choice.id),
+                      }))}
                     />
                   )}
                   {agent && <UsageRing agent={agent} />}
@@ -774,9 +929,17 @@ export function NewThread() {
             }
             attach={ATTACH}
             enter="start"
-            send={{ label: 'Start', title: chosenWhere === 'cloud' ? 'Start in the cloud' : 'Start and open it', disabled: !ready, busy: starting, submit: true }}
+            send={{
+              label: 'Start',
+              title: chosenWhere === 'cloud' ? 'Start in the cloud' : 'Start and open it',
+              disabled: !ready,
+              busy: starting,
+              submit: true,
+            }}
             menu={[
-              ...(chosenWhere === 'cloud' ? [] : [{ label: 'Start in the background', icon: 'clock' as const, onSelect: () => start(true), disabled: !ready }]),
+              ...(chosenWhere === 'cloud'
+                ? []
+                : [{ label: 'Start in the background', icon: 'clock' as const, onSelect: () => start(true), disabled: !ready }]),
               { label: 'Save as a draft', icon: 'edit' as const, onSelect: saveDraft, disabled: !prompt.trim() },
             ]}
           />
@@ -808,11 +971,16 @@ export function NewThread() {
                 mono={base !== ''}
                 value={base}
                 onChange={setBase}
-                options={[{ id: '', name: 'current checkout' }, ...(branches.data ?? []).map((branch) => ({ id: branch, name: branch }))]}
+                options={[
+                  { id: '', name: 'current checkout' },
+                  ...(branches.data ?? []).map((branch) => ({ id: branch, name: branch })),
+                ]}
               />
             )}
           </div>
-          <p className="mt-2 px-0.5 text-xs text-fg-2">{whereSays(chosenWhere, clone?.path ?? '', base, chosenWhere !== 'cloud' && devices > 0 ? device : null)}</p>
+          <p className="mt-2 px-0.5 text-xs text-fg-2">
+            {whereSays(chosenWhere, clone?.path ?? '', base, chosenWhere !== 'cloud' && devices > 0 ? device : null)}
+          </p>
           {workspace && (workspacesQuery.data?.saved || rulesLine(workspace.effective)) && <WorkspaceLine view={workspace} />}
           {choices.isSuccess && agents.length === 0 && chosenWhere !== 'cloud' && (
             <p className="mt-1 px-0.5 text-xs text-warn-fg">
@@ -822,7 +990,9 @@ export function NewThread() {
             </p>
           )}
           {chosenWhere === 'local' && busyHere && (
-            <p className="mt-1 px-0.5 text-xs text-warn-fg">An agent is already working in this project. A second Local one shares its files; pick Worktree to keep them apart.</p>
+            <p className="mt-1 px-0.5 text-xs text-warn-fg">
+              An agent is already working in this project. A second Local one shares its files; pick Worktree to keep them apart.
+            </p>
           )}
           {error && <p className="mt-2 text-sm whitespace-pre-wrap text-danger">{error}</p>}
         </form>

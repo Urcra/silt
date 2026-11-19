@@ -45,7 +45,12 @@ function useGlobalActions() {
       ? []
       : [
           { id: 'new', label: 'New thread in this project', keys: 'n', run: () => void navigate({ to: '/new', search: {} }) },
-          { id: 'new-elsewhere', label: 'New thread in another project', keys: 'shift+n', run: () => void navigate({ to: '/new', search: { pick: 'projects' } }) },
+          {
+            id: 'new-elsewhere',
+            label: 'New thread in another project',
+            keys: 'shift+n',
+            run: () => void navigate({ to: '/new', search: { pick: 'projects' } }),
+          },
           { id: 'new-chat', label: 'New chat', keys: 'c', run: () => void navigate({ to: '/chat' }) },
         ]),
     { id: 'threads', label: 'All threads', keys: 't', run: () => void navigate({ to: '/threads' }) },
@@ -64,13 +69,26 @@ function useGlobalActions() {
 
 const SIDEBAR = { min: 200, max: 420, start: 260 }
 
-function Tab({ to, icon, children, at }: { to: string; icon: 'inbox' | 'list' | 'merge' | 'search'; children: ReactNode; at: (path: string) => boolean }) {
+function Tab({
+  to,
+  icon,
+  children,
+  at,
+}: {
+  to: string
+  icon: 'inbox' | 'list' | 'merge' | 'search'
+  children: ReactNode
+  at: (path: string) => boolean
+}) {
   const current = at(useRouterState({ select: (state) => state.location.pathname }))
   return (
     <Link
       to={to}
       aria-current={current ? 'page' : undefined}
-      className={cx('flex min-h-14 flex-col items-center justify-center gap-0.5 text-2xs', current ? 'text-accent-fg' : 'text-fg-2')}
+      className={cx(
+        'flex min-h-14 flex-col items-center justify-center gap-0.5 text-2xs',
+        current ? 'text-accent-fg' : 'text-fg-2',
+      )}
     >
       <Icon name={icon} className="h-5 w-5" />
       <span>{children}</span>
@@ -108,7 +126,10 @@ function Reconnecting() {
   const connected = useBusConnected()
   if (connected) return null
   return (
-    <p role="status" className="flex items-center gap-1.5 border-b border-line-subtle bg-danger-tint px-4 py-1 text-xs text-danger">
+    <p
+      role="status"
+      className="flex items-center gap-1.5 border-b border-line-subtle bg-danger-tint px-4 py-1 text-xs text-danger"
+    >
       <Dot tone="danger" />
       {hosted() ? 'Server' : 'Daemon'} not connected; reconnecting
     </p>
@@ -124,7 +145,8 @@ export function Layout() {
   useGlobalActions()
   useThemeActions()
   useNotifier()
-  const sidebar = useDragWidth('silt-sidebar-width', SIDEBAR, 'right')
+  const aside = useRef<HTMLElement>(null)
+  const sidebar = useDragWidth('silt-sidebar-width', SIDEBAR, 'right', '--sidebar', aside)
   const scroll = useRef<HTMLElement>(null)
   const path = useRouterState({ select: (state) => state.location.pathname })
   // The drawer was opened on this page; going elsewhere closes it.
@@ -140,10 +162,13 @@ export function Layout() {
     <div className="grid h-dvh grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] bg-bg text-fg-1 md:grid-rows-[minmax(0,1fr)]">
       <div className="flex min-h-0">
         <aside
-          style={{ width: sidebar.width }}
+          ref={aside}
+          style={sidebar.style}
           className={cx(
-            'shrink-0 flex-col border-r border-line bg-bg',
-            sidebarShown ? 'fixed inset-y-0 left-0 z-30 flex max-w-[85vw] shadow-overlay md:static md:shadow-none' : 'hidden md:flex',
+            'w-(--sidebar) shrink-0 flex-col border-r border-line bg-bg',
+            sidebarShown
+              ? 'fixed inset-y-0 left-0 z-30 flex max-w-[85vw] shadow-overlay md:static md:shadow-none'
+              : 'hidden md:flex',
           )}
         >
           <ErrorBoundary>
@@ -156,7 +181,12 @@ export function Layout() {
           className="-ml-px hidden w-1 shrink-0 cursor-col-resize hover:bg-accent-tint focus-visible:bg-accent md:block"
         />
         {sidebarShown && (
-          <button type="button" aria-label="close projects" onClick={() => setSidebarShown(false)} className="fixed inset-0 z-20 bg-backdrop md:hidden" />
+          <button
+            type="button"
+            aria-label="close projects"
+            onClick={() => setSidebarShown(false)}
+            className="fixed inset-0 z-20 bg-backdrop md:hidden"
+          />
         )}
         <main ref={scroll} inert={sidebarShown || undefined} className="relative flex min-w-0 flex-1 flex-col overflow-y-auto">
           <Reconnecting />

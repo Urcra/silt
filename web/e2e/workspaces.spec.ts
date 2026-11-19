@@ -132,7 +132,7 @@ test("workspaces keep work and personal apart, with the org's rules on work (ADR
   await page.goto(`${new URL(fixture.ada).origin}/settings/workspaces${new URL(fixture.ada).hash}`)
   const settings = page.getByRole('region', { name: 'Workspaces' })
   await settings.getByRole('tab', { name: /Work/ }).click()
-  await expect(settings.getByRole('region', { name: 'Rules' })).toContainText("acme on")
+  await expect(settings.getByRole('region', { name: 'Rules' })).toContainText('acme on')
   await expect(settings.getByRole('region', { name: 'Rules' })).toContainText('Ask before commands')
   await expect(settings.getByLabel('server')).toBeDisabled()
   await shoot(page, '2-settings', 1900)
@@ -143,7 +143,9 @@ test("workspaces keep work and personal apart, with the org's rules on work (ADR
   await shoot(page, '4-projects')
 
   await page.getByRole('link', { name: 'Orgs', exact: true }).click()
-  await expect(page.getByRole('region', { name: "acme's policy" })).toContainText('GitHub Copilot only · at most Ask before commands · home locked')
+  await expect(page.getByRole('region', { name: "acme's policy" })).toContainText(
+    'GitHub Copilot only · at most Ask before commands · home locked',
+  )
   await shoot(page, '6-org-policy', 820)
 
   await sidebar.getByRole('link', { name: 'New thread', exact: true }).click()
@@ -151,7 +153,9 @@ test("workspaces keep work and personal apart, with the org's rules on work (ADR
   await page.getByRole('dialog', { name: 'Pick a project' }).getByRole('option', { name: /app/ }).click()
   const line = page.getByLabel('workspace', { exact: true })
   await expect(line).toContainText('In Work')
-  await expect(line).toContainText("GitHub Copilot only · at most Ask before commands · other workspaces' files hidden · home locked")
+  await expect(line).toContainText(
+    "GitHub Copilot only · at most Ask before commands · other workspaces' files hidden · home locked",
+  )
   await expect(page.getByRole('form', { name: 'new thread' })).toContainText('No agent installed here is allowed in Work')
   await shoot(page, '3-new-thread')
 
@@ -165,7 +169,9 @@ test("workspaces keep work and personal apart, with the org's rules on work (ADR
   expect(await refused.text()).toContain("Fake agent isn't allowed in Work: acme's policy on")
 })
 
-test("a workspace's defaults pick the agent's model, and the project picker moves to a project by its first letter", async ({ page }) => {
+test("a workspace's defaults pick the agent's model, and the project picker moves to a project by its first letter", async ({
+  page,
+}) => {
   await page.goto(`${new URL(fixture.ada).origin}/settings/workspaces${new URL(fixture.ada).hash}`)
   const settings = page.getByRole('region', { name: 'Workspaces' })
   await settings.getByRole('tab', { name: /Personal/ }).click()
@@ -190,7 +196,9 @@ test("a workspace's defaults pick the agent's model, and the project picker move
   await expect(form.getByLabel('model')).toHaveValue('smart')
 })
 
-test("a workspace's sandbox reach and its plugins are set in its settings, and a plugin is on only where turned on (ADR 0093)", async ({ page }) => {
+test("a workspace's sandbox reach and its plugins are set in its settings, and a plugin is on only where turned on (ADR 0093)", async ({
+  page,
+}) => {
   const file = join(fixture.dir, 'fleet-api.json')
   const environment = { target: 'https://api.fleet.example/graphql', reads: 'allow', changes: 'ask', data: ['location'] }
   writeFileSync(file, JSON.stringify({ name: 'fleet-api', kind: { type: 'graphql' }, environments: { production: environment } }))
@@ -232,7 +240,11 @@ test("a workspace's sandbox reach and its plugins are set in its settings, and a
   await shoot(page, '7-sandbox-settings', 1600)
 
   // A thread's header says what its agent's sandbox reaches, to read rather than change.
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: /work on the app/ }).first().click()
+  await page
+    .getByRole('navigation', { name: 'projects' })
+    .getByRole('link', { name: /work on the app/ })
+    .first()
+    .click()
   await page.getByRole('button', { name: 'Sandbox' }).click()
   const shield = page.getByRole('dialog', { name: 'Sandbox' })
   await expect(shield).toContainText('The next run is sandboxed')

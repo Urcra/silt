@@ -98,6 +98,9 @@ pub(crate) struct AcpRun {
     own_turn: bool,
     /// When the agent last said something.
     said_at: Option<Instant>,
+    /// When browsers were last told how the agent stands in full, which
+    /// words streamed tell them only now and then.
+    status_told_at: Option<Instant>,
     /// Tool calls the agent started and hasn't finished.
     calls_running: HashSet<String>,
     /// The docs and sheets the agent wrote this turn, each kept as a version
@@ -736,6 +739,7 @@ impl Core {
                 reports_work: false,
                 own_turn: false,
                 said_at: None,
+                status_told_at: None,
                 calls_running: HashSet::new(),
                 edited: std::collections::BTreeSet::new(),
                 labels: HashMap::new(),
@@ -1395,12 +1399,24 @@ impl Core {
         if let AcpEvent::Login { token, event } = event {
             return self.login_event(thread, token, event).await;
         }
+        let streamed = self.acp.get(&thread).and_then(|current| streamed_only(current, &event));
         if let Err(error) = self.handle_acp(thread, event).await {
             warn!(%error, "could not record the agent's work");
             if let Some(current) = self.acp.get_mut(&thread) {
                 current.error = Some(error.to_string());
             }
         }
+        let Some(current) = self.acp.get_mut(&thread) else {
+            return;
+        };
+        // A word streamed adds only to what the agent says, which its own
+        // event told browsers: its whole status again with each word grew
+        // with all said so far, megabytes for one long reply.
+        let unchanged = streamed.is_some_and(|before| before == (current.shown(), current.error.clone()));
+        if unchanged && current.status_told_at.is_some_and(|told| told.elapsed() < STATUS_EVERY) {
+            return;
+        }
+        current.status_told_at = Some(Instant::now());
         self.agent_changed(thread).await;
     }
 
@@ -2559,6 +2575,22 @@ pub(crate) fn spawn_agent(
             }
         }
     });
+}
+
+/// How often a browser hears an agent's whole status while it streams
+/// words, which it otherwise adds up from the words themselves.
+const STATUS_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How the agent stood before `event`, when it's a word streamed that only
+/// adds to what's being said: not a thought after words or words after a
+/// thought, which records what came before.
+fn streamed_only(run: &AcpRun, event: &AcpEvent) -> Option<(AgentState, Option<String>)> {
+    let adds = match event {
+        AcpEvent::Agent(silt_acp::Event::Update(Update::AgentText(_))) => run.thought.is_empty(),
+        AcpEvent::Agent(silt_acp::Event::Update(Update::Thought(_))) => run.text.is_empty(),
+        _ => false,
+    };
+    adds.then(|| (run.shown(), run.error.clone()))
 }
 
 #[cfg(test)]

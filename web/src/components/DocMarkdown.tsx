@@ -34,7 +34,10 @@ function DocDiagram({ text }: { text: string }) {
 const DOC_COMPONENTS: Components = {
   ...COMPONENTS,
   pre(props) {
-    const code = (Array.isArray(props.children) ? props.children[0] : props.children) as ReactElement<{ className?: string; children?: ReactNode }>
+    const code = (Array.isArray(props.children) ? props.children[0] : props.children) as ReactElement<{
+      className?: string
+      children?: ReactNode
+    }>
     const language = /language-([\w+-]+)/.exec(code?.props?.className ?? '')?.[1] ?? ''
     const text = textOf(code?.props?.children).replace(/\n$/, '')
     if (language === 'mermaid') return <DocDiagram text={text} />
@@ -53,14 +56,20 @@ const DOC_COMPONENTS: Components = {
       const date = new Date(`${day}T00:00:00`)
       return (
         <time dateTime={day} className="rounded-sm bg-surface-1 px-1" data-md={`<?silt date ${day}?>`} contentEditable={false}>
-          {Number.isNaN(date.getTime()) ? day : date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+          {Number.isNaN(date.getTime())
+            ? day
+            : date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
         </time>
       )
     }
     if (href.startsWith('#silt-mention:')) {
       const name = href.slice('#silt-mention:'.length)
       return (
-        <span className="rounded-sm bg-accent/15 px-1 text-accent-fg" data-md={`<?silt mention ${name}?>`} contentEditable={false}>
+        <span
+          className="rounded-sm bg-accent/15 px-1 text-accent-fg"
+          data-md={`<?silt mention ${name}?>`}
+          contentEditable={false}
+        >
           @{name}
         </span>
       )
@@ -72,7 +81,9 @@ const DOC_COMPONENTS: Components = {
 /** A doc's text as its read view shows it: Markdown with ADR 0077's blocks and Mermaid diagrams drawn. */
 export function DocMarkdown({ text, className }: { text: string; className?: string }) {
   return (
-    <div className={cx('min-w-0 text-sm leading-[1.6] break-words text-fg-1 [&>:first-child]:mt-0 [&>:last-child]:mb-0', className)}>
+    <div
+      className={cx('min-w-0 text-sm leading-[1.6] break-words text-fg-1 [&>:first-child]:mt-0 [&>:last-child]:mb-0', className)}
+    >
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={DOC_COMPONENTS} skipHtml>
         {docMarkdown(text)}
       </ReactMarkdown>

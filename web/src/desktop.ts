@@ -11,6 +11,8 @@ declare global {
     /** Set by the desktop app's window when it has more than one place to show Silt from. */
     __siltBackends?: Backend[]
     __siltBackend?: string
+    /** Set by the desktop app's window: the commit it was built from (ADR 0100). */
+    __siltDesktop?: { commit?: string }
   }
 }
 
@@ -58,4 +60,18 @@ export function tellDesktopTheme(appearance: 'light' | 'dark') {
   if (link === told) return
   told = link
   window.location.href = link
+}
+
+/** The commit the desktop app showing this page was built from, or none outside the app. */
+export function desktopCommit(): string | undefined {
+  return window.__siltDesktop?.commit || undefined
+}
+
+export function inDesktop(): boolean {
+  return window.__siltDesktop !== undefined
+}
+
+/** Asks the desktop app to restart itself, on the build an update installed. */
+export function relaunchDesktop() {
+  window.location.href = 'silt://relaunch'
 }

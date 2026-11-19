@@ -8,7 +8,6 @@ export async function mermaidSvg(text: string, id: string, theme: 'neutral' | 'd
   return svg
 }
 
-
 /**
  * An HTML page with each `<pre class="mermaid">` drawn into it as an image, for a copy that opens with no Silt to draw
  * them (ADR 0073). A page without diagrams comes back as it was.

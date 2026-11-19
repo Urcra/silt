@@ -57,7 +57,10 @@ export function SeenFiles({
       {onSeen && (
         <div className="flex items-center gap-2 px-2 pb-2 text-xs text-fg-2">
           <span className="h-1 flex-1 overflow-hidden rounded-sm bg-surface-2" aria-hidden="true">
-            <span className="block h-full bg-accent" style={{ width: `${files.length === 0 ? 0 : (100 * seen) / files.length}%` }} />
+            <span
+              className="block h-full bg-accent"
+              style={{ width: `${files.length === 0 ? 0 : (100 * seen) / files.length}%` }}
+            />
           </span>
           <span data-testid="seen-count" className="font-mono text-2xs">
             {seen}/{files.length} seen

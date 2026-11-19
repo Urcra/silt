@@ -23,9 +23,15 @@ describe('a section', () => {
 })
 
 describe("a whiteboard arrow's way", () => {
-  const [a, b] = [{ x: 0, y: 0, w: 100, h: 50 }, { x: 400, y: 0, w: 100, h: 50 }]
+  const [a, b] = [
+    { x: 0, y: 0, w: 100, h: 50 },
+    { x: 400, y: 0, w: 100, h: 50 },
+  ]
   it('goes straight where nothing lies between', () => {
-    expect(route(a, b, [{ x: 150, y: 200, w: 100, h: 100 }])).toEqual([[102, 25], [394, 25]])
+    expect(route(a, b, [{ x: 150, y: 200, w: 100, h: 100 }])).toEqual([
+      [102, 25],
+      [394, 25],
+    ])
   })
   it('goes round what does, clear of it', () => {
     const between = { x: 200, y: -40, w: 80, h: 130 }

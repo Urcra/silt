@@ -687,7 +687,12 @@ side: string | null,
 /**
  * On a `task`: news of a subagent or background command.
  */
-task: TaskView | null, };
+task: TaskView | null, 
+/**
+ * What a page of history left out of the entry, read whole with `whole`:
+ * an image's data, or a long output's start.
+ */
+cut: CutView | null, };
 
 export type ToolView = { id: string, name: string, 
 /**
@@ -722,6 +727,12 @@ export type ImageView = { media_type: string,
  * Base64; empty when it was too large to show.
  */
 data: string, };
+
+export type CutView = { 
+/**
+ * The whole text's lines and bytes; its last lines are what the page kept.
+ */
+lines: number, bytes: number, };
 
 export type ArtifactView = { 
 /**
@@ -1135,7 +1146,17 @@ export type HistoryHit = {
  */
 index: number, kind: string, snippet: string, };
 
-export type HistoryPage = { thread: string, total: number, entries: Array<HistoryEntry>, };
+export type HistoryPage = { thread: string, total: number, entries: Array<HistoryEntry>, 
+/**
+ * Which entry `entries` starts at: the one asked for, or an earlier one
+ * that changed since the history the request named as `known`.
+ */
+from: number | null, 
+/**
+ * The history as it is now, to name as `known` next time; a server's
+ * pages name none, and are read whole again.
+ */
+version: number | null, };
 
 export type InFlight = { thread: string, owner: string, files: Array<string>, last_ms: number, };
 
@@ -1867,3 +1888,64 @@ export type ModelPull = { id: string, done: number,
 total: number, };
 
 export type ModelFailure = { id: string, reason: string, };
+
+export type UpdateView = { build: BuildView, 
+/**
+ * The last check's answer, until the first check ends.
+ */
+availability: Availability | null, checked_ms: number | null, checking: boolean, 
+/**
+ * The update running or last run.
+ */
+run: RunView | null, 
+/**
+ * The run's last lines of output.
+ */
+output: Array<string>, 
+/**
+ * Where all of it is.
+ */
+output_path: string, 
+/**
+ * Whether the desktop app showing this needs a relaunch to run what
+ * the update brings, or has brought.
+ */
+relaunch: boolean, };
+
+export type BuildView = { version: string, channel: Channel, commit: Commit | null, branch: string | null, dirty: boolean, 
+/**
+ * The clone it was built from.
+ */
+source: string | null, };
+
+export type Channel = "stable" | "nightly";
+
+export type Availability = { "kind": "up_to_date" } | { "kind": "behind", target: Commit, ahead: number, commits: Array<NewCommit>, } | { "kind": "off", reason: OffReason, } | { "kind": "release", tag: string, url: string, } | { "kind": "failed", message: string, };
+
+export type NewCommit = { hash: Commit, subject: string, 
+/**
+ * Committed at, in seconds since the epoch.
+ */
+time: number, };
+
+export type Commit = string;
+
+export type OffReason = { "kind": "debug_build" } | { "kind": "no_clone" } | { "kind": "clone_gone", path: string, } | { "kind": "built_off_main", branch: string | null, } | { "kind": "built_with_changes" } | { "kind": "off_main", branch: string | null, } | { "kind": "local_changes" } | { "kind": "no_upstream" } | { "kind": "local_commits", count: number, } | { "kind": "unknown_build" };
+
+export type RunView = { outcome: RunOutcome, from: Commit | null, to: Commit | null, started_ms: number, elapsed_ms: number, 
+/**
+ * How long the whole update should take, once a run has said.
+ */
+expected_ms: number | null, percent: number, steps: Array<StepView>, };
+
+export type StepView = { phase: Phase, label: string, status: StepStatus, took_ms: number | null, compiled: number, 
+/**
+ * What it compiled last time, which a bar fills toward.
+ */
+expected_compiled: number | null, };
+
+export type StepStatus = "done" | "active" | "waiting" | "failed" | "todo" | "skipped";
+
+export type Phase = "fetch" | "web_dependencies" | "web_build" | "cli" | "desktop" | "voice" | "windows" | "restart";
+
+export type RunOutcome = { "kind": "running" } | { "kind": "waiting", agents: number, } | { "kind": "done" } | { "kind": "failed", message: string, };

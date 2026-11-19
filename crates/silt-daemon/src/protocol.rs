@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 pub use silt_proto::view::{
-    AnswerView, ChoiceView, CommentLocation, CommentOn, CommentView, CommitView, DaemonStatus, DeviceAgent, DeviceChange,
-    DeviceView, FileEdit, HistoryEntry, HistoryPage, ImageView, InboxEntry, LineSpan, Mine, MrDetails, MrFile, MrGuide,
-    MrSummary, NewLink, PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange,
-    TaskView, ThreadLink, ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
+    AnswerView, ChoiceView, CommentLocation, CommentOn, CommentView, CommitView, CutView, DaemonStatus, DeviceAgent,
+    DeviceChange, DeviceView, FileEdit, HistoryEntry, HistoryPage, ImageView, InboxEntry, LineSpan, Mine, MrDetails, MrFile,
+    MrGuide, MrSummary, NewLink, PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine,
+    StateChange, TaskView, ThreadLink, ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
 };
 pub use silt_proto::{ChoiceAsked, QuestionAsked, QuestionFieldAsked, SignInAsked, SignInChoice, SignInShown};
 
@@ -19,6 +19,11 @@ pub enum Request {
     AgentHomes,
     /// Whether this daemon's program was replaced since it started.
     DaemonBuild,
+    /// Runs `exe daemon restart` once no agent works in this daemon, as
+    /// stopping it now would end their turns.
+    RestartWhenIdle {
+        exe: PathBuf,
+    },
     /// Starts recording a new agent session in a new thread. Without a
     /// `session_id` the daemon finds the session once the agent writes it.
     StartSession {
@@ -79,6 +84,19 @@ pub enum Request {
     },
     /// Starts downloading llama.cpp's latest build for this machine.
     RuntimePull,
+    /// Whether a newer Silt is out, and how an update is going (ADR 0100),
+    /// for a page in the desktop app built from `desktop`.
+    Update {
+        #[serde(default)]
+        desktop: Option<String>,
+    },
+    /// Checks for a newer Silt now.
+    UpdateCheck,
+    /// Starts updating this machine's Silt.
+    UpdateStart,
+    /// Whether an installed update waits for agents to finish before the
+    /// daemon restarts.
+    UpdateWaiting,
     /// This machine's settings for chats (ADR 0059).
     ChatSettings,
     SetChatSettings {
@@ -303,6 +321,14 @@ pub enum Request {
         thread: String,
         offset: usize,
         limit: usize,
+        /// The version of the history the asker holds: the page starts
+        /// earlier than `offset` where that changed since.
+        #[serde(default)]
+        known: Option<usize>,
+        /// Long outputs and images left out, as a page of the web UI's
+        /// carries them (`silt_proto::view::cut_for_page`).
+        #[serde(default)]
+        cut: bool,
     },
     /// Search within a thread's history and the threads it came from.
     HistorySearch {
@@ -2525,6 +2551,7 @@ mod tests {
             ToolView::decl(&config),
             ToolOutcome::decl(&config),
             ImageView::decl(&config),
+            CutView::decl(&config),
             silt_proto::view::ArtifactView::decl(&config),
             silt_proto::artifact::ArtifactFile::decl(&config),
             silt_proto::view::ArtifactListed::decl(&config),
@@ -2637,6 +2664,18 @@ mod tests {
             ModelFit::decl(&config),
             ModelPull::decl(&config),
             ModelFailure::decl(&config),
+            silt_update::UpdateView::decl(&config),
+            silt_update::BuildView::decl(&config),
+            silt_update::Channel::decl(&config),
+            silt_update::Availability::decl(&config),
+            silt_update::NewCommit::decl(&config),
+            silt_update::Commit::decl(&config),
+            silt_update::OffReason::decl(&config),
+            silt_update::RunView::decl(&config),
+            silt_update::StepView::decl(&config),
+            silt_update::StepStatus::decl(&config),
+            silt_update::Phase::decl(&config),
+            silt_update::Outcome::decl(&config),
         ];
         let generated = format!(
             "// The daemon's API types, written by `UPDATE_API_TYPES=1 cargo test -p silt-daemon api_types`\n// from crates/silt-daemon/src/protocol.rs. Don't edit by hand.\n\n{}\n",

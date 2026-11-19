@@ -12,6 +12,10 @@ export default defineConfig({
   // Relative, so the page's `<base href>` decides where the assets come from.
   base: './',
   plugins: [react(), tailwindcss()],
+  build: {
+    // Mermaid's layout engine, elk, is one 1.5 MB module. It loads only when a diagram is drawn, as Mermaid itself does.
+    chunkSizeWarningLimit: 1600,
+  },
   server: daemon
     ? {
         // `changeOrigin` sends the daemon its own address as the host, which

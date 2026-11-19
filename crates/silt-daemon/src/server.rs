@@ -142,7 +142,10 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             }
             Event::Request(request, reply) => core.request(request, reply).await,
             Event::Changed { checkout, paths, noticed, settled } => core.changed(checkout, paths, noticed, settled).await,
-            Event::Tick => core.tick().await,
+            Event::Tick => {
+                core.tick().await;
+                core.restart_if_idle();
+            }
             Event::Discovered { token, found } => core.discovered(token, found).await,
             Event::Importing { run, reply } => core.import_next(run, reply).await,
             Event::Snapshotted { session_id, result } => core.snapshotted(&session_id, result).await,

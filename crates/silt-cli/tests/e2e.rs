@@ -774,7 +774,7 @@ fn repo_of(api: &Api, thread: &str) -> Option<String> {
 fn settled_history(api: &Api, thread: &str, last: &str) -> Vec<(String, String)> {
     let mut entries = Vec::new();
     let settled = eventually(|| {
-        let history = api.ok("GET", &format!("/api/threads/{thread}/history"), None);
+        let history = api.ok("GET", &format!("/api/threads/{thread}/history?whole=true"), None);
         entries = history["entries"]
             .as_array()
             .expect("entries")
@@ -870,7 +870,7 @@ fn a_long_reply_reaches_the_web_ui_whole() {
 
 /// The thread's history entries as the API gives them.
 fn history_entries(api: &Api, thread: &str) -> Vec<serde_json::Value> {
-    api.ok("GET", &format!("/api/threads/{thread}/history"), None)["entries"].as_array().cloned().unwrap_or_default()
+    api.ok("GET", &format!("/api/threads/{thread}/history?whole=true"), None)["entries"].as_array().cloned().unwrap_or_default()
 }
 
 /// The commands an agent offers reach the web UI: over v1 once its session

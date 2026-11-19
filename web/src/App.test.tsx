@@ -34,7 +34,15 @@ test('lists threads from the daemon', async () => {
               last_ms: Date.now(),
               merged: false,
               review: false,
-              mine: { pinned: false, snoozed_until: null, snoozed_at: null, wake_on_activity: false, settled: false, seen_ms: null, reviewed_turn: null },
+              mine: {
+                pinned: false,
+                snoozed_until: null,
+                snoozed_at: null,
+                wake_on_activity: false,
+                settled: false,
+                seen_ms: null,
+                reviewed_turn: null,
+              },
             },
           ]
         : []
@@ -68,7 +76,15 @@ test('a project with nothing from the last two weeks folds into one row, and ope
     last_ms,
     merged: false,
     review: false,
-    mine: { pinned: false, snoozed_until: null, snoozed_at: null, wake_on_activity: false, settled: false, seen_ms: null, reviewed_turn: null },
+    mine: {
+      pinned: false,
+      snoozed_until: null,
+      snoozed_at: null,
+      wake_on_activity: false,
+      settled: false,
+      seen_ms: null,
+      reviewed_turn: null,
+    },
   })
   const weeksAgo = (weeks: number) => Date.now() - weeks * 7 * 86_400_000
   vi.stubGlobal(
@@ -120,7 +136,15 @@ test('threads are grouped by project, newest first', () => {
     last_ms: created_ms,
     merged: false,
     review: false,
-    mine: { pinned: false, snoozed_until: null, snoozed_at: null, wake_on_activity: false, settled: false, seen_ms: null, reviewed_turn: null },
+    mine: {
+      pinned: false,
+      snoozed_until: null,
+      snoozed_at: null,
+      wake_on_activity: false,
+      settled: false,
+      seen_ms: null,
+      reviewed_turn: null,
+    },
     visibility: null,
     server: null,
     local_only: false,

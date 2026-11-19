@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { type ReactNode, memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { CommentView } from '../api'
 import { type CodeLine, type DiffFile, type Hunk, LARGE_DIFF, diffSize, parseFiles, splitRows } from '../diffParse'
 import { type Token, languageOf, useHighlighted } from '../highlight'
@@ -61,10 +61,72 @@ const GUTTER = { add: 'text-ok', del: 'text-danger', context: 'text-fg-2' }
 function Tokens({ tokens, text }: { tokens: Token[] | undefined; text: string }) {
   if (!tokens) return <>{text || ' '}</>
   if (tokens.length === 0) return <> </>
-  return <>{tokens.map((token, index) => (token.className ? <span key={index} className={token.className}>{token.text}</span> : token.text))}</>
+  return (
+    <>
+      {tokens.map((token, index) =>
+        token.className ? (
+          <span key={index} className={token.className}>
+            {token.text}
+          </span>
+        ) : (
+          token.text
+        ),
+      )}
+    </>
+  )
 }
 
 const SHEET_BUTTON = 'justify-center max-md:text-sm'
+
+/** A row's height, as `leading-5` draws it, for what isn't drawn yet. */
+const ROW_PX = 20
+/** Past this many rows, a diff draws only what's near the view: 30,000 lines drawn at once were half a million
+ * elements, seconds to open and to scroll. */
+const LAZY_ROWS = 1500
+/** How many of a long hunk's rows are drawn, or given up, together. */
+const CHUNK_ROWS = 100
+/** How far beyond the view rows are drawn ahead of it, and how much further they're kept once drawn. */
+const AHEAD = '1200px 0px'
+const KEPT = '4000px 0px'
+
+/**
+ * What `children` draws, only once it's near the view, and given up again once far from it, unless a comment is being
+ * written in it; until then, and after, a box as tall as it was, or as `height` guesses.
+ */
+function NearView({ height, children }: { height: number; children: () => ReactNode }) {
+  const box = useRef<HTMLDivElement>(null)
+  const [near, setNear] = useState(typeof IntersectionObserver === 'undefined')
+  const [tall, setTall] = useState(height)
+  useEffect(() => {
+    const element = box.current
+    if (!element || typeof IntersectionObserver === 'undefined') return undefined
+    const ahead = new IntersectionObserver(([entry]) => entry?.isIntersecting && setNear(true), { rootMargin: AHEAD })
+    const kept = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry || entry.isIntersecting || element.querySelector('textarea, input')) return
+        setTall(entry.boundingClientRect.height || height)
+        setNear(false)
+      },
+      { rootMargin: KEPT },
+    )
+    ahead.observe(element)
+    kept.observe(element)
+    return () => {
+      ahead.disconnect()
+      kept.disconnect()
+    }
+  }, [height])
+  return (
+    <div ref={box} style={near ? undefined : { height: tall }}>
+      {near && children()}
+    </div>
+  )
+}
+
+/** How many rows `file` draws in `layout`. */
+function rowsIn(file: DiffFile, layout: DiffLayout): number {
+  return file.hunks.reduce((total, hunk) => total + 1 + (layout === 'split' ? splitRows(hunk).length : hunk.lines.length), 0)
+}
 
 /** What saving a line comment does: keep it, send it to the agent now, or add it to the review. */
 type Save = 'comment' | 'send' | 'review'
@@ -125,7 +187,12 @@ function LineComment({
         </Button>
         {reviewing ? (
           <>
-            <Button disabled={!text.trim()} onClick={() => save('comment')} title="Keeps it as a comment now, outside the review" className={SHEET_BUTTON}>
+            <Button
+              disabled={!text.trim()}
+              onClick={() => save('comment')}
+              title="Keeps it as a comment now, outside the review"
+              className={SHEET_BUTTON}
+            >
               Add single comment
             </Button>
             <Button
@@ -140,11 +207,22 @@ function LineComment({
           </>
         ) : (
           <>
-            <Button type="submit" variant={agent ? 'secondary' : 'primary'} disabled={!text.trim()} title="Keeps it as a comment on the lines" className={SHEET_BUTTON}>
+            <Button
+              type="submit"
+              variant={agent ? 'secondary' : 'primary'}
+              disabled={!text.trim()}
+              title="Keeps it as a comment on the lines"
+              className={SHEET_BUTTON}
+            >
               Comment
             </Button>
             {agent && (
-              <Button variant="primary" disabled={!text.trim()} onClick={() => save('send')} className={cx(SHEET_BUTTON, 'col-span-2')}>
+              <Button
+                variant="primary"
+                disabled={!text.trim()}
+                onClick={() => save('send')}
+                className={cx(SHEET_BUTTON, 'col-span-2')}
+              >
                 Send to {agent}
               </Button>
             )}
@@ -176,7 +254,14 @@ function PendingComment({ draft, review }: { draft: Draft; review: ReviewState }
               setEditing(false)
             }}
           >
-            <Textarea aria-label="edit pending comment" autoFocus rows={2} className="text-xs" value={text} onChange={(event) => setText(event.target.value)} />
+            <Textarea
+              aria-label="edit pending comment"
+              autoFocus
+              rows={2}
+              className="text-xs"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+            />
             <span className="flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
                 Cancel
@@ -210,7 +295,7 @@ function numberOn(line: CodeLine, side: Side): number | null {
   return side === 'old' ? (line.kind === 'add' ? null : line.oldLine) : line.newLine
 }
 
-function HunkView({
+const HunkView = memo(function HunkView({
   file,
   hunk,
   layout,
@@ -222,6 +307,7 @@ function HunkView({
   current = false,
   ask,
   fresh,
+  lazy = false,
 }: {
   file: DiffFile
   hunk: Hunk
@@ -239,10 +325,12 @@ function HunkView({
   ask?: Ask
   /** New-side lines written since the person saw the file, marked at their edge. */
   fresh?: ReadonlySet<number>
+  /** Only the rows near the view are drawn. */
+  lazy?: boolean
 }) {
-  const code = hunk.lines.map((line) => line.text).join('\n')
+  const code = useMemo(() => hunk.lines.map((line) => line.text).join('\n'), [hunk])
   const highlighted = useHighlighted(code, languageOf(file.path))
-  const tokens = new Map(hunk.lines.map((line, index) => [line, highlighted?.[index]]))
+  const tokens = useMemo(() => new Map(hunk.lines.map((line, index) => [line, highlighted?.[index]])), [hunk, highlighted])
   const [picking, setPicking] = useState<Lines | null>(null)
   // Where a drag from a line's "+" started, while the button is held; the box opens once it's let go, so the lines stay put.
   const dragFrom = useRef<{ side: Side; line: number } | null>(null)
@@ -254,14 +342,16 @@ function HunkView({
     setAnswered(asked.key)
     setPicking(asked.at)
   }
+  // Only while a drag is on: each of a large diff's thousand hunks listened all the time.
   useEffect(() => {
+    if (!dragging) return undefined
     const stop = () => {
       dragFrom.current = null
       setDragging(false)
     }
     window.addEventListener('mouseup', stop)
     return () => window.removeEventListener('mouseup', stop)
-  }, [])
+  }, [dragging])
   const review = commenting?.review
   // A line takes comments on the thread's side, or on the base's when the change deleted it.
   const sideFor = (line: CodeLine): Side | null =>
@@ -289,7 +379,10 @@ function HunkView({
       <button
         type="button"
         aria-label={`comment on ${file.path} ${side === 'old' ? 'deleted line' : 'line'} ${number}`}
-        className={cx('hover:text-accent-fg', bare ? 'h-full w-full text-right' : 'pointer-coarse:-mx-1.5 pointer-coarse:min-w-11 pointer-coarse:px-1.5')}
+        className={cx(
+          'hover:text-accent-fg',
+          bare ? 'h-full w-full text-right' : 'pointer-coarse:-mx-1.5 pointer-coarse:min-w-11 pointer-coarse:px-1.5',
+        )}
         onClick={(event) => pick(side, number, event.shiftKey)}
       >
         {number}
@@ -320,16 +413,34 @@ function HunkView({
       </button>
     )
   }
-  const ending = (side: Side, number: number) =>
-    (commenting?.comments ?? []).filter((comment) => {
+  // The file's comments and drafts by the line they end at, found once rather than for each line.
+  const comments = commenting?.comments
+  const drafts = review?.review.drafts
+  const endingAt = useMemo(() => {
+    const found = new Map<string, CommentView[]>()
+    for (const comment of comments ?? []) {
       const at = linesOf(comment)
-      return at !== null && !comment.resolved && at.path === file.path && sideOf(at) === side && at.end === number
-    })
+      if (at === null || comment.resolved || at.path !== file.path) continue
+      const key = `${sideOf(at)}:${at.end}`
+      found.set(key, [...(found.get(key) ?? []), comment])
+    }
+    return found
+  }, [comments, file.path])
+  const draftsAt = useMemo(() => {
+    const found = new Map<string, Draft[]>()
+    for (const draft of drafts ?? []) {
+      if (draft.at.path !== file.path) continue
+      const key = `${sideOf(draft.at)}:${draft.at.end}`
+      found.set(key, [...(found.get(key) ?? []), draft])
+    }
+    return found
+  }, [drafts, file.path])
+  const ending = (side: Side, number: number) => endingAt.get(`${side}:${number}`) ?? []
   const after = (line: CodeLine) => {
     const side = sideFor(line)
     const number = side && numberOn(line, side)
     if (!commenting || !side || number === null) return null
-    const pending = (review?.review.drafts ?? []).filter((draft) => draft.at.path === file.path && sideOf(draft.at) === side && draft.at.end === number)
+    const pending = draftsAt.get(`${side}:${number}`) ?? []
     return (
       <>
         {ending(side, number).map((comment) => (
@@ -370,81 +481,124 @@ function HunkView({
   const ring = 'ring-1 ring-accent ring-inset'
   const isFresh = (line: CodeLine | null) => line !== null && line.newLine !== null && fresh?.has(line.newLine) === true
   const freshEdge = 'shadow-[inset_3px_0_0_var(--info)]'
+  const bareRow = (line: CodeLine, index: number) => (
+    <div key={index}>
+      <div
+        className={cx(
+          'grid grid-cols-[32px_minmax(0,1fr)] pointer-coarse:leading-7',
+          ROW[line.kind],
+          picked(line, sideFor(line)) && ring,
+        )}
+      >
+        <Gutter line={line.newLine ?? line.oldLine} kind={line.kind}>
+          {sideFor(line) && numberOf(line, sideFor(line)!)}
+        </Gutter>
+        {codeCell(line)}
+      </div>
+      {after(line)}
+    </div>
+  )
+  const unifiedRow = (line: CodeLine, index: number) => (
+    <div key={index}>
+      <div
+        className={cx(
+          'group grid grid-cols-[36px_36px_minmax(0,1fr)]',
+          ROW[line.kind],
+          picked(line, sideFor(line)) && ring,
+          isFresh(line) && freshEdge,
+        )}
+        onMouseEnter={() => dragOver(line)}
+      >
+        <Gutter line={line.oldLine} kind={line.kind}>
+          {line.kind === 'del' ? numberOf(line, 'old') : undefined}
+        </Gutter>
+        <Gutter line={line.newLine} kind={line.kind}>
+          {numberOf(line, 'new')}
+        </Gutter>
+        {codeCell(line)}
+      </div>
+      {after(line)}
+    </div>
+  )
+  const splitRow = (row: ReturnType<typeof splitRows>[number], index: number) => {
+    const left = row.left && row.left.kind !== 'add' ? row.left : null
+    const right = row.right && row.right.kind !== 'del' ? row.right : null
+    return (
+      <div key={index}>
+        <div className="grid grid-cols-[36px_minmax(0,1fr)_36px_minmax(0,1fr)]">
+          <Gutter line={row.left?.oldLine ?? null} kind={row.left?.kind === 'del' ? 'del' : 'context'}>
+            {left?.kind === 'del' ? numberOf(left, 'old') : undefined}
+          </Gutter>
+          <span
+            className={cx(
+              'group flex min-w-0 border-r border-line-subtle',
+              left && left.kind !== 'context' && ROW.del,
+              left?.kind === 'del' && picked(left, 'old') && ring,
+            )}
+            onMouseEnter={() => left && dragOver(left)}
+          >
+            {codeCell(left, left?.kind === 'del')}
+          </span>
+          <Gutter line={row.right?.newLine ?? null} kind={row.right?.kind === 'add' ? 'add' : 'context'}>
+            {right && numberOf(right, 'new')}
+          </Gutter>
+          <span
+            className={cx(
+              'group flex min-w-0',
+              right && right.kind === 'add' && ROW.add,
+              right && picked(right, 'new') && ring,
+              isFresh(right) && freshEdge,
+            )}
+            onMouseEnter={() => right && dragOver(right)}
+          >
+            {codeCell(right)}
+          </span>
+        </div>
+        {left?.kind === 'del' && after(left)}
+        {right && after(right)}
+      </div>
+    )
+  }
+  const splitRowsOf = useMemo(() => (layout === 'split' && !bare ? splitRows(hunk) : []), [layout, bare, hunk])
+  // A long hunk's rows near the view, a chunk at a time, in a diff too large to draw whole.
+  const drawn = (count: number, row: (index: number) => ReactNode) => {
+    const all = (from: number, to: number) => Array.from({ length: to - from }, (_, at) => row(from + at))
+    if (!lazy || count <= CHUNK_ROWS) return all(0, count)
+    return Array.from({ length: Math.ceil(count / CHUNK_ROWS) }, (_, chunk) => {
+      const from = chunk * CHUNK_ROWS
+      const to = Math.min(count, from + CHUNK_ROWS)
+      return (
+        <NearView key={from} height={(to - from) * ROW_PX}>
+          {() => all(from, to)}
+        </NearView>
+      )
+    })
+  }
   return (
     <>
       {!bare && (
         <div
           data-hunk={`${file.path}#${index}`}
-          className={cx('flex items-center gap-3 bg-info-tint/50 px-3 font-mono text-2xs leading-6 text-info', current && 'ring-2 ring-accent ring-inset')}
+          className={cx(
+            'flex items-center gap-3 bg-info-tint/50 px-3 font-mono text-2xs leading-6 text-info',
+            current && 'ring-2 ring-accent ring-inset',
+          )}
         >
           <span className="min-w-0 truncate">{hunk.header}</span>
           {note && <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1 font-sans">{note}</span>}
         </div>
       )}
       {bare && !first && <div aria-hidden="true" className="h-2 border-y border-line-subtle bg-surface-1" />}
-      {bare
-        ? hunk.lines.map((line, index) => (
-            <div key={index}>
-              <div className={cx('grid grid-cols-[32px_minmax(0,1fr)] pointer-coarse:leading-7', ROW[line.kind], picked(line, sideFor(line)) && ring)}>
-                <Gutter line={line.newLine ?? line.oldLine} kind={line.kind}>
-                  {sideFor(line) && numberOf(line, sideFor(line)!)}
-                </Gutter>
-                {codeCell(line)}
-              </div>
-              {after(line)}
-            </div>
-          ))
-        : layout === 'unified'
-        ? hunk.lines.map((line, index) => (
-            <div key={index}>
-              <div
-                className={cx('group grid grid-cols-[36px_36px_minmax(0,1fr)]', ROW[line.kind], picked(line, sideFor(line)) && ring, isFresh(line) && freshEdge)}
-                onMouseEnter={() => dragOver(line)}
-              >
-                <Gutter line={line.oldLine} kind={line.kind}>
-                  {line.kind === 'del' ? numberOf(line, 'old') : undefined}
-                </Gutter>
-                <Gutter line={line.newLine} kind={line.kind}>
-                  {numberOf(line, 'new')}
-                </Gutter>
-                {codeCell(line)}
-              </div>
-              {after(line)}
-            </div>
-          ))
-        : splitRows(hunk).map((row, index) => {
-            const left = row.left && row.left.kind !== 'add' ? row.left : null
-            const right = row.right && row.right.kind !== 'del' ? row.right : null
-            return (
-              <div key={index}>
-                <div className="grid grid-cols-[36px_minmax(0,1fr)_36px_minmax(0,1fr)]">
-                  <Gutter line={row.left?.oldLine ?? null} kind={row.left?.kind === 'del' ? 'del' : 'context'}>
-                    {left?.kind === 'del' ? numberOf(left, 'old') : undefined}
-                  </Gutter>
-                  <span
-                    className={cx('group flex min-w-0 border-r border-line-subtle', left && left.kind !== 'context' && ROW.del, left?.kind === 'del' && picked(left, 'old') && ring)}
-                    onMouseEnter={() => left && dragOver(left)}
-                  >
-                    {codeCell(left, left?.kind === 'del')}
-                  </span>
-                  <Gutter line={row.right?.newLine ?? null} kind={row.right?.kind === 'add' ? 'add' : 'context'}>
-                    {right && numberOf(right, 'new')}
-                  </Gutter>
-                  <span
-                    className={cx('group flex min-w-0', right && right.kind === 'add' && ROW.add, right && picked(right, 'new') && ring, isFresh(right) && freshEdge)}
-                    onMouseEnter={() => right && dragOver(right)}
-                  >
-                    {codeCell(right)}
-                  </span>
-                </div>
-                {left?.kind === 'del' && after(left)}
-                {right && after(right)}
-              </div>
-            )
-          })}
+      {drawn(bare || layout === 'unified' ? hunk.lines.length : splitRowsOf.length, (index) =>
+        bare
+          ? bareRow(hunk.lines[index]!, index)
+          : layout === 'unified'
+            ? unifiedRow(hunk.lines[index]!, index)
+            : splitRow(splitRowsOf[index]!, index),
+      )}
     </>
   )
-}
+})
 
 /** A file's hunks, or for one too large to draw unasked, its size and a way to draw it anyway. */
 function FileHunks({
@@ -456,6 +610,7 @@ function FileHunks({
   cursor,
   ask,
   fresh,
+  lazy = false,
 }: {
   file: DiffFile
   layout: DiffLayout
@@ -465,6 +620,7 @@ function FileHunks({
   cursor?: Cursor
   ask?: Ask
   fresh?: ReadonlySet<number>
+  lazy?: boolean
 }) {
   const size = diffSize(file)
   const [shown, setShown] = useState(size <= LARGE_DIFF)
@@ -491,6 +647,7 @@ function FileHunks({
       current={cursor?.path === file.path && cursor.hunk === index}
       ask={ask}
       fresh={fresh}
+      lazy={lazy}
     />
   ))
 }
@@ -537,7 +694,9 @@ export function DiffView({
   /** A file's lines written since the person saw it. */
   fresh?: (path: string) => ReadonlySet<number> | undefined
 }) {
-  const files = (given ?? parseFiles(text ?? '')).filter((file) => only === undefined || file.path === only)
+  const parsed = useMemo(() => given ?? parseFiles(text ?? ''), [given, text])
+  const files = useMemo(() => parsed.filter((file) => only === undefined || file.path === only), [parsed, only])
+  const lazy = useMemo(() => files.reduce((total, file) => total + rowsIn(file, layout), 0) > LAZY_ROWS, [files, layout])
   if (files.length === 0) return <p className="text-sm text-fg-2">No changes.</p>
   if (bare)
     return (
@@ -578,13 +737,48 @@ export function DiffView({
             </>
           }
         >
-          <div className="overflow-x-auto font-mono text-xs leading-5">
+          <div
+            className="overflow-x-auto font-mono text-xs leading-5 [content-visibility:auto]"
+            style={{ containIntrinsicSize: `auto ${heightOf(file, layout)}px` }}
+          >
             <div className="min-w-fit">
-              <FileHunks file={file} layout={layout} commenting={commenting} note={hunkNote} cursor={cursor} ask={ask} fresh={fresh?.(file.path)} />
+              {lazy ? (
+                <NearView height={heightOf(file, layout)}>
+                  {() => (
+                    <FileHunks
+                      file={file}
+                      layout={layout}
+                      commenting={commenting}
+                      note={hunkNote}
+                      cursor={cursor}
+                      ask={ask}
+                      fresh={fresh?.(file.path)}
+                      lazy
+                    />
+                  )}
+                </NearView>
+              ) : (
+                <FileHunks
+                  file={file}
+                  layout={layout}
+                  commenting={commenting}
+                  note={hunkNote}
+                  cursor={cursor}
+                  ask={ask}
+                  fresh={fresh?.(file.path)}
+                />
+              )}
             </div>
           </div>
         </DiffBlock>
       ))}
     </div>
   )
+}
+
+/** About how tall a file's lines are, in pixels, until they're first drawn. Files out of view aren't laid out or
+ * painted (`content-visibility`): with thousands of lines, each frame of a sidebar or panel dragged took 100 ms. */
+function heightOf(file: DiffFile, layout: DiffLayout): number {
+  if (diffSize(file) > LARGE_DIFF) return 40
+  return rowsIn(file, layout) * ROW_PX
 }

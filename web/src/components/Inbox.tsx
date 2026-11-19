@@ -37,7 +37,12 @@ function Answer({ notification, done }: { notification: InboxEntry; done: () => 
     <span className="flex flex-wrap gap-1" role="group" aria-label={`answer ${notification.id}`}>
       {action.do === 'permission' &&
         action.options.map(([option, label], index) => (
-          <Button key={option} size="sm" variant={index === 0 ? 'primary' : 'secondary'} onClick={() => act(api.answer(notification.thread, action.id, option))}>
+          <Button
+            key={option}
+            size="sm"
+            variant={index === 0 ? 'primary' : 'secondary'}
+            onClick={() => act(api.answer(notification.thread, action.id, option))}
+          >
             {label}
           </Button>
         ))}
@@ -117,8 +122,18 @@ function Switch({ on, label, onChange }: { on: boolean; label: string; onChange:
       onClick={() => onChange(!on)}
       className="inline-flex h-11 w-11 items-center justify-center md:h-6"
     >
-      <span className={cx('relative inline-block h-4 w-7 rounded-full transition-colors duration-100', on ? 'bg-accent' : 'bg-surface-3')}>
-        <span className={cx('absolute top-0.5 h-3 w-3 rounded-full bg-elevated transition-[left] duration-100', on ? 'left-3.5' : 'left-0.5')} />
+      <span
+        className={cx(
+          'relative inline-block h-4 w-7 rounded-full transition-colors duration-100',
+          on ? 'bg-accent' : 'bg-surface-3',
+        )}
+      >
+        <span
+          className={cx(
+            'absolute top-0.5 h-3 w-3 rounded-full bg-elevated transition-[left] duration-100',
+            on ? 'left-3.5' : 'left-0.5',
+          )}
+        />
       </span>
     </button>
   )
@@ -130,12 +145,19 @@ function Switch({ on, label, onChange }: { on: boolean; label: string; onChange:
  */
 export function NotificationSettings() {
   const queries = useQueryClient()
-  const settings = useQuery({ queryKey: keys.notificationSettings, queryFn: api.notificationSettings, retry: false, enabled: useHasServer() })
+  const settings = useQuery({
+    queryKey: keys.notificationSettings,
+    queryFn: api.notificationSettings,
+    retry: false,
+    enabled: useHasServer(),
+  })
   if (!settings.data) return null
   const notify = new Map(settings.data.map((setting) => [setting.kind, setting.notify]))
   const grouped = new Set(GROUPS.flatMap(([, kinds]) => kinds.map(([kind]) => kind)))
   // A kind the server knows and this page doesn't yet still gets its switch.
-  const others = settings.data.filter((setting) => !grouped.has(setting.kind)).map((setting): [string, string] => [setting.kind, KIND_LABEL[setting.kind] ?? setting.kind])
+  const others = settings.data
+    .filter((setting) => !grouped.has(setting.kind))
+    .map((setting): [string, string] => [setting.kind, KIND_LABEL[setting.kind] ?? setting.kind])
   const groups = others.length > 0 ? [...GROUPS, ['Other', others] as (typeof GROUPS)[number]] : GROUPS
   const change = (setting: KindSetting) =>
     void api.setNotification(setting).then(
@@ -153,7 +175,11 @@ export function NotificationSettings() {
         const shown = kinds.filter(([kind]) => notify.has(kind))
         if (shown.length === 0) return null
         return (
-          <section key={group} aria-label={group.toLowerCase()} className="overflow-hidden rounded-md border border-line bg-surface-1">
+          <section
+            key={group}
+            aria-label={group.toLowerCase()}
+            className="overflow-hidden rounded-md border border-line bg-surface-1"
+          >
             <h3 className="px-3 pt-2.5 pb-1.5 font-medium">{group}</h3>
             <ul>
               {shown.map(([kind, label]) => (
@@ -168,7 +194,11 @@ export function NotificationSettings() {
                     <Icon name="check" className="h-3.5 w-3.5" />
                   </span>
                   <span className="flex w-20 justify-center">
-                    <Switch on={notify.get(kind) ?? false} label={KIND_LABEL[kind] ?? label} onChange={(on) => change({ kind, notify: on })} />
+                    <Switch
+                      on={notify.get(kind) ?? false}
+                      label={KIND_LABEL[kind] ?? label}
+                      onChange={(on) => change({ kind, notify: on })}
+                    />
                   </span>
                 </li>
               ))}
@@ -276,7 +306,10 @@ function CaughtUp({ waiting }: { waiting: boolean }) {
       <ul className="flex flex-col gap-0.5">
         {ARRIVES.map(([icon, title, detail, to]) => (
           <li key={title}>
-            <Link to={to} className="flex items-center gap-3 rounded-sm bg-surface-1 px-3 py-2.5 hover:bg-surface-2 max-md:min-h-11">
+            <Link
+              to={to}
+              className="flex items-center gap-3 rounded-sm bg-surface-1 px-3 py-2.5 hover:bg-surface-2 max-md:min-h-11"
+            >
               <Icon name={icon} className="h-4 w-4 shrink-0 text-accent-fg" />
               <span className="flex min-w-0 flex-col">
                 <span className="text-fg-1">{title}</span>
@@ -302,7 +335,9 @@ export function Inbox() {
   const mrs = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests })
   const titleOf = (thread: string) => threads.data?.find((summary) => summary.id === thread)?.title ?? 'Untitled thread'
   const reviewOf = (thread: string) =>
-    (mrs.data ?? []).filter((mr) => mr.target === thread || mr.fork === thread).sort((a, b) => Number(b.opened_ms) - Number(a.opened_ms))[0]
+    (mrs.data ?? [])
+      .filter((mr) => mr.target === thread || mr.fork === thread)
+      .sort((a, b) => Number(b.opened_ms) - Number(a.opened_ms))[0]
   const notifications = inbox.data ?? []
   const unread = notifications.filter((notification) => !notification.read)
   const waiting = unread.filter((notification) => notification.action !== null)
@@ -313,7 +348,9 @@ export function Inbox() {
     await api.readNotifications(read, server)
     await queries.invalidateQueries({ queryKey: ['inbox'] })
   }
-  const days = (['Today', 'Earlier'] as const).map((day) => [day, shown.filter((notification) => dayOf(Number(notification.created_ms), now) === day)] as const)
+  const days = (['Today', 'Earlier'] as const).map(
+    (day) => [day, shown.filter((notification) => dayOf(Number(notification.created_ms), now) === day)] as const,
+  )
   const row = (notification: InboxEntry) => (
     <li
       key={`${notification.server ?? ''}:${notification.id}`}
@@ -376,16 +413,39 @@ export function Inbox() {
           value={filter}
           onChange={setFilter}
           tabs={[
-            { id: 'unread', label: <>Unread <span className="font-mono text-fg-2">{unread.length}</span></> },
-            { id: 'waiting', label: <>Waiting on me <span className="font-mono text-fg-2">{waiting.length}</span></> },
-            { id: 'all', label: <>All <span className="font-mono text-fg-2">{notifications.length}</span></> },
+            {
+              id: 'unread',
+              label: (
+                <>
+                  Unread <span className="font-mono text-fg-2">{unread.length}</span>
+                </>
+              ),
+            },
+            {
+              id: 'waiting',
+              label: (
+                <>
+                  Waiting on me <span className="font-mono text-fg-2">{waiting.length}</span>
+                </>
+              ),
+            },
+            {
+              id: 'all',
+              label: (
+                <>
+                  All <span className="font-mono text-fg-2">{notifications.length}</span>
+                </>
+              ),
+            },
           ]}
         />
       </div>
       <ListColumn>
         {inbox.error && <p className="text-danger">{message(inbox.error)}</p>}
         {inbox.isPending && <Skeleton className="h-24" />}
-        {inbox.isSuccess && shown.length === 0 && (filter === 'all' ? <EmptyState title="Nothing yet" /> : <CaughtUp waiting={filter === 'waiting'} />)}
+        {inbox.isSuccess &&
+          shown.length === 0 &&
+          (filter === 'all' ? <EmptyState title="Nothing yet" /> : <CaughtUp waiting={filter === 'waiting'} />)}
         {inbox.isSuccess && shown.length > 0 && <NotificationBanner line />}
         <div data-testid="inbox" className="flex flex-col gap-4">
           {days.map(

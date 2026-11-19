@@ -273,6 +273,8 @@ pub struct Core {
     pub(crate) models: std::sync::Arc<crate::models::LocalModelsHere>,
     /// What each agent's plan has used (ADR 0095).
     pub(crate) usage: std::sync::Arc<crate::usage::Usage>,
+    /// Whether a newer Silt is out, and the update installing it (ADR 0100).
+    pub(crate) updates: std::sync::Arc<crate::updates::Updates>,
     /// Each server's last sync error, by URL.
     pub(crate) sync_errors: HashMap<String, String>,
     /// The HEAD commit each checkout was last seen at.
@@ -295,6 +297,8 @@ pub struct Core {
     /// The program this daemon started from, and that file as it was then,
     /// to tell when an install replaced it.
     pub(crate) exe: Option<(PathBuf, ExeStamp)>,
+    /// The program to restart this daemon on once no agent works in it.
+    pub(crate) restart_when_idle: Option<PathBuf>,
     /// When this daemon last asked each agent what it offers, by registry
     /// id, so one that doesn't answer isn't asked again on every look.
     pub(crate) asked: HashMap<String, i64>,
@@ -335,9 +339,9 @@ pub struct Core {
     rename_waits: HashMap<CheckoutId, Vec<RenameWait>>,
     /// Sessions with a backlog whose next chunk is queued.
     pub(crate) draining: HashSet<String>,
-    /// Threads' history entries, with the length of the family's log they
-    /// were read at.
-    pub(crate) history_cache: Mutex<HashMap<ThreadId, (usize, crate::history::HistoryEntries)>>,
+    /// Threads' history entries, as of the length of the family's log they
+    /// were read at, and where they changed between the readings before.
+    pub(crate) history_cache: Mutex<HashMap<ThreadId, crate::history::KeptHistory>>,
     watchers: Arc<Watchers>,
     /// A listing of a checkout's whole worktree taken while the hook that
     /// will compare it loads, for that comparison to take.
@@ -583,6 +587,7 @@ impl Core {
             notes_settings: crate::notes::NotesSettings::default(),
             models,
             usage: std::sync::Arc::new(crate::usage::Usage::new()),
+            updates: std::sync::Arc::new(crate::updates::Updates::new(data_dir)),
             sync_errors: HashMap::new(),
             heads: HashMap::new(),
             head_stamps: HashMap::new(),
@@ -595,6 +600,7 @@ impl Core {
             registry_checked: false,
             asked: HashMap::new(),
             exe: std::env::current_exe().ok().and_then(|exe| ExeStamp::of(&exe).map(|stamp| (exe, stamp))),
+            restart_when_idle: None,
             resident,
             adopted: HashSet::new(),
             samples: HashMap::new(),
@@ -1068,6 +1074,10 @@ impl Core {
             Request::Ping => Response::ok("pong"),
             Request::Compact => to_response(self.compact().await),
             Request::DaemonBuild => Response::ok(self.daemon_build()),
+            Request::RestartWhenIdle { exe } => {
+                self.restart_when_idle = Some(exe);
+                Response::ok(())
+            }
             Request::AgentHomes => {
                 let homes: Vec<(&str, Option<String>)> =
                     silt_agents::HOME_VARIABLES.iter().map(|name| (*name, std::env::var(name).ok())).collect();
@@ -1100,6 +1110,21 @@ impl Core {
             }
             Request::ModelPull { source } => to_response(self.models.start_pull(&source)),
             Request::RuntimePull => to_response(self.models.start_runtime_pull()),
+            Request::Update { desktop } => {
+                // A page opened before the first tick sees that check under way.
+                self.updates.check_if_due();
+                let updates = self.updates.clone();
+                let desktop = desktop.as_deref().and_then(silt_update::Commit::parse);
+                return answer_later(reply, Ok(async move { Ok::<_, CoreError>(updates.view(desktop).await) }));
+            }
+            Request::UpdateCheck => {
+                self.updates.start_check();
+                to_response(Ok::<_, CoreError>("checking"))
+            }
+            Request::UpdateStart => {
+                to_response(self.updates.start(self.exe.as_ref().map(|(exe, _)| exe.as_path())).map(|()| "started"))
+            }
+            Request::UpdateWaiting => to_response(Ok::<_, CoreError>(self.updates.waiting())),
             Request::ModelSearch { query } => {
                 let models = self.models.clone();
                 return answer_later(reply, Ok(async move { models.search(&query).await }));
@@ -1193,7 +1218,7 @@ impl Core {
                     .map(|thread| thread.id.to_string())
                     .collect(),
                 recovered: self.recoveries.clone(),
-                version: env!("CARGO_PKG_VERSION").to_owned(),
+                version: silt_update::VERSION.to_owned(),
                 recoveries: self.recovered.clone(),
             }),
             Request::Resume { thread, cwd, here, agent } => to_response(self.resume(&thread, &cwd, here, agent.as_deref()).await),
@@ -1214,7 +1239,9 @@ impl Core {
             Request::MrRequestChanges { mr, reason } => to_response(self.mr_request_changes(&mr, reason).await),
             Request::MrSeen { mr, path, seen } => to_response(self.mark_seen(&mr, &path, seen).await),
             Request::MrGuide { mr, text } => to_response(self.mr_guide(&mr, text).await),
-            Request::Turns { thread } => to_response(self.find_thread(&thread).map(|thread| self.turns(thread))),
+            Request::Turns { thread } => {
+                to_response(self.find_thread(&thread).map(|thread| self.kept_turns(thread).as_ref().clone()))
+            }
             Request::Unwritten { thread } => to_response(self.find_thread(&thread).map(|thread| self.unwritten(thread))),
             Request::Commits { thread } => to_response(self.find_thread(&thread).map(|thread| self.commits(thread))),
             Request::FindCommit { commit } => to_response(self.find_commit(&commit)),
@@ -1230,8 +1257,8 @@ impl Core {
                 }
                 to_response(self.open_web(once, project.as_deref()).await)
             }
-            Request::HistoryRead { thread, offset, limit } => {
-                to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit)))
+            Request::HistoryRead { thread, offset, limit, known, cut } => {
+                to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit, known, cut)))
             }
             Request::HistorySearch { thread, query, limit } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.history_search(thread, &query, limit).await),
@@ -1424,6 +1451,9 @@ impl Core {
 
     pub async fn tick(&mut self) {
         self.drive_sync();
+        if self.resident {
+            self.updates.check_if_due();
+        }
         self.drive_notes_settings();
         if self.resident {
             self.drive_control().await;
@@ -3070,6 +3100,24 @@ impl Core {
         // record them meanwhile and hand them to the next daemon (ADR 0018).
         let working = self.acp.values().filter(|run| run.working()).count();
         crate::protocol::DaemonBuild { exe: self.exe.as_ref().map(|(exe, _)| exe.clone()), replaced, working }
+    }
+
+    /// Hands a restart asked for while agents worked to `silt daemon
+    /// restart` once none does. That stops this daemon and starts the new
+    /// one, or asks again if an agent started meanwhile.
+    pub(crate) fn restart_if_idle(&mut self) {
+        if self.restart_when_idle.is_none() || self.acp.values().any(crate::acp::AcpRun::working) {
+            return;
+        }
+        let Some(exe) = self.restart_when_idle.take() else {
+            return;
+        };
+        let mut command = std::process::Command::new(&exe);
+        command.args(["daemon", "restart"]).current_dir("/").stdin(std::process::Stdio::null());
+        match silt_os::spawn_detached(&mut command) {
+            Ok(()) => tracing::info!(exe = %exe.display(), "no agent works now; restarting on the build asked for"),
+            Err(error) => warn!(%error, exe = %exe.display(), "could not restart the daemon; `silt daemon restart` does"),
+        }
     }
 }
 

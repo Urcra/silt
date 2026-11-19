@@ -395,6 +395,49 @@ pub struct HistoryEntry {
     /// On a `task`: news of a subagent or background command.
     #[serde(default)]
     pub task: Option<TaskView>,
+    /// What a page of history left out of the entry, read whole with `whole`:
+    /// an image's data, or a long output's start.
+    #[serde(default)]
+    pub cut: Option<CutView>,
+}
+
+/// How much of an entry a page of history left out (see [`cut_for_page`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct CutView {
+    /// The whole text's lines and bytes; its last lines are what the page kept.
+    pub lines: usize,
+    pub bytes: usize,
+}
+
+/// The most of a tool's output a page of history carries, from its end.
+pub const PAGE_OUTPUT: usize = 4 * 1024;
+
+/// `entry` as a page of history carries it: a tool's long output only from
+/// its end, where its summary is, and an image without its data. A thread
+/// with thousands of reads and screenshots was tens of megabytes to parse.
+pub fn cut_for_page(entry: &HistoryEntry) -> HistoryEntry {
+    if let Some(image) = entry.image.as_ref().filter(|image| !image.data.is_empty()) {
+        let bytes = image.data.len() / 4 * 3;
+        return HistoryEntry {
+            image: Some(ImageView { media_type: image.media_type.clone(), data: String::new() }),
+            cut: Some(CutView { lines: 0, bytes }),
+            ..entry.clone()
+        };
+    }
+    if entry.kind != "tool_result" || entry.text.len() <= PAGE_OUTPUT {
+        return entry.clone();
+    }
+    let mut start = entry.text.len() - PAGE_OUTPUT;
+    while !entry.text.is_char_boundary(start) {
+        start += 1;
+    }
+    let start = entry.text[start..].find('\n').map_or(start, |at| start + at + 1);
+    HistoryEntry {
+        text: entry.text[start..].to_owned(),
+        cut: Some(CutView { lines: entry.text.lines().count(), bytes: entry.text.len() }),
+        ..entry.clone()
+    }
 }
 
 /// News of work an agent started that runs beside its turn: a subagent, or
@@ -644,6 +687,14 @@ pub struct HistoryPage {
     pub thread: String,
     pub total: usize,
     pub entries: Vec<HistoryEntry>,
+    /// Which entry `entries` starts at: the one asked for, or an earlier one
+    /// that changed since the history the request named as `known`.
+    #[serde(default)]
+    pub from: Option<usize>,
+    /// The history as it is now, to name as `known` next time; a server's
+    /// pages name none, and are read whole again.
+    #[serde(default)]
+    pub version: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -980,6 +1031,24 @@ pub struct FileQuery {
     pub at: Option<String>,
 }
 
+/// A merge request's query: `brief=true` leaves out its diff and the fork's
+/// conversation, for a list that shows only how much is seen and its guide.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MrQuery {
+    #[serde(default)]
+    pub brief: bool,
+}
+
+/// `details`, a merge request's [`MrDetails`], without its diff and
+/// conversation: a queue of reviews read every request's whole diff to show
+/// how many files were seen.
+pub fn brief_mr(details: &mut serde_json::Value) {
+    if let Some(fields) = details.as_object_mut() {
+        fields.insert("diff".into(), serde_json::Value::String(String::new()));
+        fields.insert("conversation".into(), serde_json::Value::Array(Vec::new()));
+    }
+}
+
 /// A diff's query: `git=hide` leaves out what git itself rewrote, as a
 /// checkout, pull or stash does (ADR 0069).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1201,5 +1270,54 @@ mod tests {
         assert!(shown.pinned && shown.wake_on_activity && !shown.settled);
         assert_eq!((shown.snoozed_until, shown.snoozed_at, shown.seen_ms), (Some(900), Some(60), Some(50)));
         assert_eq!(Mine::of(None), Mine::default());
+    }
+}
+
+#[cfg(test)]
+mod cut_tests {
+    use super::*;
+
+    fn entry(kind: &str, text: String) -> HistoryEntry {
+        HistoryEntry {
+            index: 0,
+            thread: "t".into(),
+            origin: "own".into(),
+            kind: kind.into(),
+            text,
+            time_ms: 0,
+            rewound: false,
+            tool: None,
+            outcome: None,
+            image: None,
+            artifact: None,
+            usage: None,
+            plan: None,
+            side: None,
+            task: None,
+            cut: None,
+        }
+    }
+
+    #[test]
+    fn a_page_keeps_a_long_outputs_last_lines_and_says_what_it_left_out() {
+        let text: String = (0..5000).map(|line| format!("line {line}\n")).collect();
+        let cut = cut_for_page(&entry("tool_result", text.clone()));
+        assert!(cut.text.len() <= PAGE_OUTPUT);
+        assert!(cut.text.starts_with("line "), "starts at a line: {:?}", &cut.text[..20]);
+        assert!(cut.text.ends_with("line 4999\n"));
+        assert_eq!(cut.cut, Some(CutView { lines: 5000, bytes: text.len() }));
+        let short = entry("tool_result", "ok".into());
+        assert_eq!(cut_for_page(&short), short);
+        let said = entry("assistant", text);
+        assert_eq!(cut_for_page(&said), said, "only tools' outputs");
+    }
+
+    #[test]
+    fn a_page_leaves_an_images_data_out() {
+        let mut image = entry("image", String::new());
+        image.image = Some(ImageView { media_type: "image/png".into(), data: "AAAA".repeat(100) });
+        let cut = cut_for_page(&image);
+        assert_eq!(cut.image.as_ref().map(|image| image.data.as_str()), Some(""));
+        assert_eq!(cut.cut, Some(CutView { lines: 0, bytes: 300 }));
     }
 }

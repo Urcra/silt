@@ -24,7 +24,10 @@ export function CloudLaunches() {
       </h2>
       <ul className="flex flex-col gap-1.5">
         {[...launches.data].reverse().map((launch) => (
-          <li key={launch.id} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 rounded-md border border-line bg-elevated px-3 py-2 text-sm">
+          <li
+            key={launch.id}
+            className="flex flex-wrap items-center gap-x-3 gap-y-0.5 rounded-md border border-line bg-elevated px-3 py-2 text-sm"
+          >
             <Dot tone={launch.thread ? 'ok' : 'warn'} />
             {launch.thread ? (
               <Link to="/t/$id" params={{ id: launch.thread }} className="min-w-0 flex-1 truncate text-fg-1 hover:text-accent-fg">
@@ -34,7 +37,8 @@ export function CloudLaunches() {
               <span className="min-w-0 flex-1 truncate">{launch.task}</span>
             )}
             <span className="font-mono text-2xs text-fg-2">
-              {projectName(launch.repo)} · {launch.thread ? 'recording' : 'waiting for its thread'} · <span data-volatile>{ago(launch.started_ms, now)}</span>
+              {projectName(launch.repo)} · {launch.thread ? 'recording' : 'waiting for its thread'} ·{' '}
+              <span data-volatile>{ago(launch.started_ms, now)}</span>
             </span>
             <a href={launch.url} target="_blank" rel="noreferrer" className="text-2xs text-accent-fg">
               claude.ai
