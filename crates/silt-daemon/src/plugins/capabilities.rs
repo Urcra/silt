@@ -1,4 +1,4 @@
-//! The daemon's side of a plugin's capabilities (ADR 0103), once the plugin
+//! The daemon's side of a plugin's capabilities (ADR 0104), once the plugin
 //! host has decided the plugin may: requests sent with the credential its
 //! manifest names, git on mirrors Silt keeps for it, the thread read.
 //!

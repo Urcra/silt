@@ -264,7 +264,7 @@ change: boolean,
  */
 once: boolean, 
 /**
- * A WebAssembly plugin's card, which Silt draws (ADR 0103).
+ * A WebAssembly plugin's card, which Silt draws (ADR 0104).
  */
 card: Card | null, 
 /**
@@ -342,7 +342,7 @@ refused: Array<NetworkRefusal>,
  */
 devices: Array<RelayView>, 
 /**
- * The folders granted to its agents (ADR 0101).
+ * The folders granted to its agents (ADR 0102).
  */
 folders: Array<FolderView>, };
 
@@ -879,7 +879,12 @@ side: string | null,
 /**
  * On a `task`: news of a subagent or background command.
  */
-task: TaskView | null, };
+task: TaskView | null, 
+/**
+ * What a page of history left out of the entry, read whole with `whole`:
+ * an image's data, or a long output's start.
+ */
+cut: CutView | null, };
 
 export type ToolView = { id: string, name: string, 
 /**
@@ -914,6 +919,12 @@ export type ImageView = { media_type: string,
  * Base64; empty when it was too large to show.
  */
 data: string, };
+
+export type CutView = { 
+/**
+ * The whole text's lines and bytes; its last lines are what the page kept.
+ */
+lines: number, bytes: number, };
 
 export type ArtifactView = { 
 /**
@@ -1327,7 +1338,17 @@ export type HistoryHit = {
  */
 index: number, kind: string, snippet: string, };
 
-export type HistoryPage = { thread: string, total: number, entries: Array<HistoryEntry>, };
+export type HistoryPage = { thread: string, total: number, entries: Array<HistoryEntry>, 
+/**
+ * Which entry `entries` starts at: the one asked for, or an earlier one
+ * that changed since the history the request named as `known`.
+ */
+from: number | null, 
+/**
+ * The history as it is now, to name as `known` next time; a server's
+ * pages name none, and are read whole again.
+ */
+version: number | null, };
 
 export type InFlight = { thread: string, owner: string, files: Array<string>, last_ms: number, };
 
@@ -1821,7 +1842,7 @@ refuse?: Array<Extra>,
  */
 no_nested?: boolean, 
 /**
- * The folders agents may ask for, and how each is answered (ADR 0101).
+ * The folders agents may ask for, and how each is answered (ADR 0102).
  */
 folders?: Array<FolderRule>, 
 /**
@@ -1830,7 +1851,7 @@ folders?: Array<FolderRule>,
  */
 folder_layers?: Array<Array<FolderRule>>, 
 /**
- * What plugins may be on, and how their calls are held (ADR 0103).
+ * What plugins may be on, and how their calls are held (ADR 0104).
  */
 plugins?: PluginPolicy, };
 

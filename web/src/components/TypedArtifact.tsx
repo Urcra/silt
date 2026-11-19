@@ -341,16 +341,43 @@ export function CanvasView({
   // A new canvas opens with every board in view, and fits again as its panel resizes, until someone moves it.
   const moved = useRef(false)
   useEffect(fit, [extent])
+  const fitting = useRef(fit)
+  useEffect(() => {
+    fitting.current = fit
+  })
+  // Observed once: a new observer each render reports at once, which drew the canvas again, every frame it was open.
   useEffect(() => {
     const element = box.current
     if (!element) return
     const observer = new ResizeObserver(() => {
-      setSize({ width: element.clientWidth, height: element.clientHeight })
-      if (!moved.current) fit()
+      const [width, height] = [element.clientWidth, element.clientHeight]
+      setSize((was) => (was.width === width && was.height === height ? was : { width, height }))
+      if (!moved.current) fitting.current()
     })
     observer.observe(element)
     return () => observer.disconnect()
-  })
+  }, [])
+  // Each board's document, made once: with the version's files inlined, it can be megabytes each.
+  const documents = useMemo(
+    () =>
+      new Map(
+        placed.map((board) => [
+          board.id,
+          partDocument(
+            withFilesInlined(board.html, files ?? {}),
+            canvas?.style,
+            board.width,
+            // The least it shows, as written, so its growing doesn't load it again.
+            (board as { least?: number }).least ?? board.height,
+            style,
+            theme,
+            undefined,
+            board.grow,
+          ),
+        ]),
+      ),
+    [placed, files, canvas, style, theme],
+  )
   useEffect(() => {
     const element = box.current
     if (!element) return
@@ -509,17 +536,7 @@ export function CanvasView({
                     if (frame) frames.current.set(board.id, frame)
                     else frames.current.delete(board.id)
                   }}
-                  srcDoc={partDocument(
-                    withFilesInlined(board.html, files ?? {}),
-                    canvas.style,
-                    board.width,
-                    // The least it shows, as written, so its growing doesn't load it again.
-                    (board as { least?: number }).least ?? board.height,
-                    style,
-                    theme,
-                    undefined,
-                    board.grow,
-                  )}
+                  srcDoc={documents.get(board.id)}
                   className="pointer-events-auto block border-0 bg-white shadow-overlay"
                   style={{ width: board.width, height: board.height }}
                 />
@@ -981,6 +998,15 @@ export function DataView({
   /** Where the page's `mcp` sources are run from: its thread and version (ADR 0084). */
   live?: { thread: string; artifact: string; version: number }
 }) {
+  // By what it names, not the object: a new one each time the panel drew ran every source's tools again.
+  const [liveThread, liveArtifact, liveVersion] = [live?.thread, live?.artifact, live?.version]
+  const sourced = useMemo(
+    () =>
+      liveThread !== undefined && liveArtifact !== undefined && liveVersion !== undefined
+        ? { thread: liveThread, artifact: liveArtifact, version: liveVersion }
+        : undefined,
+    [liveThread, liveArtifact, liveVersion],
+  )
   const written = useMemo(() => dataPageOf(text), [text])
   const [tables, setTables] = useState<Set<number>>(new Set())
   const sources = useMemo(
@@ -991,30 +1017,30 @@ export function DataView({
   const [allowed, setAllowed] = useState<boolean | null>(null)
   const [fetched, setFetched] = useState<Record<string, { value?: unknown; at: string; error?: string }>>({})
   useEffect(() => {
-    if (!live || sources.length === 0) return
+    if (!sourced || sources.length === 0) return
     let gone = false
-    api.artifactGrants(live.thread, live.artifact).then(
+    api.artifactGrants(sourced.thread, sourced.artifact).then(
       (grants) => !gone && setAllowed(grants.mcp === 'granted'),
       () => !gone && setAllowed(false),
     )
     return () => {
       gone = true
     }
-  }, [live, sources.length])
+  }, [sourced, sources.length])
   const refresh = useCallback(async () => {
-    if (!live) return
+    if (!sourced) return
     const answers: Record<string, { value?: unknown; at: string; error?: string }> = {}
     for (const source of sources) {
       const at = new Date().toISOString()
       try {
         // Only a tool the server says only reads runs on its own.
-        const about = (await api.pageMcp(live.thread, live.artifact, {
+        const about = (await api.pageMcp(sourced.thread, sourced.artifact, {
           op: 'describe',
           server: source.server,
           tool: source.tool,
         })) as { read_only?: boolean }
         if (!about.read_only) throw new Error(`${source.server}'s ${source.tool} doesn't only read, so it doesn't run on its own`)
-        const result = await api.pageMcp(live.thread, live.artifact, {
+        const result = await api.pageMcp(sourced.thread, sourced.artifact, {
           op: 'call',
           server: source.server,
           tool: source.tool,
@@ -1026,7 +1052,7 @@ export function DataView({
       }
     }
     setFetched(answers)
-  }, [live, sources])
+  }, [sourced, sources])
   useEffect(() => {
     // `refresh` sets state only once the page's tools have answered.
     // oxlint-disable-next-line react/set-state-in-effect
@@ -1053,7 +1079,7 @@ export function DataView({
       <article className="mx-auto flex max-w-4xl flex-col gap-5 px-6 pt-6 pb-10">
         <header>
           <h1 className="text-xl font-semibold text-balance text-fg-1">{page.title}</h1>
-          {live && sources.length > 0 && (
+          {sourced && sources.length > 0 && (
             <div
               className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-1 px-3 py-2 text-xs text-fg-2"
               data-testid="live-sources"
@@ -1068,7 +1094,7 @@ export function DataView({
                     size="sm"
                     onClick={() =>
                       void api
-                        .setArtifactGrant(live.thread, live.artifact, 'mcp', 'granted', live.version)
+                        .setArtifactGrant(sourced.thread, sourced.artifact, 'mcp', 'granted', sourced.version)
                         .then(() => setAllowed(true))
                     }
                   >

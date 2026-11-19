@@ -94,7 +94,7 @@ function OnIn({ view }: { view: PluginView }) {
   )
 }
 
-/** Settings › Plugins (ADR 0103): every plugin installed here, by where it came from. */
+/** Settings › Plugins (ADR 0104): every plugin installed here, by where it came from. */
 export function PluginsSettings() {
   const queries = useQueryClient()
   const plugins = useQuery({ queryKey: keys.plugins, queryFn: api.plugins })
@@ -270,7 +270,7 @@ const RULES: { value: Rule; label: string }[] = [
   { value: 'never', label: 'Never' },
 ]
 
-/** A plugin's page (ADR 0103): what it is, how it works, its settings and its rules. */
+/** A plugin's page (ADR 0104): what it is, how it works, its settings and its rules. */
 export function PluginPage() {
   const { id } = useSearch({ strict: false }) as { id: string }
   const plugins = useQuery({ queryKey: keys.plugins, queryFn: api.plugins })

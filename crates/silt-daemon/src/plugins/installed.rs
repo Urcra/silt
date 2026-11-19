@@ -1,4 +1,4 @@
-//! The plugins installed on this machine (ADR 0103): what each is, where it
+//! The plugins installed on this machine (ADR 0104): what each is, where it
 //! came from, and what the person decided about it. A plugin's files live in
 //! `plugins/<id>/` in Silt's data: its manifest, its component, its README,
 //! its own data folder, and a folder per thread for what it keeps for that
@@ -33,7 +33,7 @@ pub enum PluginSource {
     },
     /// A folder being developed, rebuilt when it changes.
     Dev { path: String },
-    /// A marketplace, served by a Silt server (ADR 0104).
+    /// A marketplace, served by a Silt server (ADR 0105).
     Marketplace { server: String },
     /// An org's policy, which installs and locks it in its workspaces, from
     /// git at `commit`.

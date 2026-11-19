@@ -1,6 +1,6 @@
 [package]
 name = "silt-plugin-test"
-description = "A stand-in for Silt's plugin host (ADR 0103): a plugin loaded as Silt loads it, its HTTP answered by the test and every request recorded"
+description = "A stand-in for Silt's plugin host (ADR 0104): a plugin loaded as Silt loads it, its HTTP answered by the test and every request recorded"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

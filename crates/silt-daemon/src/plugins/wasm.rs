@@ -1,4 +1,4 @@
-//! WebAssembly plugins' calls (ADR 0103): the tools they offer a run, a call
+//! WebAssembly plugins' calls (ADR 0104): the tools they offer a run, a call
 //! prepared by its plugin and decided by its rules, approved by the hash of
 //! what it prepared, and run with only the effects it declared.
 
@@ -298,7 +298,7 @@ fn with_org_refusals(decision: Decision, effects: &[Effect], policy: Option<&Pol
 }
 
 /// `decision` with the workspace's folder rules applied to each folder the
-/// call hands over (ADR 0101): Silt's refusals and a never hold whatever the
+/// call hands over (ADR 0102): Silt's refusals and a never hold whatever the
 /// plugin's rules say; otherwise the folder rules answer where only the
 /// plugin's default did, and tighten a rule of the person's.
 fn with_folder_rules(mut decision: Decision, effects: &[Effect], policy: Option<&Policy>, data_dir: &Path) -> Decision {

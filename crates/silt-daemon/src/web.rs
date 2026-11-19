@@ -380,7 +380,11 @@ async fn asset(State(web): State<Web>, request: HttpRequest) -> HttpResponse {
         },
     };
     let mime = file.metadata.mimetype().to_owned();
-    ([(header::CONTENT_TYPE, mime)], Body::from(file.data.into_owned())).into_response()
+    (
+        [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, silt_web::cache_control(path).to_owned())],
+        Body::from(file.data.into_owned()),
+    )
+        .into_response()
 }
 
 /// The page with the picked theme in it (ADR 0098); as built if the daemon
@@ -676,10 +680,20 @@ async fn threads(State(web): State<Web>) -> HttpResponse {
 struct HistoryQuery {
     offset: Option<usize>,
     limit: Option<usize>,
+    known: Option<usize>,
+    /// Entries as they were recorded, with images and long outputs whole.
+    #[serde(default)]
+    whole: bool,
 }
 
 async fn history(State(web): State<Web>, Path(thread): Path<String>, Query(page): Query<HistoryQuery>) -> HttpResponse {
-    let request = Request::HistoryRead { thread, offset: page.offset.unwrap_or(0), limit: page.limit.unwrap_or(usize::MAX) };
+    let request = Request::HistoryRead {
+        thread,
+        offset: page.offset.unwrap_or(0),
+        limit: page.limit.unwrap_or(usize::MAX),
+        known: page.known,
+        cut: !page.whole,
+    };
     ask(&web, request).await
 }
 
@@ -2196,9 +2210,20 @@ async fn merge_request(
     State(web): State<Web>,
     Path(mr): Path<String>,
     Query(query): Query<silt_proto::view::GitQuery>,
+    Query(brief): Query<silt_proto::view::MrQuery>,
 ) -> HttpResponse {
     let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
-    ask(&web, Request::MrShow { mr, hide_git, hide_others }).await
+    let request = Request::MrShow { mr, hide_git, hide_others };
+    if !brief.brief {
+        return ask(&web, request).await;
+    }
+    match answer(&web, request).await {
+        Ok(mut details) => {
+            silt_proto::view::brief_mr(&mut details);
+            Json(details).into_response()
+        }
+        Err(failed) => failed.into_response(),
+    }
 }
 
 async fn approve(State(web): State<Web>, Path(mr): Path<String>) -> HttpResponse {

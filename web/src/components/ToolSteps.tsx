@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useMemo, useState } from 'react'
 import { api, type HistoryEntry, type QuestionAsked, type QuestionView } from '../api'
 import { LiveQuestions } from '../liveQuestions'
 import { message } from '../query'
@@ -9,12 +9,19 @@ import { Button, Dialog, Icon, Kbd, Spinner, cx } from '../ui'
 import { changeOf } from '../edits'
 import { EditCard } from './EditCard'
 import { Markdown } from './Markdown'
+import { linesOf, useWhole } from '../wholeEntry'
 
 /** A picture a prompt or a tool carried, small, opening at full size. */
-export function ImageThumb({ entry, from }: { entry: HistoryEntry; from: string }) {
+export function ImageThumb({ entry: given, from }: { entry: HistoryEntry; from: string }) {
   const [open, setOpen] = useState(false)
+  // A page of history leaves the picture out; it's read once its row is drawn.
+  const entry = useWhole(given, true)
   const image = entry.image
   if (!image) return null
+  if (!image.data && entry.cut)
+    return (
+      <span aria-busy="true" aria-label={`an image ${from}`} className="block h-24 w-40 animate-pulse rounded-md bg-surface-2" />
+    )
   if (!image.data) return <span className="text-2xs text-fg-2">An image too large to show here ({image.media_type})</span>
   const src = `data:${image.media_type};base64,${image.data}`
   const kind = image.media_type.replace(/^image\//, '').toUpperCase()
@@ -98,11 +105,16 @@ function Said({ call, running = false }: { call: HistoryEntry; running?: boolean
 function measure(step: ToolStep): string | null {
   const text = step.result?.text.trim()
   if (!text || !step.call) return null
-  const lines = text.split('\n').length
+  const lines = linesOf(step.result!)
   const kind = kindOf(step.call)
   if (kind === 'search') return `${lines} ${lines === 1 ? 'match' : 'matches'}`
   if (kind === 'read') return `${lines} ${lines === 1 ? 'line' : 'lines'}`
   return null
+}
+
+function Measure({ step }: { step: ToolStep }) {
+  const said = measure(step)
+  return said && <span className="shrink-0 text-fg-2">{said}</span>
 }
 
 /** A plan the agent put to the person, kept in its turn as it was proposed, folded to its title. */
@@ -126,7 +138,7 @@ export function ProposedPlan({ step }: { step: ToolStep }) {
 /** One step in a run: what it did, with its result, or an edit's diff, a click away. */
 export function StepRow({ step, open: opened = false, running = false }: { step: ToolStep; open?: boolean; running?: boolean }) {
   const [open, setOpen] = useState(opened)
-  const result = step.result
+  const result = useWhole(step.result, open)
   const plan = step.call ? proposedPlan(step.call) : null
   const change = step.call ? changeOf(step.call) : null
   // A plan's result only tells the model it was saved or approved; the plan itself is what to show.
@@ -158,7 +170,7 @@ export function StepRow({ step, open: opened = false, running = false }: { step:
             <span className="text-ok">+{change.added.length}</span> <span className="text-danger">−{change.removed.length}</span>
           </span>
         ) : (
-          measure(step) && <span className="shrink-0 text-fg-2">{measure(step)}</span>
+          <Measure step={step} />
         )}
       </button>
       {open && change && (
@@ -210,13 +222,16 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
   const [all, setAll] = useState(false)
   const call = step.call!
   const outcome = step.result?.outcome
-  // Under way, its output so far, as the agent streams it; once it ends, what was recorded.
+  // Under way, its output so far, as the agent streams it; once it ends, what was recorded, whole once all is asked for.
   const live = useContext(LiveTool)
   const under = running && !step.result
-  const output = step.result?.text ?? (under && live.id !== null && live.id === call.tool?.id ? live.text : '')
+  const result = useWhole(step.result, all)
+  const output = result?.text ?? (under && live.id !== null && live.id === call.tool?.id ? live.text : '')
   const verbose = useContext(TranscriptDetail) === 'verbose'
   const [open, setOpen] = useState(verbose)
-  const tail = tailOf(output)
+  const shortened = useMemo(() => tailOf(output), [output])
+  // What its page left out counts among the lines a click shows.
+  const tail = result?.cut ? { ...shortened, hidden: result.cut.lines - shortened.lines.length } : shortened
   const command = call.tool?.subject ?? toolOf(call.text).name
   const action = call.tool?.detail?.trim()
   const waiting = useContext(LiveQuestions)?.awaiting.includes(call.tool?.id ?? '') ?? false
@@ -274,7 +289,7 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
               data-testid={under ? 'tool-output' : undefined}
               className="max-h-80 overflow-auto font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-2"
             >
-              {(all ? output.replace(/\s+$/, '').split('\n') : tail.lines).map((line, index) => (
+              {(all && !result?.cut ? output.replace(/\s+$/, '').split('\n') : tail.lines).map((line, index) => (
                 <span key={index} className={cx('block', /\b(FAILED|error|panicked)\b/.test(line) && 'bg-danger-tint text-fg-1')}>
                   {line || ' '}
                 </span>

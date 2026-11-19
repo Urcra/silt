@@ -1,4 +1,4 @@
-//! The folders an agent may ask for (ADR 0101): rules naming roots, each
+//! The folders an agent may ask for (ADR 0102): rules naming roots, each
 //! allowed, asked or never, and whether writing may be given there. In one
 //! set of rules the most specific root wins; sets combined from more than
 //! one policy are each judged alone, and the strictest answer holds, so an

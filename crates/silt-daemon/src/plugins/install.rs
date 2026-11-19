@@ -1,4 +1,4 @@
-//! Installing plugins (ADR 0103): from a folder being developed, a git
+//! Installing plugins (ADR 0104): from a folder being developed, a git
 //! repository pinned to a commit, or a release asset checked against its
 //! hash. A repository's code is built in a sandbox that reaches nothing: its
 //! crates are fetched first, outside, which runs none of them.

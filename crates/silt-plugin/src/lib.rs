@@ -1,4 +1,4 @@
-//! Plugins (ADR 0103), the parts with no I/O: a plugin's manifest and its
+//! Plugins (ADR 0104), the parts with no I/O: a plugin's manifest and its
 //! validation, the cards it describes, the effects it declares, the prepared
 //! call an approval is bound to, and the rules that decide each call. The
 //! daemon's WebAssembly host runs plugins; this crate says what they may do.

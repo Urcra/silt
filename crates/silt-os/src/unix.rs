@@ -61,6 +61,15 @@ pub fn own_group_std(command: &mut std::process::Command) {
     command.process_group(0);
 }
 
+#[expect(unsafe_code, reason = "starting a session in the child needs `pre_exec`")]
+pub fn own_session_std(command: &mut std::process::Command) {
+    // SAFETY: `setsid` is async-signal-safe and touches no memory, so it is
+    // sound between fork and exec.
+    unsafe {
+        command.pre_exec(|| rustix::process::setsid().map(drop).map_err(io::Error::from));
+    }
+}
+
 pub fn kill_tree(pid: u32) {
     if let Some(group) = rustix::process::Pid::from_raw(pid.cast_signed()) {
         let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);

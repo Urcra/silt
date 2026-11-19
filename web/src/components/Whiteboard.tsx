@@ -51,11 +51,39 @@ function boxOf(item: Item | undefined): { x: number; y: number; w: number; h: nu
   return { x: item.x, y: item.y, w, h }
 }
 
+/** How often the pointer's place is told to the others. */
+const TELL_EVERY_MS = 50
+
 /** The most items an arrow's way goes round; past it, arrows go straight. */
 const ROUTED_AMONG = 200
 
+/** Arrows' ways worked out, by what they go round: drawing the board again for a pan or another person's cursor
+ * routed every arrow again. */
+const routes = new WeakMap<Item[], Map<string, [number, number][] | null>>()
+
+/** What arrows go round where the board is now, the same array while nothing on it moves. */
+const solids = new WeakMap<Item[], { moving: unknown; resizing: unknown; solid: Item[] }>()
+
+function solidOf(items: Item[], moving: unknown, resizing: unknown, placed: (item: Item) => Item): Item[] {
+  const kept = solids.get(items)
+  if (kept && kept.moving === moving && kept.resizing === resizing) return kept.solid
+  const solid = items.filter((item) => item.type === 'block' || item.type === 'image').map(placed)
+  solids.set(items, { moving, resizing, solid })
+  return solid
+}
+
 /** An arrow's way from the edge of one item to the edge of the other, round the blocks and images between. */
 function ends(from: Item | undefined, to: Item | undefined, among: Item[]): [number, number][] | null {
+  const known = routes.get(among) ?? new Map<string, [number, number][] | null>()
+  routes.set(among, known)
+  const key = `${from?.id ?? ''}>${to?.id ?? ''}:${from?.x},${from?.y},${to?.x},${to?.y}`
+  if (known.has(key)) return known.get(key)!
+  const way = routed(from, to, among)
+  known.set(key, way)
+  return way
+}
+
+function routed(from: Item | undefined, to: Item | undefined, among: Item[]): [number, number][] | null {
   const [a, b] = [boxOf(from), boxOf(to)]
   if (!a || !b) return null
   const others =
@@ -178,6 +206,7 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [peers, setPeers] = useState<PeerPresence[]>([])
   const room = useRef<RoomSocket | null>(null)
+  const toldAt = useRef(-Infinity)
   const drag = useRef<
     | { kind: 'pan'; x: number; y: number; from: typeof view }
     | { kind: 'item'; id: string; x: number; y: number; carried: string[] }
@@ -191,11 +220,20 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   useEffect(() => {
     const socket = new RoomSocket(thread, artifact)
     room.current = socket
+    // Others' cursors are drawn once a frame, however fast they move.
+    let frame: number | null = null
+    let latest: PeerPresence[] = []
     const off = socket.listen((heard) => {
-      if (heard.event === 'peers') setPeers(heard.peers.filter((peer) => peer.peer !== socket.me))
+      if (heard.event !== 'peers') return
+      latest = heard.peers.filter((peer) => peer.peer !== socket.me)
+      frame ??= requestAnimationFrame(() => {
+        frame = null
+        setPeers(latest)
+      })
     })
     return () => {
       off()
+      if (frame !== null) cancelAnimationFrame(frame)
       socket.close()
     }
   }, [thread, artifact])
@@ -333,7 +371,11 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   }
   const move = (event: ReactPointerEvent) => {
     const [x, y] = at(event)
-    room.current?.presence({ cursor: [Math.round(x), Math.round(y)], dragging: moving?.id ?? null })
+    // Where the pointer is goes to the others at most every 50 ms, not at each move the mouse reports.
+    if (event.timeStamp - toldAt.current >= TELL_EVERY_MS) {
+      toldAt.current = event.timeStamp
+      room.current?.presence({ cursor: [Math.round(x), Math.round(y)], dragging: moving?.id ?? null })
+    }
     const now = drag.current
     if (!now) return
     if (now.kind === 'pan') {
@@ -387,7 +429,7 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
     return shown
   }
   // What an arrow's way goes round, where they are now.
-  const solid = items.filter((item) => item.type === 'block' || item.type === 'image').map(placed)
+  const solid = solidOf(items, moving, resizing, placed)
   const visibleCorner = (): [number, number] => [Math.round((-view.x + 80) / view.scale), Math.round((-view.y + 80) / view.scale)]
   const addNote = () => {
     const [x, y] = visibleCorner()

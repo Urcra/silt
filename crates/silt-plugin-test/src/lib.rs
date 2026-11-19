@@ -1,4 +1,4 @@
-//! A stand-in for Silt's plugin host, for testing a plugin (ADR 0103). It
+//! A stand-in for Silt's plugin host, for testing a plugin (ADR 0104). It
 //! loads the component as Silt does, with what its manifest declares
 //! granted, answers its HTTP from what the test says, and records every
 //! request, so a test sees what each call prepares and what it sends.

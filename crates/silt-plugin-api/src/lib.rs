@@ -1,4 +1,4 @@
-//! Write a Silt plugin in Rust (ADR 0103). Implement [`Plugin`], export it
+//! Write a Silt plugin in Rust (ADR 0104). Implement [`Plugin`], export it
 //! with [`export!`], and build for `wasm32-wasip2`:
 //!
 //! ```ignore

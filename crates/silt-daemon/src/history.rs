@@ -23,25 +23,98 @@ const HISTORIES_KEPT: usize = 16;
 /// A thread's numbered history entries, each with the delta it came from.
 pub(crate) type HistoryEntries = Arc<Vec<(DeltaId, HistoryEntry)>>;
 
+/// Readings of a thread's history kept where it changed between.
+const CHANGES_KEPT: usize = 64;
+
+/// A thread's history as last read, at `version` (its family's log length).
+#[derive(Clone)]
+pub(crate) struct KeptHistory {
+    pub(crate) version: usize,
+    pub(crate) entries: HistoryEntries,
+    /// Its turns, worked out the first time they're asked for.
+    turns: Arc<std::sync::OnceLock<Arc<Vec<TurnInfo>>>>,
+    /// The version read before the oldest change kept.
+    oldest: usize,
+    /// Each later version read, and the first entry that differed from the
+    /// reading before it.
+    changes: std::collections::VecDeque<(usize, usize)>,
+}
+
+impl KeptHistory {
+    fn new(version: usize, entries: HistoryEntries) -> Self {
+        Self { version, entries, turns: Arc::default(), oldest: version, changes: std::collections::VecDeque::new() }
+    }
+
+    /// Read again at `version` as `entries`.
+    fn grown(mut self, version: usize, entries: HistoryEntries) -> Self {
+        // A log only grows, but for a family erased and recorded again.
+        if version < self.version {
+            return Self::new(version, entries);
+        }
+        let first = first_difference(&self.entries, &entries);
+        self.changes.push_back((version, first));
+        while self.changes.len() > CHANGES_KEPT {
+            if let Some((dropped, _)) = self.changes.pop_front() {
+                self.oldest = dropped;
+            }
+        }
+        Self { version, entries, turns: Arc::default(), ..self }
+    }
+
+    /// How many of the entries at version `known` are still the same: all
+    /// of them for an unknown version.
+    fn same_before(&self, known: usize) -> usize {
+        if known == self.version {
+            return self.entries.len();
+        }
+        if known != self.oldest && !self.changes.iter().any(|(version, _)| *version == known) {
+            return 0;
+        }
+        self.changes.iter().filter(|(version, _)| *version > known).map(|(_, first)| *first).min().unwrap_or(0)
+    }
+}
+
+/// The first entry where `after` differs from `before`.
+fn first_difference(before: &[(DeltaId, HistoryEntry)], after: &[(DeltaId, HistoryEntry)]) -> usize {
+    before.iter().zip(after).position(|(old, new)| old.1 != new.1).unwrap_or_else(|| before.len().min(after.len()))
+}
+
 impl Core {
     /// The thread's history as numbered entries, with the delta each came
     /// from. Works for threads only known from the server too. Kept until
     /// the family's log grows, as the web UI reads a long history a page at
     /// a time and each page would otherwise read the whole of it.
     pub(crate) fn history_entries(&self, thread: ThreadId) -> HistoryEntries {
+        self.kept_history(thread).entries
+    }
+
+    /// The thread's history as kept: read again only once its family's log
+    /// grew, noting where it first changed, so a viewer holding an earlier
+    /// version reads only from there.
+    fn kept_history(&self, thread: ThreadId) -> KeptHistory {
         let length = self.local_log_len(self.threads[&thread].family);
         let mut cache = self.history_cache.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((cached, entries)) = cache.get(&thread)
-            && *cached == length
+        if let Some(kept) = cache.get(&thread)
+            && kept.version == length
         {
-            return Arc::clone(entries);
+            return kept.clone();
         }
         let entries = Arc::new(self.read_history_entries(thread));
+        let kept = match cache.remove(&thread) {
+            Some(before) => before.grown(length, entries),
+            None => KeptHistory::new(length, entries),
+        };
         if cache.len() >= HISTORIES_KEPT {
             cache.clear();
         }
-        cache.insert(thread, (length, Arc::clone(&entries)));
-        entries
+        cache.insert(thread, kept.clone());
+        kept
+    }
+
+    /// The thread's turns, read again only when its history was.
+    pub(crate) fn kept_turns(&self, thread: ThreadId) -> Arc<Vec<TurnInfo>> {
+        let kept = self.kept_history(thread);
+        Arc::clone(kept.turns.get_or_init(|| Arc::new(self.turns(thread))))
     }
 
     fn read_history_entries(&self, thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
@@ -78,14 +151,31 @@ impl Core {
         entries
     }
 
-    /// A page of `thread`'s history, from entry `offset`.
-    pub(crate) fn history_page(&self, thread: ThreadId, offset: usize, limit: usize) -> HistoryPage {
-        let entries = self.history_entries(thread);
-        let total = entries.len();
+    /// A page of `thread`'s history, from entry `offset`, or from where it
+    /// changed since version `known` when that's earlier. `cut` leaves out
+    /// long outputs and images, as the web UI asks for them.
+    pub(crate) fn history_page(
+        &self,
+        thread: ThreadId,
+        offset: usize,
+        limit: usize,
+        known: Option<usize>,
+        cut: bool,
+    ) -> HistoryPage {
+        let kept = self.kept_history(thread);
+        let total = kept.entries.len();
+        let from = known.map_or(offset, |known| offset.min(kept.same_before(known))).min(total);
+        let entries = kept.entries.iter().skip(from).take(limit);
         HistoryPage {
             thread: thread.to_string(),
             total,
-            entries: entries.iter().skip(offset).take(limit).map(|(_, entry)| entry.clone()).collect(),
+            entries: if cut {
+                entries.map(|(_, entry)| silt_proto::view::cut_for_page(entry)).collect()
+            } else {
+                entries.map(|(_, entry)| entry.clone()).collect()
+            },
+            from: Some(from),
+            version: Some(kept.version),
         }
     }
 
@@ -547,4 +637,57 @@ fn file_touches(family: &Family, inode: InodeId, include: impl Fn(&Delta) -> boo
         }
     }
     touches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entries(texts: &[&str]) -> HistoryEntries {
+        let delta = DeltaId::new(silt_types::ActorId(1), silt_types::Lamport(0));
+        Arc::new(
+            texts
+                .iter()
+                .enumerate()
+                .map(|(index, text)| {
+                    (
+                        delta,
+                        silt_agents::tool::Shown::plain("assistant", (*text).to_owned()).into_entry(
+                            index,
+                            "t".into(),
+                            "own",
+                            0,
+                            false,
+                        ),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_viewer_reads_a_history_again_only_from_where_it_changed() {
+        let kept = KeptHistory::new(3, entries(&["a", "b"]));
+        assert_eq!(kept.same_before(3), 2, "nothing changed");
+        let kept = kept.grown(5, entries(&["a", "b", "c"]));
+        assert_eq!(kept.same_before(3), 2, "only added to");
+        let kept = kept.grown(6, entries(&["a", "B", "c"]));
+        assert_eq!(kept.same_before(5), 1);
+        assert_eq!(kept.same_before(3), 1, "the earliest change since counts");
+        assert_eq!(kept.same_before(6), 3);
+        assert_eq!(kept.same_before(4), 0, "a version never read is read again whole");
+        let kept = kept.grown(2, entries(&["x"]));
+        assert_eq!(kept.same_before(6), 0, "an erased family starts over");
+    }
+
+    #[test]
+    fn only_the_latest_changes_are_kept() {
+        let mut kept = KeptHistory::new(0, entries(&["a"]));
+        for version in 1..=CHANGES_KEPT + 5 {
+            kept = kept.grown(version, entries(&["a"]));
+        }
+        assert_eq!(kept.same_before(CHANGES_KEPT + 4), 1);
+        assert_eq!(kept.same_before(1), 0, "too old to say");
+        assert_eq!(kept.same_before(5), 1, "the version before the oldest change kept");
+    }
 }

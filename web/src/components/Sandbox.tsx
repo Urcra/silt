@@ -682,7 +682,7 @@ const FOLDER_ANSWERS: { value: FolderAnswer; label: string }[] = [
   { value: 'never', label: 'never' },
 ]
 
-/** The person's rules for folders an agent asks for, under their org's, which only tighten (ADR 0101). */
+/** The person's rules for folders an agent asks for, under their org's, which only tighten (ADR 0102). */
 function FolderRules({
   rules,
   org,

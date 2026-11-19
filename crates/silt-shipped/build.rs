@@ -1,5 +1,5 @@
 //! Builds the plugins shipped with Silt (`plugins/`) for `wasm32-wasip2`,
-//! for `silt` to embed (ADR 0103). `SILT_SKIP_PLUGIN_BUILD=1` builds Silt
+//! for `silt` to embed (ADR 0104). `SILT_SKIP_PLUGIN_BUILD=1` builds Silt
 //! without them.
 
 use std::env;

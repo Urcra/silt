@@ -1,4 +1,4 @@
-//! The capabilities whose traffic Silt can't check (ADR 0103): TCP to the
+//! The capabilities whose traffic Silt can't check (ADR 0104): TCP to the
 //! hosts a manifest names, one command over SSH, and a local MCP server run
 //! in a sandbox of its own. Each call that uses one is opaque, and says so
 //! on its card.

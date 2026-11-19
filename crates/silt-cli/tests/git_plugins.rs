@@ -1,4 +1,4 @@
-//! A third party's plugin added from git (ADR 0103): shown before it's
+//! A third party's plugin added from git (ADR 0104): shown before it's
 //! added, built offline in a sandbox, refused what it didn't declare while
 //! a call runs, and updated to a newer tag only with agreement to what the
 //! new version adds.

@@ -32,6 +32,10 @@ export const keys = {
   diffStats: (id: string, options: DiffSpec) => ['thread', id, 'diff-stats', options] as const,
   diffFile: (id: string, options: DiffSpec, path: string) => ['thread', id, 'diff-file', options, path] as const,
   diffTurns: (id: string, spec: DiffSpec) => ['thread', id, 'diff-turns', spec] as const,
+  // Not under the thread: what a turn changed stays as it was once a later one began, so a thread event needn't fetch
+  // it again for each turn shown.
+  settledTurnStats: (id: string, options: DiffSpec) => ['settled-turn', id, 'stats', options] as const,
+  settledTurnDiff: (id: string, options: DiffSpec) => ['settled-turn', id, 'diff', options] as const,
   threadSeen: (id: string, spec: DiffSpec) => ['thread', id, 'seen', spec] as const,
   mrs: ['mrs'] as const,
   approvals: (thread: string) => ['approvals', thread] as const,
@@ -43,6 +47,7 @@ export const keys = {
   pluginActivity: (id: string) => ['pluginActivity', id] as const,
   artifacts: ['artifacts'] as const,
   mr: (id: string) => ['mrs', id] as const,
+  mrBrief: (id: string) => ['mrs', id, 'brief'] as const,
   mrShown: (id: string, hidden: Hidden) => ['mrs', id, hidden] as const,
   inbox: (all: boolean) => ['inbox', all] as const,
   agents: ['agents'] as const,

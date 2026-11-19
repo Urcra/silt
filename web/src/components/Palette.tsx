@@ -3,7 +3,7 @@ import { useMatch, useNavigate } from '@tanstack/react-router'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { api, short } from '../api'
 import { NEW_THREAD_DRAFT, keepDraft } from '../drafts'
-import { useNow } from '../now'
+import { useNow, useSettled } from '../now'
 import { cancelPreview, previewThemeById } from '../theme'
 import { projectName } from '../projects'
 import { keys, message } from '../query'
@@ -66,10 +66,13 @@ function PaletteList({ close }: { close: () => void }) {
   const commandsOnly = query.startsWith('>')
   const typed = (commandsOnly ? query.slice(1) : query).trim()
   const wanted = typed.toLowerCase()
+  // Asked once typing pauses: each key was a search of everything, none of them cancelled.
+  const asked = useSettled(wanted, 200)
   const hits = useQuery({
-    queryKey: ['palette-search', wanted],
-    queryFn: () => api.search(wanted, {}),
-    enabled: !commandsOnly && wanted.length >= 3,
+    queryKey: ['palette-search', asked],
+    queryFn: () => api.search(asked, {}),
+    enabled: !commandsOnly && asked.length >= 3,
+    placeholderData: (before) => before,
   })
   const current = threads.data?.find((thread) => thread.id === here)
   const project = current ? projectName(current.repo || 'no remote') : undefined

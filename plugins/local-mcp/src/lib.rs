@@ -1,4 +1,4 @@
-//! Local MCP, shipped with Silt (ADR 0103): a local MCP server's tools,
+//! Local MCP, shipped with Silt (ADR 0104): a local MCP server's tools,
 //! the server run by Silt in its own sandbox. Each call is opaque.
 
 use std::collections::BTreeMap;

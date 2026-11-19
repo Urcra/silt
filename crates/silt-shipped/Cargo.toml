@@ -1,6 +1,6 @@
 [package]
 name = "silt-shipped"
-description = "The plugins shipped with Silt (ADR 0103), built from plugins/ for wasm32-wasip2 and embedded"
+description = "The plugins shipped with Silt (ADR 0104), built from plugins/ for wasm32-wasip2 and embedded"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

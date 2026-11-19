@@ -1,4 +1,4 @@
-//! Plugins (ADR 0093, ADR 0103): what a sandboxed agent reaches production
+//! Plugins (ADR 0093, ADR 0104): what a sandboxed agent reaches production
 //! and other systems through, each a WebAssembly component Silt runs on
 //! this machine, outside every sandbox, with credentials the agent never
 //! holds. A call its rules say asks waits as an approval, bound to the hash

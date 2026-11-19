@@ -457,7 +457,7 @@ impl Run<'_> {
     /// Runs the agent with Silt's MCP server, hooks, and the repository's
     /// rules and skills it doesn't read by itself. In Silt's sandbox, it's
     /// started again with its session resumed when a turn ends with other
-    /// folders granted to it (ADR 0101).
+    /// folders granted to it (ADR 0102).
     fn launch(
         &self,
         start: Start,
@@ -1388,7 +1388,7 @@ pub fn open_in_browser(url: &str) -> bool {
 
 pub fn history(thread: &str, offset: usize, limit: usize) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let page: HistoryPage = call(&Request::HistoryRead { thread: thread.into(), offset, limit })?;
+    let page: HistoryPage = call(&Request::HistoryRead { thread: thread.into(), offset, limit, known: None, cut: false })?;
     print!("{}", render::safe(&render::history(&page)));
     Ok(())
 }

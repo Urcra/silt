@@ -1,4 +1,4 @@
-//! A local MCP server for the tests of plugins that wrap one (ADR 0103):
+//! A local MCP server for the tests of plugins that wrap one (ADR 0104):
 //! over stdio, one tool, `peek`, which says whether it could read `path`
 //! and reach `host`:`port` from where it runs.
 

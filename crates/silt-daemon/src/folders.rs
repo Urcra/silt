@@ -1,4 +1,4 @@
-//! Folders granted to a thread's agents (ADR 0101), kept in
+//! Folders granted to a thread's agents (ADR 0102), kept in
 //! `reach/<thread>.json`: each for the run that asked or for the thread on
 //! this machine. A grant reaches the agent when its turn ends: Silt starts
 //! its sandbox again with the folder and resumes its session.

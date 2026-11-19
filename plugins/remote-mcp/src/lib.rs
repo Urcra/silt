@@ -1,4 +1,4 @@
-//! Remote MCP, shipped with Silt (ADR 0103): a remote MCP server's tools
+//! Remote MCP, shipped with Silt (ADR 0104): a remote MCP server's tools
 //! over streamable HTTP. Every request is declared with its body, so what
 //! goes is what was shown.
 

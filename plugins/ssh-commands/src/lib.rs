@@ -1,4 +1,4 @@
-//! SSH commands, shipped with Silt (ADR 0103): one command on a host the
+//! SSH commands, shipped with Silt (ADR 0104): one command on a host the
 //! person named, through the machine's own ssh. What it does there Silt
 //! can't check, so the card says so.
 

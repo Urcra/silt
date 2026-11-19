@@ -14,7 +14,7 @@ use crate::CoreError;
 /// Variables never passed into a sandbox: what they hold or point to signs
 /// in as the person somewhere.
 const CREDENTIAL_VARIABLES: [&str; 16] = [
-    // GitHub's: the sandbox reaches GitHub through its plugin (ADR 0102).
+    // GitHub's: the sandbox reaches GitHub through its plugin (ADR 0103).
     "GH_TOKEN",
     "GITHUB_TOKEN",
     "GH_ENTERPRISE_TOKEN",
@@ -144,7 +144,7 @@ pub struct Run<'a> {
     /// The devices Silt relays to the thread's sandbox.
     pub relayed: Vec<Relayed>,
     /// What the gateway adds instead of the workspace's credentials, such
-    /// as a plugin's own for the MCP server it wraps (ADR 0103).
+    /// as a plugin's own for the MCP server it wraps (ADR 0104).
     pub gateway_credentials: Option<Vec<silt_gateway::Credential>>,
 }
 
@@ -208,14 +208,14 @@ pub fn prepare(run: &Run<'_>) -> Result<Sandboxed, CoreError> {
     std::fs::create_dir_all(run.checkout.join(".silt"))?;
     let mut plan = silt_workspace::plan(&paths, run.reach);
     // What plugins keep for the thread and show its agents, read-only, at
-    // `/silt/<plugin>`, such as GitHub's mirrors (ADR 0103). Seatbelt can't
+    // `/silt/<plugin>`, such as GitHub's mirrors (ADR 0104). Seatbelt can't
     // show a folder under another name, so it waits for the VM backends.
     if !run.seatbelt() && !run.thread.is_empty() {
         for (source, path) in crate::plugins::wasm::agent_folders(run.data_dir, run.workspace, run.thread) {
             std::fs::create_dir_all(&source)?;
             plan.mounts.push(silt_workspace::Mount { kind: silt_workspace::MountKind::ReadOnly, path, source: Some(source) });
         }
-        // Where agents clone what a plugin's mirrors hold (ADR 0102).
+        // Where agents clone what a plugin's mirrors hold (ADR 0103).
         if let Some(work) = crate::plugins::wasm::work_area(run.data_dir, run.workspace, run.thread) {
             std::fs::create_dir_all(&work)?;
             plan.mounts.push(silt_workspace::Mount {
@@ -546,7 +546,7 @@ fn silt_program(data_dir: &Path) -> std::io::Result<PathBuf> {
 }
 
 /// Why `dir` is never handed to a sandbox, whatever the rules say: the
-/// built-in refusals of ADR 0101, judged by both its names.
+/// built-in refusals of ADR 0102, judged by both its names.
 pub fn folder_refusal(data_dir: &Path, dir: &ExtraDir) -> Option<String> {
     let home = silt_os::home_dir();
     let paths = RunPaths {

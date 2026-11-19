@@ -15,6 +15,7 @@ import { Icon, Menu, type MenuItem, cx } from '../ui'
 import { DICTATION_KEYS, hasVoiceNote, insertWords, showKeyHint, taking, useDictation } from '../voice'
 import { ComposerFolded } from './composerFolded'
 import { RoundButton } from './RoundButton'
+import { useComposerHistory } from './useComposerHistory'
 import { Keys, VoiceBar, VoiceButton, VoiceNote, VoiceOffer } from './VoiceButton'
 
 export { RoundButton }
@@ -53,28 +54,48 @@ function useFolded() {
   return { room, content, folded }
 }
 
+/** The pane each box is in, found once: looking for it walked every ancestor's style at each key. */
+const panes = new WeakMap<HTMLElement, HTMLElement | null>()
+
 /** Half the pane the composer is in, past which the box scrolls rather than grows. */
 function growLimit(element: HTMLElement): number {
-  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
-    const { overflowY } = getComputedStyle(parent)
-    if (overflowY === 'auto' || overflowY === 'scroll') return parent.clientHeight / 2
+  let pane = panes.get(element)
+  if (pane === undefined || (pane && !pane.contains(element))) {
+    pane = null
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const { overflowY } = getComputedStyle(parent)
+      if (overflowY === 'auto' || overflowY === 'scroll') {
+        pane = parent
+        break
+      }
+    }
+    panes.set(element, pane)
   }
-  return window.innerHeight / 2
+  return (pane?.clientHeight ?? window.innerHeight) / 2
 }
+
+/** How long each box's text was when it was last fitted. */
+const fitted = new WeakMap<HTMLTextAreaElement, number>()
 
 /** Makes `element` as tall as its text, from its `rows` up to half the pane, and keeps it so as the pane resizes. */
 function growWithText(element: HTMLTextAreaElement): () => void {
-  const fit = () => {
+  const fit = (force = true) => {
     // Hidden during a take, it measures nothing and would collapse.
     if (element.offsetParent === null) return
+    // Text added that still fits needs no measuring: shrinking the box to measure it laid out the whole page at
+    // each key, which beside a large diff took tens of milliseconds.
+    const before = fitted.get(element)
+    fitted.set(element, element.value.length)
+    if (!force && before !== undefined && element.value.length >= before && element.scrollHeight <= element.clientHeight) return
     element.style.height = 'auto'
     const limit = growLimit(element)
     element.style.height = `${Math.min(element.scrollHeight, limit)}px`
     element.style.overflowY = element.scrollHeight > limit ? 'auto' : 'hidden'
   }
-  fit()
-  window.addEventListener('resize', fit)
-  if (typeof ResizeObserver === 'undefined') return () => window.removeEventListener('resize', fit)
+  fit(false)
+  const resized = () => fit()
+  window.addEventListener('resize', resized)
+  if (typeof ResizeObserver === 'undefined') return () => window.removeEventListener('resize', resized)
   let width = element.clientWidth
   const rewrapped = new ResizeObserver(() => {
     if (element.clientWidth === width) return
@@ -84,7 +105,7 @@ function growWithText(element: HTMLTextAreaElement): () => void {
   rewrapped.observe(element)
   return () => {
     rewrapped.disconnect()
-    window.removeEventListener('resize', fit)
+    window.removeEventListener('resize', resized)
   }
 }
 
@@ -344,11 +365,12 @@ export function ComposerBox({
   // The text Escape closed the menu on; it opens again once the text changes.
   const [dismissed, setDismissed] = useState<string>()
   const [chosen, setChosen] = useState(0)
+  const history = useComposerHistory(id, value, box, onChange)
   const offered = typed === null || dismissed === value || take ? [] : matching(commands, typed)
   const active = Math.min(chosen, offered.length - 1)
-  const edit = (text: string) => {
+  const edit = (text: string, kind = '') => {
     setChosen(0)
-    onChange(text)
+    history.edit(text, kind)
   }
   const pick = (command: AgentCommand) => edit(`/${command.name} `)
   const choosing = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -381,6 +403,11 @@ export function ComposerBox({
     onFiles(files, false)
   }
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (history.keyDown(event)) {
+      dictatedToSend.current = null
+      setChosen(0)
+      return
+    }
     if (offered.length > 0 && choosing(event)) return
     if (dictation.onKey(event)) return
     // ⏎ sends and shift+⏎ breaks the line, as in a chat; on a touch keyboard, with no shift, ⏎ breaks it and
@@ -511,8 +538,9 @@ export function ComposerBox({
               value={value}
               onChange={(event) => {
                 dictatedToSend.current = null
-                edit(event.target.value)
+                edit(event.target.value, (event.nativeEvent as InputEvent).inputType)
               }}
+              onSelect={history.select}
               onKeyDown={keyDown}
               aria-controls={offered.length > 0 ? `${id}-commands` : undefined}
               aria-activedescendant={offered.length > 0 ? `${id}-command-${active}` : undefined}

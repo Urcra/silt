@@ -10,7 +10,7 @@ const NOTE: Record<string, string> = {
 
 const LABEL = 'font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase'
 
-/** One of a card's blocks, drawn by Silt from what the plugin prepared (ADR 0103). */
+/** One of a card's blocks, drawn by Silt from what the plugin prepared (ADR 0104). */
 function CardBlock({ block }: { block: Block }) {
   switch (block.type) {
     case 'fields':

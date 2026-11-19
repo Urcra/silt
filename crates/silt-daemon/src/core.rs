@@ -339,9 +339,9 @@ pub struct Core {
     rename_waits: HashMap<CheckoutId, Vec<RenameWait>>,
     /// Sessions with a backlog whose next chunk is queued.
     pub(crate) draining: HashSet<String>,
-    /// Threads' history entries, with the length of the family's log they
-    /// were read at.
-    pub(crate) history_cache: Mutex<HashMap<ThreadId, (usize, crate::history::HistoryEntries)>>,
+    /// Threads' history entries, as of the length of the family's log they
+    /// were read at, and where they changed between the readings before.
+    pub(crate) history_cache: Mutex<HashMap<ThreadId, crate::history::KeptHistory>>,
     watchers: Arc<Watchers>,
     /// A listing of a checkout's whole worktree taken while the hook that
     /// will compare it loads, for that comparison to take.
@@ -1271,7 +1271,9 @@ impl Core {
             Request::MrRequestChanges { mr, reason } => to_response(self.mr_request_changes(&mr, reason).await),
             Request::MrSeen { mr, path, seen } => to_response(self.mark_seen(&mr, &path, seen).await),
             Request::MrGuide { mr, text } => to_response(self.mr_guide(&mr, text).await),
-            Request::Turns { thread } => to_response(self.find_thread(&thread).map(|thread| self.turns(thread))),
+            Request::Turns { thread } => {
+                to_response(self.find_thread(&thread).map(|thread| self.kept_turns(thread).as_ref().clone()))
+            }
             Request::Unwritten { thread } => to_response(self.find_thread(&thread).map(|thread| self.unwritten(thread))),
             Request::Commits { thread } => to_response(self.find_thread(&thread).map(|thread| self.commits(thread))),
             Request::FindCommit { commit } => to_response(self.find_commit(&commit)),
@@ -1287,8 +1289,8 @@ impl Core {
                 }
                 to_response(self.open_web(once, project.as_deref()).await)
             }
-            Request::HistoryRead { thread, offset, limit } => {
-                to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit)))
+            Request::HistoryRead { thread, offset, limit, known, cut } => {
+                to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit, known, cut)))
             }
             Request::HistorySearch { thread, query, limit } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.history_search(thread, &query, limit).await),
@@ -1493,6 +1495,7 @@ impl Core {
             warn!(%error, "could not record new commits");
         }
         self.end_quiet_own_turns().await;
+        self.notice_ended_background().await;
         self.poll_sessions();
         let ids: Vec<String> = self
             .sessions

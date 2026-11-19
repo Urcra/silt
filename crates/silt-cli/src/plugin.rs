@@ -228,7 +228,7 @@ pub fn run(command: PluginCommand) -> Result<(), Exn<CliError>> {
 }
 
 /// Keeps plugin `id`'s credential `credential` as its own secret, sent by
-/// Silt with its requests alone (ADR 0103).
+/// Silt with its requests alone (ADR 0104).
 fn secret(
     data: &std::path::Path,
     id: &str,

@@ -145,7 +145,8 @@ export function Layout() {
   useGlobalActions()
   useThemeActions()
   useNotifier()
-  const sidebar = useDragWidth('silt-sidebar-width', SIDEBAR, 'right')
+  const aside = useRef<HTMLElement>(null)
+  const sidebar = useDragWidth('silt-sidebar-width', SIDEBAR, 'right', '--sidebar', aside)
   const scroll = useRef<HTMLElement>(null)
   const path = useRouterState({ select: (state) => state.location.pathname })
   // The drawer was opened on this page; going elsewhere closes it.
@@ -161,9 +162,10 @@ export function Layout() {
     <div className="grid h-dvh grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] bg-bg text-fg-1 md:grid-rows-[minmax(0,1fr)]">
       <div className="flex min-h-0">
         <aside
-          style={{ width: sidebar.width }}
+          ref={aside}
+          style={sidebar.style}
           className={cx(
-            'shrink-0 flex-col border-r border-line bg-bg',
+            'w-(--sidebar) shrink-0 flex-col border-r border-line bg-bg',
             sidebarShown
               ? 'fixed inset-y-0 left-0 z-30 flex max-w-[85vw] shadow-overlay md:static md:shadow-none'
               : 'hidden md:flex',

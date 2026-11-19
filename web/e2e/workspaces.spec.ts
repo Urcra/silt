@@ -256,7 +256,7 @@ test("a workspace's sandbox reach and its plugins are set in its settings, and a
   await expect(page.getByRole('region', { name: 'plugin calls' })).toContainText('None yet')
 })
 
-test("Settings › Plugins lists the plugins here, and a plugin's page sets what runs without asking (ADR 0103)", async ({
+test("Settings › Plugins lists the plugins here, and a plugin's page sets what runs without asking (ADR 0104)", async ({
   page,
 }) => {
   await page.goto(`${new URL(fixture.ada).origin}/settings/plugins${new URL(fixture.ada).hash}`)
@@ -311,7 +311,7 @@ test("Settings › Plugins lists the plugins here, and a plugin's page sets what
   await shoot(page, '11-folder-rules', 1600)
 })
 
-test('a plugin from git says when a newer version is out, asks for what it adds, and shows its calls (ADR 0103)', async ({
+test('a plugin from git says when a newer version is out, asks for what it adds, and shows its calls (ADR 0104)', async ({
   page,
 }) => {
   // Two builds of a third party's plugin, each offline in a sandbox.
@@ -358,7 +358,7 @@ function sandboxed(): boolean {
   }
 }
 
-test('an agent asks for a folder on a card, and goes on with it once approved (ADR 0101)', async ({ page }) => {
+test('an agent asks for a folder on a card, and goes on with it once approved (ADR 0102)', async ({ page }) => {
   test.skip(!sandboxed(), "this machine can't make Silt's sandbox")
   test.setTimeout(120_000)
   const shared = join(fixture.dir, 'shared-lib')

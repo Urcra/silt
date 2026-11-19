@@ -1,6 +1,6 @@
 [package]
 name = "silt-plugin-api"
-description = "The SDK for Silt plugins (ADR 0103): the silt:plugin@1 world, typed, for plugins written in Rust and built for wasm32-wasip2"
+description = "The SDK for Silt plugins (ADR 0104): the silt:plugin@1 world, typed, for plugins written in Rust and built for wasm32-wasip2"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

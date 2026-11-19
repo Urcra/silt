@@ -78,7 +78,7 @@ export const router = createRouter({
         if (hosted()) throw redirect({ to: '/settings/$section', params: { section: 'projects' }, replace: true })
       },
     }),
-    // One plugin's page (ADR 0103); plugins are this machine's.
+    // One plugin's page (ADR 0104); plugins are this machine's.
     createRoute({
       getParentRoute: () => root,
       path: '/settings/plugins/plugin',

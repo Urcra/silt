@@ -1,6 +1,6 @@
 [package]
 name = "silt-plugin"
-description = "Plugins (ADR 0103): the manifest and its validation, cards, effects, prepared calls and their hash, and the rules that decide each call"
+description = "Plugins (ADR 0104): the manifest and its validation, cards, effects, prepared calls and their hash, and the rules that decide each call"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

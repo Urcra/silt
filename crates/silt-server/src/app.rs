@@ -75,7 +75,9 @@ async fn page(State(server): State<Server>, headers: HeaderMap, uri: Uri) -> Res
     let asset = uri.path().trim_start_matches("/app/");
     if let Some(file) = asset.strip_prefix("assets/").and_then(|_| silt_web::Assets::get(asset)) {
         let mime = file.metadata.mimetype().to_owned();
-        return ([(header::CONTENT_TYPE, mime)], Body::from(file.data.into_owned())).into_response();
+        let cache = silt_web::cache_control(asset).to_owned();
+        return ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, cache)], Body::from(file.data.into_owned()))
+            .into_response();
     }
     if pages::signed_in(&server, &headers).await.is_none() {
         let next = pages::safe_next(Some(uri.path()));

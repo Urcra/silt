@@ -60,7 +60,7 @@ pub struct ApprovalView {
     pub change: bool,
     /// Its environment allows no grant: each is approved on its own.
     pub once: bool,
-    /// A WebAssembly plugin's card, which Silt draws (ADR 0103).
+    /// A WebAssembly plugin's card, which Silt draws (ADR 0104).
     pub card: Option<silt_plugin::Card>,
     /// What it will send, each checked while it runs unless opaque.
     pub effects: Vec<silt_plugin::Effect>,
@@ -78,10 +78,10 @@ pub enum GrantScope {
     /// The thread, until `minutes` from now.
     Thread { minutes: u32 },
     /// The workspace from now on: a folder asked for becomes one of its own
-    /// (ADR 0101). Only for calls that hand over folders.
+    /// (ADR 0102). Only for calls that hand over folders.
     Workspace,
     /// Calls of this action from now on, in this call's environment: a
-    /// rule of the person's, as the plugin's page shows it (ADR 0103).
+    /// rule of the person's, as the plugin's page shows it (ADR 0104).
     Always,
 }
 
@@ -156,7 +156,7 @@ pub struct AccessView {
     pub refused: Vec<NetworkRefusal>,
     /// The devices Silt holds for the thread's sandboxes.
     pub devices: Vec<RelayView>,
-    /// The folders granted to its agents (ADR 0101).
+    /// The folders granted to its agents (ADR 0102).
     pub folders: Vec<FolderView>,
 }
 
@@ -198,7 +198,7 @@ pub struct NetworkRefusal {
 #[derive(Default)]
 pub struct Approvals {
     waiting: HashMap<i64, Arc<watch::Sender<Option<Outcome>>>>,
-    /// WebAssembly plugins (ADR 0103).
+    /// WebAssembly plugins (ADR 0104).
     pub(crate) wasm: Arc<super::wasm::Wasm>,
 }
 
@@ -648,7 +648,7 @@ impl Core {
         self.workspaces().get(&id)?.server.as_ref()?.org.clone()
     }
 
-    /// A WebAssembly plugin's call (ADR 0103): prepared by its plugin,
+    /// A WebAssembly plugin's call (ADR 0104): prepared by its plugin,
     /// decided by its rules, then run, waited on, or refused.
     async fn start_wasm_call(
         &mut self,

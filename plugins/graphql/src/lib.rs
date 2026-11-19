@@ -1,4 +1,4 @@
-//! GraphQL API, shipped with Silt (ADR 0103): queries and mutations to an
+//! GraphQL API, shipped with Silt (ADR 0104): queries and mutations to an
 //! API the person sets up per environment. Silt reads each document, so a
 //! mutation can't pass as a query, and a data rule refuses what selects or
 //! carries location.

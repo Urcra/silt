@@ -124,7 +124,7 @@ impl Core {
             "Stop" => {
                 self.store.session_idle(&agent, session_id, true).await?;
                 // A terminal's agent granted folders this turn is restarted
-                // with them (ADR 0101).
+                // with them (ADR 0102).
                 crate::folders::turn_ended(&self.data_dir, &thread.to_string(), now_ms())?;
             }
             _ => {}

@@ -1,4 +1,4 @@
-//! Updates waiting for plugins added from git (ADR 0103). One added at a
+//! Updates waiting for plugins added from git (ADR 0104). One added at a
 //! branch follows its head, one added at a version tag is offered the
 //! highest version tagged since, and one pinned to a commit stays there.
 //! Silt looks with `git ls-remote`, reads a newer commit's manifest without

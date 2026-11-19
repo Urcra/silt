@@ -358,7 +358,7 @@ impl Core {
 
     /// Installs, in the background, the plugins orgs' policies name for
     /// their workspaces and this machine lacks at the commit named, on and
-    /// locked in those workspaces (ADR 0103). Built offline in a sandbox,
+    /// locked in those workspaces (ADR 0104). Built offline in a sandbox,
     /// as any plugin from git is.
     pub(crate) fn install_org_plugins(&self) {
         let mut wanted: Vec<(String, silt_workspace::OrgPlugin, Vec<String>)> = Vec::new();
@@ -681,7 +681,7 @@ pub struct RunRules {
     #[serde(default)]
     pub args: Option<Vec<String>>,
     /// The rules in effect, an org's with the workspace's, which folders
-    /// granted to the run are checked against at each start (ADR 0101).
+    /// granted to the run are checked against at each start (ADR 0102).
     #[serde(default)]
     pub policy: Option<Policy>,
 }

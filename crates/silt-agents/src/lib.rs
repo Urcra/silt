@@ -164,7 +164,7 @@ pub enum Start {
     Resume {
         id: String,
         /// What to tell it first, where the agent takes a prompt as it
-        /// resumes, such as what changed in its sandbox (ADR 0101).
+        /// resumes, such as what changed in its sandbox (ADR 0102).
         prompt: Option<String>,
     },
     /// A new session whose first prompt carries the earlier conversation.

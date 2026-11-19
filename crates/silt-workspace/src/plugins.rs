@@ -1,4 +1,4 @@
-//! What an org says of plugins in its workspaces (ADR 0103): the ones it
+//! What an org says of plugins in its workspaces (ADR 0104): the ones it
 //! installs and locks on, which may be on at all, the versions it pins,
 //! what kinds of effect it refuses, and its own rules on their actions.
 //! Like every org rule, these only tighten what its members choose.

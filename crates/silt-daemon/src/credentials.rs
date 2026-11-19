@@ -44,7 +44,7 @@ pub struct StoredCredential {
     pub placeholder: Option<String>,
     /// The plugin whose own secret it is, set with `silt plugin secret`:
     /// handed to that plugin's requests only, by Silt, never added by the
-    /// gateway to a sandbox's (ADR 0103). Its workspace is `*`.
+    /// gateway to a sandbox's (ADR 0104). Its workspace is `*`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
 }
