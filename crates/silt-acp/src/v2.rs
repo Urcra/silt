@@ -7,17 +7,18 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::v2::{
-    self, AuthCapabilities, CancelSessionNotification, ClientCapabilities, ContentBlock, CreateElicitationRequest,
-    CreateElicitationResponse, ElicitationCapabilities, ElicitationFormCapabilities, EnvVariable, Implementation,
-    InitializeRequest, LoginAuthRequest, McpServer, McpServerStdio, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, RequestPermissionSubject, ResumeSessionRequest,
-    SelectedPermissionOutcome, SessionConfigValueId, SessionId, SessionMessage, SessionUpdate, SetSessionConfigOptionRequest,
-    StateUpdate, SubagentUpdate, TerminalAuthCapabilities, ToolCallContent, ToolCallStatus, ToolCallUpdate,
-    UpdateSessionNotification,
-};
 use agent_client_protocol::schema::{MaybeUndefined, ProtocolVersion};
-use agent_client_protocol::{Agent, Client, ConnectTo, Responder, V2ConnectionTo};
+use agent_client_protocol::v2::schema::{
+    self as v2, CancelSessionNotification, CancelledPermissionOutcome, ClientAuthCapabilities, ClientCapabilities,
+    ClientSessionCapabilities, ContentBlock, CreateElicitationRequest, CreateElicitationResponse, ElicitationCapabilities,
+    ElicitationFormCapabilities, EnvVariable, Implementation, InitializeRequest, LoginAuthRequest, McpServer, McpServerStdio,
+    NewSessionRequest, PromptRequest, PromptSuggestionsCapabilities, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, RequestPermissionSubject, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigValueId,
+    SessionId, SessionMessage, SessionUpdate, SetSessionConfigOptionRequest, StateUpdate, SubagentUpdate,
+    TerminalAuthCapabilities, ToolCallContent, ToolCallStatus, ToolCallUpdate, UpdateSessionNotification,
+};
+use agent_client_protocol::v2::{ConnectionTo, Responder};
+use agent_client_protocol::{Agent, Client, ConnectTo};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::Value;
@@ -59,7 +60,7 @@ impl ConnectTo<Agent> for V2 {
             .v2()
             .name(crate::host::NAME)
             .on_receive_notification(
-                async move |notification: UpdateSessionNotification, _connection: V2ConnectionTo<Agent>| {
+                async move |notification: UpdateSessionNotification, _connection: ConnectionTo<Agent>| {
                     for event in read.lock().expect("lock").read(&notification.session_id, notification.update) {
                         let _ = updates.send(event);
                     }
@@ -68,7 +69,7 @@ impl ConnectTo<Agent> for V2 {
                 agent_client_protocol::on_receive_notification!(),
             )
             .on_receive_request(
-                async move |request: RequestPermissionRequest, responder, _connection: V2ConnectionTo<Agent>| {
+                async move |request: RequestPermissionRequest, responder, _connection: ConnectionTo<Agent>| {
                     let id = next_id.fetch_add(1, Ordering::SeqCst);
                     let permission = permission(id, request);
                     parked.lock().expect("lock").insert(id, responder);
@@ -78,7 +79,7 @@ impl ConnectTo<Agent> for V2 {
                 agent_client_protocol::on_receive_request!(),
             )
             .on_receive_request(
-                async move |request: CreateElicitationRequest, responder, _connection: V2ConnectionTo<Agent>| {
+                async move |request: CreateElicitationRequest, responder, _connection: ConnectionTo<Agent>| {
                     let id = question_ids.fetch_add(1, Ordering::SeqCst);
                     let raw = serde_json::to_value(&request).unwrap_or_default();
                     match Question::of(id, &raw) {
@@ -93,10 +94,11 @@ impl ConnectTo<Agent> for V2 {
                 },
                 agent_client_protocol::on_receive_request!(),
             )
-            .connect_with(agent, async move |connection: V2ConnectionTo<Agent>| {
+            .connect_with(agent, async move |connection: ConnectionTo<Agent>| {
                 let capabilities = ClientCapabilities::new()
                     .elicitation(ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()))
-                    .auth(AuthCapabilities::new().terminal(TerminalAuthCapabilities::new()));
+                    .auth(ClientAuthCapabilities::new().terminal(TerminalAuthCapabilities::new()))
+                    .session(ClientSessionCapabilities::new().prompt_suggestions(PromptSuggestionsCapabilities::new()));
                 let request = InitializeRequest::new(
                     ProtocolVersion::V2,
                     Implementation::new(crate::host::NAME, env!("CARGO_PKG_VERSION")),
@@ -216,7 +218,9 @@ impl ConnectTo<Agent> for V2 {
                             // permission request once they cancel.
                             let parked: Vec<_> = waiting.lock().expect("lock").drain().map(|(_, responder)| responder).collect();
                             for responder in parked {
-                                responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled))?;
+                                responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled(
+                                    CancelledPermissionOutcome::new(),
+                                )))?;
                             }
                             let asked: Vec<_> =
                                 asking.lock().expect("lock").drain().map(|(_, (responder, _))| responder).collect();
@@ -231,7 +235,7 @@ impl ConnectTo<Agent> for V2 {
                             if let Some(responder) = responder {
                                 let outcome = match option {
                                     Some(option) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option)),
-                                    None => RequestPermissionOutcome::Cancelled,
+                                    None => RequestPermissionOutcome::Cancelled(CancelledPermissionOutcome::new()),
                                 };
                                 responder.respond(RequestPermissionResponse::new(outcome))?;
                             }
@@ -404,6 +408,9 @@ impl Reading {
             SessionUpdate::ConfigOptionUpdate(update) => self.settings(settings_v2(update.config_options)),
             SessionUpdate::AvailableCommandsUpdate(update) => vec![Event::Commands(commands_v2(update.available_commands))],
             SessionUpdate::UsageUpdate(usage) => vec![Event::Context { used: usage.used, size: usage.size }],
+            SessionUpdate::PromptSuggestionsUpdate(update) => vec![Event::Suggestion(
+                update.suggestions.first().map(|suggestion| all_text(&suggestion.prompt)).and_then(crate::host::suggested),
+            )],
             update => self.said(update),
         }
     }
@@ -451,7 +458,7 @@ impl Reading {
     /// which names the call that started it, or what one reported back.
     fn message(&mut self, message: SessionMessage) -> Vec<Event> {
         let (Some(sender), Some(recipient), Some(main)) =
-            (message.sender_session_id, message.recipient_session_id, self.session.clone())
+            (message.sender_session_id.take(), message.recipient_session_id.take(), self.session.clone())
         else {
             return Vec::new();
         };

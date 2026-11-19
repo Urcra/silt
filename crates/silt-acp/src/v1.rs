@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     AuthCapabilities, AuthenticateRequest, CancelNotification, ClientCapabilities, ClientSessionCapabilities, ContentBlock,
     CreateElicitationRequest, CreateElicitationResponse, ElicitationCapabilities, ElicitationFormCapabilities, EnvVariable,
     Implementation, InitializeRequest, LoadSessionRequest, McpServer, McpServerStdio, Meta, NewSessionRequest, PromptRequest,
@@ -14,7 +14,8 @@ use agent_client_protocol::schema::v1::{
     SessionConfigValueId, SessionId, SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
     SetSessionModeRequest, ToolCallContent,
 };
-use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Responder};
+use agent_client_protocol::v1::{ConnectionTo, Responder};
+use agent_client_protocol::{Agent, Client, ConnectTo};
 use serde_json::Value;
 
 use crate::host::{Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label};
@@ -33,6 +34,9 @@ pub(crate) fn initialize() -> Result<InitializeRequest, serde_json::Error> {
     // Silt shows a form of choices and text as a question; it has no browser to send the person to.
     let elicitation = ElicitationCapabilities::new().form(ElicitationFormCapabilities::new());
     // Every v2 client takes boolean settings; Silt leaves out any but choices.
+    // It takes suggested prompts only over v2: the SDK reuses a connection
+    // only when this says what v2's does as v1, which has no session
+    // capabilities of its own to carry them.
     let session: ClientSessionCapabilities = serde_json::from_value(serde_json::json!({"configOptions": {"boolean": {}}}))?;
     // Silt runs an agent's terminal sign-in in a terminal of its own, shown on a card (ADR 0056).
     let capabilities =
@@ -96,7 +100,7 @@ impl ConnectTo<Agent> for V1 {
         let early: Arc<Mutex<Option<Vec<Event>>>> = Arc::new(Mutex::new(Some(Vec::new())));
         let held_back = early.clone();
         Client
-            .builder()
+            .v1()
             .name(crate::host::NAME)
             .on_receive_notification(
                 async move |notification: SessionNotification, _connection| {
@@ -341,8 +345,8 @@ impl ConnectTo<Agent> for V1 {
     }
 }
 
-fn stop_reason(reason: agent_client_protocol::schema::v1::StopReason) -> StopReason {
-    use agent_client_protocol::schema::v1::StopReason as Acp;
+fn stop_reason(reason: agent_client_protocol::v1::schema::StopReason) -> StopReason {
+    use agent_client_protocol::v1::schema::StopReason as Acp;
     match reason {
         Acp::EndTurn => StopReason::EndTurn,
         Acp::MaxTokens => StopReason::MaxTokens,
@@ -599,7 +603,7 @@ fn simplify_own(update: SessionUpdate) -> Option<Update> {
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::v1::{ContentChunk, ToolCall, ToolCallUpdate, ToolCallUpdateFields};
+    use agent_client_protocol::v1::schema::{ContentChunk, ToolCall, ToolCallUpdate, ToolCallUpdateFields};
     use serde_json::json;
 
     use super::*;

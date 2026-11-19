@@ -6,12 +6,33 @@ import { ComposerBox } from './Composer'
 
 afterEach(cleanup)
 
-function Draft({ id = 'prompt', initial = 'Please fix the bug' }: { id?: string; initial?: string }) {
+function Draft({
+  id = 'prompt',
+  initial = 'Please fix the bug',
+  suggestion,
+  onSend = () => {},
+}: {
+  id?: string
+  initial?: string
+  suggestion?: string
+  onSend?: () => void
+}) {
   const [value, setValue] = useState(initial)
   const [client] = useState(() => new QueryClient())
   return (
     <QueryClientProvider client={client}>
-      <ComposerBox id={id} label="prompt" value={value} onChange={setValue} onSend={() => setValue('')} placeholder="Message" />
+      <ComposerBox
+        id={id}
+        label="prompt"
+        value={value}
+        onChange={setValue}
+        onSend={() => {
+          onSend()
+          setValue('')
+        }}
+        placeholder="Message"
+        suggestion={suggestion}
+      />
     </QueryClientProvider>
   )
 }
@@ -91,4 +112,39 @@ test('clearing the whole draft is undoable until it is sent', () => {
   input('', 'deleteContentBackward')
   fireEvent.keyDown(box(), { key: 'z', ctrlKey: true })
   expect(box()).toHaveValue('Please fix the bug')
+})
+
+test("Tab or → puts the agent's suggestion in the empty box without sending it, and undo takes it out", () => {
+  for (const key of ['Tab', 'ArrowRight']) {
+    let sent = 0
+    const view = render(<Draft initial="" suggestion="Add a test for it" onSend={() => sent++} />)
+    expect(document.getElementById('prompt-suggestion')).toHaveTextContent('Add a test for it')
+    expect(box()).toHaveAttribute('placeholder', '')
+    box().focus()
+    fireEvent.keyDown(box(), { key })
+    expect(box()).toHaveValue('Add a test for it')
+    expect(document.getElementById('prompt-suggestion')).toBeNull()
+    expect(sent).toBe(0)
+    fireEvent.keyDown(box(), { key: 'z', ctrlKey: true })
+    expect(box()).toHaveValue('')
+    view.unmount()
+  }
+})
+
+test('a draft hides the suggestion, and Tab and → keep their own meaning there', () => {
+  render(<Draft initial="" suggestion="Add a test for it" />)
+  select(0)
+  input('Also', 'insertText')
+  expect(document.getElementById('prompt-suggestion')).toBeNull()
+  expect(box()).toHaveAttribute('placeholder', 'Message')
+  expect(fireEvent.keyDown(box(), { key: 'Tab' })).toBe(true)
+  expect(fireEvent.keyDown(box(), { key: 'ArrowRight' })).toBe(true)
+  expect(box()).toHaveValue('Also')
+})
+
+test('Shift+Tab leaves a suggestion where it is', () => {
+  render(<Draft initial="" suggestion="Add a test for it" />)
+  fireEvent.keyDown(box(), { key: 'Tab', shiftKey: true })
+  expect(box()).toHaveValue('')
+  expect(document.getElementById('prompt-suggestion')).toHaveTextContent('Add a test for it')
 })

@@ -264,6 +264,7 @@ export function ComposerBox({
   onFiles,
   commands = [],
   voice = false,
+  suggestion,
   className,
 }: {
   id: string
@@ -307,6 +308,8 @@ export function ComposerBox({
   commands?: AgentCommand[]
   /** Offers dictation, where this machine can do it. */
   voice?: boolean
+  /** The prompt the agent suggests next, grey in the empty box until Tab or → takes it (ADR 0108). */
+  suggestion?: string
   className?: string
 }) {
   const box = useRef<HTMLTextAreaElement>(null)
@@ -373,6 +376,11 @@ export function ComposerBox({
     history.edit(text, kind)
   }
   const pick = (command: AgentCommand) => edit(`/${command.name} `)
+  const ghost = suggestion && value === '' && !take ? suggestion : undefined
+  const takeSuggestion = (text: string) => {
+    dictatedToSend.current = null
+    edit(text)
+  }
   const choosing = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const step = { ArrowDown: 1, ArrowUp: offered.length - 1 }[event.key]
     if (step !== undefined) setChosen((active + step) % offered.length)
@@ -403,6 +411,20 @@ export function ComposerBox({
     onFiles(files, false)
   }
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Only into an empty box: there Tab would otherwise leave it, and → did nothing.
+    if (
+      ghost &&
+      (event.key === 'Tab' || event.key === 'ArrowRight') &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.nativeEvent.isComposing
+    ) {
+      event.preventDefault()
+      takeSuggestion(ghost)
+      return
+    }
     if (history.keyDown(event)) {
       dictatedToSend.current = null
       setChosen(0)
@@ -452,6 +474,11 @@ export function ComposerBox({
   const left =
     (dictation.available && hasVoiceNote(dictation) && <VoiceNote dictation={dictation} />) ||
     note ||
+    (hint && ghost && (
+      <span className="inline-flex items-center gap-1 text-xs whitespace-nowrap text-fg-3 max-md:hidden">
+        <Keys keys={['Tab']} /> or <Keys keys={['→']} /> use the suggestion · <Keys keys={['⏎']} /> {enter}
+      </span>
+    )) ||
     (hint && value === '' && (
       <span className="inline-flex items-center gap-1 text-xs whitespace-nowrap text-fg-3 max-md:hidden">
         <Keys keys={['⏎']} /> {enter}
@@ -486,9 +513,24 @@ export function ComposerBox({
       onClick={send.submit ? undefined : () => onSend(false)}
     />
   )
-  const ending = (actions || touchSend) && (
+  // A touch keyboard has no Tab, so a button takes the suggestion there.
+  const touchUse = touch && ghost && (
+    <button
+      type="button"
+      title="Puts the suggested prompt in the box"
+      onClick={() => {
+        takeSuggestion(ghost)
+        box.current?.focus()
+      }}
+      className="inline-flex h-11 shrink-0 items-center rounded-md border border-line px-3 text-sm text-fg-1 hover:bg-surface-2"
+    >
+      Use
+    </button>
+  )
+  const ending = (actions || touchUse || touchSend) && (
     <span className="flex shrink-0 items-center gap-1">
       {actions}
+      {touchUse}
       {touchSend}
     </span>
   )
@@ -530,27 +572,46 @@ export function ComposerBox({
             <label htmlFor={id} className="sr-only">
               {label}
             </label>
-            <textarea
-              ref={box}
-              id={id}
-              aria-label={label}
-              rows={rows}
-              value={value}
-              onChange={(event) => {
-                dictatedToSend.current = null
-                edit(event.target.value, (event.nativeEvent as InputEvent).inputType)
-              }}
-              onSelect={history.select}
-              onKeyDown={keyDown}
-              aria-controls={offered.length > 0 ? `${id}-commands` : undefined}
-              aria-activedescendant={offered.length > 0 ? `${id}-command-${active}` : undefined}
-              onPaste={paste}
-              placeholder={placeholder}
-              className={cx(
-                'min-w-0 flex-1 resize-none border-0 bg-transparent px-1.5 py-1.5 text-sm leading-normal text-fg-1 placeholder:text-fg-3 focus:outline-none max-md:text-base',
-                take && 'hidden',
+            {/* The suggestion shares the text's cell, so a long one grows the box; the text stays mounted under it. */}
+            <div className={cx('grid min-w-0 flex-1', take && 'hidden')}>
+              <textarea
+                ref={box}
+                id={id}
+                aria-label={label}
+                aria-describedby={ghost ? `${id}-suggestion` : undefined}
+                rows={rows}
+                value={value}
+                onChange={(event) => {
+                  dictatedToSend.current = null
+                  edit(event.target.value, (event.nativeEvent as InputEvent).inputType)
+                }}
+                onSelect={history.select}
+                onKeyDown={keyDown}
+                aria-controls={offered.length > 0 ? `${id}-commands` : undefined}
+                aria-activedescendant={offered.length > 0 ? `${id}-command-${active}` : undefined}
+                onPaste={paste}
+                placeholder={ghost ? '' : placeholder}
+                className="col-start-1 row-start-1 w-full min-w-0 resize-none border-0 bg-transparent px-1.5 py-1.5 text-sm leading-normal text-fg-1 placeholder:text-fg-3 focus:outline-none max-md:text-base"
+              />
+              {ghost && (
+                <div
+                  id={`${id}-suggestion`}
+                  aria-hidden="true"
+                  onMouseDown={(event) => {
+                    event.preventDefault()
+                    box.current?.focus()
+                  }}
+                  className="col-start-1 row-start-1 min-w-0 cursor-text px-1.5 py-1.5 text-sm leading-normal break-words whitespace-pre-wrap text-fg-3 max-md:text-base"
+                >
+                  {ghost}
+                  {!touch && (
+                    <span className="ml-1.5 inline-flex -translate-y-px align-middle">
+                      <Keys keys={['Tab']} />
+                    </span>
+                  )}
+                </div>
               )}
-            />
+            </div>
             {take && frozen && (
               <Heard
                 value={value}

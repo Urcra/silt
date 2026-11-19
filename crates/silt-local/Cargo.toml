@@ -11,7 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-agent-client-protocol = { version = "3.4", features = ["stdio"] }
+agent-client-protocol = { version = "5.4", features = ["stdio"] }
 regex = "1.13.1"
 reqwest = { version = "0.13.5", features = ["json"] }
 serde = { version = "1.0.229", features = ["derive"] }

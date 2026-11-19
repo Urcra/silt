@@ -707,7 +707,7 @@ mod tests {
             claude.distribution,
             Distribution::Command {
                 program: "npx".into(),
-                args: vec!["-y".into(), "@agentclientprotocol/claude-agent-acp@0.106.0".into()],
+                args: vec!["-y".into(), "@agentclientprotocol/claude-agent-acp@0.109.0".into()],
                 env: Vec::new(),
             }
         );

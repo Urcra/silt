@@ -14,14 +14,17 @@
 //! `Present` makes it put a plan to the person, as Claude's ExitPlanMode
 //! does, by asking leave to quit its plan mode. Its session offers the commands
 //! `count` and `compact` as it opens, and drops `compact` on a prompt.
+//! `Suggest` makes it predict the next prompt once it stopped, as Claude's
+//! adapter does, to a client that says it takes one.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::v2;
-use agent_client_protocol::{Agent, Client, Responder, Result, Stdio, V2ConnectionTo};
+use agent_client_protocol::v2::schema as v2;
+use agent_client_protocol::v2::{ConnectionTo, Responder};
+use agent_client_protocol::{Agent, Client, Result, Stdio};
 use base64::Engine;
 use serde_json::{Value, json};
 
@@ -30,6 +33,8 @@ struct State {
     cwd: HashMap<String, PathBuf>,
     mode: HashMap<String, String>,
     model: HashMap<String, String>,
+    /// The client takes suggested prompts.
+    suggestions: bool,
 }
 
 /// The commands it offers, tagged as Claude's adapter tags them over v2;
@@ -54,27 +59,30 @@ fn parse<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
     serde_json::from_value(value).map_err(agent_client_protocol::Error::into_internal_error)
 }
 
-fn say(connection: &V2ConnectionTo<Client>, session: &v2::SessionId, update: Value) -> Result<()> {
+fn say(connection: &ConnectionTo<Client>, session: &v2::SessionId, update: Value) -> Result<()> {
     connection.send_notification(v2::UpdateSessionNotification::new(session.clone(), parse::<v2::SessionUpdate>(update)?))
 }
 
 pub async fn main() -> Result<()> {
     let state = Arc::new(Mutex::new(State::default()));
-    let (created, resumed, configured, prompted) = (state.clone(), state.clone(), state.clone(), state);
+    let (created, resumed, configured, prompted, initialized) =
+        (state.clone(), state.clone(), state.clone(), state.clone(), state);
     let stopping = Arc::new(AtomicBool::new(false));
     let cancelling = stopping.clone();
     Agent
         .v2()
         .name("silt-fake-agent")
         .on_receive_notification(
-            async move |_cancel: v2::CancelSessionNotification, _connection: V2ConnectionTo<Client>| {
+            async move |_cancel: v2::CancelSessionNotification, _connection: ConnectionTo<Client>| {
                 cancelling.store(true, Ordering::SeqCst);
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
         )
         .on_receive_request(
-            async move |request: v2::InitializeRequest, responder: Responder<v2::InitializeResponse>, _connection: V2ConnectionTo<Client>| {
+            async move |request: v2::InitializeRequest, responder: Responder<v2::InitializeResponse>, _connection: ConnectionTo<Client>| {
+                initialized.lock().expect("lock").suggestions =
+                    request.capabilities.session.as_ref().is_some_and(|session| session.prompt_suggestions.is_some());
                 responder.respond(parse(json!({
                     "protocolVersion": request.protocol_version,
                     "info": {"name": "fake-agent", "version": "2.0"},
@@ -85,7 +93,7 @@ pub async fn main() -> Result<()> {
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: v2::NewSessionRequest, responder: Responder<v2::NewSessionResponse>, _connection: V2ConnectionTo<Client>| {
+            async move |request: v2::NewSessionRequest, responder: Responder<v2::NewSessionResponse>, _connection: ConnectionTo<Client>| {
                 let mut state = created.lock().expect("lock");
                 let id = format!("fake-v2-{}", state.cwd.len() + 1);
                 state.cwd.insert(id.clone(), request.cwd.into_inner());
@@ -94,7 +102,7 @@ pub async fn main() -> Result<()> {
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: v2::ResumeSessionRequest, responder: Responder<v2::ResumeSessionResponse>, _connection: V2ConnectionTo<Client>| {
+            async move |request: v2::ResumeSessionRequest, responder: Responder<v2::ResumeSessionResponse>, _connection: ConnectionTo<Client>| {
                 let mut state = resumed.lock().expect("lock");
                 let id = request.session_id.to_string();
                 if !state.cwd.contains_key(&id) {
@@ -108,7 +116,7 @@ pub async fn main() -> Result<()> {
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: v2::SetSessionConfigOptionRequest, responder: Responder<v2::SetSessionConfigOptionResponse>, _connection: V2ConnectionTo<Client>| {
+            async move |request: v2::SetSessionConfigOptionRequest, responder: Responder<v2::SetSessionConfigOptionResponse>, _connection: ConnectionTo<Client>| {
                 let value = serde_json::to_value(&request.value)?.get("value").and_then(Value::as_str).unwrap_or_default().to_owned();
                 let (id, config) = (request.session_id.to_string(), request.config_id.to_string());
                 let mut state = configured.lock().expect("lock");
@@ -124,7 +132,7 @@ pub async fn main() -> Result<()> {
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: v2::PromptRequest, responder: Responder<v2::PromptResponse>, connection: V2ConnectionTo<Client>| {
+            async move |request: v2::PromptRequest, responder: Responder<v2::PromptResponse>, connection: ConnectionTo<Client>| {
                 responder.respond(parse(json!({"messageId": "user-1"}))?)?;
                 let state = prompted.clone();
                 let cancelled = stopping.clone();
@@ -241,6 +249,10 @@ pub async fn main() -> Result<()> {
                     let reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
                     say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "reply-1", "content": {"type": "text", "text": reply}}))?;
                     say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn", "usage": {"inputTokens": 1_600, "outputTokens": 240, "totalTokens": 1_840}}))?;
+                    if prompt.contains("Suggest") && state.lock().expect("lock").suggestions {
+                        let suggestion = json!([{"prompt": [{"type": "text", "text": "Add a test for it"}]}]);
+                        say(&worker, &session, json!({"sessionUpdate": "prompt_suggestions_update", "suggestions": suggestion}))?;
+                    }
                     if background {
                         // The command ends once the turn has; the agent goes on about it unless stopped.
                         tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;

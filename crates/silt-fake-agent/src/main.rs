@@ -33,7 +33,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     AgentCapabilities, ContentBlock, ContentChunk, CreateElicitationRequest, EmbeddedResourceResource, Implementation,
     InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
     PermissionOption, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome,
@@ -42,7 +43,7 @@ use agent_client_protocol::schema::v1::{
     SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
     ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo, Result, Stdio};
+use agent_client_protocol::{Agent, Client, Result, Stdio};
 
 #[derive(Default)]
 struct State {
@@ -51,7 +52,7 @@ struct State {
     mode: HashMap<String, String>,
     model: HashMap<String, String>,
     /// The MCP servers each session was given.
-    mcp: HashMap<String, Vec<agent_client_protocol::schema::v1::McpServer>>,
+    mcp: HashMap<String, Vec<agent_client_protocol::v1::schema::McpServer>>,
     /// The artifact each session made last, to add a version of.
     artifact: HashMap<String, String>,
 }
@@ -159,7 +160,7 @@ async fn agent() -> Result<()> {
     let moded = state.clone();
     let configured = state.clone();
     Agent
-        .builder()
+        .v1()
         .name("silt-fake-agent")
         .on_receive_request(
             async move |initialize: InitializeRequest, responder, _connection| {
