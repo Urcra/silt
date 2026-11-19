@@ -1,0 +1,27 @@
+[package]
+name = "silt-plugin-notes"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# A workspace of its own: it builds for wasm32-wasip2.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+silt-plugin-api = { git = "https://github.com/Urcra/silt", branch = "main" }
+
+[dev-dependencies]
+serde_json = "1.0.154"
+silt-plugin-test = { git = "https://github.com/Urcra/silt", branch = "main" }
+
+# Small and quick to load.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

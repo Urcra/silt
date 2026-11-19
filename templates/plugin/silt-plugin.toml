@@ -1,0 +1,37 @@
+id = "example.notes"
+name = "Notes"
+version = "0.1.0"
+publisher = "example"
+description = "Reads and adds notes in Example Notes, each note added asked unless you allow it."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/example/silt-notes"
+world = "silt:plugin@1"
+build = { cargo = { package = "silt-plugin-notes", toolchain = "1.99.1" } }
+
+[[capabilities]]
+kind = "http"
+hosts = ["api.notes.example"]
+reason = "Reads notes, and adds the ones you allow, through Example Notes' API."
+
+[[credentials]]
+id = "token"
+label = "An Example Notes token"
+hosts = ["api.notes.example"]
+send = { header = { name = "Authorization", scheme = "Bearer" } }
+how = "Make one in Example Notes' settings, then `silt plugin secret example.notes token`."
+
+[[actions]]
+id = "list"
+label = "List notes"
+description = "Lists the notes in a notebook."
+kind = "read"
+default = "allow"
+fields = ["notebook"]
+
+[[actions]]
+id = "add"
+label = "Add a note"
+description = "Adds a note to a notebook."
+kind = "change"
+default = "ask"
+fields = ["notebook"]

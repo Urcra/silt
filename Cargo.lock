@@ -6335,6 +6335,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "silt-plugin-test"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
+ "silt-plugin",
+ "silt-plugin-host",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "silt-proto"
 version = "0.0.1"
 dependencies = [
