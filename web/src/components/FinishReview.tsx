@@ -5,7 +5,19 @@ import { Button, Popover, Textarea, buttonClass, cx } from '../ui'
 
 const CHOICE = 'grid cursor-pointer grid-cols-[16px_minmax(0,1fr)] gap-x-2 gap-y-px rounded-md border px-2 py-1.5'
 
-function Choice({ value, picked, onPick, title, children }: { value: Finish; picked: Finish; onPick: (how: Finish) => void; title: string; children: string }) {
+function Choice({
+  value,
+  picked,
+  onPick,
+  title,
+  children,
+}: {
+  value: Finish
+  picked: Finish
+  onPick: (how: Finish) => void
+  title: string
+  children: string
+}) {
   const said = useId()
   return (
     <label className={cx(CHOICE, picked === value ? 'border-accent/60 bg-elevated' : 'border-transparent')}>
@@ -47,7 +59,13 @@ export function FinishReview(props: FinishProps & { opener?: (open: (() => void)
   const who = agent ?? 'the agent'
   if (count === 0 && reviewedTurn === undefined) return null
   const comments = `${count} ${count === 1 ? 'comment' : 'comments'}`
-  const submit = { send: 'Request changes', steer: 'Request changes now', copy: `Copy ${comments}`, save: 'Keep as comments', reviewed: 'Mark reviewed' }[how]
+  const submit = {
+    send: 'Request changes',
+    steer: 'Request changes now',
+    copy: `Copy ${comments}`,
+    save: 'Keep as comments',
+    reviewed: 'Mark reviewed',
+  }[how]
   return (
     <span role="group" aria-label="review" className="flex items-center gap-2">
       <span className="text-2xs whitespace-nowrap text-fg-2">
@@ -155,7 +173,12 @@ export function FinishReview(props: FinishProps & { opener?: (open: (() => void)
                 </Button>
               )}
               {agent && count > 0 && (
-                <Button variant="ghost" size="sm" disabled={sending} onClick={() => void finish('copy').then((done) => done && close())}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={sending}
+                  onClick={() => void finish('copy').then((done) => done && close())}
+                >
                   Copy for a terminal
                 </Button>
               )}

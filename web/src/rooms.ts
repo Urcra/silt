@@ -47,7 +47,9 @@ export class PeerBook {
 
   /** Whether a presence still shown at `then` has lapsed by `now`. */
   lapsed(then: number, now: number): boolean {
-    return [...this.peers.values()].some(({ peer, at }) => peer.state !== null && now - at > PRESENCE_MS && then - at <= PRESENCE_MS)
+    return [...this.peers.values()].some(
+      ({ peer, at }) => peer.state !== null && now - at > PRESENCE_MS && then - at <= PRESENCE_MS,
+    )
   }
 }
 

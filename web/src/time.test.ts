@@ -19,7 +19,9 @@ test("a limit's reset reads as a time today, a weekday this week, else a date", 
   const today = new Date(2026, 10, 17, 14)
   expect(resetsAt(today.getTime(), now)).toBe(`Resets at ${time(today)}`)
   const later = new Date(2026, 10, 18, 7)
-  expect(resetsAt(later.getTime(), now)).toBe(`Resets ${later.toLocaleDateString(undefined, { weekday: 'short' })} ${time(later)}`)
+  expect(resetsAt(later.getTime(), now)).toBe(
+    `Resets ${later.toLocaleDateString(undefined, { weekday: 'short' })} ${time(later)}`,
+  )
   const month = new Date(2026, 11, 1)
   expect(resetsAt(month.getTime(), now)).toBe(`Resets ${month.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`)
 })

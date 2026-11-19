@@ -59,7 +59,10 @@ async function open(page: Page, path: string) {
  */
 function shotOptions(page: Page) {
   return {
-    mask: [page.locator('[data-volatile]'), page.getByText(/\/tmp\/silt-|\/silt-live-|127\.0\.0\.1:\d+|forked from [0-9a-f]+/).filter({ visible: true })],
+    mask: [
+      page.locator('[data-volatile]'),
+      page.getByText(/\/tmp\/silt-|\/silt-live-|127\.0\.0\.1:\d+|forked from [0-9a-f]+/).filter({ visible: true }),
+    ],
     animations: 'disabled' as const,
     caret: 'hide' as const,
     maxDiffPixelRatio: 0.001,
@@ -86,7 +89,11 @@ async function pickThemes(page: Page, settings: { mode: string; light: string; d
   await page.evaluate(async (settings) => {
     const response = await fetch('/api/appearance', {
       method: 'PUT',
-      headers: { Authorization: `Bearer ${sessionStorage.getItem('silt-token')}`, 'Content-Type': 'application/json', 'X-Silt-Request': '1' },
+      headers: {
+        Authorization: `Bearer ${sessionStorage.getItem('silt-token')}`,
+        'Content-Type': 'application/json',
+        'X-Silt-Request': '1',
+      },
       body: JSON.stringify(settings),
     })
     if (!response.ok) throw new Error(await response.text())
@@ -121,7 +128,10 @@ test("a theme's file edited while the page is open restyles it (ADR 0098)", asyn
   const write = (bg: string) =>
     writeFileSync(
       file,
-      JSON.stringify({ name: 'Live', themes: [{ id: 'live-edit', name: 'Live', appearance: 'light', colors: { bg, 'fg-1': '#1b1b1b', accent: '#0055cc' } }] }),
+      JSON.stringify({
+        name: 'Live',
+        themes: [{ id: 'live-edit', name: 'Live', appearance: 'light', colors: { bg, 'fg-1': '#1b1b1b', accent: '#0055cc' } }],
+      }),
     )
   write('#fafafa')
   await open(page, '/settings/appearance')
@@ -141,7 +151,18 @@ test("a theme's file edited while the page is open restyles it (ADR 0098)", asyn
 test('a theme that ships its own font loads it from its folder (ADR 0099)', async ({ page }) => {
   const root = join(world.work, 'alice', 'silt', 'themes', 'shipped')
   mkdirSync(join(root, 'fonts'), { recursive: true })
-  copyFileSync(join(import.meta.dirname, '..', 'node_modules', '@fontsource', 'ibm-plex-mono', 'files', 'ibm-plex-mono-latin-100-italic.woff2'), join(root, 'fonts', 'thin.woff2'))
+  copyFileSync(
+    join(
+      import.meta.dirname,
+      '..',
+      'node_modules',
+      '@fontsource',
+      'ibm-plex-mono',
+      'files',
+      'ibm-plex-mono-latin-100-italic.woff2',
+    ),
+    join(root, 'fonts', 'thin.woff2'),
+  )
   writeFileSync(
     join(root, 'theme.json'),
     JSON.stringify({
@@ -152,7 +173,10 @@ test('a theme that ships its own font loads it from its folder (ADR 0099)', asyn
           name: 'Shipped',
           appearance: 'light',
           colors: { bg: '#fafafa', 'fg-1': '#1b1b1b', accent: '#0055cc' },
-          fonts: { ui: ['Shipped Mono', 'monospace'], faces: [{ family: 'Shipped Mono', file: 'fonts/thin.woff2', style: 'italic', weight: 100 }] },
+          fonts: {
+            ui: ['Shipped Mono', 'monospace'],
+            faces: [{ family: 'Shipped Mono', file: 'fonts/thin.woff2', style: 'italic', weight: 100 }],
+          },
         },
       ],
     }),
@@ -278,7 +302,14 @@ test('reconciling a diverged thread', async ({ page }) => {
   await page.route('**/api/status', async (route) => {
     const response = await route.fetch()
     const status = (await response.json()) as Record<string, unknown>
-    const threads = (await (await route.fetch({ url: route.request().url().replace(/status$/, 'threads') })).json()) as { id: string }[]
+    const threads = (await (
+      await route.fetch({
+        url: route
+          .request()
+          .url()
+          .replace(/status$/, 'threads'),
+      })
+    ).json()) as { id: string }[]
     const full = (short: string) => threads.find((thread) => thread.id.endsWith(short))?.id ?? short
     status.recoveries = [{ thread: full(world.thread), recovery: full(world.fork), time_ms: Date.now() - 3_600_000 }]
     await route.fulfill({ response, json: status })
@@ -335,7 +366,8 @@ test('design systems (ADR 0088)', async ({ page }) => {
 test('a new design system (ADR 0088)', async ({ page }) => {
   await open(page, '/settings/design-systems')
   await shoot(page, 'new-design-system', async (shown) => {
-    if (!(await shown.getByRole('dialog', { name: 'New design system' }).isVisible())) await shown.getByRole('button', { name: 'New design system' }).first().click()
+    if (!(await shown.getByRole('dialog', { name: 'New design system' }).isVisible()))
+      await shown.getByRole('button', { name: 'New design system' }).first().click()
     await shown.getByRole('textbox', { name: 'Name' }).fill('Harbor')
     await expect(shown.getByRole('button', { name: 'Start building' })).toBeVisible()
   })
@@ -355,7 +387,9 @@ test("a design system's tokens (ADR 0088)", async ({ page }) => {
   await open(page, '/settings/design-systems/system?source=personal&name=harbor')
   await shoot(page, 'design-system-tokens', async (shown) => {
     await shown.getByRole('tab', { name: 'Tokens' }).click()
-    await expect(shown.frameLocator('iframe[title="type scale"]').getByText('Sphinx of black quartz, judge my vow').first()).toBeVisible()
+    await expect(
+      shown.frameLocator('iframe[title="type scale"]').getByText('Sphinx of black quartz, judge my vow').first(),
+    ).toBeVisible()
     await shown.waitForTimeout(300)
   })
 })
@@ -421,9 +455,30 @@ test('the first open, with no projects yet', async ({ page }) => {
   await page.route('**/api/found', (route) =>
     route.fulfill({
       json: [
-        { path: '/home/alice/src/api', repo: 'github.com/acme/api', git: true, added: false, sessions: [{ agent: 'Claude Code', count: 12 }], last_ms: Date.now() - 7_200_000 },
-        { path: '/home/alice/src/site', repo: 'github.com/acme/site', git: true, added: false, sessions: [{ agent: 'Codex', count: 3 }], last_ms: Date.now() - 86_400_000 * 3 },
-        { path: '/home/alice/notes', repo: '', git: false, added: false, sessions: [{ agent: 'Claude Code', count: 2 }], last_ms: Date.now() - 86_400_000 * 9 },
+        {
+          path: '/home/alice/src/api',
+          repo: 'github.com/acme/api',
+          git: true,
+          added: false,
+          sessions: [{ agent: 'Claude Code', count: 12 }],
+          last_ms: Date.now() - 7_200_000,
+        },
+        {
+          path: '/home/alice/src/site',
+          repo: 'github.com/acme/site',
+          git: true,
+          added: false,
+          sessions: [{ agent: 'Codex', count: 3 }],
+          last_ms: Date.now() - 86_400_000 * 3,
+        },
+        {
+          path: '/home/alice/notes',
+          repo: '',
+          git: false,
+          added: false,
+          sessions: [{ agent: 'Claude Code', count: 2 }],
+          last_ms: Date.now() - 86_400_000 * 9,
+        },
       ],
     }),
   )
@@ -484,4 +539,3 @@ test('a question waiting on you', async ({ page }) => {
     await expectInNeedsYou(shown, 'Ask me what to count')
   })
 })
-

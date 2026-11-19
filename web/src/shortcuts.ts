@@ -48,7 +48,11 @@ export function formatKeys(keys: string): string {
     .join(MAC ? '' : '+')
 }
 
-export function matches(event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>, keys: string, mac = MAC) {
+export function matches(
+  event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>,
+  keys: string,
+  mac = MAC,
+) {
   const parts = keys.split('+')
   const key = parts[parts.length - 1]
   const mod = parts.includes('mod')

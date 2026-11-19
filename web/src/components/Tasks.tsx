@@ -4,6 +4,7 @@ import { SessionLive, StoppableTasks, type TaskState, type Tasks, TasksContext, 
 import { type ToolStep, duration, kindOf, shortCommand, toolOf } from '../transcript'
 import { Button, Icon, Spinner, Tag, cx } from '../ui'
 import { Markdown } from './Markdown'
+import { useWhole } from '../wholeEntry'
 
 /** What a call left running: its task's news, else what its call and result say. */
 function stateOf(step: ToolStep, tasks: Tasks): { task: TaskState | null; subagent: boolean; status: string } {
@@ -37,21 +38,28 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
   const tasks = useContext(TasksContext)
   const live = useContext(SessionLive)
   const stoppable = useContext(StoppableTasks)
-  const now = useNow(1000)
   const call = step.call!
   const { task, subagent, status } = stateOf(step, tasks)
+  // Only a task still running counts the seconds: every card in a long thread ticked once a second, for good.
+  const now = useNow(status === 'running' ? 1000 : 0)
   const [open, setOpen] = useState(false)
+  const result = useWhole(step.result, open)
   const quiet = status === 'running' && !live
   const shown = quiet ? { label: 'no word since', tone: 'neutral' as const } : (STATUS[status] ?? STATUS.running)
   const ended = task?.ended_ms ?? (task ? null : (step.result?.time_ms ?? null))
-  const took = status === 'running' ? (quiet ? null : duration(call.time_ms, now)) : ended !== null ? duration(call.time_ms, ended) : null
+  const took =
+    status === 'running' ? (quiet ? null : duration(call.time_ms, now)) : ended !== null ? duration(call.time_ms, ended) : null
   const kind = subagent ? call.tool?.detail?.trim() || 'Subagent' : 'In the background'
   // What came back: a subagent's report, or a background command's launch message and what it said when it ended.
-  const report = subagent && status !== 'running' ? step.result?.text.trim() : undefined
+  const report = subagent && status !== 'running' ? result?.text.trim() : undefined
   const said = task?.summary?.trim()
   const canStop = status === 'running' && call.tool !== null && stoppable.calls.has(call.tool.id)
   return (
-    <div id={call.tool ? `task-${call.tool.id}` : undefined} data-testid="task" className="overflow-hidden rounded-md border border-line bg-elevated text-xs">
+    <div
+      id={call.tool ? `task-${call.tool.id}` : undefined}
+      data-testid="task"
+      className="overflow-hidden rounded-md border border-line bg-elevated text-xs"
+    >
       <div className={cx('flex items-center', open && 'border-b border-line-subtle')}>
         <button
           type="button"
@@ -61,7 +69,11 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
           className="group/row flex w-full min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left max-md:min-h-11"
         >
           <Icon name="chevronRight" className={cx('h-3 w-3 shrink-0 text-fg-2 transition-transform', open && 'rotate-90')} />
-          {status === 'running' && !quiet ? <Spinner /> : <Icon name={subagent ? 'agent' : 'terminal'} className="h-3.5 w-3.5 shrink-0 text-fg-2" />}
+          {status === 'running' && !quiet ? (
+            <Spinner />
+          ) : (
+            <Icon name={subagent ? 'agent' : 'terminal'} className="h-3.5 w-3.5 shrink-0 text-fg-2" />
+          )}
           <span className="shrink-0 text-fg-2">{kind}</span>
           <span className="min-w-0 flex-1 truncate text-fg-1 group-hover/row:text-accent-fg">{titleOf(step, subagent)}</span>
           {took && (
@@ -74,7 +86,14 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
           </Tag>
         </button>
         {canStop && (
-          <Button variant="ghost" size="sm" icon="stop" className="mr-2" title="End the command and what it started" onClick={() => stoppable.stop(call.tool!.id)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon="stop"
+            className="mr-2"
+            title="End the command and what it started"
+            onClick={() => stoppable.stop(call.tool!.id)}
+          >
             Stop
           </Button>
         )}
@@ -88,9 +107,15 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
               {call.tool.subject}
             </pre>
           )}
-          {subagent && call.tool?.subject && call.tool.subject.includes('\n') && <p className="whitespace-pre-wrap text-fg-2">{call.tool.subject}</p>}
+          {subagent && call.tool?.subject && call.tool.subject.includes('\n') && (
+            <p className="whitespace-pre-wrap text-fg-2">{call.tool.subject}</p>
+          )}
           {children}
-          {!subagent && step.result?.text.trim() && <pre className="max-h-40 overflow-auto font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">{step.result.text.trim()}</pre>}
+          {!subagent && result?.text.trim() && (
+            <pre className="max-h-40 overflow-auto font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">
+              {result.text.trim()}
+            </pre>
+          )}
           {said && (
             <div className="border-l-2 border-line pl-3 text-sm text-fg-1">
               <Markdown text={said} />
@@ -104,7 +129,9 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
               </div>
             </div>
           )}
-          {!children && subagent && !report && status === 'running' && <p className="text-fg-2">Its steps show here as it takes them.</p>}
+          {!children && subagent && !report && status === 'running' && (
+            <p className="text-fg-2">Its steps show here as it takes them.</p>
+          )}
         </div>
       )}
     </div>
@@ -123,7 +150,11 @@ export function RunningStrip({ titles }: { titles: (task: TaskState) => string }
   const still = running(tasks)
   if (!live || still.length === 0) return null
   return (
-    <section aria-label="still running beside the agent" data-testid="running-tasks" className="flex flex-col gap-1 rounded-md border border-line bg-elevated px-3 py-1.5 text-xs">
+    <section
+      aria-label="still running beside the agent"
+      data-testid="running-tasks"
+      className="flex flex-col gap-1 rounded-md border border-line bg-elevated px-3 py-1.5 text-xs"
+    >
       <span className="text-2xs font-medium text-fg-2">Still running beside the agent</span>
       {still.map((task) => (
         <div key={task.call ?? task.ids[0]} className="flex min-w-0 items-center gap-2">
@@ -138,14 +169,23 @@ export function RunningStrip({ titles }: { titles: (task: TaskState) => string }
             className="flex min-w-0 flex-1 items-center gap-2 text-fg-1 hover:text-accent-fg max-md:min-h-11"
           >
             <Spinner />
-            <span className="shrink-0 text-fg-2">{task.kind === 'subagent' ? 'Subagent' : task.kind === 'background' ? 'Background' : 'Task'}</span>
+            <span className="shrink-0 text-fg-2">
+              {task.kind === 'subagent' ? 'Subagent' : task.kind === 'background' ? 'Background' : 'Task'}
+            </span>
             <span className="min-w-0 flex-1 truncate">{titles(task)}</span>
             <span className="shrink-0 font-mono text-fg-3 tabular-nums" data-volatile>
               {duration(task.started_ms, now) ?? '0s'}
             </span>
           </a>
           {task.call && stoppable.calls.has(task.call) && (
-            <Button variant="ghost" size="sm" icon="stop" aria-label={`Stop ${titles(task)}`} title="End the command and what it started" onClick={() => stoppable.stop(task.call!)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="stop"
+              aria-label={`Stop ${titles(task)}`}
+              title="End the command and what it started"
+              onClick={() => stoppable.stop(task.call!)}
+            >
               Stop
             </Button>
           )}

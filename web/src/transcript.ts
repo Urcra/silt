@@ -93,7 +93,13 @@ export function rowsOf(entries: HistoryEntry[], turns: TurnInfo[]): Row[] {
     if (entry.kind === 'compaction') {
       const last = rows[rows.length - 1]
       if (!isMarker(entry) && last?.kind === 'compaction' && last.summary === null) last.summary = entry
-      else rows.push({ kind: 'compaction', key: `compaction-${entry.index}`, marker: isMarker(entry) ? entry : null, summary: isMarker(entry) ? null : entry })
+      else
+        rows.push({
+          kind: 'compaction',
+          key: `compaction-${entry.index}`,
+          marker: isMarker(entry) ? entry : null,
+          summary: isMarker(entry) ? null : entry,
+        })
       current = null
       continue
     }
@@ -128,7 +134,12 @@ export type Piece =
 function stands(step: ToolStep, tasks: Tasks): boolean {
   if (!step.call) return false
   const kind = kindOf(step.call)
-  return kind === 'question' || Boolean(proposedPlan(step.call)) || (kind === 'execute' && Boolean(step.result?.outcome?.failed)) || tasked(step, tasks)
+  return (
+    kind === 'question' ||
+    Boolean(proposedPlan(step.call)) ||
+    (kind === 'execute' && Boolean(step.result?.outcome?.failed)) ||
+    tasked(step, tasks)
+  )
 }
 
 /** Whether a step started a subagent or left a command running in the background. */
@@ -327,10 +338,16 @@ export function toolSummary(entries: HistoryEntry[], live = false, most = Infini
   // Past `most` kinds, the rest are only counted, so a busy turn still says it in a line.
   const counted = (parts: string[], counts: Map<string, Set<string>>) => {
     if (parts.length <= most) return parts.join(', ')
-    const rest = Object.keys(SAID).filter((kind) => counts.has(kind)).slice(most).reduce((sum, kind) => sum + counts.get(kind)!.size, 0)
+    const rest = Object.keys(SAID)
+      .filter((kind) => counts.has(kind))
+      .slice(most)
+      .reduce((sum, kind) => sum + counts.get(kind)!.size, 0)
     return [...parts.slice(0, most), `${rest} other ${rest === 1 ? 'step' : 'steps'}`].join(', ')
   }
-  const finished = counted(said(done, (kind) => SAID[kind]![0]), done)
+  const finished = counted(
+    said(done, (kind) => SAID[kind]![0]),
+    done,
+  )
   const underWay = said(doing, (kind) => DOING[kind]!).join(', ')
   const text = finished && underWay ? `${finished} · now ${underWay}` : finished || underWay
   if (!text) return entries.some((entry) => entry.kind === 'thinking') ? 'Thought' : 'Tool output'
@@ -352,7 +369,8 @@ export function stepsOf(entries: HistoryEntry[]): ToolStep[] {
   const steps: ToolStep[] = []
   for (const entry of entries) {
     // An agent that said more of a call later, its command for one, updates the call already shown.
-    const earlier = entry.kind === 'tool_call' && entry.tool ? steps.find((step) => step.call?.tool?.id === entry.tool!.id) : undefined
+    const earlier =
+      entry.kind === 'tool_call' && entry.tool ? steps.find((step) => step.call?.tool?.id === entry.tool!.id) : undefined
     if (earlier) {
       earlier.call = entry
       continue
@@ -368,7 +386,10 @@ export function stepsOf(entries: HistoryEntry[]): ToolStep[] {
       steps.push({ call: null, result: entry, images: [] })
     } else if (entry.kind === 'image') {
       // A result's pictures follow it.
-      const before = entries.slice(0, entries.indexOf(entry)).reverse().find((candidate) => candidate.kind !== 'image')
+      const before = entries
+        .slice(0, entries.indexOf(entry))
+        .reverse()
+        .find((candidate) => candidate.kind !== 'image')
       steps.find((step) => step.result !== null && step.result === before)?.images.push(entry)
     }
   }
@@ -420,3 +441,44 @@ export function shortCommand(command: string, max = 64): string {
   if (command.length <= max) return command
   return command.replace(/\bhttps?:\/\/\S+/g, (url) => `…/${url.replace(/\/+$/, '').split('/').pop()}`)
 }
+
+function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((item, index) => item === b[index])
+}
+
+function sameRow(a: Row, b: Row): boolean {
+  if (a.kind === 'origin') return b.kind === 'origin' && a.origin === b.origin && a.thread === b.thread && a.folded === b.folded
+  if (a.kind === 'compaction') return b.kind === 'compaction' && a.marker === b.marker && a.summary === b.summary
+  return (
+    b.kind === 'turn' &&
+    a.prompt === b.prompt &&
+    a.turn === b.turn &&
+    a.tokens === b.tokens &&
+    sameList(a.entries, b.entries) &&
+    sameList(a.images, b.images)
+  )
+}
+
+/**
+ * `after`, with each row that holds what it held in `before` kept as that row, and `before` itself when nothing
+ * changed: a row drawn once isn't drawn again because something was added below it.
+ */
+export function keepRows(before: readonly Row[] | undefined, after: Row[]): Row[] {
+  if (!before) return after
+  const byKey = new Map(before.map((row) => [row.key, row]))
+  let same = before.length === after.length
+  const kept = after.map((row, index) => {
+    const old = byKey.get(row.key)
+    const chosen = old && sameRow(old, row) ? old : row
+    if (chosen !== before[index]) same = false
+    return chosen
+  })
+  return same ? (before as Row[]) : kept
+}
+
+/** The entries `tasksOf` reads: task news and subagents' own. */
+export function taskEntries(entries: HistoryEntry[]): HistoryEntry[] {
+  return entries.filter((entry) => entry.task || entry.side)
+}
+
+export { sameList }

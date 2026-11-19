@@ -28,13 +28,23 @@ function transcript(cwd: string, session: string): string {
   const result = 'x'.repeat(15_000)
   for (let round = 0; round < ROUNDS; round++) {
     const tool = `toolu_${round}`
-    lines.push(JSON.stringify({ type: 'user', sessionId: session, cwd, message: { role: 'user', content: `prompt ${round}: look at the module` } }))
+    lines.push(
+      JSON.stringify({
+        type: 'user',
+        sessionId: session,
+        cwd,
+        message: { role: 'user', content: `prompt ${round}: look at the module` },
+      }),
+    )
     lines.push(
       JSON.stringify({
         type: 'assistant',
         sessionId: session,
         cwd,
-        message: { role: 'assistant', content: [{ type: 'tool_use', id: tool, name: 'Read', input: { file_path: `src/f${round}.rs` } }] },
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: tool, name: 'Read', input: { file_path: `src/f${round}.rs` } }],
+        },
       }),
     )
     lines.push(
@@ -114,9 +124,106 @@ test('a 2,000-message thread shows quickly and stays small', async ({ page }) =>
   await cdp.send('HeapProfiler.collectGarbage')
   const { usedSize } = (await cdp.send('Runtime.getHeapUsage')) as { usedSize: number }
   const heapMb = usedSize / 1024 / 1024
-  console.log(`web.thread: shown in ${shown.toFixed(0)} ms (budget ${SHOWN_BUDGET_MS}), heap ${heapMb.toFixed(0)} MB (budget ${HEAP_BUDGET_MB})`)
+  console.log(
+    `web.thread: shown in ${shown.toFixed(0)} ms (budget ${SHOWN_BUDGET_MS}), heap ${heapMb.toFixed(0)} MB (budget ${HEAP_BUDGET_MB})`,
+  )
   if (ENFORCED) {
     expect(shown, 'web.thread: shown').toBeLessThan(SHOWN_BUDGET_MS)
     expect(heapMb, 'web.thread: heap').toBeLessThan(HEAP_BUDGET_MB)
   }
+})
+
+/** Opens the long thread and waits for its whole history, the page landed at its end. */
+async function openLong(page: import('@playwright/test').Page) {
+  const { url } = fixture()
+  await page.goto(url)
+  await allThreads(page)
+  await page.getByRole('link', { name: thread }).click()
+  await expect(page.getByTestId('history').getByText(`reply ${ROUNDS - 1}: changed it`)).toBeVisible({ timeout: 60_000 })
+}
+
+/** The main thread's long tasks from here on, as the page reports them. */
+async function watchLongTasks(page: import('@playwright/test').Page) {
+  await page.evaluate(() => {
+    const held = window as unknown as { longTasks: number[] }
+    held.longTasks = []
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) held.longTasks.push(entry.duration)
+    }).observe({ type: 'longtask' })
+  })
+  return () => page.evaluate(() => (window as unknown as { longTasks: number[] }).longTasks)
+}
+
+// `web.scroll` (ADR 0101): scrolling the 2,000-message thread draws only the rows coming into view, so the page
+// keeps answering. Each scroll drew the whole page and parsed every row's Markdown again: 13 s blocked over 150
+// wheel notches on a long session.
+const SCROLL_BLOCKED_MS = CLOUD ? 1000 : 500
+
+test('a long thread scrolls without holding the page', async ({ page }) => {
+  test.setTimeout(180_000)
+  await openLong(page)
+  const history = page.getByTestId('history')
+  const box = await history.boundingBox()
+  await page.mouse.move((box?.x ?? 0) + (box?.width ?? 0) / 2, 400)
+  const longTasks = await watchLongTasks(page)
+  for (let notch = 0; notch < 100; notch++) {
+    await page.mouse.wheel(0, -600)
+    await page.waitForTimeout(16)
+  }
+  await page.waitForTimeout(300)
+  const blocked = (await longTasks()).reduce((total, duration) => total + duration, 0)
+  console.log(`web.scroll: ${blocked.toFixed(0)} ms blocked over 100 notches (budget ${SCROLL_BLOCKED_MS})`)
+  if (ENFORCED) expect(blocked, 'web.scroll: blocked').toBeLessThan(SCROLL_BLOCKED_MS)
+})
+
+// `web.change` (ADR 0101): a change to an open thread reads only what changed, not its whole history again, and a
+// page of history carries a long output only from its end.
+test('a change to an open thread reads only what changed', async ({ page }) => {
+  test.setTimeout(180_000)
+  await openLong(page)
+  await page.waitForLoadState('networkidle')
+  let read = 0
+  page.on('response', (response) => {
+    if (!response.url().includes('/history')) return
+    void response.body().then(
+      (body) => (read += body.length),
+      () => undefined,
+    )
+  })
+  const heard = page.waitForResponse((response) => response.url().includes('/comments') && response.request().method() === 'GET')
+  await page.evaluate(async (id) => {
+    const token = sessionStorage.getItem('silt-token')
+    await fetch(`/api/threads/${id}/comments`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'X-Silt-Request': '1', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on: { on: 'entry', index: 3 }, text: 'a comment' }),
+    })
+  }, thread)
+  // The comment is heard as a change to the thread, which the page reads again.
+  await heard
+  await page.waitForTimeout(1000)
+  await page.waitForLoadState('networkidle')
+  console.log(`web.change: ${read} bytes of history read again after one change`)
+  expect(read, 'web.change: history read again').toBeLessThan(64 * 1024)
+  const first = await page.evaluate(async (id) => {
+    const token = sessionStorage.getItem('silt-token')
+    const page = await fetch(`/api/threads/${id}/history?offset=0&limit=50`, { headers: { Authorization: `Bearer ${token}` } })
+    return (await page.text()).length
+  }, thread)
+  // 25 tool outputs of 15 KB each, carried 4 KB at most.
+  expect(first, "a page of history carries long outputs' ends").toBeLessThan(200 * 1024)
+})
+
+test('typing in the composer tells the others once it pauses, not at each key', async ({ page }) => {
+  test.setTimeout(180_000)
+  await openLong(page)
+  await page.waitForLoadState('networkidle')
+  let told = 0
+  page.on('request', (request) => {
+    if (request.url().includes('/presence')) told++
+  })
+  await page.getByRole('textbox').last().click()
+  await page.keyboard.type('a prompt typed at a steady pace, key by key', { delay: 30 })
+  await page.waitForTimeout(500)
+  expect(told, 'presence requests while typing').toBeLessThanOrEqual(4)
 })

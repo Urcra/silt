@@ -78,7 +78,9 @@ export function offReason(reason: OffReason): string {
     case 'clone_gone':
       return `The clone it was built from, ${reason.path}, is gone.`
     case 'built_off_main':
-      return reason.branch ? `It was built from \`${reason.branch}\`, not \`main\`.` : 'It was built from a detached HEAD, not `main`.'
+      return reason.branch
+        ? `It was built from \`${reason.branch}\`, not \`main\`.`
+        : 'It was built from a detached HEAD, not `main`.'
     case 'built_with_changes':
       return 'It was built with local changes, not from a clean `main`.'
     case 'off_main':

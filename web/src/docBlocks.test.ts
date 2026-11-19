@@ -3,7 +3,8 @@ import { docBlocks } from './docBlocks'
 
 describe("a doc's blocks", () => {
   it('are where they are in the source, prose editable and the rest kept as written', () => {
-    const text = '# Plan\n\nShip it on <?silt date 2026-11-16?>.\n\n```js\nx\n```\n\n<?silt chart {"type":"bar"} ?>\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- one\n- two\n'
+    const text =
+      '# Plan\n\nShip it on <?silt date 2026-11-16?>.\n\n```js\nx\n```\n\n<?silt chart {"type":"bar"} ?>\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- one\n- two\n'
     const blocks = docBlocks(text)
     expect(blocks.map((block) => text.slice(block.start, block.end))).toEqual([
       '# Plan',

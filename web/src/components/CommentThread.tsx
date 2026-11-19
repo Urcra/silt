@@ -29,7 +29,10 @@ export function CommentThread({
       <p>
         {comment.by}: {comment.text} {comment.resolved && '(resolved)'}
         {comment.sent && !comment.resolved && (
-          <span title="It went to the agent in a review; resolve it once it's addressed" className="ml-1.5 rounded-sm border border-line px-1 font-mono text-2xs text-fg-2">
+          <span
+            title="It went to the agent in a review; resolve it once it's addressed"
+            className="ml-1.5 rounded-sm border border-line px-1 font-mono text-2xs text-fg-2"
+          >
             Sent
           </span>
         )}
@@ -55,7 +58,13 @@ export function CommentThread({
             )
           }}
         >
-          <Input aria-label="reply" autoFocus className="flex-1 text-xs" value={text} onChange={(event) => setText(event.target.value)} />
+          <Input
+            aria-label="reply"
+            autoFocus
+            className="flex-1 text-xs"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+          />
           <Button type="submit" disabled={!text.trim()}>
             Reply
           </Button>

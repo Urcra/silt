@@ -51,14 +51,45 @@ function boxOf(item: Item | undefined): { x: number; y: number; w: number; h: nu
   return { x: item.x, y: item.y, w, h }
 }
 
+/** How often the pointer's place is told to the others. */
+const TELL_EVERY_MS = 50
+
 /** The most items an arrow's way goes round; past it, arrows go straight. */
 const ROUTED_AMONG = 200
 
+/** Arrows' ways worked out, by what they go round: drawing the board again for a pan or another person's cursor
+ * routed every arrow again. */
+const routes = new WeakMap<Item[], Map<string, [number, number][] | null>>()
+
+/** What arrows go round where the board is now, the same array while nothing on it moves. */
+const solids = new WeakMap<Item[], { moving: unknown; resizing: unknown; solid: Item[] }>()
+
+function solidOf(items: Item[], moving: unknown, resizing: unknown, placed: (item: Item) => Item): Item[] {
+  const kept = solids.get(items)
+  if (kept && kept.moving === moving && kept.resizing === resizing) return kept.solid
+  const solid = items.filter((item) => item.type === 'block' || item.type === 'image').map(placed)
+  solids.set(items, { moving, resizing, solid })
+  return solid
+}
+
 /** An arrow's way from the edge of one item to the edge of the other, round the blocks and images between. */
 function ends(from: Item | undefined, to: Item | undefined, among: Item[]): [number, number][] | null {
+  const known = routes.get(among) ?? new Map<string, [number, number][] | null>()
+  routes.set(among, known)
+  const key = `${from?.id ?? ''}>${to?.id ?? ''}:${from?.x},${from?.y},${to?.x},${to?.y}`
+  if (known.has(key)) return known.get(key)!
+  const way = routed(from, to, among)
+  known.set(key, way)
+  return way
+}
+
+function routed(from: Item | undefined, to: Item | undefined, among: Item[]): [number, number][] | null {
   const [a, b] = [boxOf(from), boxOf(to)]
   if (!a || !b) return null
-  const others = among.length > ROUTED_AMONG ? [] : among.filter((item) => item.id !== from?.id && item.id !== to?.id).flatMap((item) => boxOf(item) ?? [])
+  const others =
+    among.length > ROUTED_AMONG
+      ? []
+      : among.filter((item) => item.id !== from?.id && item.id !== to?.id).flatMap((item) => boxOf(item) ?? [])
   return route(a, b, others as Box[])
 }
 
@@ -77,7 +108,17 @@ function base64Of(file: Blob): Promise<string> {
 }
 
 /** An image on the board, read from the page's assets. */
-function BoardImage({ thread, artifact, item, onDown }: { thread: string; artifact: string; item: Item; onDown: (event: ReactPointerEvent) => void }) {
+function BoardImage({
+  thread,
+  artifact,
+  item,
+  onDown,
+}: {
+  thread: string
+  artifact: string
+  item: Item
+  onDown: (event: ReactPointerEvent) => void
+}) {
   const read = useQuery({
     queryKey: ['page-asset', thread, artifact, item.asset],
     queryFn: () => api.pageAsset(thread, artifact, item.asset ?? ''),
@@ -85,7 +126,8 @@ function BoardImage({ thread, artifact, item, onDown }: { thread: string; artifa
     staleTime: Infinity,
   })
   const [w, h] = sizeOf(item)
-  const shown = read.data && IMAGE_TYPES.includes(read.data.media_type) ? `data:${read.data.media_type};base64,${read.data.data}` : null
+  const shown =
+    read.data && IMAGE_TYPES.includes(read.data.media_type) ? `data:${read.data.media_type};base64,${read.data.data}` : null
   return (
     <g onPointerDown={onDown} className="cursor-grab" data-item={item.id} data-testid="whiteboard-image">
       {shown ? (
@@ -164,6 +206,7 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [peers, setPeers] = useState<PeerPresence[]>([])
   const room = useRef<RoomSocket | null>(null)
+  const toldAt = useRef(-Infinity)
   const drag = useRef<
     | { kind: 'pan'; x: number; y: number; from: typeof view }
     | { kind: 'item'; id: string; x: number; y: number; carried: string[] }
@@ -177,15 +220,27 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   useEffect(() => {
     const socket = new RoomSocket(thread, artifact)
     room.current = socket
+    // Others' cursors are drawn once a frame, however fast they move.
+    let frame: number | null = null
+    let latest: PeerPresence[] = []
     const off = socket.listen((heard) => {
-      if (heard.event === 'peers') setPeers(heard.peers.filter((peer) => peer.peer !== socket.me))
+      if (heard.event !== 'peers') return
+      latest = heard.peers.filter((peer) => peer.peer !== socket.me)
+      frame ??= requestAnimationFrame(() => {
+        frame = null
+        setPeers(latest)
+      })
     })
     return () => {
       off()
+      if (frame !== null) cancelAnimationFrame(frame)
       socket.close()
     }
   }, [thread, artifact])
-  const items = useMemo(() => (listed.data ?? []).map((doc) => doc.data).filter((item) => item && typeof item.id === 'string'), [listed.data])
+  const items = useMemo(
+    () => (listed.data ?? []).map((doc) => doc.data).filter((item) => item && typeof item.id === 'string'),
+    [listed.data],
+  )
   // The board is framed in the panel, as a canvas fits its boards, and again when the panel changes size, such as going
   // to the full view, until the person pans or zooms.
   const moved = useRef(false)
@@ -253,7 +308,10 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   }
   const remove = async (id: string) => {
     // An arrow to or from it goes with it.
-    const gone = [id, ...items.filter((item) => item.type === 'arrow' && (item.from === id || item.to === id)).map((item) => item.id)]
+    const gone = [
+      id,
+      ...items.filter((item) => item.type === 'arrow' && (item.from === id || item.to === id)).map((item) => item.id),
+    ]
     try {
       await api.pageData(thread, artifact, { op: 'batch', writes: gone.map((each) => ({ op: 'delete', path: `items/${each}` })) })
       setSelected(null)
@@ -294,10 +352,13 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
     const section = id ? byId.get(id) : undefined
     const box = section?.type === 'section' ? boxOf(section) : null
     const carried = box
-      ? items.filter((other) => other.id !== id && other.type !== 'arrow' && other.type !== 'stroke').filter((other) => {
-          const inner = boxOf(other)
-          return inner !== null && within(inner, box)
-        }).map((other) => other.id)
+      ? items
+          .filter((other) => other.id !== id && other.type !== 'arrow' && other.type !== 'stroke')
+          .filter((other) => {
+            const inner = boxOf(other)
+            return inner !== null && within(inner, box)
+          })
+          .map((other) => other.id)
       : []
     drag.current = id ? { kind: 'item', id, x, y, carried } : { kind: 'pan', x: event.clientX, y: event.clientY, from: view }
   }
@@ -310,15 +371,19 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   }
   const move = (event: ReactPointerEvent) => {
     const [x, y] = at(event)
-    room.current?.presence({ cursor: [Math.round(x), Math.round(y)], dragging: moving?.id ?? null })
+    // Where the pointer is goes to the others at most every 50 ms, not at each move the mouse reports.
+    if (event.timeStamp - toldAt.current >= TELL_EVERY_MS) {
+      toldAt.current = event.timeStamp
+      room.current?.presence({ cursor: [Math.round(x), Math.round(y)], dragging: moving?.id ?? null })
+    }
     const now = drag.current
     if (!now) return
     if (now.kind === 'pan') {
       moved.current = true
       setView({ ...now.from, x: now.from.x + event.clientX - now.x, y: now.from.y + event.clientY - now.y })
-    }
-    else if (now.kind === 'item') setMoving({ id: now.id, dx: x - now.x, dy: y - now.y, carried: now.carried })
-    else if (now.kind === 'resize') setResizing({ id: now.id, w: Math.max(MIN_SIZE, now.w + x - now.x), h: Math.max(MIN_SIZE, now.h + y - now.y) })
+    } else if (now.kind === 'item') setMoving({ id: now.id, dx: x - now.x, dy: y - now.y, carried: now.carried })
+    else if (now.kind === 'resize')
+      setResizing({ id: now.id, w: Math.max(MIN_SIZE, now.w + x - now.x), h: Math.max(MIN_SIZE, now.h + y - now.y) })
     else
       setStroke((points) => {
         if (!points || points.length >= STROKE_POINTS) return points
@@ -334,7 +399,15 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
       if (item && (moving.dx !== 0 || moving.dy !== 0)) {
         const moved = [item.id, ...moving.carried].flatMap((id) => {
           const one = byId.get(id)
-          return one ? [{ op: 'update', path: `items/${id}`, fields: { x: Math.round((one.x ?? 0) + moving.dx), y: Math.round((one.y ?? 0) + moving.dy) } }] : []
+          return one
+            ? [
+                {
+                  op: 'update',
+                  path: `items/${id}`,
+                  fields: { x: Math.round((one.x ?? 0) + moving.dx), y: Math.round((one.y ?? 0) + moving.dy) },
+                },
+              ]
+            : []
         })
         void (moved.length === 1 ? patch(item.id, moved[0].fields) : batch(moved))
       }
@@ -350,12 +423,13 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
   }
   const placed = (item: Item): Item => {
     let shown = item
-    if (moving && (moving.id === item.id || moving.carried.includes(item.id))) shown = { ...shown, x: (item.x ?? 0) + moving.dx, y: (item.y ?? 0) + moving.dy }
+    if (moving && (moving.id === item.id || moving.carried.includes(item.id)))
+      shown = { ...shown, x: (item.x ?? 0) + moving.dx, y: (item.y ?? 0) + moving.dy }
     if (resizing?.id === item.id) shown = { ...shown, w: resizing.w, h: resizing.h }
     return shown
   }
   // What an arrow's way goes round, where they are now.
-  const solid = items.filter((item) => item.type === 'block' || item.type === 'image').map(placed)
+  const solid = solidOf(items, moving, resizing, placed)
   const visibleCorner = (): [number, number] => [Math.round((-view.x + 80) / view.scale), Math.round((-view.y + 80) / view.scale)]
   const addNote = () => {
     const [x, y] = visibleCorner()
@@ -379,7 +453,15 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
       })
       const scale = Math.min(1, 320 / Math.max(size[0], size[1]))
       const [x, y] = visibleCorner()
-      await write({ id: newId('i'), type: 'image', asset: added.id, x, y, w: Math.round(size[0] * scale), h: Math.round(size[1] * scale) })
+      await write({
+        id: newId('i'),
+        type: 'image',
+        asset: added.id,
+        x,
+        y,
+        w: Math.round(size[0] * scale),
+        h: Math.round(size[1] * scale),
+      })
     } catch (failure) {
       toast(message(failure), 'danger')
     }
@@ -490,91 +572,151 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
             </marker>
           </defs>
           <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`} className="text-fg-2" data-board>
-            {items.filter((item) => item.type === 'section').map((raw) => {
-              const item = placed(raw)
-              const [w, h] = sizeOf(item)
-              return (
-                <g key={item.id} onPointerDown={(event) => down(event, item.id)} data-item={item.id}>
-                  <rect x={item.x} y={item.y} width={w} height={h} rx={12} fill="none" stroke={marked(item.id) ? 'var(--color-accent, #b86a2b)' : 'currentColor'} strokeDasharray="6 6" />
-                  <text x={(item.x ?? 0) + 12} y={(item.y ?? 0) + 24} fontSize={16} fill="currentColor">
-                    {item.text}
-                  </text>
-                </g>
-              )
-            })}
-            {items.filter((item) => item.type === 'image').map((raw) => (
-              <BoardImage key={raw.id} thread={thread} artifact={artifact} item={placed(raw)} onDown={(event) => down(event, raw.id)} />
-            ))}
-            {items.filter((item) => item.type === 'arrow').map((item) => {
-              const way = ends(placed(byId.get(item.from ?? '') ?? ({} as Item)), placed(byId.get(item.to ?? '') ?? ({} as Item)), solid)
-              if (!way) return null
-              const points = way.map(([x, y]) => `${x},${y}`).join(' ')
-              // The label sits at the middle of the way's middle stretch.
-              const middle = Math.floor((way.length - 1) / 2)
-              const [from, to] = [way[middle], way[middle + 1]]
-              return (
-                <g key={item.id} onPointerDown={(event) => down(event, item.id)} data-testid="whiteboard-arrow">
-                  {/* A wider line no one sees, so an arrow is easy to pick. */}
-                  <polyline points={points} fill="none" stroke="transparent" strokeWidth={12} />
-                  <polyline points={points} fill="none" strokeLinejoin="round" stroke={marked(item.id) ? 'var(--color-accent, #b86a2b)' : 'currentColor'} strokeWidth={2} markerEnd="url(#whiteboard-arrow)" />
-                  {item.label && (
-                    <text x={(from[0] + to[0]) / 2} y={(from[1] + to[1]) / 2 - 6} fontSize={13} textAnchor="middle" fill="currentColor">
-                      {item.label}
+            {items
+              .filter((item) => item.type === 'section')
+              .map((raw) => {
+                const item = placed(raw)
+                const [w, h] = sizeOf(item)
+                return (
+                  <g key={item.id} onPointerDown={(event) => down(event, item.id)} data-item={item.id}>
+                    <rect
+                      x={item.x}
+                      y={item.y}
+                      width={w}
+                      height={h}
+                      rx={12}
+                      fill="none"
+                      stroke={marked(item.id) ? 'var(--color-accent, #b86a2b)' : 'currentColor'}
+                      strokeDasharray="6 6"
+                    />
+                    <text x={(item.x ?? 0) + 12} y={(item.y ?? 0) + 24} fontSize={16} fill="currentColor">
+                      {item.text}
                     </text>
-                  )}
-                </g>
-              )
-            })}
-            {items.filter((item) => item.type === 'stroke').map((item) => (
+                  </g>
+                )
+              })}
+            {items
+              .filter((item) => item.type === 'image')
+              .map((raw) => (
+                <BoardImage
+                  key={raw.id}
+                  thread={thread}
+                  artifact={artifact}
+                  item={placed(raw)}
+                  onDown={(event) => down(event, raw.id)}
+                />
+              ))}
+            {items
+              .filter((item) => item.type === 'arrow')
+              .map((item) => {
+                const way = ends(
+                  placed(byId.get(item.from ?? '') ?? ({} as Item)),
+                  placed(byId.get(item.to ?? '') ?? ({} as Item)),
+                  solid,
+                )
+                if (!way) return null
+                const points = way.map(([x, y]) => `${x},${y}`).join(' ')
+                // The label sits at the middle of the way's middle stretch.
+                const middle = Math.floor((way.length - 1) / 2)
+                const [from, to] = [way[middle], way[middle + 1]]
+                return (
+                  <g key={item.id} onPointerDown={(event) => down(event, item.id)} data-testid="whiteboard-arrow">
+                    {/* A wider line no one sees, so an arrow is easy to pick. */}
+                    <polyline points={points} fill="none" stroke="transparent" strokeWidth={12} />
+                    <polyline
+                      points={points}
+                      fill="none"
+                      strokeLinejoin="round"
+                      stroke={marked(item.id) ? 'var(--color-accent, #b86a2b)' : 'currentColor'}
+                      strokeWidth={2}
+                      markerEnd="url(#whiteboard-arrow)"
+                    />
+                    {item.label && (
+                      <text
+                        x={(from[0] + to[0]) / 2}
+                        y={(from[1] + to[1]) / 2 - 6}
+                        fontSize={13}
+                        textAnchor="middle"
+                        fill="currentColor"
+                      >
+                        {item.label}
+                      </text>
+                    )}
+                  </g>
+                )
+              })}
+            {items
+              .filter((item) => item.type === 'stroke')
+              .map((item) => (
+                <polyline
+                  key={item.id}
+                  points={(item.points ?? []).map(([x, y]) => `${x},${y}`).join(' ')}
+                  fill="none"
+                  stroke={marked(item.id) ? 'var(--color-accent, #b86a2b)' : 'currentColor'}
+                  strokeWidth={3}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  onPointerDown={(event) => down(event, item.id)}
+                  data-testid="whiteboard-stroke"
+                />
+              ))}
+            {stroke && (
               <polyline
-                key={item.id}
-                points={(item.points ?? []).map(([x, y]) => `${x},${y}`).join(' ')}
+                points={stroke.map(([x, y]) => `${x},${y}`).join(' ')}
                 fill="none"
-                stroke={marked(item.id) ? 'var(--color-accent, #b86a2b)' : 'currentColor'}
+                stroke="currentColor"
                 strokeWidth={3}
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                onPointerDown={(event) => down(event, item.id)}
-                data-testid="whiteboard-stroke"
               />
-            ))}
-            {stroke && <polyline points={stroke.map(([x, y]) => `${x},${y}`).join(' ')} fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" />}
-            {items.filter((item) => item.type === 'block').map((raw) => {
-              const item = placed(raw)
-              const [w, h] = sizeOf(item)
-              return (
-                <g
-                  key={item.id}
-                  onPointerDown={(event) => down(event, item.id)}
-                  onDoubleClick={() => setEditing({ id: item.id, text: item.text ?? '' })}
-                  className="cursor-grab"
-                  data-item={item.id}
-                  data-testid="whiteboard-block"
-                >
-                  <rect
-                    x={item.x}
-                    y={item.y}
-                    width={w}
-                    height={h}
-                    rx={6}
-                    fill={COLORS[item.color ?? 'yellow'] ?? COLORS.yellow}
-                    stroke={marked(item.id) ? 'var(--color-accent, #b86a2b)' : 'rgba(0,0,0,0.15)'}
-                    strokeWidth={marked(item.id) ? 2 : 1}
-                  />
-                  <foreignObject x={item.x} y={item.y} width={w} height={h}>
-                    <div className="h-full w-full overflow-hidden p-2 text-[13px] leading-snug whitespace-pre-wrap text-[#1d1d1f]">{item.text}</div>
-                  </foreignObject>
-                </g>
-              )
-            })}
-            {items.filter((item) => item.type === 'block' || item.type === 'section' || item.type === 'image').map((item) => (
-              <g key={`handle-${item.id}`}>{handle(item)}</g>
-            ))}
+            )}
+            {items
+              .filter((item) => item.type === 'block')
+              .map((raw) => {
+                const item = placed(raw)
+                const [w, h] = sizeOf(item)
+                return (
+                  <g
+                    key={item.id}
+                    onPointerDown={(event) => down(event, item.id)}
+                    onDoubleClick={() => setEditing({ id: item.id, text: item.text ?? '' })}
+                    className="cursor-grab"
+                    data-item={item.id}
+                    data-testid="whiteboard-block"
+                  >
+                    <rect
+                      x={item.x}
+                      y={item.y}
+                      width={w}
+                      height={h}
+                      rx={6}
+                      fill={COLORS[item.color ?? 'yellow'] ?? COLORS.yellow}
+                      stroke={marked(item.id) ? 'var(--color-accent, #b86a2b)' : 'rgba(0,0,0,0.15)'}
+                      strokeWidth={marked(item.id) ? 2 : 1}
+                    />
+                    <foreignObject x={item.x} y={item.y} width={w} height={h}>
+                      <div className="h-full w-full overflow-hidden p-2 text-[13px] leading-snug whitespace-pre-wrap text-[#1d1d1f]">
+                        {item.text}
+                      </div>
+                    </foreignObject>
+                  </g>
+                )
+              })}
+            {items
+              .filter((item) => item.type === 'block' || item.type === 'section' || item.type === 'image')
+              .map((item) => (
+                <g key={`handle-${item.id}`}>{handle(item)}</g>
+              ))}
             {peers.map((peer) => {
               const cursor = (peer.state as { cursor?: [number, number] } | null)?.cursor
               if (!cursor) return null
               return (
-                <g key={peer.peer} transform={`translate(${cursor[0]} ${cursor[1]})`} data-testid="whiteboard-cursor" pointerEvents="none">
+                <g
+                  key={peer.peer}
+                  transform={`translate(${cursor[0]} ${cursor[1]})`}
+                  data-testid="whiteboard-cursor"
+                  pointerEvents="none"
+                >
                   <path d="M0,0 L0,16 L4,12 L8,20 L11,19 L7,11 L13,11 z" fill="var(--color-accent, #b86a2b)" />
                   <text x={14} y={22} fontSize={12} fill="currentColor">
                     {peer.kind === 'agent' ? 'agent' : peer.user.slice(0, 6)}
@@ -649,7 +791,13 @@ export function WhiteboardView({ thread, artifact, title }: { thread: string; ar
           </Button>
         )}
         <span className="px-1 text-xs text-fg-2">
-          {tool === 'connect' ? (connecting ? 'Now pick where it goes' : 'Pick where an arrow starts') : peers.length > 0 ? `${peers.length + 1} here` : 'Only you'}
+          {tool === 'connect'
+            ? connecting
+              ? 'Now pick where it goes'
+              : 'Pick where an arrow starts'
+            : peers.length > 0
+              ? `${peers.length + 1} here`
+              : 'Only you'}
         </span>
       </div>
       <div className="absolute right-2 bottom-2 flex items-center gap-1 rounded-md border border-line bg-elevated p-1 shadow-overlay">

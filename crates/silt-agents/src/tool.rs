@@ -205,6 +205,7 @@ impl Shown {
             plan: self.plan,
             side: self.side,
             task: self.task,
+            cut: None,
         }
     }
 }

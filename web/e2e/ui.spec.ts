@@ -1,6 +1,24 @@
 import { expect, test } from '@playwright/test'
 import { allThreads, fixture, silt } from './fixture'
 
+test('the prompt box undoes deleted text and restores its selection', async ({ page }) => {
+  await page.goto(fixture().url)
+  const prompt = page.getByRole('textbox', { name: 'first prompt' })
+  await prompt.fill('Please fix the bug')
+  await prompt.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(7, 15))
+  await prompt.press('Backspace')
+  await expect(prompt).toHaveValue('Please bug')
+  await prompt.press('ControlOrMeta+z')
+  await expect(prompt).toHaveValue('Please fix the bug')
+  expect(await prompt.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd])).toEqual([7, 15])
+  await prompt.press('ControlOrMeta+Shift+Z')
+  await expect(prompt).toHaveValue('Please bug')
+  await prompt.press('ControlOrMeta+a')
+  await prompt.press('Backspace')
+  await prompt.press('ControlOrMeta+z')
+  await expect(prompt).toHaveValue('Please bug')
+})
+
 test('a thread page shows what changes elsewhere without a reload', async ({ page }) => {
   const { url, thread } = fixture()
   await page.goto(url)
@@ -9,6 +27,47 @@ test('a thread page shows what changes elsewhere without a reload', async ({ pag
   await expect(page.getByText('Please add a farewell line to main')).toBeVisible()
   silt('comment', thread, '--entry', '0', 'said from a terminal')
   await expect(page.getByText(/: said from a terminal/)).toBeVisible()
+})
+
+test("the sidebar's and the changes panel's edges drag, and their widths are kept", async ({ page }) => {
+  const { url, thread } = fixture()
+  await page.setViewportSize({ width: 1600, height: 900 })
+  await page.goto(url)
+  await allThreads(page)
+  await page.getByRole('link', { name: thread }).click()
+  await expect(page.getByRole('region', { name: 'changes' }).getByTestId('diff')).toBeVisible()
+  const sidebar = page.getByRole('complementary').first()
+  const details = page.getByRole('complementary', { name: 'thread details' })
+  const width = async (panel: typeof sidebar) => (await panel.boundingBox())?.width ?? 0
+  // Level with a link, in moves past the browser's drag threshold: once the sidebar grows under where the press began,
+  // the browser could drag the link instead, which cancels the pointer.
+  const link = await sidebar.getByRole('link', { name: 'Inbox' }).boundingBox()
+  const y = (link?.y ?? 200) + (link?.height ?? 0) / 2
+  const drag = async (name: string, by: number) => {
+    const box = await page.getByRole('separator', { name }).boundingBox()
+    if (!box) throw new Error(`no ${name}`)
+    await page.mouse.move(box.x + box.width / 2, y)
+    await page.mouse.down()
+    await page.mouse.move(box.x + box.width / 2 + by, y, { steps: 4 })
+    await page.mouse.up()
+  }
+  const sidebarBefore = await width(sidebar)
+  await drag('resize projects', 80)
+  await expect.poll(() => width(sidebar)).toBe(sidebarBefore + 80)
+  const detailsBefore = await width(details)
+  await drag('resize thread details', -100)
+  await expect.poll(() => width(details)).toBe(detailsBefore + 100)
+  await page.getByRole('separator', { name: 'resize projects' }).press('ArrowLeft')
+  await expect.poll(() => width(sidebar)).toBe(sidebarBefore + 64)
+
+  await page.reload()
+  await expect(page.getByRole('region', { name: 'changes' }).getByTestId('diff')).toBeVisible()
+  expect(await width(sidebar)).toBe(sidebarBefore + 64)
+  expect(await width(details)).toBe(detailsBefore + 100)
+  await expect(page.getByRole('separator', { name: 'resize projects' })).toHaveAttribute(
+    'aria-valuenow',
+    String(sidebarBefore + 64),
+  )
 })
 
 test('lists threads and searches across compaction', async ({ page }) => {

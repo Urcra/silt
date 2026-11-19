@@ -42,7 +42,12 @@ describe('the capabilities a page is served', () => {
     const declined = new Broker({ thread: 't', artifact, emit: () => undefined }, handlersFor('t', artifact, holder(false)))
     const answer = await declined.answer({ id: 1, cap: 'downloads', method: 'save', args: { filename: 'a.txt', data: 'hi' } })
     expect(answer).toMatchObject({ ok: false, error: { code: 'not_granted' } })
-    const large = await declined.answer({ id: 2, cap: 'downloads', method: 'save', args: { filename: 'a.bin', data: new Uint8Array(17 << 20) } })
+    const large = await declined.answer({
+      id: 2,
+      cap: 'downloads',
+      method: 'save',
+      args: { filename: 'a.bin', data: new Uint8Array(17 << 20) },
+    })
     expect(large).toMatchObject({ ok: false, error: { code: 'too_large' } })
   })
 
@@ -55,21 +60,33 @@ describe('the capabilities a page is served', () => {
       ok: false,
       error: { code: 'refused' },
     })
-    expect(await broker.answer({ id: 3, cap: 'artifact', method: 'version', args: null })).toEqual({ ok: true, value: { version: 3 } })
+    expect(await broker.answer({ id: 3, cap: 'artifact', method: 'version', args: null })).toEqual({
+      ok: true,
+      value: { version: 3 },
+    })
   })
 
   it('comments as the viewer once they agree, and only replies to comments on this artifact', async () => {
     const added: string[] = []
-    const broker = new Broker({ thread: 't', artifact, emit: () => undefined }, handlersFor('t', artifact, holder(true, [], added)))
+    const broker = new Broker(
+      { thread: 't', artifact, emit: () => undefined },
+      handlersFor('t', artifact, holder(true, [], added)),
+    )
     const made = await broker.answer({ id: 1, cap: 'comments', method: 'add', args: { text: 'Move this up', quote: 'Q3 row' } })
     expect(made).toEqual({ ok: true, value: { id: 'c1' } })
     expect(added).toEqual(['Q3 row: Move this up'])
     const foreign = await broker.answer({ id: 2, cap: 'comments', method: 'reply', args: { id: 'elsewhere', text: 'hi' } })
     expect(foreign).toMatchObject({ ok: false, error: { code: 'refused' } })
     const declined = new Broker({ thread: 't', artifact, emit: () => undefined }, handlersFor('t', artifact, holder(false)))
-    expect(await declined.answer({ id: 3, cap: 'comments', method: 'add', args: { text: 'no' } })).toMatchObject({ ok: false, error: { code: 'not_granted' } })
+    expect(await declined.answer({ id: 3, cap: 'comments', method: 'add', args: { text: 'no' } })).toMatchObject({
+      ok: false,
+      error: { code: 'not_granted' },
+    })
     const composerOnly: ArtifactView = { ...artifact, capabilities: { comments: { composer_only: true } } }
-    const opener = new Broker({ thread: 't', artifact: composerOnly, emit: () => undefined }, handlersFor('t', composerOnly, holder(true)))
+    const opener = new Broker(
+      { thread: 't', artifact: composerOnly, emit: () => undefined },
+      handlersFor('t', composerOnly, holder(true)),
+    )
     expect(await opener.answer({ id: 4, cap: 'comments', method: 'add', args: { text: 'no' } })).toMatchObject({ ok: false })
   })
 })
@@ -78,8 +95,14 @@ describe('the built-in permissions', () => {
   it('is served to every page, declared or not', async () => {
     const plain: ArtifactView = { ...artifact, capabilities: null }
     const broker = new Broker({ thread: 't', artifact: plain, emit: () => undefined }, handlersFor('t', plain, holder(true)))
-    expect(await broker.answer({ id: 1, cap: 'silt', method: 'use', args: { name: 'permissions' } })).toMatchObject({ ok: true, value: { available: true } })
-    expect(await broker.answer({ id: 2, cap: 'silt', method: 'use', args: { name: 'sample' } })).toMatchObject({ ok: true, value: { available: false } })
+    expect(await broker.answer({ id: 1, cap: 'silt', method: 'use', args: { name: 'permissions' } })).toMatchObject({
+      ok: true,
+      value: { available: true },
+    })
+    expect(await broker.answer({ id: 2, cap: 'silt', method: 'use', args: { name: 'sample' } })).toMatchObject({
+      ok: true,
+      value: { available: false },
+    })
   })
   it('says a capability that never asks is granted wherever it is served', async () => {
     vi.spyOn(api, 'artifactGrants').mockResolvedValue({})
@@ -96,7 +119,12 @@ describe('the people a page sees', () => {
     const plain: ArtifactView = { ...artifact, capabilities: { user: {} } }
     const named: ArtifactView = { ...artifact, capabilities: { user: { scopes: ['profile'] } } }
     const ask = (view: ArtifactView, id: number, method: string, args: unknown) =>
-      new Broker({ thread: 't', artifact: view, emit: () => undefined }, handlersFor('t', view, holder(true))).answer({ id, cap: 'user', method, args })
+      new Broker({ thread: 't', artifact: view, emit: () => undefined }, handlersFor('t', view, holder(true))).answer({
+        id,
+        cap: 'user',
+        method,
+        args,
+      })
     expect(await ask(plain, 1, 'profiles', { ids: ['p2'] })).toEqual({ ok: true, value: { p2: { id: 'p2', name: '' } } })
     expect(await ask(plain, 2, 'search', { query: 'gr' })).toMatchObject({ ok: false })
     expect(await ask(named, 3, 'profiles', { ids: ['p2'] })).toEqual({ ok: true, value: { p2: { id: 'p2', name: 'Grace' } } })

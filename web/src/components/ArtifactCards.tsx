@@ -52,7 +52,16 @@ function sizeOf(bytes: number): string {
 }
 
 export function KindIcon({ kind, className }: { kind: string; className?: string }) {
-  const name = kind === 'image' || kind === 'svg' || kind === 'canvas' ? 'image' : kind === 'mermaid' ? 'graph' : kind === 'slides' ? 'play' : kind === 'data' ? 'list' : 'file'
+  const name =
+    kind === 'image' || kind === 'svg' || kind === 'canvas'
+      ? 'image'
+      : kind === 'mermaid'
+        ? 'graph'
+        : kind === 'slides'
+          ? 'play'
+          : kind === 'data'
+            ? 'list'
+            : 'file'
   return <Icon name={name} className={className} />
 }
 

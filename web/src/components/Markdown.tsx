@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { memo, useDeferredValue, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { languageOf, useHighlighted } from '../highlight'
 import { COMPONENTS } from './markdownParts'
+import { markdownBlocks } from '../markdownBlocks'
 import { Icon, cx } from '../ui'
 
 /** Highlighted code, line by line, as it would be in an editor. */
@@ -13,7 +14,15 @@ export function Code({ code, language, className }: { code: string; language: st
       {lines
         ? lines.map((line, index) => (
             <span key={index}>
-              {line.map((token, at) => (token.className ? <span key={at} className={token.className}>{token.text}</span> : token.text))}
+              {line.map((token, at) =>
+                token.className ? (
+                  <span key={at} className={token.className}>
+                    {token.text}
+                  </span>
+                ) : (
+                  token.text
+                ),
+              )}
               {index < lines.length - 1 && '\n'}
             </span>
           ))
@@ -68,12 +77,43 @@ export function CodeBlock({ text, language }: { text: string; language: string }
  * A message as Markdown. Its HTML is shown as text and its images by name
  * only: an agent's words are other people's content (M9's review).
  */
-export function Markdown({ text, className }: { text: string; className?: string }) {
+export const Markdown = memo(function Markdown({ text, className }: { text: string; className?: string }) {
   return (
-    <div className={cx('min-w-0 text-sm leading-[1.6] break-words text-fg-1 [&>:first-child]:mt-0 [&>:last-child]:mb-0', className)}>
+    <div
+      className={cx('min-w-0 text-sm leading-[1.6] break-words text-fg-1 [&>:first-child]:mt-0 [&>:last-child]:mb-0', className)}
+    >
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS} skipHtml>
         {text}
       </ReactMarkdown>
+    </div>
+  )
+})
+
+/** One block of a message being streamed, parsed again only when its own text changes. */
+const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS} skipHtml>
+      {text}
+    </ReactMarkdown>
+  )
+})
+
+/**
+ * A message as it streams in, as Markdown: block by block, so each word parses only the block it ends, not
+ * everything said so far. Parsing the whole reply at each word made a long one fall far behind the agent.
+ */
+export function StreamingMarkdown({ text, className }: { text: string; className?: string }) {
+  // Behind the keys typed and the page scrolled, when there's both to do.
+  const shown = useDeferredValue(text)
+  const blocks = markdownBlocks(shown)
+  return (
+    <div
+      className={cx('min-w-0 text-sm leading-[1.6] break-words text-fg-1 [&>:first-child]:mt-0 [&>:last-child]:mb-0', className)}
+    >
+      {blocks.map((block, index) => (
+        // Blocks only grow at the end, so each keeps its place.
+        <MarkdownBlock key={index} text={block} />
+      ))}
     </div>
   )
 }

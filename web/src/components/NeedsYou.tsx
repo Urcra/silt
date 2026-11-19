@@ -39,7 +39,7 @@ function Card({ tone, kind, label, children }: { tone: DotTone; kind: string; la
 /** A merge request waiting on the person: its guide, how much is seen, and approving it. */
 function ReviewCard({ thread, mr }: { thread: ThreadSummary; mr: MrSummary }) {
   const queries = useQueryClient()
-  const details = useQuery({ queryKey: keys.mr(mr.id), queryFn: () => api.mergeRequest(mr.id) })
+  const details = useQuery({ queryKey: keys.mrBrief(mr.id), queryFn: () => api.mergeRequest(mr.id, {}, true) })
   const files = details.data?.files ?? []
   const seen = files.filter((file) => file.seen).length
   const guide = details.data?.guide
@@ -110,7 +110,8 @@ function AgentCard({ thread, review }: { thread: ThreadSummary; review: MrSummar
   const label = `${title} needs you`
   const asked = status?.permissions[0]
   if (thread.review && review && !asked && status?.state !== 'awaiting_input') return <ReviewCard thread={thread} mr={review} />
-  const where = thread.location === 'remote' ? 'on the server' : thread.location === 'moved' ? 'on another device' : `on ${device}`
+  const where =
+    thread.location === 'remote' ? 'on the server' : thread.location === 'moved' ? 'on another device' : `on ${device}`
   const meta = [status?.agent ?? thread.agent, title, where].filter(Boolean).join(' · ')
   if (asked) {
     const [first, second, ...rest] = asked.options
@@ -156,7 +157,11 @@ function AgentCard({ thread, review }: { thread: ThreadSummary; review: MrSummar
       </Card>
     )
   return (
-    <Card tone={thread.agent_state === 'error' ? 'danger' : 'warn'} kind={thread.agent_state === 'error' ? 'Agent stopped' : 'Waiting on you'} label={label}>
+    <Card
+      tone={thread.agent_state === 'error' ? 'danger' : 'warn'}
+      kind={thread.agent_state === 'error' ? 'Agent stopped' : 'Waiting on you'}
+      label={label}
+    >
       <span className="text-base font-medium">{title}</span>
       <span className="font-mono text-xs text-fg-2">{meta}</span>
       <Link to="/t/$id" params={{ id: thread.id }} className={buttonClass('secondary', 'touch')}>
@@ -182,21 +187,33 @@ interface Waiting {
 const ORDER: WaitKind[] = ['sign-in', 'question', 'plan', 'permission', 'review', 'stopped']
 
 /** One waiting thread in the queue's list: its kind's icon, its title, what it asks in a line, and how long it has waited. */
-function QueueRow({ item, review, selected, onSelect, now }: { item: Waiting; review: MrSummary | undefined; selected: boolean; onSelect: () => void; now: number }) {
+function QueueRow({
+  item,
+  review,
+  selected,
+  onSelect,
+  now,
+}: {
+  item: Waiting
+  review: MrSummary | undefined
+  selected: boolean
+  onSelect: () => void
+  now: number
+}) {
   const { thread, kind, status } = item
   const asked = status?.permissions[0]
   const what =
     kind === 'sign-in'
       ? 'Needs signing in'
       : kind === 'question'
-      ? status?.questions[0]?.message
-      : kind === 'permission'
-        ? asked?.title
-        : kind === 'plan'
-          ? 'A plan to approve'
-          : kind === 'review'
-            ? review && `Merge request: ${review.title}`
-            : (status?.error ?? 'Stopped with an error')
+        ? status?.questions[0]?.message
+        : kind === 'permission'
+          ? asked?.title
+          : kind === 'plan'
+            ? 'A plan to approve'
+            : kind === 'review'
+              ? review && `Merge request: ${review.title}`
+              : (status?.error ?? 'Stopped with an error')
   return (
     <li>
       <button
@@ -208,7 +225,10 @@ function QueueRow({ item, review, selected, onSelect, now }: { item: Waiting; re
           selected ? 'bg-accent-tint shadow-[inset_2px_0_0_var(--accent)]' : 'hover:bg-surface-2',
         )}
       >
-        <Icon name={WAIT_KINDS[kind].icon} className={cx('mt-0.5 h-3.5 w-3.5 shrink-0', kind === 'stopped' ? 'text-danger' : 'text-accent-fg')} />
+        <Icon
+          name={WAIT_KINDS[kind].icon}
+          className={cx('mt-0.5 h-3.5 w-3.5 shrink-0', kind === 'stopped' ? 'text-danger' : 'text-accent-fg')}
+        />
         <span className="flex min-w-0 flex-1 flex-col">
           <span className={cx('truncate', selected && 'font-medium')}>{thread.title ?? 'Untitled thread'}</span>
           {what && <span className="truncate text-xs text-fg-2">{what}</span>}
@@ -223,7 +243,7 @@ function QueueRow({ item, review, selected, onSelect, now }: { item: Waiting; re
 
 /** A merge request waiting on the person, in the queue: how much is seen, then approving it or reviewing the files. */
 function ReviewDetail({ mr, approve }: { mr: MrSummary; approve: () => void }) {
-  const details = useQuery({ queryKey: keys.mr(mr.id), queryFn: () => api.mergeRequest(mr.id) })
+  const details = useQuery({ queryKey: keys.mrBrief(mr.id), queryFn: () => api.mergeRequest(mr.id, {}, true) })
   const files = details.data?.files ?? []
   const seen = files.filter((file) => file.seen).length
   const guide = details.data?.guide
@@ -259,7 +279,17 @@ function ReviewDetail({ mr, approve }: { mr: MrSummary; approve: () => void }) {
 }
 
 /** The item chosen in the queue, answered in place with the same cards the thread shows. */
-function QueueDetail({ item, review, next, approve }: { item: Waiting; review: MrSummary | undefined; next: Waiting | undefined; approve: () => void }) {
+function QueueDetail({
+  item,
+  review,
+  next,
+  approve,
+}: {
+  item: Waiting
+  review: MrSummary | undefined
+  next: Waiting | undefined
+  approve: () => void
+}) {
   const { thread, kind, status } = item
   const now = useNow()
   const named = useQuery({ queryKey: keys.projects, queryFn: api.projects })
@@ -281,13 +311,16 @@ function QueueDetail({ item, review, next, approve }: { item: Waiting; review: M
       <span className="flex min-w-0 items-center gap-2 text-xs text-fg-2">
         <Dot tone={kind === 'stopped' ? 'danger' : 'accent'} />
         <span className="truncate">
-          {said} {kind === 'review' ? 'into' : 'in'} <span className="text-fg-1">{title}</span> · <span className="font-mono">{project}</span> · <span data-volatile>{ago(thread.last_ms, now)}</span>
+          {said} {kind === 'review' ? 'into' : 'in'} <span className="text-fg-1">{title}</span> ·{' '}
+          <span className="font-mono">{project}</span> · <span data-volatile>{ago(thread.last_ms, now)}</span>
         </span>
       </span>
       {kind === 'review' && review && <h2 className="text-lg font-medium">{review.title}</h2>}
       {kind === 'sign-in' && status?.sign_in && <SignInCard thread={thread.id} asked={status.sign_in} agent={agent} />}
       {kind === 'question' && question && <AnswerForm key={question.id} thread={thread.id} asked={question} />}
-      {(kind === 'permission' || kind === 'plan') && asked && <PermissionCard key={asked.id} thread={thread.id} asked={asked} agent={agent} first />}
+      {(kind === 'permission' || kind === 'plan') && asked && (
+        <PermissionCard key={asked.id} thread={thread.id} asked={asked} agent={agent} first />
+      )}
       {kind === 'plan' && !asked && (
         <span className="flex flex-wrap gap-1.5">
           <Button variant="primary" onClick={approve}>
@@ -320,12 +353,24 @@ function QueueDetail({ item, review, next, approve }: { item: Waiting; review: M
  * answered on the right; the keyboard moves through it, and once one is answered the
  * next takes its place.
  */
-function Queue({ waiting, openInto, replies }: { waiting: ThreadSummary[]; openInto: (thread: ThreadSummary) => MrSummary | undefined; replies: ReactNode[] }) {
+function Queue({
+  waiting,
+  openInto,
+  replies,
+}: {
+  waiting: ThreadSummary[]
+  openInto: (thread: ThreadSummary) => MrSummary | undefined
+  replies: ReactNode[]
+}) {
   const queries = useQueryClient()
   const navigate = useNavigate()
   const now = useNow()
   const [statuses, setStatuses] = useState<Record<string, AgentStatus | null>>({})
-  const onStatus = useCallback((thread: string, status: AgentStatus | null) => setStatuses((had) => (had[thread] === status ? had : { ...had, [thread]: status })), [])
+  const onStatus = useCallback(
+    (thread: string, status: AgentStatus | null) =>
+      setStatuses((had) => (had[thread] === status ? had : { ...had, [thread]: status })),
+    [],
+  )
   const items: Waiting[] = waiting
     .map((thread) => ({ thread, status: statuses[thread.id] ?? null, kind: waitKind(thread, statuses[thread.id] ?? null) }))
     .sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind) || a.thread.last_ms - b.thread.last_ms)
@@ -455,7 +500,11 @@ export function NeedsYou() {
           openInto={openInto}
           replies={replies.map((entry) => (
             <li key={`${entry.server ?? ''}:${entry.id}`}>
-              <Link to="/t/$id" params={{ id: entry.thread }} className="flex items-start gap-3 rounded-sm px-2.5 py-2 hover:bg-surface-2">
+              <Link
+                to="/t/$id"
+                params={{ id: entry.thread }}
+                className="flex items-start gap-3 rounded-sm px-2.5 py-2 hover:bg-surface-2"
+              >
                 <Icon name="comment" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-info" />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate">{titleOf(entry.thread)}</span>

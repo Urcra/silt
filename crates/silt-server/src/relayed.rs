@@ -318,11 +318,15 @@ async fn mr_details(
     Extension(browser): Extension<Browser>,
     Path(id): Path<String>,
     Query(query): Query<silt_proto::view::GitQuery>,
+    Query(brief): Query<silt_proto::view::MrQuery>,
 ) -> Result<Json<Value>, Refused> {
     let silt_log::Hide { git: hide_git, others: hide_others } = query.hide();
     let Json(own) = crate::browse::merge_request(State(server.clone()), Extension(browser), Path(id.clone())).await?;
     let mut details = serde_json::to_value(&own).map_err(crate::ServerError::from)?;
     if !browser.capabilities.review {
+        if brief.brief {
+            silt_proto::view::brief_mr(&mut details);
+        }
         return Ok(Json(details));
     }
     let (_, request, _) = crate::browse::seen_request(&server, browser.user, &id).await?;
@@ -345,6 +349,9 @@ async fn mr_details(
         for field in ["diff", "conflicts", "files"] {
             details[field] = view[field].clone();
         }
+    }
+    if brief.brief {
+        silt_proto::view::brief_mr(&mut details);
     }
     Ok(Json(details))
 }

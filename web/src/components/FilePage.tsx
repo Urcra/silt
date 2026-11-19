@@ -46,7 +46,13 @@ export function FilePage() {
             {at ? 'at a pinned version' : 'as the thread has it now'}
           </span>
         )}
-        {file.data && <CopyLink path={filePath(id, path, file.data.at, lines ?? undefined)} thread={id} label={lines ? 'copy link to these lines' : 'copy link'} />}
+        {file.data && (
+          <CopyLink
+            path={filePath(id, path, file.data.at, lines ?? undefined)}
+            thread={id}
+            label={lines ? 'copy link to these lines' : 'copy link'}
+          />
+        )}
       </div>
       {file.error && <p className="text-danger">{message(file.error)}</p>}
       {file.data?.text === null && <p className="text-sm text-fg-2">A binary file.</p>}
@@ -59,7 +65,12 @@ export function FilePage() {
               const line = index + 1
               const picked = lines !== null && line >= lines.start && line <= lines.end
               return (
-                <div key={line} id={`L${line}`} data-picked={picked || undefined} className={`flex ${picked ? 'bg-accent-tint' : ''}`}>
+                <div
+                  key={line}
+                  id={`L${line}`}
+                  data-picked={picked || undefined}
+                  className={`flex ${picked ? 'bg-accent-tint' : ''}`}
+                >
                   <button
                     type="button"
                     aria-label={`line ${line}`}

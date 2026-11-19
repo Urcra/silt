@@ -33,7 +33,10 @@ export function useFinishReview({ thread, review, unsent, items, agent, onSent, 
     setError(undefined)
     setSending(true)
     const prompt = reviewPrompt(
-      [...drafts.map((draft) => ({ at: draft.at, text: draft.text, quote: draft.quote })), ...unsent.flatMap((comment) => items(comment) ?? [])],
+      [
+        ...drafts.map((draft) => ({ at: draft.at, text: draft.text, quote: draft.quote })),
+        ...unsent.flatMap((comment) => items(comment) ?? []),
+      ],
       note,
     )
     // Copied at once, while the click still lets the page write the clipboard.
@@ -43,7 +46,9 @@ export function useFinishReview({ thread, review, unsent, items, agent, onSent, 
       // Each draft becomes a comment first, and leaves the review once it is one, so a failure halfway repeats none.
       for (const draft of drafts) {
         const { at } = draft
-        const on = draft.anchor ? { on: 'anchored' as const, anchor: draft.anchor } : { on: 'lines' as const, path: at.path, start: at.start, end: at.end, base: draft.base, ...hiddenLines(draft) }
+        const on = draft.anchor
+          ? { on: 'anchored' as const, anchor: draft.anchor }
+          : { on: 'lines' as const, path: at.path, start: at.start, end: at.end, base: draft.base, ...hiddenLines(draft) }
         const made = await api.addComment(thread, on, draft.text)
         review.remove(draft.id)
         ids.push(made.id)
@@ -51,7 +56,12 @@ export function useFinishReview({ thread, review, unsent, items, agent, onSent, 
       if (how === 'reviewed' && reviewedTurn !== undefined) {
         await api.setThreadState(thread, { pinned: null, snooze: null, settled: null, seen: false, reviewed_turn: reviewedTurn })
         review.setNote('')
-        toast(drafts.length > 0 ? `Reviewed through turn ${reviewedTurn}; the comments are kept` : `Reviewed through turn ${reviewedTurn}`, 'ok')
+        toast(
+          drafts.length > 0
+            ? `Reviewed through turn ${reviewedTurn}; the comments are kept`
+            : `Reviewed through turn ${reviewedTurn}`,
+          'ok',
+        )
         return true
       }
       if (how === 'save') {
@@ -59,7 +69,8 @@ export function useFinishReview({ thread, review, unsent, items, agent, onSent, 
         toast('Kept as comments; the review sends them once an agent runs', 'ok')
         return true
       }
-      const sent = how === 'send' ? await api.prompt(thread, prompt) : how === 'steer' ? await api.steer(thread, prompt) : 'copied'
+      const sent =
+        how === 'send' ? await api.prompt(thread, prompt) : how === 'steer' ? await api.steer(thread, prompt) : 'copied'
       await api.commentsSent(thread, ids)
       review.clear()
       toast(
@@ -83,4 +94,3 @@ export function useFinishReview({ thread, review, unsent, items, agent, onSent, 
   }
   return { count: drafts.length + unsent.length, sending, error, finish }
 }
-

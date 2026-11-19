@@ -4,7 +4,15 @@
 import type { ArtifactView } from '../api'
 
 /** Why a call was refused, as a page reads it from the rejection's `code`. */
-export type RefusalCode = 'not_granted' | 'rate_limited' | 'conflict' | 'too_large' | 'refused' | 'unavailable' | 'busy' | 'viewer_stopped'
+export type RefusalCode =
+  | 'not_granted'
+  | 'rate_limited'
+  | 'conflict'
+  | 'too_large'
+  | 'refused'
+  | 'unavailable'
+  | 'busy'
+  | 'viewer_stopped'
 
 export class Refusal extends Error {
   code: RefusalCode
@@ -39,7 +47,8 @@ export type Call = { id: number; cap: string; method: string; args: unknown }
 /** A frame's message, if it's a call. */
 export function callOf(data: unknown): Call | null {
   const said = data as { silt?: unknown; id?: unknown; cap?: unknown; method?: unknown; args?: unknown } | null
-  if (said?.silt !== 'call' || typeof said.id !== 'number' || typeof said.cap !== 'string' || typeof said.method !== 'string') return null
+  if (said?.silt !== 'call' || typeof said.id !== 'number' || typeof said.cap !== 'string' || typeof said.method !== 'string')
+    return null
   return { id: said.id, cap: said.cap, method: said.method, args: said.args ?? null }
 }
 
@@ -90,7 +99,9 @@ export class Broker {
       return { ok: true, value: await this.run(call) }
     } catch (failure) {
       const refusal =
-        failure instanceof Refusal ? failure : new Refusal('refused', failure instanceof Error ? failure.message : String(failure))
+        failure instanceof Refusal
+          ? failure
+          : new Refusal('refused', failure instanceof Error ? failure.message : String(failure))
       return { ok: false, error: { code: refusal.code, message: refusal.message } }
     }
   }
@@ -102,12 +113,14 @@ export class Broker {
       const name = String((call.args as { name?: unknown } | null)?.name ?? '')
       return this.available(name) ? { available: true, methods: this.handlers[name].methods } : { available: false }
     }
-    if (!this.available(call.cap)) throw new Refusal('not_granted', `this page didn't declare ${call.cap}, or it isn't served here`)
+    if (!this.available(call.cap))
+      throw new Refusal('not_granted', `this page didn't declare ${call.cap}, or it isn't served here`)
     const handler = this.handlers[call.cap]
     if (!handler.methods.includes(call.method)) throw new Refusal('refused', `${call.cap} has no ${call.method}`)
     this.spend(call.cap, handler.perMinute ?? 120)
     const value = await handler.call(call.method, call.args, this.context)
-    if (sizeOf(value) > Math.max(MESSAGE_BYTES, handler.answerBytes ?? 0)) throw new Refusal('too_large', 'the answer is too large to send to the page')
+    if (sizeOf(value) > Math.max(MESSAGE_BYTES, handler.answerBytes ?? 0))
+      throw new Refusal('too_large', 'the answer is too large to send to the page')
     return value
   }
 

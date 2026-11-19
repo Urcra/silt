@@ -14,7 +14,9 @@ export function splitTyped(typed: string): { dir: string; partial: string } | nu
 /** The folders whose names start with `partial`, as typed in any case; hidden ones only once a dot's typed. */
 export function completions(folders: Subfolder[], partial: string): Subfolder[] {
   const typed = partial.toLowerCase()
-  return folders.filter((folder) => folder.name.toLowerCase().startsWith(typed) && (typed.startsWith('.') || !folder.name.startsWith('.')))
+  return folders.filter(
+    (folder) => folder.name.toLowerCase().startsWith(typed) && (typed.startsWith('.') || !folder.name.startsWith('.')),
+  )
 }
 
 /** How far every name agrees, in any case, spelt as the first one is. */
@@ -36,7 +38,13 @@ export function sharedStart(names: string[]): string {
 export function usePathCompletion(typed: string, setTyped: (path: string) => void) {
   const split = splitTyped(typed)
   const dir = split?.dir ?? ''
-  const listed = useQuery({ queryKey: keys.subfolders(dir), queryFn: () => api.subfolders(dir), enabled: split !== null, staleTime: 30_000, retry: false })
+  const listed = useQuery({
+    queryKey: keys.subfolders(dir),
+    queryFn: () => api.subfolders(dir),
+    enabled: split !== null,
+    staleTime: 30_000,
+    retry: false,
+  })
   const matches = split && listed.data ? completions(listed.data, split.partial).slice(0, SHOWN) : []
   // Picked for what's typed now, so typing on forgets it.
   const [picked, setPicked] = useState<{ typed: string; index: number }>()

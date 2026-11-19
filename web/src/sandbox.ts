@@ -6,11 +6,16 @@ import { hosted } from './served'
 /** Silt's sandbox in the web UI (ADR 0093): its options as Settings shows them, and what a policy gives a run. */
 
 export const BACKENDS: { value: Backend; label: string; detail: string }[] = [
-  { value: 'bubblewrap', label: 'bubblewrap', detail: "A process sandbox on Linux: starts at once, and shares this machine's kernel." },
+  {
+    value: 'bubblewrap',
+    label: 'bubblewrap',
+    detail: "A process sandbox on Linux: starts at once, and shares this machine's kernel.",
+  },
   {
     value: 'seatbelt',
     label: 'Seatbelt',
-    detail: "macOS's own sandbox, through sandbox-exec: starts at once; full internet goes through Silt's gateway, as HTTP(S) only.",
+    detail:
+      "macOS's own sandbox, through sandbox-exec: starts at once; full internet goes through Silt's gateway, as HTTP(S) only.",
   },
 ]
 
@@ -22,9 +27,21 @@ export const PLANNED_BACKENDS: { label: string; detail: string }[] = [
 
 export const NETWORKS: { value: Network; label: string; detail: string }[] = [
   { value: 'none', label: 'No network', detail: 'Nothing leaves the sandbox. For work on untrusted content.' },
-  { value: 'gateway', label: 'Through Silt only', detail: "HTTP(S) through Silt's gateway, to the hosts on its list; it adds the credentials." },
-  { value: 'full', label: 'Full internet', detail: "Any public host; never this machine, its networks or cloud metadata. Credentials are still added by Silt's gateway." },
-  { value: 'host', label: "This machine's network", detail: "As if it ran outside the sandbox: everything on this machine's 127.0.0.1, Silt's own web UI included." },
+  {
+    value: 'gateway',
+    label: 'Through Silt only',
+    detail: "HTTP(S) through Silt's gateway, to the hosts on its list; it adds the credentials.",
+  },
+  {
+    value: 'full',
+    label: 'Full internet',
+    detail: "Any public host; never this machine, its networks or cloud metadata. Credentials are still added by Silt's gateway.",
+  },
+  {
+    value: 'host',
+    label: "This machine's network",
+    detail: "As if it ran outside the sandbox: everything on this machine's 127.0.0.1, Silt's own web UI included.",
+  },
 ]
 
 export const DEVICES: { value: Devices; label: string; detail: string }[] = [
@@ -32,7 +49,8 @@ export const DEVICES: { value: Devices; label: string; detail: string }[] = [
   {
     value: 'relayed',
     label: 'Relayed by Silt',
-    detail: 'Silt holds each device on this machine and hands the agent a session of it, which outlives the agent: a serial port as a terminal, adb for that one device.',
+    detail:
+      'Silt holds each device on this machine and hands the agent a session of it, which outlives the agent: a serial port as a terminal, adb for that one device.',
   },
   { value: 'named', label: 'Named devices', detail: 'The device nodes themselves, inside the sandbox.' },
   { value: 'all_usb', label: 'All USB', detail: 'Every USB device, for tools that talk to them directly (libusb).' },
@@ -73,6 +91,11 @@ export function reachOf(policy: Policy): Reach {
 
 /** How many plugin calls wait for the person, for Needs you's empty state. */
 export function useApprovalsWaiting(): number {
-  const approvals = useQuery({ queryKey: keys.allApprovals, queryFn: () => api.approvals(), enabled: !hosted(), refetchInterval: 30_000 })
+  const approvals = useQuery({
+    queryKey: keys.allApprovals,
+    queryFn: () => api.approvals(),
+    enabled: !hosted(),
+    refetchInterval: 30_000,
+  })
   return (approvals.data ?? []).filter((approval) => approval.state === 'pending').length
 }

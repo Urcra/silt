@@ -1,4 +1,7 @@
+import { useQuery } from '@tanstack/react-query'
 import { useSyncExternalStore } from 'react'
+import { api } from './api'
+import { keys } from './query'
 import { store, stored } from './stored'
 
 /** A diff filter: off until the person ticks it, then kept in this browser and shared by every diff on the page. */
@@ -32,3 +35,9 @@ export const setHideGit = git.set
 export const setHideOthers = others.set
 export const useHideGit = () => useFilter(git)
 export const useHideOthers = () => useFilter(others)
+
+/** Whether the thread records other agents' edits, the only threads where leaving them out shows anything (ADR 0089). */
+export function useShared(thread: string | undefined): boolean {
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
+  return threads.data?.some((candidate) => candidate.id === thread && candidate.shared) ?? false
+}
