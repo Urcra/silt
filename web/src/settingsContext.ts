@@ -4,4 +4,4 @@ import { createContext } from 'react'
 export const InSettings = createContext(false)
 
 /** A Settings section's heading, the same in every section. */
-export const SETTINGS_HEADING = 'text-[15px] font-medium'
+export const SETTINGS_HEADING = 'text-heading font-medium'

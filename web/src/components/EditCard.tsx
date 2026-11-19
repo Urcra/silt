@@ -23,7 +23,7 @@ export function EditCard({ change, bare = false }: { change: Change; bare?: bool
         </span>
       </div>
       {rows.length > 0 && (
-        <div className="overflow-x-auto py-1 font-mono text-[11.5px] leading-relaxed">
+        <div className="overflow-x-auto py-1 font-mono text-output leading-relaxed">
           {shown.map((row, index) => (
             <div key={index} className={cx('px-3 whitespace-pre', row.sign === '-' ? 'bg-danger-tint' : 'bg-ok-tint')}>
               {row.sign} {row.text}

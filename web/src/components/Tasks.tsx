@@ -102,7 +102,7 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
         <div className="flex flex-col gap-2 px-3 py-2">
           {quiet && <p className="text-fg-2">Nothing has said how it ended. Its session may have stopped with it running.</p>}
           {!subagent && call.tool?.subject && (
-            <pre className="font-mono text-[11.5px] whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
+            <pre className="font-mono text-output whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
               <span className="text-fg-2">$ </span>
               {call.tool.subject}
             </pre>
@@ -112,9 +112,7 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
           )}
           {children}
           {!subagent && result?.text.trim() && (
-            <pre className="max-h-40 overflow-auto font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">
-              {result.text.trim()}
-            </pre>
+            <pre className="max-h-40 overflow-auto font-mono text-output whitespace-pre-wrap text-fg-2">{result.text.trim()}</pre>
           )}
           {said && (
             <div className="border-l-2 border-line pl-3 text-sm text-fg-1">

@@ -87,3 +87,14 @@ test('toasts come and go, and banners and avatars say what they are', () => {
   expect(screen.getByRole('img', { name: 'ada lovelace' })).toHaveTextContent('AL')
   vi.useRealTimers()
 })
+
+test("a toast with the same key takes the last one's place", () => {
+  vi.useFakeTimers()
+  const { container } = render(<Toaster />)
+  act(() => toast('Zoom 110%', 'ok', 'zoom'))
+  act(() => toast('Zoom 120%', 'ok', 'zoom'))
+  act(() => toast('Saved', 'ok'))
+  expect([...container.querySelectorAll('[role="status"]')].map((shown) => shown.textContent)).toEqual(['Zoom 120%', 'Saved'])
+  act(() => vi.advanceTimersByTime(6000))
+  vi.useRealTimers()
+})

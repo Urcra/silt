@@ -368,7 +368,7 @@ function Entry({
 function SendingPrompt({ item }: { item: Sending }) {
   return (
     <div data-testid="sending" className="flex flex-col items-end gap-1" aria-busy="true">
-      <p className="w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap opacity-70">
+      <p className="w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-chat leading-[1.45] whitespace-pre-wrap opacity-70">
         {item.text}
       </p>
       {item.files.length > 0 && <span className="text-2xs text-fg-2">{item.files.join(', ')}</span>}
@@ -398,7 +398,9 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
     )
   if (entry.kind === 'user')
     return (
-      <p className="ml-auto w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-sm whitespace-pre-wrap">{entry.text}</p>
+      <p className="ml-auto w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-chat leading-[1.45] whitespace-pre-wrap">
+        {entry.text}
+      </p>
     )
   if (entry.kind === 'assistant') return <Markdown text={entry.text} />
   if (entry.kind === 'artifact' && entry.artifact) return <ShownArtifact entry={entry} />
@@ -1071,8 +1073,8 @@ const TranscriptRow = memo(function TranscriptRow({
       </Entry>
     )
   return (
-    <div id={row.turn ? `turn-${row.turn.number}` : undefined} className="group/turn py-3">
-      <div className="flex min-w-0 flex-col gap-3.5">
+    <div id={row.turn ? `turn-${row.turn.number}` : undefined} className="group/turn py-[calc(12px*var(--density))]">
+      <div className="flex min-w-0 flex-col gap-[calc(14px*var(--density))]">
         {row.prompt?.kind === 'user' && (
           <Entry entry={row.prompt} turn={row.turn?.number} {...props}>
             <EntryText entry={row.prompt} />
@@ -1636,7 +1638,7 @@ export function ThreadHeader({
       {/* Two lines, as ADR 0044 draws it: the title keeps the room, what it is goes under it. */}
       <div className="flex min-w-0 flex-1 flex-col justify-center">
         <div className="flex min-w-0 items-center gap-2">
-          <h1 className="min-w-0 truncate text-[15px] leading-tight font-medium" title={summary?.title ?? undefined}>
+          <h1 className="min-w-0 truncate text-heading leading-tight font-medium" title={summary?.title ?? undefined}>
             {summary?.title ?? 'Thread'}
           </h1>
           {waiting ? (
@@ -2650,7 +2652,7 @@ function ThreadBody({
                               setSheet(window.matchMedia('(max-width: 1023px)').matches)
                             }}
                           />
-                          <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col px-4 md:px-6">
+                          <div className="mx-auto flex w-full max-w-(--read-width) flex-1 flex-col px-4 md:px-6">
                             {summary?.cloud && (
                               <div className="pt-3">
                                 <CloudSession thread={summary} />

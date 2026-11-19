@@ -390,7 +390,7 @@ function ProjectPicker({
       label="Pick a project"
       triggerLabel={`project: ${chosen ? projectName(chosen.repo || chosen.path) : 'pick one'}`}
       openOnMount={opening !== undefined}
-      triggerClassName="inline-flex items-center gap-1.5 rounded-sm border border-line px-2.5 py-0.5 font-mono text-[22px] font-medium text-fg-1 hover:bg-surface-2 aria-expanded:border-accent aria-expanded:bg-accent-tint"
+      triggerClassName="inline-flex items-center gap-1.5 rounded-sm border border-line px-2.5 py-0.5 font-mono text-display-sm font-medium text-fg-1 hover:bg-surface-2 aria-expanded:border-accent aria-expanded:bg-accent-tint"
       panelClassName="w-[440px] max-w-[calc(100vw-20px)] p-2"
       trigger={
         <>
@@ -488,7 +488,7 @@ function Welcome() {
   return (
     <div className="mx-auto flex w-full max-w-[720px] flex-col gap-5 px-4 py-10 md:py-16">
       <div>
-        <h2 className="text-[26px] font-medium tracking-[-0.015em]">Pick a folder to start in</h2>
+        <h2 className="text-display font-medium tracking-[-0.015em]">Pick a folder to start in</h2>
         <p className="mt-1.5 text-fg-2">
           Silt records what your agent does there, so you can search it, fork it, or carry on from another machine.
         </p>
@@ -828,7 +828,7 @@ export function NewThread() {
   return (
     <Page title="New thread" flush label="new thread">
       <div className="mx-auto flex w-full max-w-[760px] flex-1 flex-col justify-center gap-[18px] px-4 pt-10 pb-16 md:px-6 md:pt-14">
-        <h2 className="flex flex-wrap items-center justify-center gap-2.5 text-center text-[26px] font-medium tracking-[-0.015em] max-md:text-xl">
+        <h2 className="flex flex-wrap items-center justify-center gap-2.5 text-center text-display font-medium tracking-[-0.015em] max-md:text-xl">
           What should we work on in
           {choices.isPending ? (
             <Skeleton className="h-8 w-24" />

@@ -515,6 +515,10 @@ pub enum Request {
         light: Option<String>,
         #[serde(default)]
         dark: Option<String>,
+        /// Text and layout in place of what's saved, so a page changing it
+        /// never gets the CSS of what was saved before (ADR 0102).
+        #[serde(default)]
+        text: Option<silt_theme::TextSettings>,
     },
     /// How this machine's web UI loads artifacts' libraries and fonts.
     ArtifactSettings,
@@ -2561,6 +2565,20 @@ mod tests {
             ArtifactSettings::decl(&config),
             silt_proto::view::AppearanceMode::decl(&config),
             silt_proto::view::AppearanceSettings::decl(&config),
+            silt_theme::text::TextSettings::decl(&config),
+            silt_theme::text::Zoom::decl(&config),
+            silt_theme::text::UiSize::decl(&config),
+            silt_theme::text::ChatSize::decl(&config),
+            silt_theme::text::CodeSize::decl(&config),
+            silt_theme::text::TabWidth::decl(&config),
+            silt_theme::text::FontChoice::decl(&config),
+            silt_theme::text::Density::decl(&config),
+            silt_theme::text::LineHeight::decl(&config),
+            silt_theme::text::ReadingWidth::decl(&config),
+            silt_theme::text::DiffLayout::decl(&config),
+            silt_theme::text::Detail::decl(&config),
+            silt_theme::text::Grouping::decl(&config),
+            silt_theme::text::Motion::decl(&config),
             silt_proto::view::ThemeSource::decl(&config),
             silt_proto::view::ThemeSummary::decl(&config),
             silt_proto::view::ThemeProblem::decl(&config),

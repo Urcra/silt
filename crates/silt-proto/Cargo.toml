@@ -28,7 +28,7 @@ quick-xml = "0.42.0"
 
 [features]
 # TypeScript declarations of the types the web UI reads.
-ts = ["dep:ts-rs", "silt-workspace/ts"]
+ts = ["dep:ts-rs", "silt-workspace/ts", "silt-theme/ts"]
 # A sheet as an `.xlsx` workbook, for the shell crates that serve it.
 xlsx = ["dep:rust_xlsxwriter"]
 

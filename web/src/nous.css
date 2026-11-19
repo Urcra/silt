@@ -86,6 +86,18 @@
   --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Text and layout (ADR 0102): Silt's defaults, which a person's settings
+     replace in a later, more specific block. */
+  --ui-size: 13px;
+  --chat-size: 13px;
+  --code-size: 12px;
+  --chat-leading: 1.6;
+  --read-width: 720px;
+  --row: 30px;
+  --density: 1;
+  --tab-size: 4;
+  --code-ligatures: normal;
 }
 
 :root[data-theme='light'] {
@@ -98,7 +110,7 @@
 
 /* In the base layer, so a page's own rules and utilities override them. */
 @layer base {
-  /* 13 px on the body, not the root, so lengths in rem keep 16 px to the rem. */
+  /* On the body, not the root, so lengths in rem keep 16 px to the rem. */
   html,
   body {
     background: var(--bg);
@@ -107,7 +119,7 @@
   }
 
   body {
-    font-size: 13px;
+    font-size: var(--ui-size);
     line-height: 1.45;
     -webkit-font-smoothing: antialiased;
   }
@@ -126,13 +138,29 @@
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
   }
+
+  pre,
+  code,
+  kbd,
+  samp {
+    tab-size: var(--tab-size);
+    font-variant-ligatures: var(--code-ligatures);
+  }
 }
 
+/* As the system asks, unless the person's settings say otherwise (ADR 0102). */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  :root:not([data-motion='full']) *,
+  :root:not([data-motion='full']) *::before,
+  :root:not([data-motion='full']) *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] *::before,
+:root[data-motion='reduced'] *::after {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
 }

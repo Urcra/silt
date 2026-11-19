@@ -16,7 +16,8 @@ test('a diff too large to read whole lists its files and reads only the one open
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path: string) => {
-      asked.push(path)
+      // A diff reads text and layout's settings too (ADR 0102); only the diffs asked for count here.
+      if (!path.startsWith('/api/themes')) asked.push(path)
       return new Response(
         JSON.stringify('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+fn opened() {}\n'),
       )
@@ -53,7 +54,8 @@ test("with git's changes hidden, a file is read without them", async () => {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path: string) => {
-      asked.push(path)
+      // A diff reads text and layout's settings too (ADR 0102); only the diffs asked for count here.
+      if (!path.startsWith('/api/themes')) asked.push(path)
       return new Response(
         JSON.stringify('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+fn mine() {}\n'),
       )
@@ -75,7 +77,8 @@ test("with other agents' changes hidden too, a file is read without either", asy
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path: string) => {
-      asked.push(path)
+      // A diff reads text and layout's settings too (ADR 0102); only the diffs asked for count here.
+      if (!path.startsWith('/api/themes')) asked.push(path)
       return new Response(
         JSON.stringify('diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-old\n+fn ours() {}\n'),
       )

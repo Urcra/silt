@@ -898,10 +898,12 @@ impl Core {
             },
             Request::ImportTheme { text } => to_response(crate::theme::import(&self.data_dir, &text)),
             Request::DuplicateTheme { from } => to_response(crate::theme::duplicate(&self.data_dir, &from)),
-            Request::ThemeCss { light, dark } => {
+            Request::ThemeCss { light, dark, text } => {
                 self.watch_themes();
-                let mode = crate::theme::appearance(&self.data_dir).mode;
-                Response::ok(serde_json::json!({ "css": crate::theme::css(&self.data_dir, light, dark), "mode": mode }))
+                let appearance = crate::theme::appearance(&self.data_dir);
+                let motion = text.as_ref().unwrap_or(&appearance.text).motion_attribute();
+                let css = crate::theme::css(&self.data_dir, light, dark, text);
+                Response::ok(serde_json::json!({ "css": css, "mode": appearance.mode, "motion": motion }))
             }
             Request::ArtifactSettings => Response::ok(crate::design::artifact_settings(&self.data_dir)),
             Request::SetArtifactSettings { settings } => {

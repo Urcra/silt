@@ -10,6 +10,7 @@ import { MainScroll } from '../scroll'
 import { Drawer } from '../shell'
 import { hosted } from '../served'
 import { useActions } from '../shortcuts'
+import { useTextActions, useTextSync } from '../text'
 import { THEMES, useAppearance, useThemeSync } from '../theme'
 import { Dot, Icon, Toaster, cx } from '../ui'
 import { ErrorBoundary } from './ErrorBoundary'
@@ -22,6 +23,9 @@ import { Sidebar } from './Sidebar'
  */
 function useThemeActions() {
   useThemeSync()
+  useTextSync()
+  const navigate = useNavigate()
+  useTextActions(() => void navigate({ to: '/settings/$section', params: { section: 'text' } }))
   const { catalog, settings, save } = useAppearance()
   const next = THEMES[(THEMES.indexOf(settings.mode) + 1) % THEMES.length]
   const themes = Array.isArray(catalog.data?.themes) ? catalog.data.themes : []

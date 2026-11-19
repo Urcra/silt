@@ -11,6 +11,7 @@ pub mod font;
 pub mod import;
 pub mod model;
 pub mod schema;
+pub mod text;
 pub mod token;
 
 pub use check::{Finding, check, passes};
@@ -18,6 +19,7 @@ pub use color::Rgba;
 pub use css::compile;
 pub use derive::{Palette, derive};
 pub use model::{Appearance, Family, FontName, Theme, ThemeError, ThemeId, Warning, parse};
+pub use text::TextSettings;
 pub use token::{ColorToken, SyntaxTag};
 
 /// The themes Silt ships, by file name.

@@ -187,6 +187,32 @@ test('the hosted app lists the threads a device shared', async ({ page }) => {
   expect(key.length).toBeGreaterThan(80)
 })
 
+test('the hosted app keeps text and layout in the browser and sizes the page by it (ADR 0102)', async ({ page }) => {
+  await page.goto(`${base}/app/settings/text`)
+  await page.getByLabel('User').fill('alice')
+  await page.getByLabel('Password').fill('correct horse battery')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  const section = page.getByRole('region', { name: 'Text and layout' })
+  await expect(section.getByText('kept in this browser', { exact: true })).toBeVisible()
+  // A browser zooms on its own, so only the desktop app offers it.
+  await expect(section.getByRole('group', { name: 'zoom' })).toHaveCount(0)
+  await section.getByRole('button', { name: 'bigger conversation text' }).click()
+  await section.getByRole('button', { name: 'bigger conversation text' }).click()
+  const chat = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--chat-size').trim())
+  await expect.poll(chat).toBe('15px')
+  await page.reload()
+  await expect.poll(chat).toBe('15px')
+  await expect(
+    page.getByRole('region', { name: 'Text and layout' }).getByRole('button', { name: 'reset conversation text' }),
+  ).toBeVisible()
+  const css = (await (
+    await page.request.get(`${base}/app/api/themes/css?text=${encodeURIComponent('{"code_size":40}')}`)
+  ).json()) as {
+    css: string
+  }
+  expect(css.css).toContain(':root:root:root{--code-size:20px;}')
+})
+
 test('a device is approved in the browser', async ({ page }) => {
   // Asked without a version, the server says which one it speaks.
   const mismatch = (await fetch(`${base}/v1/device/start`, { method: 'POST' }).then((response) => response.json())) as {

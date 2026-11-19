@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use silt_theme::check::Kind;
-use silt_theme::{Appearance, ColorToken, Family, SyntaxTag, Theme, ThemeId};
+use silt_theme::{Appearance, ColorToken, Family, SyntaxTag, TextSettings, Theme, ThemeId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -37,6 +37,9 @@ pub struct AppearanceSettings {
     pub light: String,
     #[serde(default = "default_dark")]
     pub dark: String,
+    /// Sizes, fonts and spacing over the theme (ADR 0102).
+    #[serde(default, deserialize_with = "silt_theme::text::lenient_settings")]
+    pub text: TextSettings,
 }
 
 fn default_light() -> String {
@@ -49,7 +52,7 @@ fn default_dark() -> String {
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
-        Self { mode: AppearanceMode::System, light: default_light(), dark: default_dark() }
+        Self { mode: AppearanceMode::System, light: default_light(), dark: default_dark(), text: TextSettings::default() }
     }
 }
 
@@ -368,8 +371,11 @@ fn nous(appearance: Appearance) -> &'static Theme {
 }
 
 /// The CSS for the light and dark themes `settings` pick.
+/// The picked themes' CSS, then the text and layout over them (ADR 0102).
 pub fn css(entries: &[ThemeEntry], settings: &AppearanceSettings) -> String {
-    silt_theme::theme_css(pick(entries, &settings.light, Appearance::Light), pick(entries, &settings.dark, Appearance::Dark))
+    let themes =
+        silt_theme::theme_css(pick(entries, &settings.light, Appearance::Light), pick(entries, &settings.dark, Appearance::Dark));
+    themes + &silt_theme::text::css(&settings.text)
 }
 
 /// `settings`, refused when a slot names a theme of the other appearance.

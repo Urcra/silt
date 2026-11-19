@@ -184,7 +184,7 @@ export function StepRow({ step, open: opened = false, running = false }: { step:
         </div>
       )}
       {open && output && (
-        <pre className="ml-5 max-h-64 overflow-auto rounded-sm bg-bg px-2.5 py-2 font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">
+        <pre className="ml-5 max-h-64 overflow-auto rounded-sm bg-bg px-2.5 py-2 font-mono text-output whitespace-pre-wrap text-fg-2">
           {output}
         </pre>
       )}
@@ -265,7 +265,7 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
           {action ?? <span className="font-mono">{shortCommand(command.trim().split('\n')[0]!)}</span>}
         </span>
         {action && (
-          <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg-3 max-sm:hidden">
+          <span className="min-w-0 flex-1 truncate font-mono text-output text-fg-3 max-sm:hidden">
             {shortCommand(command.trim().split('\n')[0]!)}
           </span>
         )}
@@ -280,14 +280,14 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
       </button>
       {open && (
         <div className={cx('flex flex-col gap-1.5', card ? 'px-3 py-2' : 'mt-1 ml-5 rounded-sm bg-bg px-2.5 py-2')}>
-          <pre className="font-mono text-[11.5px] whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
+          <pre className="font-mono text-output whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
             <span className="text-fg-2">$ </span>
             {command}
           </pre>
           {output.trim() && (
             <pre
               data-testid={under ? 'tool-output' : undefined}
-              className="max-h-80 overflow-auto font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-2"
+              className="max-h-80 overflow-auto font-mono text-output leading-relaxed whitespace-pre-wrap text-fg-2"
             >
               {(all && !result?.cut ? output.replace(/\s+$/, '').split('\n') : tail.lines).map((line, index) => (
                 <span key={index} className={cx('block', /\b(FAILED|error|panicked)\b/.test(line) && 'bg-danger-tint text-fg-1')}>

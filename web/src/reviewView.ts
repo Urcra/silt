@@ -20,12 +20,14 @@ const FRESH: Kept = { view: 'thread', other: 'merge-base', commit: '', layout: '
 
 const keyOf = (thread: string) => `silt-review-view-${thread}`
 
-export function keptView(thread: string): Kept {
+/** What the review last showed for `thread`, or a fresh view in `layout`, the one text and layout set if any (ADR 0102). */
+export function keptView(thread: string, layout?: DiffLayout | null): Kept {
+  const fresh = layout ? { ...FRESH, layout } : FRESH
   try {
     const value = sessionStorage.getItem(keyOf(thread))
-    return value ? { ...FRESH, ...(JSON.parse(value) as Partial<Kept>) } : FRESH
+    return value ? { ...fresh, ...(JSON.parse(value) as Partial<Kept>) } : fresh
   } catch {
-    return FRESH
+    return fresh
   }
 }
 

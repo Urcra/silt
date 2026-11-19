@@ -4,7 +4,7 @@
 // in this browser.
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { type AppearanceMode, type AppearanceSettings, type ThemeCatalog, api } from './api'
 import { tellDesktopTheme } from './desktop'
 import { keys } from './query'
@@ -13,7 +13,7 @@ import { hosted } from './served'
 export type Theme = AppearanceMode
 
 const MODE_KEY = 'silt-theme'
-/** The hosted app's light and dark theme. */
+/** The hosted app's light and dark theme, and its text and layout (ADR 0102). */
 const PICK_KEY = 'silt-theme-pick'
 /** The last CSS shown, so the hosted app's next page starts in it. */
 const CSS_KEY = 'silt-theme-css'
@@ -21,7 +21,7 @@ const CSS_KEY = 'silt-theme-css'
 const MOVED_KEY = 'silt-theme-moved'
 export const THEMES: Theme[] = ['system', 'light', 'dark']
 
-export const DEFAULT_APPEARANCE: AppearanceSettings = { mode: 'system', light: 'nous-light', dark: 'nous-dark' }
+export const DEFAULT_APPEARANCE: AppearanceSettings = { mode: 'system', light: 'nous-light', dark: 'nous-dark', text: {} }
 
 function read(key: string): string | null {
   try {
@@ -99,10 +99,24 @@ export function startTheme() {
   if (css) styleElement('silt-theme').textContent = css
 }
 
-function hostedPick(): AppearanceSettings {
+const pickHeard = new Set<() => void>()
+
+/** What the hosted app keeps, as a string that changes when the pick does, so the page draws a change at once. */
+function keptPick(): string {
+  return `${read(MODE_KEY) ?? ''}|${read(PICK_KEY) ?? ''}`
+}
+
+function hearPick(listener: () => void) {
+  pickHeard.add(listener)
+  return () => pickHeard.delete(listener)
+}
+
+/** The hosted app's pick, from what `keptPick` read. */
+function hostedPick(kept: string): AppearanceSettings {
   try {
-    const pick = JSON.parse(read(PICK_KEY) ?? '{}') as Partial<AppearanceSettings>
-    return { ...DEFAULT_APPEARANCE, ...pick, mode: storedTheme() }
+    const pick = JSON.parse(kept.slice(kept.indexOf('|') + 1) || '{}') as Partial<AppearanceSettings>
+    const text = pick.text && typeof pick.text === 'object' ? pick.text : {}
+    return { ...DEFAULT_APPEARANCE, ...pick, text, mode: storedTheme() }
   } catch {
     return { ...DEFAULT_APPEARANCE, mode: storedTheme() }
   }
@@ -112,14 +126,24 @@ function hostedPick(): AppearanceSettings {
 export function useAppearance() {
   const queries = useQueryClient()
   const catalog = useQuery<ThemeCatalog>({ queryKey: keys.themes, queryFn: api.themes, staleTime: 60_000 })
-  // A daemon from before themes answers with no catalog; it shows Nous.
-  const settings = hosted() ? hostedPick() : (catalog.data?.appearance ?? DEFAULT_APPEARANCE)
+  // A daemon from before themes answers with no catalog; it shows Nous, and one from before text and layout no text.
+  const kept = useSyncExternalStore(hearPick, keptPick)
+  const given = hosted() ? hostedPick(kept) : (catalog.data?.appearance ?? DEFAULT_APPEARANCE)
+  const settings = given.text ? given : { ...given, text: {} }
   const save = async (next: AppearanceSettings) => {
     if (hosted()) {
-      write(PICK_KEY, JSON.stringify({ light: next.light, dark: next.dark }))
+      write(PICK_KEY, JSON.stringify({ light: next.light, dark: next.dark, text: next.text }))
       applyTheme(next.mode)
+      for (const listener of pickHeard) listener()
     } else {
-      await api.setAppearance(next)
+      // Shown at once, so a size stepped through draws each step; put back if the daemon refuses it.
+      queries.setQueryData<ThemeCatalog>(keys.themes, (before) => before && { ...before, appearance: next })
+      try {
+        await api.setAppearance(next)
+      } catch (failure) {
+        await queries.invalidateQueries({ queryKey: keys.themes })
+        throw failure
+      }
       applyMode(next.mode)
     }
     await queries.invalidateQueries({ queryKey: keys.themes })
@@ -131,8 +155,8 @@ export function useAppearance() {
 export function useThemeSync() {
   const { catalog, settings, save } = useAppearance()
   const css = useQuery({
-    queryKey: [...keys.themeCss, settings.light, settings.dark],
-    queryFn: () => api.themeCss({ light: settings.light, dark: settings.dark }),
+    queryKey: [...keys.themeCss, settings.light, settings.dark, JSON.stringify(settings.text)],
+    queryFn: () => api.themeCss({ light: settings.light, dark: settings.dark, text: settings.text }),
     enabled: hosted() || catalog.isSuccess,
   })
   useEffect(() => {

@@ -30,6 +30,7 @@ import { Conversation } from './Conversation'
 import { CopyLink } from './CopyLink'
 import { useShared } from '../hideGit'
 import { HideGitBox, HideOthersBox } from './DiffPanel'
+import { useTextSettings } from '../text'
 import { type Commenting, type DiffLayout, DiffView } from './DiffView'
 import { Markdown } from './Markdown'
 import { ListColumn, Page } from './Page'
@@ -516,6 +517,7 @@ export function MergeRequest({ id }: { id: string }) {
   const now = useNow()
   const [hideGit, setHideGit] = useHideGit()
   const [hideOthers, setHideOthers] = useHideOthers()
+  const preferredLayout = useTextSettings().shown.diff_layout
   const hidden = { hideGit, hideOthers }
   const details = useQuery({ queryKey: keys.mrShown(id, hidden), queryFn: () => api.mergeRequest(id, hidden) })
   const shared = useShared(details.data?.mr.fork)
@@ -524,7 +526,7 @@ export function MergeRequest({ id }: { id: string }) {
   const [error, setError] = useState<string>()
   const [ticked, setTicked] = useState<Record<string, boolean>>({})
   const [tab, setTab] = useState<MrTab>('changes')
-  const [layout, setLayout] = useState<DiffLayout>('unified')
+  const [layout, setLayout] = useState<DiffLayout>(() => preferredLayout ?? 'unified')
   const wide = useMedia(WIDE)
   const phone = useMedia('(max-width: 767px)')
   const [fileAt, setFileAt] = useState(0)
