@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO plugin_grants\n               (thread_id, run_hash, plugin, environment, change, created_ms, until_ms, revoked_ms, from_call)\n               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id AS \"id!\"",
+  "query": "INSERT INTO plugin_grants\n               (thread_id, run_hash, plugin, environment, change, created_ms, until_ms, revoked_ms, from_call, action)\n               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id AS \"id!\"",
   "describe": {
     "columns": [
       {
@@ -16,11 +16,11 @@
       }
     ],
     "parameters": {
-      "Right": 9
+      "Right": 10
     },
     "nullable": [
       false
     ]
   },
-  "hash": "44375b992f797374864137bdbc4c86e2034d2747eb260f688a84ef9eeb8501d3"
+  "hash": "a0f126f71283ca04cbfb5af8cee10bccc68ca034b755feb168c346216081452f"
 }

@@ -22,7 +22,9 @@
 //! `git merge --ff-only -q upstream`, or `git FAKE_GIT`, then an edit of
 //! `lib.rs`;
 //! `git-by-hand`, the same with the merge run between two turns, outside
-//! any tool call, as a person would.
+//! any tool call, as a person would; `folder`, one turn asking Silt's
+//! Folders for `FAKE_FOLDER`, then waiting to be restarted, and once
+//! resumed, `folder-seen` written in the checkout with what's there.
 //!
 //! `-p --output-format stream-json` answers the message on stdin as print
 //! mode does, in two chunks: `Sampled:` and the message's first words, or
@@ -114,6 +116,8 @@ fn run() -> Step {
     let transcript = dir.join(format!("{session}.jsonl"));
     let run = Run { session, settings, cwd, dir, transcript };
     match (resume, env::var("FAKE_SCRIPT").as_deref()) {
+        (true, Ok("folder")) => folder_resumed(&run),
+        (false, Ok("folder")) => folder(&run, &config),
         (true, _) => resumed(&run, &config),
         (false, Ok("short")) => short(&run),
         (false, Ok("tools")) => tools(&run),
@@ -330,6 +334,62 @@ fn short(run: &Run) -> Step {
     run.say(&json!({"type": "system", "subtype": "compact_boundary", "content": "Conversation compacted"}))?;
     run.say(&json!({"type": "user", "isCompactSummary": true, "message": {"role": "user", "content": "Summary: farewell was added to main."}}))?;
     run.hook("Stop", &hook("Stop"), None)
+}
+
+/// One turn asking Folders for `FAKE_FOLDER` through Silt's MCP server,
+/// then waiting to be restarted with it, as Claude Code waits for its next
+/// prompt; `folder-not-restarted` is written in the checkout if it isn't.
+fn folder(run: &Run, config: &Path) -> Step {
+    fs::create_dir_all(&run.dir).map_err(io)?;
+    let folder = env::var("FAKE_FOLDER").map_err(|_| Failed(1, "FAKE_FOLDER is unset".into()))?;
+    run.session_hook("SessionStart", json!({"source": "startup"}))?;
+    run.prompt(&format!("Work on {folder} too"))?;
+    let servers: Value = serde_json::from_str(&silt_fake_agent::read(&config.join("mcp-config.json")))
+        .map_err(|error| Failed(1, format!("no MCP config: {error}")))?;
+    let silt = &servers["mcpServers"]["silt"];
+    let strings = |value: &Value| -> Vec<String> {
+        value.as_array().into_iter().flatten().filter_map(|item| item.as_str().map(str::to_owned)).collect()
+    };
+    let env: Vec<(String, String)> = silt["env"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned())))
+        .collect();
+    let input = json!({"path": folder, "reason": "the app uses it"});
+    run.start("toolu_1", "mcp__silt__folders_request", &input)?;
+    let answer = silt_fake_agent::call_tool(
+        silt["command"].as_str().unwrap_or_default(),
+        &strings(&silt["args"]),
+        &env,
+        &run.cwd,
+        "folders_request",
+        input.clone(),
+    );
+    run.finish("toolu_1", "mcp__silt__folders_request", &input)?;
+    run.reply(&match answer {
+        Ok(text) => text,
+        Err(text) => format!("refused: {text}"),
+    })?;
+    run.hook("Stop", &run.about("Stop", "", "", &Value::Null), None)?;
+    std::thread::sleep(Duration::from_secs(30));
+    write(&run.cwd.join("folder-not-restarted"), b"")
+}
+
+/// Resumed after asking for `FAKE_FOLDER`: writes what it sees there to
+/// `folder-seen` in the checkout, and what it was told first to
+/// `folder-told`.
+fn folder_resumed(run: &Run) -> Step {
+    let folder = env::var("FAKE_FOLDER").map_err(|_| Failed(1, "FAKE_FOLDER is unset".into()))?;
+    let mut names: Vec<String> = fs::read_dir(&folder)
+        .map(|entries| entries.flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    names.sort();
+    write(&run.cwd.join("folder-seen"), names.join(",").as_bytes())?;
+    // Claude Code takes its first prompt last, after the flags.
+    let told = env::args().skip(1).last().filter(|arg| !arg.starts_with('-')).unwrap_or_default();
+    write(&run.cwd.join("folder-told"), told.as_bytes())?;
+    run.session_hook("SessionEnd", json!({"reason": "prompt_input_exit"}))
 }
 
 /// Two turns with an edit, a read, a command and a write, and a hand edit

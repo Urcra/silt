@@ -143,6 +143,19 @@ pub fn is_absolute(path: &str) -> bool {
     path.starts_with('/') || (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/')
 }
 
+/// Why a folder can't be handed to sandboxes, as far as its name says;
+/// the sandbox checks again where it really is when a run starts.
+pub fn sandbox_folder_refusal(folder: &str) -> Option<&'static str> {
+    let trimmed = folder.trim_end_matches('/');
+    if !is_absolute(folder) && !folder.starts_with("~/") {
+        return Some("isn't a full path or under `~/`");
+    }
+    if trimmed.is_empty() || trimmed == "~" || folder.contains("/../") || folder.ends_with("/..") {
+        return Some("is the whole machine, your home folder or a path through `..`");
+    }
+    None
+}
+
 fn folder_matches(folder: &str, clone: &str) -> Option<Specificity> {
     let folder = folder.trim_end_matches('/');
     // A drive's paths don't tell case apart.
@@ -249,6 +262,8 @@ pub enum InvalidWorkspaces {
     LocalOnlyServer(WorkspaceId),
     #[error("{workspace}'s folder {folder:?} has a wildcard; a folder rule takes one folder and covers everything under it")]
     WildcardFolder { workspace: WorkspaceId, folder: String },
+    #[error("{workspace} hands its sandboxes {folder:?}, which {why}")]
+    SandboxFolder { workspace: WorkspaceId, folder: String, why: &'static str },
 }
 
 /// Why a project is in its workspace.
@@ -290,6 +305,15 @@ impl Workspaces {
             if workspace.policy.local_only && workspace.server.is_some() {
                 return Err(InvalidWorkspaces::LocalOnlyServer(workspace.id.clone()));
             }
+            for folder in workspace.policy.paths.keys() {
+                if let Some(why) = sandbox_folder_refusal(folder) {
+                    return Err(InvalidWorkspaces::SandboxFolder {
+                        workspace: workspace.id.clone(),
+                        folder: folder.clone(),
+                        why,
+                    });
+                }
+            }
             for rule in &workspace.rules {
                 match rule {
                     MatchRule::Remote(pattern) if pattern.trim_matches('/').is_empty() => {
@@ -315,6 +339,23 @@ impl Workspaces {
             return Err(InvalidWorkspaces::NoDefault(self.default.clone()));
         }
         Ok(())
+    }
+
+    /// Takes out the folders handed to sandboxes that validation refuses,
+    /// as saved before it did, saying which.
+    pub fn drop_refused_folders(&mut self) -> Vec<InvalidWorkspaces> {
+        let mut dropped = Vec::new();
+        for workspace in &mut self.workspaces {
+            let id = workspace.id.clone();
+            workspace.policy.paths.retain(|folder, _| match sandbox_folder_refusal(folder) {
+                Some(why) => {
+                    dropped.push(InvalidWorkspaces::SandboxFolder { workspace: id.clone(), folder: folder.clone(), why });
+                    false
+                }
+                None => true,
+            });
+        }
+        dropped
     }
 
     /// Writes each folder rule as [`MatchRule::folder`] would.
@@ -458,6 +499,15 @@ mod tests {
         let mut all = sample();
         all.workspaces[1].rules.push(MatchRule::Folder("/home/*/work".into()));
         assert!(matches!(all.validate(), Err(InvalidWorkspaces::WildcardFolder { .. })));
+        for folder in ["datasets", "/", "~", "~/", "~/code/../.."] {
+            let mut all = sample();
+            all.workspaces[1].policy.paths.insert(folder.into(), false);
+            assert!(matches!(all.validate(), Err(InvalidWorkspaces::SandboxFolder { .. })), "{folder}");
+        }
+        let mut all = sample();
+        all.workspaces[1].policy.paths.extend([("~/datasets".into(), false), ("/srv/data".into(), true), ("x".into(), true)]);
+        assert_eq!(all.drop_refused_folders().len(), 1, "saved before validation looked");
+        assert_eq!(all.validate(), Ok(()));
         assert_eq!(Workspaces { default: id("x"), workspaces: vec![] }.validate(), Err(InvalidWorkspaces::Empty));
     }
 

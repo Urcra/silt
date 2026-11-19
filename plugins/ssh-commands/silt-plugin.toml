@@ -1,0 +1,32 @@
+id = "silt.ssh-commands"
+name = "SSH commands"
+version = "1.0.0"
+publisher = "silt"
+description = "Runs one command at a time on hosts you name, such as a test fleet, over your own ssh; each run is asked, and Silt can't check what it does."
+license = "AGPL-3.0-only"
+world = "silt:plugin@1"
+build = "shipped"
+environments = { label = "fleets", field = "target" }
+
+[[capabilities]]
+kind = "ssh"
+hosts_from = "targets"
+reason = "Runs the command the agent gives on the host it names, one of those you set, with no terminal, forwarding or local command."
+
+[[settings]]
+key = "targets"
+label = "Hosts"
+description = "The hosts it may run on: names, or patterns such as `*.fleet.vpn`."
+type = "list"
+default = []
+
+[[actions]]
+id = "run"
+label = "Run a command"
+description = "Runs one command on a host, with the input given. Silt shows the command and input, but can't check what it does there."
+kind = "change"
+default = "ask"
+fields = ["target"]
+
+[docs]
+readme = "README.md"

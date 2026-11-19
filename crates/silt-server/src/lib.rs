@@ -39,7 +39,7 @@ mod collab;
 pub mod config;
 mod control;
 mod devices;
-pub mod forge;
+pub use silt_forge as forge;
 mod git;
 mod inbox;
 mod index;

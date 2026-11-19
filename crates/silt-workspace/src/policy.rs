@@ -163,6 +163,16 @@ pub struct Policy {
     /// The agent's own sandbox may not run inside Silt's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_nested: bool,
+    /// The folders agents may ask for, and how each is answered (ADR 0102).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<crate::FolderRule>,
+    /// The folder rules of more than one policy, each set judged on its
+    /// own, once policies are combined.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folder_layers: Vec<Vec<crate::FolderRule>>,
+    /// What plugins may be on, and how their calls are held (ADR 0104).
+    #[serde(default, skip_serializing_if = "crate::PluginPolicy::is_empty")]
+    pub plugins: crate::PluginPolicy,
 }
 
 /// Which of a workspace's sandbox rules Silt can hold an agent to.
@@ -199,6 +209,7 @@ impl Policy {
 
     /// Both policies at once: each rule as the stricter of the two sets it.
     pub fn stricter(&self, other: &Self) -> Self {
+        let (folders, folder_layers) = self.both_folder_rules(other);
         Self {
             agents: match (&self.agents, &other.agents) {
                 (Some(mine), Some(theirs)) => Some(mine.intersection(theirs).cloned().collect()),
@@ -241,6 +252,9 @@ impl Policy {
             ssh_agent: self.ssh_agent || other.ssh_agent,
             refuse: both(&self.refuse, &other.refuse),
             no_nested: self.no_nested || other.no_nested,
+            folders,
+            folder_layers,
+            plugins: self.plugins.stricter(&other.plugins),
         }
     }
 

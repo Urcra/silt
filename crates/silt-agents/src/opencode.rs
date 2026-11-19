@@ -418,7 +418,7 @@ impl Agent for OpenCode {
     fn launch(&self, plan: &LaunchPlan) -> Result<Launch, AgentError> {
         let mut launch = Launch::new(self.command());
         match &plan.start {
-            Start::Resume { id } => {
+            Start::Resume { id, .. } => {
                 launch.arg("--session").arg(id);
             }
             Start::Primed { prompt, .. } => {

@@ -1,6 +1,7 @@
 //! The forges a thread's pull request lives on (ADR 0042), as requests to
-//! make and answers to read: GitHub, GitLab and Forgejo. No I/O here; the
-//! bridge sends them.
+//! make and answers to read: GitHub, GitLab and Forgejo. No I/O here: the
+//! server's forge bridge sends them, and GitHub's plugin builds its URLs
+//! with them (ADR 0103).
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -16,7 +17,7 @@ pub enum ForgeKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Method {
+pub enum Method {
     Get,
     Post,
     Patch,
@@ -24,7 +25,7 @@ pub(crate) enum Method {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Call {
+pub struct Call {
     pub method: Method,
     pub url: String,
     pub body: Option<Value>,
@@ -38,7 +39,7 @@ impl Call {
 
 /// The API of one repository on one forge.
 #[derive(Debug, Clone)]
-pub(crate) struct Api {
+pub struct Api {
     pub kind: ForgeKind,
     /// The API's root, without a trailing slash.
     pub base: String,
@@ -47,7 +48,7 @@ pub(crate) struct Api {
 }
 
 /// Where a forge's API is when the config doesn't say.
-pub(crate) fn default_api(kind: ForgeKind, host: &str) -> String {
+pub fn default_api(kind: ForgeKind, host: &str) -> String {
     match kind {
         ForgeKind::GitHub if host == "github.com" => "https://api.github.com".into(),
         ForgeKind::GitHub => format!("https://{host}/api/v3"),
@@ -57,7 +58,7 @@ pub(crate) fn default_api(kind: ForgeKind, host: &str) -> String {
 }
 
 /// The header a token goes in.
-pub(crate) fn auth_header(kind: ForgeKind, token: &str) -> (&'static str, String) {
+pub fn auth_header(kind: ForgeKind, token: &str) -> (&'static str, String) {
     match kind {
         ForgeKind::GitHub => ("Authorization", format!("Bearer {token}")),
         ForgeKind::GitLab => ("PRIVATE-TOKEN", token.to_owned()),
@@ -66,14 +67,14 @@ pub(crate) fn auth_header(kind: ForgeKind, token: &str) -> (&'static str, String
 }
 
 /// Splits a project (`github.com/acme/web`) into its host and repository path.
-pub(crate) fn split_repo(repo: &str) -> Option<(&str, &str)> {
+pub fn split_repo(repo: &str) -> Option<(&str, &str)> {
     let (host, path) = repo.split_once('/')?;
     (!host.is_empty() && path.contains('/') && !path.split('/').any(|part| part.is_empty() || part == ".."))
         .then_some((host, path))
 }
 
 /// Encodes one URL path segment or query value.
-fn encode(text: &str) -> String {
+pub fn encode(text: &str) -> String {
     let mut out = String::new();
     for byte in text.bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
@@ -86,7 +87,8 @@ fn encode(text: &str) -> String {
 }
 
 impl Api {
-    fn repo(&self) -> String {
+    /// The repository's own API URL, which every call about it starts with.
+    pub fn repo(&self) -> String {
         match self.kind {
             ForgeKind::GitLab => format!("{}/projects/{}", self.base, encode(&self.path)),
             ForgeKind::GitHub | ForgeKind::Forgejo => {
@@ -97,12 +99,12 @@ impl Api {
     }
 
     /// Who the token is.
-    pub(crate) fn me(&self) -> Call {
+    pub fn me(&self) -> Call {
         Call::get(format!("{}/user", self.base))
     }
 
     /// The open pull requests from `branch`.
-    pub(crate) fn open_pulls(&self, branch: &str) -> Call {
+    pub fn open_pulls(&self, branch: &str) -> Call {
         let branch = encode(branch);
         Call::get(match self.kind {
             ForgeKind::GitHub => {
@@ -121,7 +123,7 @@ impl Api {
         }
     }
 
-    pub(crate) fn comments(&self, pull: u64) -> Call {
+    pub fn comments(&self, pull: u64) -> Call {
         let page = match self.kind {
             ForgeKind::Forgejo => "limit=50",
             ForgeKind::GitHub | ForgeKind::GitLab => "per_page=100",
@@ -129,11 +131,11 @@ impl Api {
         Call::get(format!("{}?{page}", self.pull(pull)))
     }
 
-    pub(crate) fn create(&self, pull: u64, body: &str) -> Call {
+    pub fn create(&self, pull: u64, body: &str) -> Call {
         Call { method: Method::Post, url: self.pull(pull), body: Some(json!({ "body": body })) }
     }
 
-    pub(crate) fn update(&self, pull: u64, comment: u64, body: &str) -> Call {
+    pub fn update(&self, pull: u64, comment: u64, body: &str) -> Call {
         let (method, url) = match self.kind {
             ForgeKind::GitLab => (Method::Put, format!("{}/{comment}", self.pull(pull))),
             ForgeKind::GitHub | ForgeKind::Forgejo => (Method::Patch, format!("{}/issues/comments/{comment}", self.repo())),
@@ -143,7 +145,7 @@ impl Api {
 }
 
 /// The token's user name, from [`Api::me`]'s answer.
-pub(crate) fn read_me(kind: ForgeKind, answer: &Value) -> Option<String> {
+pub fn read_me(kind: ForgeKind, answer: &Value) -> Option<String> {
     let key = match kind {
         ForgeKind::GitLab => "username",
         ForgeKind::GitHub | ForgeKind::Forgejo => "login",
@@ -155,7 +157,7 @@ pub(crate) fn read_me(kind: ForgeKind, answer: &Value) -> Option<String> {
 /// [`Api::open_pulls`]'s answer. Forgejo can't filter by branch, so it's
 /// done here, and for every forge a pull request from a fork's branch of
 /// the same name is left alone.
-pub(crate) fn read_pull(kind: ForgeKind, answer: &Value, branch: &str, path: &str) -> Option<u64> {
+pub fn read_pull(kind: ForgeKind, answer: &Value, branch: &str, path: &str) -> Option<u64> {
     answer.as_array()?.iter().find_map(|pull| match kind {
         ForgeKind::GitLab => {
             let same_project = pull.get("source_project_id") == pull.get("target_project_id");
@@ -173,7 +175,7 @@ pub(crate) fn read_pull(kind: ForgeKind, answer: &Value, branch: &str, path: &st
 
 /// The id of the comment `me` left with `marker`, from [`Api::comments`]'s
 /// answer. Anyone can paste the marker; only the token's own comment counts.
-pub(crate) fn read_comment(kind: ForgeKind, answer: &Value, marker: &str, me: &str) -> Option<u64> {
+pub fn read_comment(kind: ForgeKind, answer: &Value, marker: &str, me: &str) -> Option<u64> {
     let author_key = match kind {
         ForgeKind::GitLab => ("author", "username"),
         ForgeKind::GitHub | ForgeKind::Forgejo => ("user", "login"),
@@ -187,7 +189,7 @@ pub(crate) fn read_comment(kind: ForgeKind, answer: &Value, marker: &str, me: &s
 
 /// What a pull request's comment says of its thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ThreadComment {
+pub struct ThreadComment {
     pub thread: String,
     pub title: String,
     pub link: String,
@@ -200,19 +202,19 @@ pub(crate) struct ThreadComment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Linked {
+pub struct Linked {
     pub title: String,
     pub link: String,
     /// `in progress`, `merge request open`, `merged` or `declined`.
     pub state: String,
 }
 
-pub(crate) fn marker(thread: &str) -> String {
+pub fn marker(thread: &str) -> String {
     format!("<!-- silt:thread:{thread} -->")
 }
 
 impl ThreadComment {
-    pub(crate) fn body(&self) -> String {
+    pub fn body(&self) -> String {
         let plural = |count: usize, word: &str| if count == 1 { format!("1 {word}") } else { format!("{count} {word}s") };
         let mut body = format!(
             "{}\n**Silt thread** [{}]({}): {}, {}.\n",

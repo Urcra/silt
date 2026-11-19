@@ -1,0 +1,24 @@
+[package]
+name = "silt-plugin"
+description = "Plugins (ADR 0104): the manifest and its validation, cards, effects, prepared calls and their hash, and the rules that decide each call"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+blake3 = "1.8.7"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+silt-access = { path = "../silt-access" }
+thiserror = "2.0.21"
+toml = "1.2.1"
+ts-rs = { version = "12.0.1", optional = true, features = ["no-serde-warnings"] }
+
+[features]
+# TypeScript declarations of the types the web UI reads.
+ts = ["dep:ts-rs"]

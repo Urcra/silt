@@ -1,0 +1,16 @@
+[package]
+name = "silt-shipped"
+description = "The plugins shipped with Silt (ADR 0104), built from plugins/ for wasm32-wasip2 and embedded"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+silt-plugin = { path = "../silt-plugin" }
+silt-plugin-host = { path = "../silt-plugin-host" }

@@ -404,6 +404,24 @@ fn exit_like(status: std::process::ExitStatus) -> Result<(), Exn<CliError>> {
 /// A directory for one run, removed however the run ends.
 struct Scratch(PathBuf);
 
+/// An agent's command, ready to run, and what serves its sandbox meanwhile.
+struct Launched {
+    command: Command,
+    served: Vec<tokio::task::JoinHandle<()>>,
+    scratch: Scratch,
+}
+
+fn epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| i64::try_from(since.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// How a run's folder grants name it, from its token.
+fn run_of(token: &str) -> Option<String> {
+    (!token.is_empty()).then(|| silt_daemon::folders::run_of_token(token))
+}
+
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
@@ -437,25 +455,90 @@ fn bind_run_token(token: &str, thread: &str) -> Result<(), Exn<CliError>> {
 
 impl Run<'_> {
     /// Runs the agent with Silt's MCP server, hooks, and the repository's
-    /// rules and skills it doesn't read by itself.
+    /// rules and skills it doesn't read by itself. In Silt's sandbox, it's
+    /// started again with its session resumed when a turn ends with other
+    /// folders granted to it (ADR 0102).
     fn launch(
         &self,
         start: Start,
         args: &[String],
         recording: &mut Recording,
     ) -> Result<std::process::ExitStatus, Exn<CliError>> {
+        let data = paths::data_dir();
+        let run = run_of(&self.held.token);
+        let mut start = start;
+        for attempt in 0u32.. {
+            let folders = match &self.held.reach {
+                Some(_) => silt_daemon::folders::still_allowed(
+                    silt_daemon::folders::granted(&data, self.thread, run.as_deref(), epoch_ms()),
+                    self.held.policy.as_ref(),
+                    &data,
+                ),
+                None => Default::default(),
+            };
+            let reach = self.held.reach.clone().map(|reach| silt_daemon::folders::widened(reach, &folders));
+            let Launched { command, served, scratch } = self.command(start.clone(), args, recording, reach.as_ref(), attempt)?;
+            let started = epoch_ms();
+            let resumable = match &start {
+                Start::New { id } | Start::Primed { id, .. } => id.clone(),
+                Start::Resume { id, .. } => Some(id.clone()),
+            };
+            let thread = self.thread;
+            let name = self.agent.display_name();
+            let restart = || {
+                if reach.is_none() || !silt_daemon::folders::take_restart(&data, thread, started) {
+                    return false;
+                }
+                if resumable.is_none() {
+                    eprintln!("\nsilt: other folders were granted to {name}; start it again (`silt resume`) to use them");
+                    return false;
+                }
+                true
+            };
+            let (status, restarted) = recording
+                .run_restartable(command, &restart)
+                .or_raise(|| CliError(format!("cannot run {}", self.agent.display_name())))?;
+            for task in served {
+                task.abort();
+            }
+            drop(scratch);
+            let Some(id) = resumable.filter(|_| restarted) else { return Ok(status) };
+            let now = silt_daemon::folders::still_allowed(
+                silt_daemon::folders::granted(&data, self.thread, run.as_deref(), epoch_ms()),
+                self.held.policy.as_ref(),
+                &data,
+            );
+            let (added, removed) = silt_daemon::folders::difference(&folders, &now);
+            eprintln!("\nsilt: restarting {name} in its sandbox: {}", silt_daemon::folders::resume_note(&added, &removed));
+            start = Start::Resume { id, prompt: Some(silt_daemon::folders::resume_note(&added, &removed)) };
+        }
+        unreachable!("the loop returns")
+    }
+
+    /// The agent's command, in Silt's sandbox reaching `reach` when it runs
+    /// in one, with what serves that sandbox while it runs.
+    fn command(
+        &self,
+        start: Start,
+        args: &[String],
+        recording: &mut Recording,
+        reach: Option<&silt_workspace::Reach>,
+        attempt: u32,
+    ) -> Result<Launched, Exn<CliError>> {
         let held = self.held;
         // Only a run whose workspace has plugins calls them, which are kept
         // with its thread.
-        let plugins = silt_daemon::plugins::load(&paths::data_dir());
-        let any_on = plugins.iter().any(|plugin| plugin.workspaces.iter().any(|on| on == held.workspace.id.as_str()));
+        let any_on = silt_daemon::plugins::installed::load(&paths::data_dir())
+            .iter()
+            .any(|installed| installed.on_in(held.workspace.id.as_str()));
         if !held.token.is_empty() && any_on {
             bind_run_token(&held.token, self.thread)?;
         }
         let exe = env::current_exe().or_raise(|| CliError("cannot find the silt executable".into()))?;
-        let scratch = paths::data_dir().join("runs").join(format!("{}-{}", short(self.thread), std::process::id()));
+        let scratch = paths::data_dir().join("runs").join(format!("{}-{}-{attempt}", short(self.thread), std::process::id()));
         fs::create_dir_all(&scratch).or_raise(|| CliError("cannot create a directory for the run".into()))?;
-        let _scratch = Scratch(scratch.clone());
+        let kept_scratch = Scratch(scratch.clone());
+        let mut served = Vec::new();
         let home = silt_os::home_dir();
         let native = self.agent.native();
         let skills = agent_conventions::discover_skills(self.checkout, home.as_deref());
@@ -489,7 +572,7 @@ impl Run<'_> {
             env: held.env.clone(),
         };
         let launch = self.agent.launch(&plan).or_raise(|| CliError(format!("cannot prepare {}", self.agent.display_name())))?;
-        let mut command = match &held.reach {
+        let mut command = match reach {
             Some(reach) => {
                 let env: Vec<(String, String)> = env::vars()
                     .chain(held.env.iter().cloned())
@@ -518,6 +601,7 @@ impl Run<'_> {
                     reach,
                     token: &held.token,
                     read_only: silt_daemon::sandbox::program_paths(&launch.program, &env),
+                    gateway_credentials: None,
                     relayed,
                     env,
                 })
@@ -525,10 +609,13 @@ impl Run<'_> {
                 for name in &sandboxed.missing {
                     eprintln!("silt: the credential {name} has no secret to add; `silt credential list` says why");
                 }
+                for why in &sandboxed.refused {
+                    eprintln!("silt: a folder the workspace names is left out of the sandbox: {why}");
+                }
                 let handle = recording.handle();
                 for outside in sandboxed.outside.drain(..) {
                     // Served while the agent runs, and dropped with this process.
-                    outside.spawn(&handle).or_raise(|| CliError("cannot start the sandbox's gateway".into()))?;
+                    served.push(outside.spawn(&handle).or_raise(|| CliError("cannot start the sandbox's gateway".into()))?);
                 }
                 let all = sandboxed.command(&launch.program, &launch.args);
                 let mut command = Command::new(&all[0]);
@@ -548,7 +635,7 @@ impl Run<'_> {
             }
         };
         command.current_dir(self.cwd);
-        recording.run(command).or_raise(|| CliError(format!("cannot run {}", launch.program.to_string_lossy())))
+        Ok(Launched { command, served, scratch: kept_scratch })
     }
 }
 
@@ -741,7 +828,7 @@ fn continue_session(resumed: Resumed, args: &[String]) -> Result<(), Exn<CliErro
     };
     let agent = find_agent(&resumed.agent)?;
     let start = match start {
-        AgentStart::Resume { id } => Start::Resume { id },
+        AgentStart::Resume { id } => Start::Resume { id, prompt: None },
         AgentStart::Primed { id, prompt } => {
             eprintln!("silt: starting {} with the conversation so far", agent.display_name());
             Start::Primed { id, prompt }

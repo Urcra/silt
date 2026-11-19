@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
 import { stopAgent, teardown } from './fixture'
@@ -199,22 +199,19 @@ test("a workspace's defaults pick the agent's model, and the project picker move
 test("a workspace's sandbox reach and its plugins are set in its settings, and a plugin is on only where turned on (ADR 0093)", async ({
   page,
 }) => {
-  const file = join(fixture.dir, 'fleet-api.json')
-  const environment = { target: 'https://api.fleet.example/graphql', reads: 'allow', changes: 'ask', data: ['location'] }
-  writeFileSync(file, JSON.stringify({ name: 'fleet-api', kind: { type: 'graphql' }, environments: { production: environment } }))
-  ada(['plugin', 'add', file])
   await page.goto(`${new URL(fixture.ada).origin}/settings/workspaces${new URL(fixture.ada).hash}`)
   const settings = page.getByRole('region', { name: 'Workspaces' })
   await settings.getByRole('tab', { name: /Personal/ }).click()
 
   const plugins = settings.getByRole('region', { name: 'Plugins its agents can use' })
-  await expect(plugins).toContainText('fleet-api')
-  await expect(plugins).toContainText('production · location kept')
-  await plugins.getByLabel('fleet-api in Personal').click()
-  await expect(plugins.getByLabel('fleet-api in Personal')).toBeChecked()
-  await expect.poll(() => ada(['plugin', 'list'])).toContain('on in personal')
+  // Silt's own plugins are there from the start: Folders on everywhere, GitHub off until turned on.
+  await expect(plugins).toContainText('Folders')
+  await expect(plugins.getByLabel('silt.folders in Personal')).toBeChecked()
+  await plugins.getByLabel('silt.github in Personal').click()
+  await expect(plugins.getByLabel('silt.github in Personal')).toBeChecked()
+  await expect.poll(() => ada(['plugin', 'list'])).toMatch(/silt\.github .*on in personal/)
   await settings.getByRole('tab', { name: /Work/ }).click()
-  await expect(plugins.getByLabel('fleet-api in Work')).not.toBeChecked()
+  await expect(plugins.getByLabel('silt.github in Work')).not.toBeChecked()
 
   const reach = settings.getByRole('region', { name: 'What its agents can reach' })
   const sandbox = reach.getByLabel("Run its agents in Silt's sandbox")
@@ -257,4 +254,144 @@ test("a workspace's sandbox reach and its plugins are set in its settings, and a
   await page.getByRole('tab', { name: 'Access' }).click()
   await expect(page.getByRole('region', { name: 'granted' })).toContainText('Nothing beyond each call you approve')
   await expect(page.getByRole('region', { name: 'plugin calls' })).toContainText('None yet')
+})
+
+test("Settings › Plugins lists the plugins here, and a plugin's page sets what runs without asking (ADR 0104)", async ({
+  page,
+}) => {
+  await page.goto(`${new URL(fixture.ada).origin}/settings/plugins${new URL(fixture.ada).hash}`)
+  const plugins = page.getByRole('region', { name: 'Plugins', exact: true })
+  for (const name of ['Folders', 'GitHub', 'GraphQL API', 'SSH commands', 'Local MCP', 'Remote MCP']) {
+    await expect(plugins.getByRole('link', { name, exact: true })).toBeVisible()
+  }
+  await expect(plugins).toContainText("Only Silt's own plugins so far")
+  await shoot(page, '9-plugins', 1100)
+
+  await plugins.getByRole('button', { name: 'Add from git…' }).click()
+  const adding = page.getByRole('dialog', { name: /Add a plugin/ })
+  await adding.getByLabel('repository').fill(`file://${join(fixture.dir, 'nowhere')}#v1.0.0`)
+  await adding.getByRole('button', { name: 'See what it gets' }).click()
+  await expect(adding).toContainText('cloning it failed')
+  await adding.getByRole('button', { name: 'Cancel' }).click()
+
+  await plugins.getByRole('link', { name: 'GitHub', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'How it works' })).toBeVisible()
+  const actions = page.getByRole('region', { name: 'What runs without asking' })
+  const push = actions.getByLabel("Push a branch's rule")
+  await expect(push).toHaveValue('ask')
+  await push.selectOption('allow')
+  await expect(actions).toContainText('your rule')
+  await page.reload()
+  await expect(push).toHaveValue('allow')
+  await shoot(page, '10-plugin-page', 1800)
+  await actions.getByRole('button', { name: 'reset' }).first().click()
+  await expect(push).toHaveValue('ask')
+
+  // A workspace's rules for folders its agents ask for, under the org's.
+  await page.goto(`${new URL(fixture.ada).origin}/settings/workspaces${new URL(fixture.ada).hash}`)
+  const settings = page.getByRole('region', { name: 'Workspaces' })
+  await settings.getByRole('tab', { name: /Personal/ }).click()
+  // Folders are given into Silt's sandbox, so the rules wait for it.
+  await settings.getByRole('region', { name: 'What its agents can reach' }).getByLabel("Run its agents in Silt's sandbox").check()
+  const rules = settings.getByLabel('folder rules')
+  await rules.getByLabel('folder to add a rule for').fill('~/datasets')
+  await rules.getByRole('button', { name: 'Add' }).click()
+  await rules.getByLabel('answer for ~/datasets').selectOption('allow')
+  await rules.getByLabel('folder to add a rule for').fill('~/.aws')
+  await rules.getByRole('button', { name: 'Add' }).click()
+  await rules.getByLabel('answer for ~/.aws').selectOption('never')
+  await settings.getByRole('button', { name: 'Save workspaces' }).click()
+  await expect(page.getByText('Workspaces saved')).toBeVisible()
+  await expect.poll(() => ada(['workspace', 'list'], 'tools')).toContain('Personal')
+  await page.reload()
+  await settings.getByRole('tab', { name: /Personal/ }).click()
+  await expect(rules.getByLabel('answer for ~/datasets')).toHaveValue('allow')
+  await expect(rules.getByLabel('answer for ~/.aws')).toHaveValue('never')
+  await rules.scrollIntoViewIfNeeded()
+  await shoot(page, '11-folder-rules', 1600)
+})
+
+test('a plugin from git says when a newer version is out, asks for what it adds, and shows its calls (ADR 0104)', async ({
+  page,
+}) => {
+  // Two builds of a third party's plugin, each offline in a sandbox.
+  test.setTimeout(240_000)
+  const repository = join(fixture.dir, 'probe-repo')
+  execFileSync(join(import.meta.dirname, 'probe-repo.sh'), [repository])
+  const home = join(fixture.dir, 'ada')
+  // The real home, for the toolchain a sandboxed build is given.
+  execFileSync(SILT, ['plugin', 'add', `file://${repository}#v1.0.0`, '--yes'], {
+    cwd: join(home, 'app'),
+    encoding: 'utf8',
+    env: { ...process.env, SILT_HOME: join(home, 'silt') },
+  })
+  execFileSync(join(import.meta.dirname, 'probe-repo.sh'), [repository, 'bump'])
+
+  await page.goto(`${new URL(fixture.ada).origin}/settings/plugins${new URL(fixture.ada).hash}`)
+  const plugins = page.getByRole('region', { name: 'Plugins', exact: true })
+  await expect(plugins.getByRole('link', { name: 'Probe', exact: true })).toBeVisible()
+  const update = plugins.getByLabel('update to 1.1.0')
+  await expect(update).toContainText('1.1.0 is out at v1.1.0; this is 1.0.0')
+  await expect(update).toContainText('elsewhere.test')
+  await update.scrollIntoViewIfNeeded()
+  await shoot(page, '5-update-waiting', 900)
+
+  await plugins.getByRole('link', { name: 'Probe', exact: true }).click()
+  const status = page.getByRole('region', { name: 'Status' })
+  await expect(status).toContainText('yes, offering')
+  await expect(status).toContainText('none yet')
+  await expect(page.getByRole('region', { name: 'Calls' })).toContainText('None yet')
+  await page.getByLabel('update to 1.1.0').getByRole('button', { name: 'Agree and update' }).click()
+  await expect(page.getByText('Updated test.probe to 1.1.0')).toBeVisible({ timeout: 180_000 })
+  await expect(page.getByLabel('update to 1.1.0')).toHaveCount(0)
+  expect(ada(['plugin', 'list'])).toContain('test.probe 1.1.0')
+  await shoot(page, '6-plugin-status', 1400)
+})
+
+/** Whether this machine can make Silt's sandbox, which Folders gives folders into. */
+function sandboxed(): boolean {
+  try {
+    execFileSync('bwrap', ['--ro-bind', '/', '/', 'true'])
+    return true
+  } catch {
+    return false
+  }
+}
+
+test('an agent asks for a folder on a card, and goes on with it once approved (ADR 0102)', async ({ page }) => {
+  test.skip(!sandboxed(), "this machine can't make Silt's sandbox")
+  test.setTimeout(120_000)
+  const shared = join(fixture.dir, 'shared-lib')
+  mkdirSync(shared, { recursive: true })
+  writeFileSync(join(shared, 'notes.md'), 'kept\n')
+  // Personal runs its agents in Silt's sandbox (set above); no network, which they don't need here.
+  ada(['workspace', 'policy', 'Personal', '--silt-sandbox', 'on', '--network', 'none'], 'tools')
+
+  await page.goto(fixture.ada)
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
+  const form = page.getByRole('form', { name: 'new thread' })
+  await page.getByRole('button', { name: /^project:/ }).click()
+  await page.getByRole('dialog', { name: 'Pick a project' }).getByRole('option', { name: /tools/ }).click()
+  await form.getByLabel('first prompt').fill(`Folder ${shared}`)
+  await form.getByRole('radio', { name: 'Worktree' }).click()
+  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await form.getByLabel('first prompt').press('Enter')
+
+  // No folder rule names it, so it's asked, on a card Silt draws.
+  const card = page.getByRole('group', { name: 'approval' }).first()
+  await expect(card).toContainText('silt.folders', { timeout: 30_000 })
+  await expect(card).toContainText(shared)
+  await expect(card).toContainText('Prepared by the plugin, drawn by Silt')
+  await shoot(page, '7-folder-request')
+  await card.getByRole('button', { name: /^Approve/ }).click()
+
+  // The agent is restarted in a sandbox with it, told what's there, and goes on.
+  await expect(page.getByText(/is now in your sandbox, read-only, at that path/)).toBeVisible({ timeout: 60_000 })
+  await page.getByRole('tab', { name: 'Access' }).click()
+  const folders = page.getByRole('region', { name: 'folders' })
+  await expect(folders).toContainText(shared)
+  await shoot(page, '8-folder-granted')
+  await folders.getByRole('button', { name: `unfolder ${shared}` }).click()
+  await expect(folders).toHaveCount(0)
+  await stopAgent(page)
 })

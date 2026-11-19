@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", thread_id, run_hash, workspace, request, hash, change, asked, state, outcome, grant_id, created_ms, answered_ms\n               FROM plugin_calls\n               WHERE (?1 IS NULL OR thread_id = ?1) AND (?2 IS NULL OR state = ?2)\n               ORDER BY id DESC LIMIT ?3",
+  "query": "SELECT id AS \"id!\", thread_id, run_hash, workspace, request, hash, change, asked, state, outcome, grant_id, created_ms, answered_ms, kind\n               FROM plugin_calls WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -145,10 +145,21 @@
             "name": "answered_ms"
           }
         }
+      },
+      {
+        "name": "kind",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plugin_calls",
+            "name": "kind"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 1
     },
     "nullable": [
       false,
@@ -163,8 +174,9 @@
       true,
       true,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "80686c0ee282b02311fea944dcc3a268b1aefc08e817d00230e4799f658fb52d"
+  "hash": "f4ea3e0f8f790c0cc79a0919e7ed7bef61d697216a2435e8aef3ddcd45f8ca27"
 }

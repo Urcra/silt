@@ -274,6 +274,14 @@ impl Reach {
             let ports: Vec<String> = self.ports.iter().map(u16::to_string).collect();
             parts.push(format!("ports {}", ports.join(", ")));
         }
+        if !self.paths.is_empty() {
+            let folders: Vec<String> = self
+                .paths
+                .iter()
+                .map(|(path, writable)| if *writable { format!("{path} (writable)") } else { path.clone() })
+                .collect();
+            parts.push(format!("folders {}", folders.join(", ")));
+        }
         parts.join(" · ")
     }
 }

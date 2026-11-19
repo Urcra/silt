@@ -545,7 +545,7 @@ impl Agent for Antigravity {
         launch.arg("--gemini_dir").arg(overlay(plan)?);
         let prompt = match &plan.start {
             Start::New { .. } => None,
-            Start::Resume { id } => {
+            Start::Resume { id, .. } => {
                 launch.arg("--conversation").arg(id);
                 None
             }

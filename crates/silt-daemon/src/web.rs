@@ -249,10 +249,21 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/approvals", get(approvals))
         .route("/api/approvals/{id}", post(approval_answer))
         .route("/api/grants/{id}", delete(grant_revoke))
+        .route("/api/threads/{thread}/folders", delete(folder_revoke))
         .route("/api/threads/{id}/access", get(access))
         .route("/api/threads/{id}/devices/release", post(release_device))
         .route("/api/plugins", get(plugins))
-        .route("/api/plugins/{name}", put(plugin_put).delete(plugin_remove))
+        .route("/api/plugins/{name}", delete(plugin_remove))
+        .route("/api/plugins/{id}/workspaces/{workspace}", put(plugin_turn))
+        .route("/api/plugins/{id}/rules", put(plugin_rule))
+        .route("/api/plugins/{id}/settings", put(plugin_set))
+        .route("/api/plugins/{id}/environments/{name}", put(plugin_environment))
+        .route("/api/publishers/{publisher}", put(plugin_trust))
+        .route("/api/plugins/preview", post(plugin_preview))
+        .route("/api/plugins/check", post(plugin_check))
+        .route("/api/plugins/{id}/update", post(plugin_update))
+        .route("/api/plugins/{id}/activity", get(plugin_activity))
+        .route("/api/plugins/add", post(plugin_add))
         .route("/api/mrs", get(merge_requests))
         .route("/api/mrs/{id}", get(merge_request))
         .route("/api/mrs/{id}/approve", post(approve))
@@ -2034,6 +2045,15 @@ async fn grant_revoke(State(web): State<Web>, Path(id): Path<u64>) -> HttpRespon
 }
 
 #[derive(Deserialize)]
+struct FolderBody {
+    path: String,
+}
+
+async fn folder_revoke(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<FolderBody>) -> HttpResponse {
+    ask(&web, Request::FolderRevoke { thread, path: body.path }).await
+}
+
+#[derive(Deserialize)]
 struct ReleaseBody {
     device: String,
 }
@@ -2050,16 +2070,132 @@ async fn plugins(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::Plugins).await
 }
 
-async fn plugin_put(
+#[derive(Deserialize)]
+struct PluginTurnBody {
+    on: bool,
+}
+
+async fn plugin_turn(
     State(web): State<Web>,
-    Path(name): Path<String>,
-    Json(plugin): Json<crate::plugins::Plugin>,
+    Path((id, workspace)): Path<(String, String)>,
+    Json(body): Json<PluginTurnBody>,
 ) -> HttpResponse {
-    if plugin.name != name {
-        return Failed { status: StatusCode::BAD_REQUEST, message: "the plugin's name isn't the one in its path".into() }
-            .into_response();
+    ask(&web, Request::PluginTurn { id, workspace, on: body.on }).await
+}
+
+#[derive(Deserialize)]
+struct PluginRuleBody {
+    action: String,
+    rule: Option<silt_plugin::Rule>,
+    #[serde(default)]
+    field: Option<String>,
+    #[serde(default)]
+    pattern: Option<String>,
+}
+
+async fn plugin_rule(State(web): State<Web>, Path(id): Path<String>, Json(body): Json<PluginRuleBody>) -> HttpResponse {
+    ask(&web, Request::PluginRule { id, action: body.action, rule: body.rule, field: body.field, pattern: body.pattern }).await
+}
+
+#[derive(Deserialize)]
+struct PluginSetBody {
+    key: String,
+    value: serde_json::Value,
+    #[serde(default)]
+    environment: Option<String>,
+    #[serde(default)]
+    workspace: Option<String>,
+}
+
+async fn plugin_set(State(web): State<Web>, Path(id): Path<String>, Json(body): Json<PluginSetBody>) -> HttpResponse {
+    ask(
+        &web,
+        Request::PluginSet { id, key: body.key, value: body.value, environment: body.environment, workspace: body.workspace },
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+struct PluginEnvironmentBody {
+    patterns: Vec<String>,
+}
+
+async fn plugin_environment(
+    State(web): State<Web>,
+    Path((id, name)): Path<(String, String)>,
+    Json(body): Json<PluginEnvironmentBody>,
+) -> HttpResponse {
+    ask(&web, Request::PluginEnvironment { id, name, patterns: body.patterns }).await
+}
+
+#[derive(Deserialize)]
+struct PluginTrustBody {
+    trusted: bool,
+}
+
+async fn plugin_activity(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
+    ask(&web, Request::PluginActivity { id }).await
+}
+
+async fn plugin_trust(State(web): State<Web>, Path(publisher): Path<String>, Json(body): Json<PluginTrustBody>) -> HttpResponse {
+    ask(&web, Request::PluginTrust { publisher, trusted: body.trusted }).await
+}
+
+#[derive(Deserialize)]
+struct PluginSourceBody {
+    url: String,
+    /// The commit the person was shown, for an add.
+    #[serde(default)]
+    commit: String,
+    #[serde(default)]
+    workspaces: Vec<String>,
+}
+
+/// What a plugin from git gets, read here, off the core: cloning takes a while.
+async fn plugin_preview(Json(body): Json<PluginSourceBody>) -> HttpResponse {
+    match crate::plugins::install::preview(&crate::paths::data_dir(), &body.url).await {
+        Ok(preview) => Json(preview).into_response(),
+        Err(error) => Failed { status: StatusCode::BAD_REQUEST, message: error.to_string() }.into_response(),
     }
-    ask(&web, Request::PluginPut { plugin: Box::new(plugin) }).await
+}
+
+/// Adds a plugin from git, built here, off the core: building takes a while.
+async fn plugin_add(State(web): State<Web>, Json(body): Json<PluginSourceBody>) -> HttpResponse {
+    match crate::plugins::install::add_from_git(&crate::paths::data_dir(), &body.url, &body.commit, &body.workspaces).await {
+        Ok(installed) => {
+            let _ = web.bus.send(BusEvent::Approvals);
+            Json(installed).into_response()
+        }
+        Err(error) => Failed { status: StatusCode::BAD_REQUEST, message: error.to_string() }.into_response(),
+    }
+}
+
+/// Looks for updates of the plugins added from git, off the core: it asks
+/// each repository.
+async fn plugin_check() -> HttpResponse {
+    match tokio::task::spawn_blocking(|| crate::plugins::updates::check(&crate::paths::data_dir())).await {
+        Ok(updates) => Json(updates).into_response(),
+        Err(error) => Failed { status: StatusCode::INTERNAL_SERVER_ERROR, message: error.to_string() }.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct PluginUpdateBody {
+    /// The person agreed to what the update adds.
+    #[serde(default)]
+    consented: bool,
+}
+
+/// Updates a plugin added from git to the version waiting, built here, off
+/// the core.
+async fn plugin_update(State(web): State<Web>, Path(id): Path<String>, Json(body): Json<PluginUpdateBody>) -> HttpResponse {
+    match crate::plugins::updates::apply(&crate::paths::data_dir(), &id, body.consented).await {
+        Ok(installed) => {
+            let _ = web.bus.send(BusEvent::Approvals);
+            Json(installed).into_response()
+        }
+        Err(error) => Failed { status: StatusCode::BAD_REQUEST, message: error.to_string() }.into_response(),
+    }
 }
 
 async fn plugin_remove(State(web): State<Web>, Path(name): Path<String>) -> HttpResponse {

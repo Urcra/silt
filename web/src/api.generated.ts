@@ -242,55 +242,6 @@ export type BusEvent = { "event": "threads" } | { "event": "thread", thread: str
 
 export type DataClass = "location";
 
-export type Plugin = { 
-/**
- * Its name, which its tools start with.
- */
-name: string, description: string, kind: Kind, 
-/**
- * The workspaces it's on in, by id.
- */
-workspaces: Array<string>, 
-/**
- * Its environments, such as `staging` and `production`, by name.
- */
-environments: { [key in string]: Environment }, };
-
-export type Kind = { "type": "graphql" } | { "type": "command", argv: Array<string>, } | { "type": "mcp", argv: Array<string>, };
-
-export type Rule = "allow" | "ask";
-
-export type Environment = { 
-/**
- * A GraphQL endpoint's URL, or the targets a command may name, such
- * as `car-*.fleet.vpn`.
- */
-target: string, reads: Rule, changes: Rule, 
-/**
- * What a result may never carry to an agent.
- */
-data: Array<DataClass>, 
-/**
- * A credential of `silt credential` added to its requests, or for a
- * command or MCP server, given to it in `variable`.
- */
-credential: string | null, 
-/**
- * The variable a command or MCP server reads the credential's secret
- * from, such as `FLEET_TOKEN`.
- */
-variable: string | null, 
-/**
- * Each change is approved on its own: no grant covers it.
- */
-once: boolean, 
-/**
- * A GraphQL environment its agents may also query straight through
- * the gateway, which reads each request: reads go, changes only where
- * `changes` allows them, and data rules hold both ways.
- */
-direct: boolean, };
-
 export type Outcome = { "status": "done", output: string, } | { "status": "refused", why: string, } | { "status": "failed", error: string, } | { "status": "unknown", why: string, } | { "status": "pending", approval: number, };
 
 export type ApprovalState = "pending" | "approved" | "rejected" | "expired";
@@ -311,9 +262,51 @@ change: boolean,
 /**
  * Its environment allows no grant: each is approved on its own.
  */
-once: boolean, };
+once: boolean, 
+/**
+ * A WebAssembly plugin's card, which Silt draws (ADR 0104).
+ */
+card: Card | null, 
+/**
+ * What it will send, each checked while it runs unless opaque.
+ */
+effects: Array<Effect>, 
+/**
+ * What decided it, such as a rule or an untrusted publisher.
+ */
+why: string | null, };
 
-export type GrantScope = { "for": "run" } | { "for": "thread", minutes: number, };
+export type Card = { title: string, blocks: Array<Block>, };
+
+export type Block = { "type": "fields", pairs: Array<[string, string]>, } | { "type": "list", label: string, items: Array<Item>, } | { "type": "diff", label: string, files: Array<FileChange>, } | { "type": "code", label: string, text: string, } | { "type": "note", tone: Tone, text: string, };
+
+export type Item = { 
+/**
+ * Set apart, such as a commit's id.
+ */
+key?: string | null, text: string, };
+
+export type FileChange = { path: string, added: number, removed: number, };
+
+export type Tone = "neutral" | "good" | "warn" | "danger";
+
+export type Effect = { "type": "http", method: string, url: string, body_sha256?: string | null, } | { "type": "git_push", remote: string, reference: string, old: string, new: string, } | { "type": "reach", path: string, writable: boolean, } | { "type": "opaque", channel: EffectChannel, what: string, };
+
+export type EffectChannel = "sockets" | "ssh" | "mcp-process";
+
+export type ScopedRule = { action: string, field?: string | null, pattern?: Glob | null, rule: Rule, 
+/**
+ * Each call approved on its own; no grant covers it.
+ */
+once: boolean, source: RuleSource, };
+
+export type Rule = "allow" | "ask" | "never";
+
+export type RuleSource = { "from": "built_in" } | { "from": "org", "name": string } | { "from": "yours" } | { "from": "default" } | { "from": "untrusted" };
+
+export type Glob = string;
+
+export type GrantScope = { "for": "run" } | { "for": "thread", minutes: number, } | { "for": "workspace" } | { "for": "always" };
 
 export type CallView = { id: number, plugin: string, tool: string, environment: string, target: string, shown: string, change: boolean, 
 /**
@@ -327,7 +320,7 @@ grant: number | null,
 /**
  * `pending`, `running`, `rejected`, `expired` or `ended`.
  */
-state: string, outcome: Outcome | null, created_ms: number, answered_ms: number | null, };
+state: string, outcome: Outcome | null, created_ms: number, answered_ms: number | null, card: Card | null, effects: Array<Effect>, };
 
 export type GrantView = { id: number, plugin: string, environment: string, change: boolean, 
 /**
@@ -347,7 +340,206 @@ refused: Array<NetworkRefusal>,
 /**
  * The devices Silt holds for the thread's sandboxes.
  */
-devices: Array<RelayView>, };
+devices: Array<RelayView>, 
+/**
+ * The folders granted to its agents (ADR 0102).
+ */
+folders: Array<FolderView>, };
+
+export type ThreadCall = { thread: string, call: CallView, };
+
+export type PluginActivity = { built_ms: number | null, 
+/**
+ * The tools it offers agents, by its own names.
+ */
+tools: Array<string>, 
+/**
+ * Why it doesn't load here, when it doesn't.
+ */
+broken: string | null, 
+/**
+ * Newest first.
+ */
+calls: Array<ThreadCall>, };
+
+export type Installed = { id: string, source: PluginSource, version: string, 
+/**
+ * The capabilities the person granted, by name.
+ */
+granted: Array<string>, 
+/**
+ * The workspaces it's on in, by id.
+ */
+workspaces: Array<string>, 
+/**
+ * Its environments, each with the patterns that pick it.
+ */
+environments: { [key in string]: Array<string> }, 
+/**
+ * Which of `silt credential`'s credentials each of its own is: by the
+ * credential's id, or `id@environment` for one per environment.
+ */
+credentials: { [key in string]: string }, 
+/**
+ * The person's values of its settings; never secrets.
+ */
+settings: Record<string, unknown>, 
+/**
+ * The person's rules for its actions.
+ */
+rules: Array<ScopedRule>, 
+/**
+ * What the person agreed to for this version, in the words they saw:
+ * each capability with its hosts, credential and action.
+ */
+consented: Array<string>, };
+
+export type PluginView = { installed: Installed, 
+/**
+ * `None` when its files can't be read here.
+ */
+manifest: Manifest | null, readme: string | null, trusted: boolean, 
+/**
+ * Its hosts, those its settings name included.
+ */
+hosts: Array<string>, 
+/**
+ * A newer version from its git repository, waiting for the person.
+ */
+update: GitUpdate | null, };
+
+export type GitUpdate = { id: string, 
+/**
+ * The commit installed when it was found.
+ */
+from_commit: string, from: string, to: string, 
+/**
+ * The tag or branch it's at.
+ */
+reference: string, commit: string, 
+/**
+ * What came in since, newest first, as `<short id> <subject>`.
+ */
+commits: Array<string>, 
+/**
+ * What it asks for that the installed version doesn't: updating it
+ * needs agreeing to these.
+ */
+adds: Array<string>, };
+
+export type Preview = { id: string, commit: string, 
+/**
+ * What adding it agrees to, in words.
+ */
+consent: Array<string>, };
+
+export type Manifest = { 
+/**
+ * `publisher.name`, such as `silt.github` or `acme.deploys`.
+ */
+id: string, name: string, version: string, publisher: string, description: string, license: string, repository?: string | null, 
+/**
+ * The WIT world it was built for, such as `silt:plugin@1`.
+ */
+world: string, build: Build, capabilities: Array<Capability>, actions: Array<ActionSpec>, environments?: Environments | null, settings: Array<SettingSpec>, credentials: Array<CredentialSpec>, docs: Docs, };
+
+export type Build = { "cargo": { package: string, toolchain: string, } } | { "asset": { url: string, sha256: string, } } | "shipped";
+
+export type Capability = { "kind": "http", hosts: Array<string>, 
+/**
+ * A setting whose values name more hosts, the person's to set.
+ */
+hosts_from?: string | null, reason: string, } | { "kind": "git", hosts: Array<string>, hosts_from?: string | null, reason: string, } | { "kind": "agent-files", reason: string, } | { "kind": "thread-read", reason: string, } | { "kind": "reach", reason: string, } | { "kind": "sockets", hosts: Array<string>, hosts_from?: string | null, reason: string, } | { "kind": "ssh", hosts: Array<string>, hosts_from?: string | null, reason: string, } | { "kind": "mcp-process", command: Array<string>, 
+/**
+ * A setting holding the command instead, the person's to set.
+ */
+command_from?: string | null, hosts: Array<string>, hosts_from?: string | null, reason: string, };
+
+export type ActionSpec = { id: string, label: string, 
+/**
+ * Markdown.
+ */
+description: string, kind: ActionKind, 
+/**
+ * What it starts as, once the person trusts the publisher.
+ */
+default: Rule, 
+/**
+ * Each call approved on its own; no grant covers it.
+ */
+once: boolean, 
+/**
+ * The call's fields its rules may match on, such as `branch`.
+ */
+fields: Array<string>, };
+
+export type ActionKind = "read" | "change";
+
+export type Environments = { 
+/**
+ * Such as "repos" for GitHub, or "sites".
+ */
+label: string, 
+/**
+ * The prepared call's field matched against each environment's
+ * patterns, such as `repo`.
+ */
+field: string, };
+
+export type SettingSpec = { key: string, label: string, 
+/**
+ * Markdown.
+ */
+description: string, type: SettingKind, scope: SettingScope, default?: unknown, 
+/**
+ * An enum's choices.
+ */
+options?: Array<string>, };
+
+export type SettingKind = "string" | "number" | "boolean" | "enum" | "path" | "list" | "secret";
+
+export type SettingScope = "plugin" | "environment" | "workspace";
+
+export type CredentialSpec = { id: string, label: string, 
+/**
+ * The hosts Silt sends it to, and no others.
+ */
+hosts: Array<string>, 
+/**
+ * A setting naming more hosts it's sent to: one a capability takes its
+ * hosts from too.
+ */
+hosts_from?: string | null, send: Send, 
+/**
+ * Markdown: how a person gets one.
+ */
+how: string, 
+/**
+ * Each environment has its own.
+ */
+per_environment: boolean, 
+/**
+ * Another credential of this plugin whose secret this sends, another
+ * way or to other hosts, such as a token to an API and to git: the
+ * person sets it once.
+ */
+same_as?: string | null, };
+
+export type Send = { "header": { name: string, scheme: string | null, } } | { "basic": { user: string, } } | { "query": { name: string, } };
+
+export type Docs = { readme: string, 
+/**
+ * Folders of skills teaching agents to use it.
+ */
+skills: Array<string>, };
+
+export type PluginSource = { "type": "shipped" } | { "type": "git", url: string, commit: string, follow?: string | null, } | { "type": "dev", path: string, } | { "type": "marketplace", server: string, } | { "type": "org", org: string, commit?: string | null, };
+
+export type FolderView = { path: string, writable: boolean, 
+/**
+ * For the run that asked, rather than the thread on this machine.
+ */
+run_only: boolean, granted_ms: number, until_ms: number | null, };
 
 export type NetworkRefusal = { time_ms: number, host: string, port: number, why: string, };
 
@@ -1486,6 +1678,54 @@ server: ServerBinding | null, rules: Array<MatchRule>, defaults: Defaults,
  */
 env: { [key in string]: string }, policy: Policy, };
 
+export type FolderRule = { 
+/**
+ * A folder, `~/` for the home folder's.
+ */
+root: string, answer: FolderAnswer, 
+/**
+ * Writing may be given in it.
+ */
+writable: boolean, };
+
+export type PluginPolicy = { install?: Array<OrgPlugin>, 
+/**
+ * Only these may be on: `publisher:<name>`, `git:<url>`, or a plugin's
+ * id; any when unset. Silt's own plugins are named by id like others.
+ */
+allow?: Array<string> | null, 
+/**
+ * The one version each named plugin may run at.
+ */
+pinned?: { [key in string]: string }, 
+/**
+ * No call may have an effect Silt can't check (TCP, SSH, a local MCP
+ * server's).
+ */
+refuse_opaque?: boolean, 
+/**
+ * No plugin may widen an agent's sandbox.
+ */
+refuse_reach?: boolean, rules?: Array<OrgPluginRule>, };
+
+export type OrgPlugin = { id: string, git: string, 
+/**
+ * The commit it's built from, and no other.
+ */
+commit: string, };
+
+export type OrgPluginRule = { plugin: string, 
+/**
+ * An action, or `*` for every one.
+ */
+action: string, field?: string | null, pattern?: string | null, 
+/**
+ * `ask` or `never`: an org's allow would loosen its members' rules.
+ */
+rule: string, };
+
+export type FolderAnswer = "allow" | "ask" | "never";
+
 export type Workspaces = { 
 /**
  * Where projects no rule matches go.
@@ -1600,7 +1840,20 @@ refuse?: Array<Extra>,
 /**
  * The agent's own sandbox may not run inside Silt's.
  */
-no_nested?: boolean, };
+no_nested?: boolean, 
+/**
+ * The folders agents may ask for, and how each is answered (ADR 0102).
+ */
+folders?: Array<FolderRule>, 
+/**
+ * The folder rules of more than one policy, each set judged on its
+ * own, once policies are combined.
+ */
+folder_layers?: Array<Array<FolderRule>>, 
+/**
+ * What plugins may be on, and how their calls are held (ADR 0104).
+ */
+plugins?: PluginPolicy, };
 
 export type Network = "none" | "gateway" | "full" | "host";
 

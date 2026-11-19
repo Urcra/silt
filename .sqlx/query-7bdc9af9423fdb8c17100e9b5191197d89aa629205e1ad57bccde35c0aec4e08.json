@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", thread_id, run_hash, plugin, environment, change, created_ms, until_ms, revoked_ms, from_call\n               FROM plugin_grants WHERE thread_id = ? ORDER BY id DESC",
+  "query": "SELECT id AS \"id!\", thread_id, run_hash, plugin, environment, change, created_ms, until_ms, revoked_ms, from_call, action\n               FROM plugin_grants WHERE thread_id = ? ORDER BY id DESC",
   "describe": {
     "columns": [
       {
@@ -112,6 +112,17 @@
             "name": "from_call"
           }
         }
+      },
+      {
+        "name": "action",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "plugin_grants",
+            "name": "action"
+          }
+        }
       }
     ],
     "parameters": {
@@ -127,8 +138,9 @@
       false,
       true,
       true,
-      false
+      false,
+      true
     ]
   },
-  "hash": "6d1b420d21579944cfcde8855b070cc42f659574e2155e3f518f04648a2c090e"
+  "hash": "7bdc9af9423fdb8c17100e9b5191197d89aa629205e1ad57bccde35c0aec4e08"
 }

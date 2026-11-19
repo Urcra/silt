@@ -172,6 +172,55 @@ impl Utc {
     }
 }
 
+/// The text of `tool`'s answer from the MCP server `command` starts, over
+/// stdio, as an agent would call it, or why it failed.
+pub fn call_tool(
+    command: &str,
+    args: &[String],
+    env: &[(String, String)],
+    cwd: &Path,
+    tool: &str,
+    arguments: serde_json::Value,
+) -> Result<String, String> {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(command)
+        .args(args)
+        .envs(env.iter().map(|(name, value)| (name, value)))
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("could not start the MCP server: {error}"))?;
+    let mut input = child.stdin.take().ok_or("no stdin")?;
+    let messages = [
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}}}),
+        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": tool, "arguments": arguments}}),
+    ];
+    for message in messages {
+        writeln!(input, "{message}").map_err(|error| error.to_string())?;
+    }
+    input.flush().map_err(|error| error.to_string())?;
+    let output = child.stdout.take().ok_or("no stdout")?;
+    let mut answer = Err("the MCP server didn't answer".to_owned());
+    for line in BufReader::new(output).lines() {
+        let Ok(reply) = serde_json::from_str::<serde_json::Value>(&line.map_err(|error| error.to_string())?) else {
+            continue;
+        };
+        if reply["id"] == 2 {
+            let text = reply["result"]["content"][0]["text"].as_str().unwrap_or_default().to_owned();
+            answer = if reply["result"]["isError"] == true { Err(text) } else { Ok(text) };
+            break;
+        }
+    }
+    drop(input);
+    let _ = child.kill();
+    let _ = child.wait();
+    answer
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

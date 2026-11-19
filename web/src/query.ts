@@ -42,6 +42,9 @@ export const keys = {
   allApprovals: ['approvals'] as const,
   access: (thread: string) => ['approvals', 'access', thread] as const,
   plugins: ['plugins'] as const,
+  // Apart from `plugins`, so a change to one doesn't ask every repository again.
+  pluginUpdates: ['pluginUpdates'] as const,
+  pluginActivity: (id: string) => ['pluginActivity', id] as const,
   artifacts: ['artifacts'] as const,
   mr: (id: string) => ['mrs', id] as const,
   mrBrief: (id: string) => ['mrs', id, 'brief'] as const,

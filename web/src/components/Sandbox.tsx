@@ -6,10 +6,11 @@ import {
   type AgentStatus,
   type ApprovalView,
   type BackendView,
-  type CallView,
   type Extra,
   type GrantScope,
-  type Plugin,
+  type Installed,
+  type FolderAnswer,
+  type FolderRule,
   type Policy,
   type Reach,
   type ThreadSummary,
@@ -20,7 +21,9 @@ import { BACKENDS, DEVICE_ORDER, DEVICES, HANDS_OVER, NETWORK_ORDER, NETWORKS, P
 import { useNow } from '../now'
 import { hosted } from '../served'
 import { useShortcut } from '../shortcuts'
-import { Button, Icon, Kbd, Popover, Tag, buttonClass, cx } from '../ui'
+import { Button, Icon, Input, Kbd, Popover, Select, Tag, buttonClass, cx } from '../ui'
+import { PluginCard } from './PluginCard'
+import { TONE_DOT, callSaid, clock } from '../calls'
 
 function networkLine(reach: Reach): string {
   switch (reach.network) {
@@ -82,7 +85,7 @@ export function SandboxShield({
   const live = agent && agent.state !== 'stopped' ? agent : null
   const running = live?.sandbox ?? null
   const reach = running ?? (!live && required && view ? reachOf(view.effective) : null)
-  const on = (plugins.data ?? []).filter((plugin) => view && plugin.workspaces.includes(view.workspace.id))
+  const on = (plugins.data ?? []).map((plugin) => plugin.installed).filter((plugin) => view && onIn(plugin, view.workspace.id))
   const heading = running
     ? 'Sandboxed'
     : live
@@ -116,7 +119,7 @@ export function SandboxShield({
               <Fact name="Network">{networkLine(reach)}</Fact>
               {alsoLine(reach) && <Fact name="Also allowed">{alsoLine(reach)}</Fact>}
               <Fact name="Devices">{devicesLine(reach)}</Fact>
-              <Fact name="Plugins">{on.length ? on.map((plugin) => plugin.name).join(', ') : 'None'}</Fact>
+              <Fact name="Plugins">{on.length ? on.map((plugin) => plugin.id).join(', ') : 'None'}</Fact>
               <Fact name="Files">This checkout, your toolchains read-only</Fact>
               <Fact name="Credentials">None inside; Silt adds the workspace's on the way out</Fact>
             </>
@@ -146,6 +149,11 @@ export function SandboxShield({
 /** What approving may also allow: nothing more, or calls like it for the run or the thread a while. */
 const GRANTS: { value: string; label: (change: boolean) => string; scope: GrantScope | null }[] = [
   { value: 'once', label: () => 'ask again next time', scope: null },
+  {
+    value: 'always',
+    label: (change) => `always allow ${change ? 'changes' : 'reads'} like it, by a rule of yours`,
+    scope: { for: 'always' },
+  },
   { value: 'run', label: (change) => `allow ${change ? 'changes' : 'reads'} like it for this run`, scope: { for: 'run' } },
   {
     value: 'hour',
@@ -205,17 +213,23 @@ export function ApprovalCard({ approval, first, title }: { approval: ApprovalVie
         <Tag>{approval.tool}</Tag>
         {title && <span className="truncate">· {title}</span>}
       </span>
-      <span className="font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase">Silt will send exactly this, once</span>
-      <pre className="max-h-80 overflow-y-auto rounded-sm border border-line bg-bg px-2.5 py-2 font-mono text-xs whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
-        {approval.shown}
-      </pre>
+      {approval.card ? (
+        <PluginCard card={approval.card} effects={approval.effects} why={approval.why} />
+      ) : (
+        <>
+          <span className="font-mono text-2xs tracking-[0.04em] text-fg-2 uppercase">Silt will send exactly this, once</span>
+          <pre className="max-h-80 overflow-y-auto rounded-sm border border-line bg-bg px-2.5 py-2 font-mono text-xs whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
+            {approval.shown}
+          </pre>
+        </>
+      )}
       <span className="font-mono text-2xs text-fg-2">
         {approval.target} · request {approval.hash.slice(0, 4)}…{approval.hash.slice(-4)} · expires in{' '}
         {remaining(approval.created_ms, now)}
       </span>
       <span className="flex flex-wrap items-center gap-1.5">
         <Button variant="primary" disabled={sending} onClick={() => answer(true)}>
-          Approve and send once {first && <Kbd onAccent>⏎</Kbd>}
+          {approval.card ? 'Approve once' : 'Approve and send once'} {first && <Kbd onAccent>⏎</Kbd>}
         </Button>
         <Button disabled={sending} onClick={() => answer(false)}>
           Reject
@@ -231,7 +245,7 @@ export function ApprovalCard({ approval, first, title }: { approval: ApprovalVie
               value={grant}
               onChange={(event) => setGrant(event.target.value)}
             >
-              {GRANTS.map((choice) => (
+              {GRANTS.filter((choice) => choice.value !== 'always' || approval.card).map((choice) => (
                 <option key={choice.value} value={choice.value}>
                   {choice.label(change)}
                 </option>
@@ -629,6 +643,17 @@ export function ReachSettings({
             </div>
           </div>
           <div className={ROW}>
+            <span className="flex flex-col">
+              <span className="text-sm">Folders agents ask for</span>
+              <span className={SUB}>With Silt's Folders plugin, beyond what's above</span>
+            </span>
+            <FolderRules
+              rules={policy.folders ?? []}
+              org={org ? { name: org.name, rules: org.policy.folders ?? [] } : null}
+              onChange={(folders) => onChange({ folders })}
+            />
+          </div>
+          <div className={ROW}>
             <span className="text-sm">Agents' own sandboxes</span>
             <label className={cx('flex items-start gap-2 text-sm', org?.policy.no_nested && 'opacity-50')}>
               <input
@@ -651,16 +676,131 @@ export function ReachSettings({
   )
 }
 
+const FOLDER_ANSWERS: { value: FolderAnswer; label: string }[] = [
+  { value: 'allow', label: 'given' },
+  { value: 'ask', label: 'asked' },
+  { value: 'never', label: 'never' },
+]
+
+/** The person's rules for folders an agent asks for, under their org's, which only tighten (ADR 0102). */
+function FolderRules({
+  rules,
+  org,
+  onChange,
+}: {
+  rules: FolderRule[]
+  org: { name: string; rules: FolderRule[] } | null
+  onChange: (rules: FolderRule[]) => void
+}) {
+  const [root, setRoot] = useState('')
+  const put = (index: number, next: Partial<FolderRule>) =>
+    onChange(rules.map((rule, at) => (at === index ? { ...rule, ...next } : rule)))
+  const add = () => {
+    const trimmed = root.trim()
+    if (!trimmed || rules.some((rule) => rule.root === trimmed)) return
+    onChange([...rules, { root: trimmed, answer: 'ask', writable: false }])
+    setRoot('')
+  }
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5" aria-label="folder rules">
+      {org?.rules.map((rule) => (
+        <div key={`org-${rule.root}`} className="flex min-w-0 items-center gap-2 text-sm opacity-70">
+          <code className="min-w-0 flex-1 truncate font-mono text-xs">{rule.root}</code>
+          <Tag tone={rule.answer === 'never' ? 'danger' : 'neutral'}>
+            {FOLDER_ANSWERS.find((known) => known.value === rule.answer)?.label}
+            {rule.writable ? ', writable' : ''}
+          </Tag>
+          <span className={SUB}>{org.name}</span>
+        </div>
+      ))}
+      {rules.map((rule, index) => (
+        <div key={rule.root} className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+          <code className="min-w-0 flex-1 truncate font-mono text-xs">{rule.root}</code>
+          <Select
+            aria-label={`answer for ${rule.root}`}
+            value={rule.answer}
+            onChange={(event) => put(index, { answer: event.target.value as FolderAnswer })}
+          >
+            {FOLDER_ANSWERS.map((answer) => (
+              <option key={answer.value} value={answer.value}>
+                {answer.label}
+              </option>
+            ))}
+          </Select>
+          <label className={cx('flex items-center gap-1 text-xs', rule.answer === 'never' && 'opacity-50')}>
+            <input
+              type="checkbox"
+              aria-label={`writable ${rule.root}`}
+              className="accent-[var(--accent)]"
+              checked={rule.writable}
+              disabled={rule.answer === 'never'}
+              onChange={(event) => put(index, { writable: event.target.checked })}
+            />
+            writable
+          </label>
+          <Button
+            variant="ghost"
+            aria-label={`remove ${rule.root}`}
+            onClick={() => onChange(rules.filter((_, at) => at !== index))}
+          >
+            Remove
+          </Button>
+        </div>
+      ))}
+      <form
+        className="flex min-w-0 items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault()
+          add()
+        }}
+      >
+        <Input
+          aria-label="folder to add a rule for"
+          placeholder="~/datasets"
+          className="min-w-0 flex-1 font-mono"
+          value={root}
+          onChange={(event) => setRoot(event.target.value)}
+        />
+        <Button type="submit" disabled={!root.trim()}>
+          Add
+        </Button>
+      </form>
+      <span className={SUB}>
+        Folders no rule names are asked. Silt's data, credentials and other workspaces' folders are never given.
+      </span>
+    </div>
+  )
+}
+
+/** Whether `plugin` is on in `workspace`; `*` is every workspace. */
+function onIn(plugin: Installed, workspace: string): boolean {
+  return plugin.workspaces.includes(workspace) || plugin.workspaces.includes('*')
+}
+
+/** Where a plugin came from, as its tag says it. */
+function sourceLabel(source: Installed['source']): string {
+  switch (source.type) {
+    case 'shipped':
+      return 'Silt'
+    case 'git':
+      return 'git'
+    case 'dev':
+      return 'dev'
+    case 'marketplace':
+      return 'marketplace'
+    case 'org':
+      return source.org
+  }
+}
+
 /** Settings › Workspaces' plugins (ADR 0093): which of this machine's plugins the workspace's agents get. Saved at once. */
 export function WorkspacePlugins({ workspace, name }: { workspace: string; name: string }) {
   const queries = useQueryClient()
   const plugins = useQuery({ queryKey: keys.plugins, queryFn: api.plugins })
   const [error, setError] = useState<string>()
-  const turn = (plugin: Plugin, on: boolean) => {
+  const turn = (plugin: Installed, on: boolean) => {
     setError(undefined)
-    const workspaces = plugin.workspaces.filter((other) => other !== workspace)
-    if (on) workspaces.push(workspace)
-    api.putPlugin({ ...plugin, workspaces: workspaces.sort() }).then(
+    api.turnPlugin(plugin.id, workspace, on).then(
       () => void queries.invalidateQueries({ queryKey: keys.plugins }),
       (failure: unknown) => setError(message(failure)),
     )
@@ -673,43 +813,37 @@ export function WorkspacePlugins({ workspace, name }: { workspace: string; name:
         credentials it never sees. Other workspaces' agents never see them.
       </p>
       <div className="overflow-hidden rounded-md border border-line bg-elevated">
-        {(plugins.data ?? []).map((plugin) => {
-          const on = plugin.workspaces.includes(workspace)
-          const elsewhere = plugin.workspaces.filter((other) => other !== workspace)
+        {(plugins.data ?? []).map(({ installed: plugin, manifest }) => {
+          const on = onIn(plugin, workspace)
+          const everywhere = plugin.workspaces.includes('*')
+          const elsewhere = plugin.workspaces.filter((other) => other !== workspace && other !== '*')
           return (
             <label
-              key={plugin.name}
+              key={plugin.id}
               className="flex cursor-pointer items-center gap-2.5 border-b border-line-subtle px-4 py-2.5 text-sm last:border-b-0"
             >
               <input
                 type="checkbox"
-                aria-label={`${plugin.name} in ${name}`}
+                aria-label={`${plugin.id} in ${name}`}
                 className="accent-[var(--accent)]"
                 checked={on}
                 onChange={(event) => turn(plugin, event.target.checked)}
               />
-              <span className="font-medium">{plugin.name}</span>
-              <Tag>
-                {plugin.kind.type === 'graphql'
-                  ? 'GraphQL'
-                  : plugin.kind.type === 'mcp'
-                    ? 'MCP'
-                    : (plugin.kind.argv[0] ?? 'command')}
-              </Tag>
-              {Object.entries(plugin.environments).map(([environment, rules]) => (
-                <Tag key={environment} tone={rules.changes === 'ask' ? 'warn' : 'neutral'}>
-                  {environment}
-                  {rules.data.length ? ` · ${rules.data.join(', ')} kept` : ''}
-                </Tag>
-              ))}
-              <span className="ml-auto text-xs text-fg-2">{elsewhere.length ? `also in ${elsewhere.join(', ')}` : ''}</span>
+              <Link to="/settings/plugins/plugin" search={{ id: plugin.id }} className="font-medium hover:text-accent-fg">
+                {manifest?.name ?? plugin.id}
+              </Link>
+              <Tag>{sourceLabel(plugin.source)}</Tag>
+              <span className="font-mono text-2xs text-fg-2">{plugin.version}</span>
+              <span className="ml-auto text-xs text-fg-2">
+                {everywhere ? 'in every workspace' : elsewhere.length ? `also in ${elsewhere.join(', ')}` : ''}
+              </span>
             </label>
           )
         })}
         {plugins.data?.length === 0 && (
           <p className="px-4 py-3 text-xs text-fg-2">
-            No plugins on this machine yet. Add one with <code className="font-mono">silt plugin add &lt;file&gt;</code>; the
-            guide shows its JSON.
+            No plugins on this machine yet. Add one from git with{' '}
+            <code className="font-mono">silt plugin add &lt;url&gt;#&lt;tag&gt;</code>.
           </p>
         )}
       </div>
@@ -721,35 +855,6 @@ export function WorkspacePlugins({ workspace, name }: { workspace: string; name:
 function Heading({ children }: { children: ReactNode }) {
   return <h3 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{children}</h3>
 }
-
-function clock(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-function callSaid(call: CallView): { tone: 'ok' | 'warn' | 'danger' | 'neutral'; said: string } {
-  const outcome = call.outcome
-  if (call.state === 'pending') return { tone: 'warn', said: 'waiting for you' }
-  if (call.state === 'running') return { tone: 'warn', said: 'running' }
-  if (call.state === 'expired') return { tone: 'neutral', said: 'approval expired' }
-  if (!outcome) return { tone: 'neutral', said: call.state }
-  switch (outcome.status) {
-    case 'done':
-      return {
-        tone: 'ok',
-        said: call.asked ? 'you approved · ran' : call.grant !== null ? 'ran under a grant' : 'ran without asking',
-      }
-    case 'refused':
-      return { tone: 'danger', said: `refused: ${outcome.why}` }
-    case 'failed':
-      return { tone: 'danger', said: `failed before it was sent: ${outcome.error}` }
-    case 'unknown':
-      return { tone: 'warn', said: `outcome unknown: ${outcome.why}` }
-    case 'pending':
-      return { tone: 'warn', said: 'waiting for you' }
-  }
-}
-
-const TONE_DOT = { ok: 'bg-ok', warn: 'bg-warn', danger: 'bg-danger', neutral: 'bg-fg-3' } as const
 
 /**
  * The thread's Access tab (ADR 0093): what its sandbox reaches, the grants in force, each plugin call and how it
@@ -770,6 +875,13 @@ export function AccessPanel({ thread, agent }: { thread: string; agent: AgentSta
     setError(undefined)
     api.releaseDevice(thread, device).then(
       () => void queries.invalidateQueries({ queryKey: keys.allApprovals }),
+      (failure: unknown) => setError(message(failure)),
+    )
+  }
+  const unfolder = (path: string) => {
+    setError(undefined)
+    api.unfolder(thread, path).then(
+      () => void queries.invalidateQueries({ queryKey: keys.access(thread) }),
       (failure: unknown) => setError(message(failure)),
     )
   }
@@ -822,6 +934,30 @@ export function AccessPanel({ thread, agent }: { thread: string; agent: AgentSta
         ))}
         <p className="text-2xs text-fg-2">Grants stay with this thread. A fork starts with none.</p>
       </section>
+      {(access.data?.folders.length ?? 0) > 0 && (
+        <section aria-label="folders" className="flex flex-col gap-2">
+          <Heading>Folders</Heading>
+          {access.data?.folders.map((folder) => (
+            <div key={folder.path} className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-ok" />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate font-mono text-xs">{folder.path}</span>
+                <span className="font-mono text-2xs text-fg-2">
+                  {folder.writable ? 'writable' : 'read-only'} · {folder.run_only ? 'this run' : 'this thread'} · since{' '}
+                  {clock(folder.granted_ms)}
+                  {folder.until_ms !== null ? ` · until ${clock(folder.until_ms)}` : ''}
+                </span>
+              </span>
+              <Button variant="ghost" onClick={() => unfolder(folder.path)} aria-label={`unfolder ${folder.path}`}>
+                Unfolder
+              </Button>
+            </div>
+          ))}
+          <p className="text-2xs text-fg-2">
+            Taken back, a folder leaves the agent's sandbox when its turn ends; it restarts where it was without it.
+          </p>
+        </section>
+      )}
       {(access.data?.devices.length ?? 0) > 0 && (
         <section aria-label="devices and sessions" className="flex flex-col gap-2">
           <Heading>Devices and sessions</Heading>
