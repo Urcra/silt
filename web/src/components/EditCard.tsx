@@ -32,7 +32,11 @@ export function EditCard({ change, bare = false }: { change: Change; bare?: bool
         </div>
       )}
       {rows.length > SHOWN && (
-        <button type="button" onClick={() => setAll(!all)} className="w-full border-t border-line-subtle px-3 py-1 text-left text-2xs text-fg-2 hover:text-fg-1">
+        <button
+          type="button"
+          onClick={() => setAll(!all)}
+          className="w-full border-t border-line-subtle px-3 py-1 text-left text-2xs text-fg-2 hover:text-fg-1"
+        >
           {all ? 'Show fewer lines' : `Show all ${rows.length} lines`}
         </button>
       )}

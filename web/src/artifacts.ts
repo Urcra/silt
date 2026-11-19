@@ -126,7 +126,10 @@ function bootJson(boot: string | null): string {
     return '{}'
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return '{}'
-  return boot.replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
+  return boot
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
 }
 
 export type FrameOptions = {
@@ -228,7 +231,10 @@ export function fileName(artifact: ArtifactView, extension = EXTENSIONS[artifact
 }
 
 function escape(text: string): string {
-  return text.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] ?? char)
+  return text.replace(
+    /[&<>"']/g,
+    (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] ?? char,
+  )
 }
 
 /**
@@ -242,7 +248,10 @@ export function artifactPath(thread: string, artifact: string, version?: number 
 }
 
 /** Whether `row` is among what the filters ask for. */
-export function listingMatches(row: ArtifactListed, filters: { text: string; kind: string; repo: string; mine: boolean; archived: boolean }): boolean {
+export function listingMatches(
+  row: ArtifactListed,
+  filters: { text: string; kind: string; repo: string; mine: boolean; archived: boolean },
+): boolean {
   if (row.archived !== filters.archived) return false
   if (filters.kind && row.artifact.kind !== filters.kind) return false
   if (filters.repo && row.repo !== filters.repo) return false
@@ -265,16 +274,28 @@ export function withFilesInlined(html: string, files: InlineFiles): string {
   for (const path of paths) {
     const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const uri = `data:${files[path].media_type.split(';')[0]};base64,${files[path].data}`
-    out = out.replace(new RegExp(`((?:src|href)\\s*=\\s*["'])(?:\\./)?${escaped}(["'])`, 'g'), (_match, before: string, after: string) => `${before}${uri}${after}`)
+    out = out.replace(
+      new RegExp(`((?:src|href)\\s*=\\s*["'])(?:\\./)?${escaped}(["'])`, 'g'),
+      (_match, before: string, after: string) => `${before}${uri}${after}`,
+    )
   }
-  const carried = JSON.stringify(Object.fromEntries(paths.map((path) => [path, [files[path].media_type, files[path].data]]))).replace(/</g, '\\u003c')
+  const carried = JSON.stringify(
+    Object.fromEntries(paths.map((path) => [path, [files[path].media_type, files[path].data]])),
+  ).replace(/</g, '\\u003c')
   const shim = `<script>(function(){var f=${carried};var of=window.fetch;window.fetch=function(u,o){var k=String(u&&u.url||u).replace(/^\\.\\//,'');if(Object.prototype.hasOwnProperty.call(f,k)){var b=atob(f[k][1]),a=new Uint8Array(b.length);for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return Promise.resolve(new Response(a,{headers:{'content-type':f[k][0]}}))}return of.apply(this,arguments)}})()</script>`
   const doctype = /^\s*<!doctype[^>]*>/i.exec(out)
   return doctype ? doctype[0] + shim + out.slice(doctype[0].length) : shim + out
 }
 
-export function offlineHtml(artifact: ArtifactView, content: ArtifactContent, rendered?: string, style?: string | null, files: InlineFiles = {}): string {
-  if (artifact.kind === 'html') return sandboxedDocument(withFilesInlined(rendered ?? textOf(content), files), { probe: false, style })
+export function offlineHtml(
+  artifact: ArtifactView,
+  content: ArtifactContent,
+  rendered?: string,
+  style?: string | null,
+  files: InlineFiles = {},
+): string {
+  if (artifact.kind === 'html')
+    return sandboxedDocument(withFilesInlined(rendered ?? textOf(content), files), { probe: false, style })
   const title = escape(`${artifact.title} · v${artifact.version}`)
   const body = rendered ?? `<img alt="${escape(artifact.title)}" src="${dataUrl(content)}">`
   return [
@@ -302,7 +323,10 @@ export function commentsOn(group: ArtifactGroup, comments: CommentView[]): Comme
 /** A comment's words with the text it's about quoted first. */
 export function quoted(text: string, quote: string | null): string {
   if (!quote) return text.trim()
-  const lines = quote.trim().split('\n').map((line) => `> ${line}`)
+  const lines = quote
+    .trim()
+    .split('\n')
+    .map((line) => `> ${line}`)
   return `${lines.join('\n')}\n\n${text.trim()}`
 }
 
@@ -313,7 +337,13 @@ export function artifactPrompt(shown: ArtifactVersion, comments: CommentView[]):
     const on = comment.location.at === 'element' ? `On the page's \`${comment.location.anchor}\`: ` : ''
     return `- ${on}${comment.text.replace(/\n/g, '\n  ')}`
   })
-  return [`Comments on the artifact "${title}" (id ${id}, version ${version}):`, '', ...items, '', `Make a new version with silt_artifact and id ${id}.`].join('\n')
+  return [
+    `Comments on the artifact "${title}" (id ${id}, version ${version}):`,
+    '',
+    ...items,
+    '',
+    `Make a new version with silt_artifact and id ${id}.`,
+  ].join('\n')
 }
 
 /**

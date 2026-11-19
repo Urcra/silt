@@ -55,14 +55,17 @@ const ASKED = ['sample', 'dictation', 'mcp', 'comments', 'files']
  * such as `db`, is `granted` wherever it's served.
  */
 function permissionsHandler(thread: string, artifact: ArtifactView, holder: Holder, served: string[]): CapabilityHandler {
-  const declared = () => ASKED.filter((name) => Boolean(artifact.capabilities?.[name]) && !(name === 'comments' && composerOnly(artifact)))
+  const declared = () =>
+    ASKED.filter((name) => Boolean(artifact.capabilities?.[name]) && !(name === 'comments' && composerOnly(artifact)))
   const states = async () => {
     const grants = await api.artifactGrants(thread, artifact.id).catch(() => ({}) as Record<string, string>)
     const refused = refusedHere(holder)
     const state = (name: string) =>
       !served.includes(name) ? 'unavailable' : grants[name] === 'granted' ? 'granted' : refused.has(name) ? 'denied' : 'prompt'
     const asking = declared()
-    const quiet = Object.keys(artifact.capabilities ?? {}).filter((name) => !asking.includes(name) && name !== 'edit' && name !== 'permissions')
+    const quiet = Object.keys(artifact.capabilities ?? {}).filter(
+      (name) => !asking.includes(name) && name !== 'edit' && name !== 'permissions',
+    )
     return Object.fromEntries([
       ...asking.map((name) => [name, state(name)]),
       ...quiet.map((name) => [name, served.includes(name) ? 'granted' : 'unavailable']),
@@ -85,7 +88,11 @@ function permissionsHandler(thread: string, artifact: ArtifactView, holder: Hold
         const pending = wanted.filter((name) => all[name] === 'prompt' && !asked.has(name))
         if (pending.length > 0) {
           pending.forEach((name) => asked.add(name))
-          const agreed = await holder.confirm({ title: `Let ${artifact.title} use ${pending.join(', ')}?`, detail: 'You can change this later from the page.', action: 'Allow' })
+          const agreed = await holder.confirm({
+            title: `Let ${artifact.title} use ${pending.join(', ')}?`,
+            detail: 'You can change this later from the page.',
+            action: 'Allow',
+          })
           for (const name of pending) {
             if (agreed) await api.setArtifactGrant(thread, artifact.id, name, 'granted', artifact.version).catch(() => undefined)
             else refusedHere(holder).add(name)
@@ -94,7 +101,11 @@ function permissionsHandler(thread: string, artifact: ArtifactView, holder: Hold
         const now = await states()
         return Object.fromEntries(wanted.map((name) => [name, now[name] ?? 'unavailable']))
       }
-      const forget = await holder.confirm({ title: `Forget what you allowed ${artifact.title}?`, detail: 'It asks again the next time it needs something.', action: 'Forget' })
+      const forget = await holder.confirm({
+        title: `Forget what you allowed ${artifact.title}?`,
+        detail: 'It asks again the next time it needs something.',
+        action: 'Forget',
+      })
       if (forget) {
         for (const name of declared()) await api.setArtifactGrant(thread, artifact.id, name, null).catch(() => undefined)
         refusedHere(holder).clear()
@@ -112,9 +123,13 @@ function roomHandler(thread: string, artifact: ArtifactView): CapabilityHandler 
     if (!socket) {
       socket = new RoomSocket(thread, artifact.id, name)
       socket.listen((heard) => {
-        if (heard.event === 'moment') context.emit('room', 'moment', { room: name, topic: heard.topic, data: heard.data, from: heard.from })
+        if (heard.event === 'moment')
+          context.emit('room', 'moment', { room: name, topic: heard.topic, data: heard.data, from: heard.from })
         else if (heard.event === 'peers')
-          context.emit('room', 'peers', { room: name, peers: heard.peers.map((peer) => ({ ...peer, you: peer.peer === socket!.me })) })
+          context.emit('room', 'peers', {
+            room: name,
+            peers: heard.peers.map((peer) => ({ ...peer, you: peer.peer === socket!.me })),
+          })
         else if (heard.event === 'refused') context.emit('room', 'refused', { room: name, reason: heard.reason })
       })
       sockets.set(name, socket)
@@ -174,7 +189,12 @@ function assetsHandler(thread: string, artifact: ArtifactView): CapabilityHandle
       if (!(given.blob instanceof Blob)) throw new Refusal('refused', 'upload takes a Blob or a File')
       if (given.blob.size > ASSET_BYTES) throw new Refusal('too_large', `a file is at most ${ASSET_BYTES >> 20} MiB`)
       const name = typeof given.name === 'string' ? given.name : given.blob instanceof File ? given.blob.name : 'file'
-      const made = (await ask({ op: 'add', name, media_type: given.blob.type || 'application/octet-stream', data: await base64Of(given.blob) })) as {
+      const made = (await ask({
+        op: 'add',
+        name,
+        media_type: given.blob.type || 'application/octet-stream',
+        data: await base64Of(given.blob),
+      })) as {
         id: string
         url: string
         size: number
@@ -189,14 +209,26 @@ function assetsHandler(thread: string, artifact: ArtifactView): CapabilityHandle
 function filesHandler(thread: string, artifact: ArtifactView, holder: Holder): CapabilityHandler {
   const consented = consentFor(thread, artifact, holder, 'files', () => {
     const paths = (artifact.capabilities?.files as { paths?: unknown } | undefined)?.paths
-    const scope = Array.isArray(paths) && paths.length > 0 ? paths.map(String).join(', ') : "all of the thread's files its workspace allows"
-    return { title: `Let ${artifact.title} read this thread's files?`, detail: `It reads ${scope}, and can show what it reads to anyone viewing it.`, action: 'Allow' }
+    const scope =
+      Array.isArray(paths) && paths.length > 0 ? paths.map(String).join(', ') : "all of the thread's files its workspace allows"
+    return {
+      title: `Let ${artifact.title} read this thread's files?`,
+      detail: `It reads ${scope}, and can show what it reads to anyone viewing it.`,
+      action: 'Allow',
+    }
   })
   const ask = async (asked: Record<string, unknown>) => {
     if (!(await consented())) throw new Refusal('not_granted', "the person chose not to let this page read the thread's files")
     return api.pageFiles(thread, artifact.id, asked).catch((failure: unknown) => {
       const said = failure instanceof Error ? failure.message : String(failure)
-      throw new Refusal(/too_large|over 4 MiB/i.test(said) ? 'too_large' : /not_found|no file|had no/i.test(said) ? 'refused' : refusalOf(failure).code, said)
+      throw new Refusal(
+        /too_large|over 4 MiB/i.test(said)
+          ? 'too_large'
+          : /not_found|no file|had no/i.test(said)
+            ? 'refused'
+            : refusalOf(failure).code,
+        said,
+      )
     })
   }
   return {
@@ -207,13 +239,29 @@ function filesHandler(thread: string, artifact: ArtifactView, holder: Holder): C
     call: async (method, args) => {
       const given = (args ?? {}) as { path?: unknown; recursive?: unknown; cursor?: unknown; at?: unknown }
       const path = typeof given.path === 'string' ? given.path : ''
-      if (method === 'list') return ask({ op: 'list', path, recursive: given.recursive === true, cursor: typeof given.cursor === 'string' ? given.cursor : null })
+      if (method === 'list')
+        return ask({
+          op: 'list',
+          path,
+          recursive: given.recursive === true,
+          cursor: typeof given.cursor === 'string' ? given.cursor : null,
+        })
       if (method === 'history') return ask({ op: 'history', path })
-      const read = (await ask({ op: 'read', path, at: typeof given.at === 'string' ? given.at : null })) as { text: string; size: number; revision: string }
+      const read = (await ask({ op: 'read', path, at: typeof given.at === 'string' ? given.at : null })) as {
+        text: string
+        size: number
+        revision: string
+      }
       if (method === 'read') return read
       const filename = downloadName(path.split('/').pop())
       if (!filename) throw new Refusal('refused', "that file isn't one a page may save")
-      if (!(await holder.confirm({ title: 'Save a file from this thread?', detail: `${path} · ${sizeText(read.size)}`, action: 'Save' })))
+      if (
+        !(await holder.confirm({
+          title: 'Save a file from this thread?',
+          detail: `${path} · ${sizeText(read.size)}`,
+          action: 'Save',
+        }))
+      )
         throw new Refusal('not_granted', 'the person chose not to save it')
       const url = URL.createObjectURL(new Blob([read.text], { type: 'text/plain' }))
       const anchor = document.createElement('a')
@@ -247,7 +295,8 @@ function artifactHandler(thread: string, artifact: ArtifactView): CapabilityHand
     call: async (method, args) => {
       if (method === 'version') return { version: artifact.version }
       const html = (args as { html?: unknown } | null)?.html
-      if (typeof html !== 'string' || !/^\s*<!doctype html/i.test(html)) throw new Refusal('refused', 'publish takes a whole document, doctype first')
+      if (typeof html !== 'string' || !/^\s*<!doctype html/i.test(html))
+        throw new Refusal('refused', 'publish takes a whole document, doctype first')
       if (new Blob([html]).size > PUBLISH_BYTES) throw new Refusal('too_large', 'a page is at most 10 MiB')
       try {
         return await api.publishArtifact(thread, artifact.id, html, artifact.version)
@@ -287,9 +336,18 @@ function userHandler(thread: string, artifact: ArtifactView): CapabilityHandler 
         }
         case 'search': {
           // The thread's people whose names start a word with what was typed; everyone when it's empty.
-          const typed = String((args as { query?: unknown } | null)?.query ?? '').trim().toLowerCase()
+          const typed = String((args as { query?: unknown } | null)?.query ?? '')
+            .trim()
+            .toLowerCase()
           return Object.entries(me.people)
-            .filter(([, person]) => !typed || person.toLowerCase().split(/[\s._-]+/).some((word) => word.startsWith(typed)))
+            .filter(
+              ([, person]) =>
+                !typed ||
+                person
+                  .toLowerCase()
+                  .split(/[\s._-]+/)
+                  .some((word) => word.startsWith(typed)),
+            )
             .slice(0, 20)
             .map(([id, person]) => ({ id, name: person }))
         }
@@ -341,7 +399,11 @@ function downloadsHandler(holder: Holder): CapabilityHandler {
             : null
       if (!blob) throw new Refusal('refused', 'save takes text, bytes or a Blob')
       if (blob.size > DOWNLOAD_BYTES) throw new Refusal('too_large', `a download is at most ${DOWNLOAD_BYTES >> 20} MiB`)
-      const agreed = await holder.confirm({ title: 'Save a file from this page?', detail: `${filename} · ${sizeText(blob.size)}`, action: 'Save' })
+      const agreed = await holder.confirm({
+        title: 'Save a file from this page?',
+        detail: `${filename} · ${sizeText(blob.size)}`,
+        action: 'Save',
+      })
       if (!agreed) throw new Refusal('not_granted', 'the person chose not to save it')
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
@@ -390,7 +452,13 @@ function commentsHandler(thread: string, artifact: ArtifactView, holder: Holder)
       }
       if (!(await consented())) throw new Refusal('not_granted', 'the viewer chose not to let this page comment as them')
       if (method === 'add')
-        return { id: await holder.addComment(said(given.text), typeof given.quote === 'string' ? given.quote.slice(0, 500) : null, anchor) }
+        return {
+          id: await holder.addComment(
+            said(given.text),
+            typeof given.quote === 'string' ? given.quote.slice(0, 500) : null,
+            anchor,
+          ),
+        }
       const id = own(given.id)
       if (method === 'reply') await api.reply(thread, id, said(given.text))
       else await api.resolveComment(thread, id)
@@ -450,21 +518,33 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
       }
       if (method === 'toolResult') {
         const said = (args ?? {}) as { ask?: unknown; call?: unknown; ok?: unknown; value?: unknown; error?: unknown }
-        const result = said.ok === true ? { ok: true, value: said.value ?? null } : { ok: false, error: String(said.error ?? 'the tool failed').slice(0, 2000) }
+        const result =
+          said.ok === true
+            ? { ok: true, value: said.value ?? null }
+            : { ok: false, error: String(said.error ?? 'the tool failed').slice(0, 2000) }
         const minted = asks.get(String(said.ask ?? ''))
         if (!minted) throw new Refusal('refused', 'no question by that name is waiting')
         await api.sampleToolResult(thread, artifact.id, minted, Number(said.call), result)
         return null
       }
-      const given = (args ?? {}) as { input?: unknown; ask?: unknown; images?: unknown; tools?: unknown; cache?: unknown; model?: { model_tier?: unknown; model?: unknown } }
+      const given = (args ?? {}) as {
+        input?: unknown
+        ask?: unknown
+        images?: unknown
+        tools?: unknown
+        cache?: unknown
+        model?: { model_tier?: unknown; model?: unknown }
+      }
       const model = {
         model_tier: typeof given.model?.model_tier === 'string' ? given.model.model_tier : undefined,
         model: typeof given.model?.model === 'string' ? given.model.model : undefined,
       }
       const tools = sampleTools(given.tools)
       const blobs = Array.isArray(given.images) ? given.images : []
-      if (blobs.length > 0 && !takesImages) throw new Refusal('refused', 'declare {sample: {images: true}} to show the agent images')
-      if (blobs.length > SAMPLE_IMAGES || !blobs.every((blob) => blob instanceof Blob)) throw new Refusal('refused', `show at most ${SAMPLE_IMAGES} images, as Blobs`)
+      if (blobs.length > 0 && !takesImages)
+        throw new Refusal('refused', 'declare {sample: {images: true}} to show the agent images')
+      if (blobs.length > SAMPLE_IMAGES || !blobs.every((blob) => blob instanceof Blob))
+        throw new Refusal('refused', `show at most ${SAMPLE_IMAGES} images, as Blobs`)
       if (!(await consented())) throw new Refusal('not_granted', 'the person chose not to let this page ask')
       // Only a question with no tools or images is the same question asked again.
       const key = given.cache === true && tools.length === 0 && blobs.length === 0 ? JSON.stringify([given.input, model]) : null
@@ -474,7 +554,9 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
         context.emit('sample', 'text', { ask: named, text: kept.answer.text })
         return kept.answer
       }
-      const images = await Promise.all((blobs as Blob[]).map(async (blob) => ({ media_type: blob.type, data: await base64Of(blob) })))
+      const images = await Promise.all(
+        (blobs as Blob[]).map(async (blob) => ({ media_type: blob.type, data: await base64Of(blob) })),
+      )
       // The page's name for the question stays between it and this view; the
       // daemon and the server hear one minted here, which no other page can pick.
       const named = typeof given.ask === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(given.ask) ? given.ask : 'q'
@@ -485,7 +567,8 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
         const said = event as { event?: string; ask?: string; text?: string }
         if (said.event === 'sample' && said.ask === ask) context.emit('sample', 'text', { ask: named, text: said.text ?? '' })
         const called = event as { event?: string; ask?: string; call?: number; name?: string; input?: unknown }
-        if (called.event === 'sample_tool' && called.ask === ask) context.emit('sample', 'tool', { ask: named, call: called.call, name: called.name, input: called.input })
+        if (called.event === 'sample_tool' && called.ask === ask)
+          context.emit('sample', 'tool', { ask: named, call: called.call, name: called.name, input: called.input })
       })
       // The hosted app has no bus: it reads what the device's agent has said so far.
       let heard = ''
@@ -508,7 +591,11 @@ function sampleHandler(thread: string, artifact: ArtifactView, holder: Holder): 
         : null
       try {
         const answer = await api.sample(thread, artifact.id, ask, given.input, images, tools, model)
-        const shown = { text: answer.text, truncated: answer.truncated, ...(answer.model_applied ? { modelApplied: answer.model_applied } : {}) }
+        const shown = {
+          text: answer.text,
+          truncated: answer.truncated,
+          ...(answer.model_applied ? { modelApplied: answer.model_applied } : {}),
+        }
         if (key !== null) answered.set(key, { at: Date.now(), answer: shown })
         return shown
       } catch (failure) {

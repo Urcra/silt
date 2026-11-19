@@ -12,9 +12,21 @@ import { type View, VIEWS, baseOf } from '../diffSpec'
 import { useHideGit, useHideOthers } from '../hideGit'
 import { keys, message } from '../query'
 import { type Lines, itemOf, useReview } from '../review'
-import { type At, defaultTurns, filtered, firstChange, linesNew, nextUnseen, pickTurns, seenOf, stepFile, stepHunk, turnsOfHunk } from '../reviewNav'
+import {
+  type At,
+  defaultTurns,
+  filtered,
+  firstChange,
+  linesNew,
+  nextUnseen,
+  pickTurns,
+  seenOf,
+  stepFile,
+  stepHunk,
+  turnsOfHunk,
+} from '../reviewNav'
 import { type Kept, keepView, keptView } from '../reviewView'
-import { useLive } from '../session'
+import { useAgentStatus } from '../agentStatus'
 import { useActions } from '../shortcuts'
 import { useThreadDiff } from '../threadDiff'
 import { Button, Icon, Input, Select, Skeleton, Tabs, cx, toast } from '../ui'
@@ -37,7 +49,8 @@ export function ReviewRoute() {
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   // A short id is the end of the full one, as the app shows it, or its start, as the CLI takes it.
   const summary =
-    threads.data?.find((thread) => thread.id === id) ?? threads.data?.find((thread) => thread.id.endsWith(id) || thread.id.startsWith(id))
+    threads.data?.find((thread) => thread.id === id) ??
+    threads.data?.find((thread) => thread.id.endsWith(id) || thread.id.startsWith(id))
   const navigate = useNavigate()
   // A short id in the address becomes the full one, which the bus's events name.
   useEffect(() => {
@@ -80,15 +93,26 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
   const hidden = { hideGit: hideGitSetting && !againstMain, hideOthers: hideOthersSetting && !againstMain && summary.shared }
   const spec: DiffSpec = picked ? { turn: picked[0], toTurn: picked[1], ...hidden } : { base, ...hidden }
   const review = useReview(thread)
-  const { agent: status } = useLive(thread)
+  // Its state alone: the whole live session drew the review again at every word the agent streamed.
+  const status = useAgentStatus(thread)
   const agent = status?.agent
   const working = status?.state === 'working' || status?.state === 'awaiting_permission' || status?.state === 'starting'
   // What Mark reviewed records: the end of the turns picked, else the last turn that ended.
   const ended = (turns.data?.length ?? 0) - (working ? 1 : 0)
   const reviewedTurn = picked ? picked[1] : ended > 0 ? ended : undefined
   const reload = () => queries.invalidateQueries({ queryKey: keys.comments(thread) })
-  const { stats, whole, diff, files, commenting, unsent, changed, pending, outdated, error } = useThreadDiff(thread, spec, review, reload, agent)
-  const wrote = useQuery({ queryKey: keys.diffTurns(thread, spec), queryFn: () => api.diffTurns(thread, spec), enabled: whole === true })
+  const { stats, whole, diff, files, commenting, unsent, changed, pending, outdated, error } = useThreadDiff(
+    thread,
+    spec,
+    review,
+    reload,
+    agent,
+  )
+  const wrote = useQuery({
+    queryKey: keys.diffTurns(thread, spec),
+    queryFn: () => api.diffTurns(thread, spec),
+    enabled: whole === true,
+  })
   const runs = useMemo(() => new Map((wrote.data ?? []).map((file) => [file.path, file.runs])), [wrote.data])
   const only = picked && picked[0] === picked[1] ? picked[0] : undefined
   const seenView = useQuery({ queryKey: keys.threadSeen(thread, spec), queryFn: () => api.threadSeen(thread, spec) })
@@ -115,7 +139,12 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
     const lines = new Map<string, Set<number>>()
     for (const file of seenView.data?.files ?? []) {
       if (file.seen !== 'changed') continue
-      lines.set(file.path, new Set(file.new_lines.flatMap((span) => Array.from({ length: span.end - span.start + 1 }, (_, index) => span.start + index))))
+      lines.set(
+        file.path,
+        new Set(
+          file.new_lines.flatMap((span) => Array.from({ length: span.end - span.start + 1 }, (_, index) => span.start + index)),
+        ),
+      )
     }
     return lines
   }, [seenView.data])
@@ -138,15 +167,23 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
   const shown = filtered(files, filter)
   const hunks = shown.map((file) => file.hunks.length)
   const totals = useMemo(
-    () => stats.data && { added: stats.data.reduce((sum, file) => sum + file.added, 0), removed: stats.data.reduce((sum, file) => sum + file.removed, 0) },
+    () =>
+      stats.data && {
+        added: stats.data.reduce((sum, file) => sum + file.added, 0),
+        removed: stats.data.reduce((sum, file) => sum + file.removed, 0),
+      },
     [stats.data],
   )
   const back = () => void navigate({ to: '/t/$id', params: { id: thread } })
 
   const show = (file: DiffFile, hunk?: number) => {
     change({ file: file.path })
-    const target = hunk === undefined ? document.getElementById(`file-${file.path}`) : pane.current?.querySelector(`[data-hunk="${CSS.escape(`${file.path}#${hunk}`)}"]`)
-    target?.scrollIntoView({ block: 'start' })
+    const hunkIn = () => pane.current?.querySelector(`[data-hunk="${CSS.escape(`${file.path}#${hunk}`)}"]`)
+    const target = hunk === undefined ? null : hunkIn()
+    if (target) return target.scrollIntoView({ block: 'start' })
+    document.getElementById(`file-${file.path}`)?.scrollIntoView({ block: 'start' })
+    // A large diff draws a file's lines only once it's near the view: the hunk is there a frame or two later.
+    if (hunk !== undefined) requestAnimationFrame(() => requestAnimationFrame(() => hunkIn()?.scrollIntoView({ block: 'start' })))
   }
   const go = (next: At | null) => {
     if (!next) return
@@ -155,7 +192,17 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
     setAt(next)
     show(file, next.hunk)
   }
-  const current = at ?? (kept.file ? { file: Math.max(0, shown.findIndex((file) => file.path === kept.file)), hunk: 0 } : { file: 0, hunk: 0 })
+  const current =
+    at ??
+    (kept.file
+      ? {
+          file: Math.max(
+            0,
+            shown.findIndex((file) => file.path === kept.file),
+          ),
+          hunk: 0,
+        }
+      : { file: 0, hunk: 0 })
   useActions(
     [
       { id: 'review:back', label: 'Back to the conversation', keys: 'escape', run: back },
@@ -205,7 +252,12 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
           if (next !== null) go({ file: next, hunk: 0 })
         },
       },
-      { id: 'review:layout', label: kept.layout === 'split' ? 'Unified diff' : 'Split diff', keys: 's', run: () => change({ layout: kept.layout === 'split' ? 'unified' : 'split' }) },
+      {
+        id: 'review:layout',
+        label: kept.layout === 'split' ? 'Unified diff' : 'Split diff',
+        keys: 's',
+        run: () => change({ layout: kept.layout === 'split' ? 'unified' : 'split' }),
+      },
       { id: 'review:filter', label: 'Filter files', keys: '/', run: () => filterBox.current?.focus() },
       { id: 'review:finish', label: 'Finish the review', keys: 'mod+enter', run: () => opener.current?.() },
     ],
@@ -232,14 +284,29 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
       />
       <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line-subtle px-4 py-1.5 md:pl-5">
         <h2 className="text-xs font-medium">Changes</h2>
-        <TurnPicker turns={turns.data ?? []} picked={picked} reviewed={reviewed} onPick={(chosen) => change({ turns: chosen, chosen: true })} />
+        <TurnPicker
+          turns={turns.data ?? []}
+          picked={picked}
+          reviewed={reviewed}
+          onPick={(chosen) => change({ turns: chosen, chosen: true })}
+        />
         <span className="ml-auto flex flex-wrap items-center gap-2">
           {picked ? (
-            <Button variant="ghost" size="sm" onClick={() => change({ turns: undefined, chosen: true })} title="Back to what the compare menu shows">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => change({ turns: undefined, chosen: true })}
+              title="Back to what the compare menu shows"
+            >
               All changes
             </Button>
           ) : (
-            <ChipSelect label="compare" value={kept.view} onChange={(chosen) => change({ view: chosen as View })} options={VIEWS.map((choice) => ({ id: choice.id, name: choice.label }))} />
+            <ChipSelect
+              label="compare"
+              value={kept.view}
+              onChange={(chosen) => change({ view: chosen as View })}
+              options={VIEWS.map((choice) => ({ id: choice.id, name: choice.label }))}
+            />
           )}
           <HideGitBox on={hideGitSetting} onChange={setHideGit} disabled={againstMain} />
           {summary.shared && <HideOthersBox on={hideOthersSetting} onChange={setHideOthers} disabled={againstMain} />}
@@ -267,20 +334,35 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
             <option value="commit">Since a commit…</option>
           </Select>
           {kept.other === 'commit' && (
-            <Input aria-label="commit" placeholder="sha" className="w-28 font-mono" value={kept.commit} onChange={(event) => change({ commit: event.target.value })} />
+            <Input
+              aria-label="commit"
+              placeholder="sha"
+              className="w-28 font-mono"
+              value={kept.commit}
+              onChange={(event) => change({ commit: event.target.value })}
+            />
           )}
         </div>
       )}
       <div className="flex min-h-0 flex-1">
         <div className="flex w-64 shrink-0 flex-col gap-2 overflow-y-auto border-r border-line-subtle p-3">
-          <Input ref={filterBox} aria-label="filter files" placeholder="Filter files ( / )" value={filter} onChange={(event) => setFilter(event.target.value)} className="text-xs" />
+          <Input
+            ref={filterBox}
+            aria-label="filter files"
+            placeholder="Filter files ( / )"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            className="text-xs"
+          />
           <SeenFiles
             files={filtered(stats.data ?? [], filter).map((file) => {
               const seen = seenState(file.path)
               const count = linesNew(marks.get(file.path))
               const note =
                 seen === 'changed' ? (
-                  <span className="text-info">{count > 0 ? `${count} ${count === 1 ? 'line' : 'lines'} new since you saw it` : 'changed since you saw it'}</span>
+                  <span className="text-info">
+                    {count > 0 ? `${count} ${count === 1 ? 'line' : 'lines'} new since you saw it` : 'changed since you saw it'}
+                  </span>
                 ) : undefined
               return { path: file.path, added: file.added, removed: file.removed, binary: file.binary, seen, note }
             })}
@@ -308,7 +390,9 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
           {error && <p className="text-sm text-danger">{message(error)}</p>}
           {(stats.isPending || (whole && diff.isPending)) && <Skeleton className="h-32" />}
           <HiddenNote hidden={spec} />
-          {whole === false && <FilesByStats thread={thread} stats={filtered(stats.data ?? [], filter)} of={spec} commenting={commenting} />}
+          {whole === false && (
+            <FilesByStats thread={thread} stats={filtered(stats.data ?? [], filter)} of={spec} commenting={commenting} />
+          )}
           {whole && files.length === 0 && !diff.isPending && <p className="text-sm text-fg-2">No changes.</p>}
           {whole && shown.length > 0 && (
             <DiffView
@@ -344,7 +428,9 @@ function TurnNote({ thread, turns, said }: { thread: string; turns: number[]; sa
       className="inline-flex min-w-0 items-center gap-1 rounded-sm px-1.5 text-accent-fg hover:bg-surface-2"
     >
       <Icon name="comment" className="h-3 w-3 shrink-0" />
-      <span className="truncate">{turns.length === 1 ? `turn ${first}${prompt ? ` · ${prompt}` : ''}` : `turns ${turns.join(', ')}`}</span>
+      <span className="truncate">
+        {turns.length === 1 ? `turn ${first}${prompt ? ` · ${prompt}` : ''}` : `turns ${turns.join(', ')}`}
+      </span>
     </Link>
   )
 }

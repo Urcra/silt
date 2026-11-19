@@ -58,7 +58,9 @@ function startProvider(): Promise<string> {
       response.writeHead(404).end()
     }
   })
-  return new Promise((resolve) => provider.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${(provider.address() as AddressInfo).port}`)))
+  return new Promise((resolve) =>
+    provider.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${(provider.address() as AddressInfo).port}`)),
+  )
 }
 
 async function freePort(): Promise<number> {
@@ -135,7 +137,9 @@ test('the server hosts the web app for someone signed in', async ({ page }) => {
   // Nothing here runs agents, so a new thread is All threads (ADR 0044).
   await expect(page).toHaveURL(`${base}/app/`)
   await expect(page.getByRole('link', { name: 'Silt' })).toBeVisible()
-  await expect(page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true })).toHaveCount(0)
+  await expect(
+    page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }),
+  ).toHaveCount(0)
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'All threads' }).click()
   await expect(page).toHaveURL(`${base}/app/threads`)
 })
@@ -170,7 +174,10 @@ test('the hosted app lists the threads a device shared', async ({ page }) => {
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page).toHaveURL(`${base}/app/`)
   await expect(page.getByRole('link', { name: /untitled/i }).first()).toBeVisible()
-  await page.getByRole('link', { name: /untitled/i }).first().click()
+  await page
+    .getByRole('link', { name: /untitled/i })
+    .first()
+    .click()
   await expect(page).toHaveURL(new RegExp(`/app/t/${thread}`))
 
   // The service worker that shows pushes lives under the app, as JavaScript.

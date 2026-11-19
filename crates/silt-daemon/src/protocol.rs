@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 pub use silt_proto::view::{
-    AnswerView, ChoiceView, CommentLocation, CommentOn, CommentView, CommitView, DaemonStatus, DeviceAgent, DeviceChange,
-    DeviceView, FileEdit, HistoryEntry, HistoryPage, ImageView, InboxEntry, LineSpan, Mine, MrDetails, MrFile, MrGuide,
-    MrSummary, NewLink, PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine, StateChange,
-    TaskView, ThreadLink, ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
+    AnswerView, ChoiceView, CommentLocation, CommentOn, CommentView, CommitView, CutView, DaemonStatus, DeviceAgent,
+    DeviceChange, DeviceView, FileEdit, HistoryEntry, HistoryPage, ImageView, InboxEntry, LineSpan, Mine, MrDetails, MrFile,
+    MrGuide, MrSummary, NewLink, PlanStepView, Project, QuestionView, ReplyView, SearchFilters, SearchResult, ShowLine,
+    StateChange, TaskView, ThreadLink, ThreadSummary, ToolOutcome, ToolView, TurnInfo, UsageView,
 };
 pub use silt_proto::{ChoiceAsked, QuestionAsked, QuestionFieldAsked, SignInAsked, SignInChoice, SignInShown};
 
@@ -321,6 +321,14 @@ pub enum Request {
         thread: String,
         offset: usize,
         limit: usize,
+        /// The version of the history the asker holds: the page starts
+        /// earlier than `offset` where that changed since.
+        #[serde(default)]
+        known: Option<usize>,
+        /// Long outputs and images left out, as a page of the web UI's
+        /// carries them (`silt_proto::view::cut_for_page`).
+        #[serde(default)]
+        cut: bool,
     },
     /// Search within a thread's history and the threads it came from.
     HistorySearch {
@@ -2543,6 +2551,7 @@ mod tests {
             ToolView::decl(&config),
             ToolOutcome::decl(&config),
             ImageView::decl(&config),
+            CutView::decl(&config),
             silt_proto::view::ArtifactView::decl(&config),
             silt_proto::artifact::ArtifactFile::decl(&config),
             silt_proto::view::ArtifactListed::decl(&config),

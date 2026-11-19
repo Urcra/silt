@@ -15,8 +15,20 @@ const snapshot = (value: string, box: HTMLTextAreaElement | null): Snapshot => (
 })
 
 /** Controlled values can replace the browser's undo stack, so keep the draft's edits here. */
-export function useComposerHistory(id: string, value: string, box: RefObject<HTMLTextAreaElement | null>, onChange: (value: string) => void) {
-  const history = useRef({ id, current: snapshot(value, null), past: [] as Snapshot[], future: [] as Snapshot[], kind: '', time: 0 })
+export function useComposerHistory(
+  id: string,
+  value: string,
+  box: RefObject<HTMLTextAreaElement | null>,
+  onChange: (value: string) => void,
+) {
+  const history = useRef({
+    id,
+    current: snapshot(value, null),
+    past: [] as Snapshot[],
+    future: [] as Snapshot[],
+    kind: '',
+    time: 0,
+  })
   const pending = useRef<Snapshot | null>(null)
 
   useLayoutEffect(() => {
@@ -62,7 +74,8 @@ export function useComposerHistory(id: string, value: string, box: RefObject<HTM
     const key = event.key.toLowerCase()
     const modified = (event.ctrlKey || event.metaKey) && !event.altKey
     const undo = modified && key === 'z' && !event.shiftKey
-    const redo = modified && ((key === 'z' && event.shiftKey) || (key === 'y' && event.ctrlKey && !event.metaKey && !event.shiftKey))
+    const redo =
+      modified && ((key === 'z' && event.shiftKey) || (key === 'y' && event.ctrlKey && !event.metaKey && !event.shiftKey))
     if (!undo && !redo) {
       select()
       return false

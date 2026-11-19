@@ -514,6 +514,8 @@ machine. Pass `design_system` to choose one, or `none` to keep the page's own st
                     thread,
                     offset: number_arg(arguments, "offset").unwrap_or(0),
                     limit: number_arg(arguments, "limit").unwrap_or(DEFAULT_LIMIT),
+                    known: None,
+                    cut: false,
                 })?;
                 Ok(render_page(&page))
             }

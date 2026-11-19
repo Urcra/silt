@@ -54,7 +54,9 @@ test("the ring fills with the fullest limit and opens on each limit's use", asyn
 })
 
 test('an agent with no plan limits to read shows nothing, and others are never asked', async () => {
-  const usage = vi.spyOn(api, 'usage').mockResolvedValue({ ...MAX, plan: null, limits: [], unavailable: 'Claude Code uses an API key here' })
+  const usage = vi
+    .spyOn(api, 'usage')
+    .mockResolvedValue({ ...MAX, plan: null, limits: [], unavailable: 'Claude Code uses an API key here' })
   shown('claude-code')
   await vi.waitFor(() => expect(usage).toHaveBeenCalled())
   expect(screen.queryByRole('button')).toBeNull()

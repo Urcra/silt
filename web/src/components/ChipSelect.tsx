@@ -36,10 +36,18 @@ export function ChipSelect({
         aria-label={label}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className={cx('field-sizing-content max-w-56 min-w-0 cursor-pointer appearance-none truncate bg-transparent pr-4 text-xs text-fg-1 focus:outline-none', mono && 'font-mono')}
+        className={cx(
+          'field-sizing-content max-w-56 min-w-0 cursor-pointer appearance-none truncate bg-transparent pr-4 text-xs text-fg-1 focus:outline-none',
+          mono && 'font-mono',
+        )}
       >
         {options.map((option) => (
-          <option key={option.id} value={option.id} title={option.refused ?? option.description ?? undefined} disabled={Boolean(option.refused)}>
+          <option
+            key={option.id}
+            value={option.id}
+            title={option.refused ?? option.description ?? undefined}
+            disabled={Boolean(option.refused)}
+          >
             {option.refused ? `${option.name} · ${option.refused}` : option.name}
           </option>
         ))}

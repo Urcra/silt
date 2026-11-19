@@ -44,7 +44,8 @@ function whose(view: WorkspaceView, rule: (policy: Policy) => boolean): string {
 /** Why `agent` can't start in the workspace, or nothing when it can. */
 export function agentRefused(view: WorkspaceView | undefined, agent: string): string | undefined {
   // A Local only workspace runs Silt's own agent, and Claude Code on a local model (ADR 0092).
-  if (view?.effective.local_only && !LOCAL_AGENTS.includes(agentKey(agent))) return `Local only · ${view.workspace.name} runs local models only`
+  if (view?.effective.local_only && !LOCAL_AGENTS.includes(agentKey(agent)))
+    return `Local only · ${view.workspace.name} runs local models only`
   const allowed = view?.effective.agents
   if (!view || !allowed || allowed.includes(agentKey(agent))) return undefined
   return `Not allowed in ${view.workspace.name} · ${whose(view, (policy) => Boolean(policy.agents && !policy.agents.includes(agentKey(agent))))}`
@@ -59,9 +60,16 @@ export function presetRefused(view: WorkspaceView | undefined, preset: Preset): 
 }
 
 /** The workspace a project is in, by its repository, else the default. */
-export function workspaceOf(views: WorkspacesView | undefined, repo: string, workspace?: string | null): WorkspaceView | undefined {
+export function workspaceOf(
+  views: WorkspacesView | undefined,
+  repo: string,
+  workspace?: string | null,
+): WorkspaceView | undefined {
   if (!views?.workspaces) return undefined
-  const id = workspace ?? views.workspaces.find((view) => view.projects.some((project) => project.repo === repo))?.workspace.id ?? views.default
+  const id =
+    workspace ??
+    views.workspaces.find((view) => view.projects.some((project) => project.repo === repo))?.workspace.id ??
+    views.default
   return views.workspaces.find((view) => view.workspace.id === id)
 }
 
@@ -105,5 +113,7 @@ export function modeRefused(view: WorkspaceView | undefined, agent: string, mode
   if (!view || !cap || cap === 'full_access') return undefined
   const preset = modePreset(mode)
   if (preset) return presetRefused(view, preset)
-  return agentKey(agent) === 'copilot' ? undefined : `Not known to Silt; ${presetRefused(view, 'full_access')?.toLowerCase() ?? 'refused'}`
+  return agentKey(agent) === 'copilot'
+    ? undefined
+    : `Not known to Silt; ${presetRefused(view, 'full_access')?.toLowerCase() ?? 'refused'}`
 }

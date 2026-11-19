@@ -8,7 +8,15 @@ import { hosted } from '../served'
 import { Button, toast } from '../ui'
 
 /** Erasing a Local only thread and its forks from this machine for good, once what goes is shown (ADR 0092). */
-export function EraseThread({ thread, summary, onDone }: { thread: string; summary: ThreadSummary | undefined; onDone: () => void }) {
+export function EraseThread({
+  thread,
+  summary,
+  onDone,
+}: {
+  thread: string
+  summary: ThreadSummary | undefined
+  onDone: () => void
+}) {
   const queries = useQueryClient()
   const navigate = useNavigate()
   const workspaces = useQuery({
@@ -33,7 +41,11 @@ export function EraseThread({ thread, summary, onDone }: { thread: string; summa
     )
   }
   return (
-    <div role="alertdialog" aria-label="erase this thread" className="flex flex-col gap-2 rounded-sm border border-line p-2 text-xs text-fg-2">
+    <div
+      role="alertdialog"
+      aria-label="erase this thread"
+      className="flex flex-col gap-2 rounded-sm border border-line p-2 text-xs text-fg-2"
+    >
       <p className="first-letter:uppercase">{said}</p>
       <span className="flex justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={() => setSaid(undefined)}>

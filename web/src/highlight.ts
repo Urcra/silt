@@ -83,17 +83,54 @@ export function tokenize(code: string, using: Parser): Token[][] {
   return lines
 }
 
+/** Highlighting waiting its turn, oldest first. */
+const waiting: { run: () => void; dropped: boolean }[] = []
+let working = false
+
+/** How long highlighting may hold the page before it lets a frame be drawn or a key be read. */
+const SLICE_MS = 8
+
+function work() {
+  const until = performance.now() + SLICE_MS
+  while (waiting.length > 0 && performance.now() < until) {
+    const job = waiting.shift()!
+    if (!job.dropped) job.run()
+  }
+  if (waiting.length > 0) setTimeout(work, 0)
+  else working = false
+}
+
+/** Runs `run` in its turn, a few at a time between frames; answers how to drop it. A large diff's hunks all
+ * highlighted at once, as their parser loaded, and the page didn't answer for seconds. */
+function inTurn(run: () => void): () => void {
+  const job = { run, dropped: false }
+  waiting.push(job)
+  // The first slice runs now, as one hunk highlighted at once always did; only what's left waits.
+  if (!working) {
+    working = true
+    work()
+  }
+  return () => {
+    job.dropped = true
+  }
+}
+
 /** `code` highlighted as `language`, once its parser has loaded; null until then, or for a language this doesn't know. */
 export function useHighlighted(code: string, language: string | null): Token[][] | null {
   const [done, setDone] = useState<{ code: string; language: string; lines: Token[][] } | null>(null)
   useEffect(() => {
     if (!language) return
     let current = true
+    let drop = () => undefined as void
     void parser(language).then((using) => {
-      if (current) setDone({ code, language, lines: tokenize(code, using) })
+      if (!current) return
+      drop = inTurn(() => {
+        if (current) setDone({ code, language, lines: tokenize(code, using) })
+      })
     })
     return () => {
       current = false
+      drop()
     }
   }, [code, language])
   return done && done.code === code && done.language === language ? done.lines : null

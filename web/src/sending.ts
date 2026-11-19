@@ -52,7 +52,9 @@ export function arrived(sent: Sending[], entries: { kind: string; text: string }
   const taken = new Set<number>()
   const ids = new Set<number>()
   const claim = (item: Sending, fits: (text: string) => boolean) => {
-    const at = entries.findIndex((entry, index) => index >= item.after && !taken.has(index) && entry.kind === 'user' && fits(entry.text))
+    const at = entries.findIndex(
+      (entry, index) => index >= item.after && !taken.has(index) && entry.kind === 'user' && fits(entry.text),
+    )
     if (at === -1) return
     taken.add(at)
     ids.add(item.id)
