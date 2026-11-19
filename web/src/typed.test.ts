@@ -61,7 +61,7 @@ describe('the artifact types', () => {
       ],
     })
     expect(csvOf(['name', 'note'], [['a, b', 'say "hi"']])).toBe('name,note\n"a, b","say ""hi"""')
-    expect(shown(1234.56789)).toMatch(/1.?234\.568/)
+    expect(shown(1234.56789)).toMatch(/^1.?234[.,]568$/)
   })
 
   it('renders a slide at its stage size in a sealed document', () => {
