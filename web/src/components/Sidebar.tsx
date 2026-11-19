@@ -1,16 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
-import { Link, useRouterState } from '@tanstack/react-router'
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useAgentStatus } from '../agentStatus'
 import { api, type ThreadSummary } from '../api'
 import { isChat } from '../chats'
 import { useTopic } from '../bus'
-import { inDesktop, relaunchDesktop, switchBackend, useBackends } from '../desktop'
+import { type Backend, inDesktop, relaunchDesktop, switchBackend, useBackends } from '../desktop'
 import { useNow } from '../now'
 import { openPalette } from '../palette'
 import { projectName, projects } from '../projects'
 import { keys } from '../query'
-import { type Section, byActivity, old, section, sections, unread } from '../sections'
+import { type Section, inListOrder, old, section, sections, unread } from '../sections'
 import { hosted } from '../served'
 import { formatKeys } from '../shortcuts'
 import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
@@ -141,8 +141,8 @@ function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
 }
 
 /**
- * One project's threads, newest first, folded away by its name, with what's old, settled or
- * snoozed behind a count. An older project is one row until opened, and then has nothing to hold back.
+ * One project's threads, those busy in the last few minutes by title and then newest first, folded away
+ * by its name, with what's old, settled or snoozed behind a count. An older project is one row until opened, and then has nothing to hold back.
  */
 function ProjectGroup({
   repo,
@@ -161,10 +161,10 @@ function ProjectGroup({
 }) {
   const [open, setOpen] = useState(!older)
   const [showRest, setShowRest] = useState(false)
-  const newest = [...threads].sort(byActivity)
+  const ordered = [...threads].sort(inListOrder(now))
   const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
-  const shown = newest.filter((thread) => !held(thread))
-  const rest = newest.filter(held)
+  const shown = ordered.filter((thread) => !held(thread))
+  const rest = ordered.filter(held)
   const restKinds = new Set(rest.map((thread) => (old(thread, now) ? 'older' : section(thread, now))))
   const restSaid = restKinds.size > 1 ? 'more' : [...restKinds][0]
   const working = threads.filter(inProgress).length
@@ -218,13 +218,13 @@ function ProjectGroup({
   )
 }
 
-/** The chats, newest first, with what's old, settled or snoozed behind a count, as a project's threads are (ADR 0059). */
+/** The chats, in a project's order, with what's old, settled or snoozed behind a count, as a project's threads are (ADR 0059). */
 function ChatGroup({ threads, now }: { threads: ThreadSummary[]; now: number }) {
   const [showRest, setShowRest] = useState(false)
-  const newest = [...threads].sort(byActivity)
+  const ordered = [...threads].sort(inListOrder(now))
   const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
-  const shown = newest.filter((thread) => !held(thread))
-  const rest = newest.filter(held)
+  const shown = ordered.filter((thread) => !held(thread))
+  const rest = ordered.filter(held)
   return (
     <section aria-label="chats" className="mt-2">
       <SectionLabel
@@ -338,6 +338,65 @@ function UpdatePill() {
   )
 }
 
+/** How a backend looks in Runs on: This computer and WSL by an icon, a machine by whether it's connected. */
+function backendMark(backend: Backend): ReactNode {
+  if (backend.kind !== 'ssh') return <Icon name="laptop" className="h-3.5 w-3.5 shrink-0 text-fg-2" />
+  if (backend.state === 'connecting') return <Spinner label="connecting" />
+  const tone = backend.state === 'connected' ? 'ok' : backend.state === 'failed' ? 'danger' : 'idle'
+  const said = { ok: 'connected', danger: 'couldn’t connect', idle: 'not connected' }[tone]
+  return <Dot tone={tone} label={said} />
+}
+
+/** Which machine the desktop app's window shows Silt from, and the others it could (ADRs 0045, 0108). */
+function RunsOn({ backends, current }: { backends: Backend[]; current: string | undefined }) {
+  const navigate = useNavigate()
+  const shown = backends.find((backend) => backend.id === current)
+  const switching = backends.find((backend) => backend.switching)
+  return (
+    <>
+      <div className="flex items-center gap-2 px-2 pt-2 text-xs text-fg-2">
+        <Icon name="laptop" className="h-3.5 w-3.5 shrink-0" />
+        <span className="shrink-0">Runs on</span>
+        <Menu
+          label="where Silt runs"
+          above
+          align="left"
+          trigger={
+            <span className="inline-flex min-w-0 items-center gap-1.5 text-fg-1">
+              {shown?.kind === 'ssh' && <Dot tone="ok" />}
+              <span className="truncate">{shown?.label ?? 'This computer'}</span>
+              <Icon name="chevronDown" className="h-3 w-3 shrink-0" />
+            </span>
+          }
+          items={[
+            ...backends.map((backend) => ({
+              label: backend.label,
+              lead: backendMark(backend),
+              onSelect: () => switchBackend(backend.id),
+              disabled: backend.id === current,
+              checked: backend.id === current,
+            })),
+            {
+              label: 'Add a machine…',
+              icon: 'plus' as const,
+              divided: true,
+              onSelect: () => void navigate({ to: '/settings/$section', params: { section: 'machines' } }),
+            },
+          ]}
+        />
+      </div>
+      {switching && (
+        <div role="status" className="flex items-center gap-2 px-2 pt-1 text-xs text-fg-2">
+          <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+            <Spinner />
+          </span>
+          <span className="truncate">Connecting to {switching.label}…</span>
+        </div>
+      )}
+    </>
+  )
+}
+
 /** This machine at the bottom: its name, how many agents run on it, and Settings. */
 function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
@@ -349,28 +408,7 @@ function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
   const { backends, current } = useBackends()
   return (
     <div className="flex flex-col border-t border-line">
-      {backends.length > 1 && (
-        <div className="flex items-center gap-2 px-2 pt-2 text-xs text-fg-2">
-          <Icon name="laptop" className="h-3.5 w-3.5 shrink-0" />
-          <span className="shrink-0">Runs on</span>
-          <Menu
-            label="where Silt runs"
-            above
-            align="left"
-            trigger={
-              <span className="inline-flex min-w-0 items-center gap-1 text-fg-1">
-                <span className="truncate">{backends.find((backend) => backend.id === current)?.label ?? 'This computer'}</span>
-                <Icon name="chevronDown" className="h-3 w-3 shrink-0" />
-              </span>
-            }
-            items={backends.map((backend) => ({
-              label: backend.label,
-              onSelect: () => switchBackend(backend.id),
-              disabled: backend.id === current,
-            }))}
-          />
-        </div>
-      )}
+      {backends.length > 0 && <RunsOn backends={backends} current={current} />}
       <div className="flex items-center gap-2 px-2 pt-2.5 pb-1 text-xs text-fg-2">
         {hosted() ? (
           <span className="flex-1 truncate">On the server</span>
@@ -518,7 +556,7 @@ export function Sidebar() {
           <section aria-label="pinned" className="mt-2">
             <SectionLabel className="px-2">Pinned</SectionLabel>
             <ul>
-              {grouped.pinned.map((thread) => (
+              {[...grouped.pinned].sort(inListOrder(now)).map((thread) => (
                 <ThreadItem key={thread.id} thread={thread} />
               ))}
             </ul>

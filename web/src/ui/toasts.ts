@@ -1,8 +1,9 @@
+import type { ReactNode } from 'react'
 import type { Tone } from './basics'
 
 export interface Toast {
   id: number
-  text: string
+  text: ReactNode
   tone: Tone
   /** A toast with the same key takes this one's place, as each zoom step does the last's. */
   key?: string
@@ -28,7 +29,7 @@ export function hearToasts(listener: () => void): () => void {
 }
 
 /** Says something briefly, such as a failure nobody waits on. */
-export function toast(text: string, tone: Tone = 'neutral', key?: string) {
+export function toast(text: ReactNode, tone: Tone = 'neutral', key?: string) {
   const id = nextToast++
   const kept = key === undefined ? toasts : toasts.filter((shown) => shown.key !== key)
   setToasts([...kept, { id, text, tone, key }])

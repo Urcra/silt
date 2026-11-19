@@ -256,6 +256,13 @@ impl Op {
             _ => 1,
         }
     }
+
+    /// Whether it counts towards a thread's last activity. Git's records and
+    /// leases don't: a `git pull` in the thread's clone or a move between
+    /// machines isn't work on the thread.
+    pub fn is_activity(&self) -> bool {
+        !matches!(self, Self::Git(_) | Self::Lease { .. })
+    }
 }
 
 /// Why a delta is malformed regardless of what it applies to.
