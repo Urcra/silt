@@ -58,7 +58,7 @@ function SystemRow({ summary, clone }: { summary: DesignSummary; clone?: string 
       <Swatches colors={summary.swatches} />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="text-[14px] font-medium text-fg-1">{summary.title}</span>
+          <span className="text-ui-lg font-medium text-fg-1">{summary.title}</span>
           <span className="font-mono text-2xs text-fg-3">{summary.name}</span>
           {summary.uses.map((use) => (
             <Tag key={use} tone="accent">
@@ -959,7 +959,7 @@ export function DesignSystemPage() {
             {tab === 'tokens' && <Tokens detail={detail} theme={theme ?? shown} />}
             {tab === 'rules' &&
               (detail.readme.trim() ? (
-                <Markdown text={detail.readme} className="max-w-[72ch] text-[14px]" />
+                <Markdown text={detail.readme} className="max-w-[72ch] text-ui-lg" />
               ) : (
                 <EmptyState title="No rules yet">Its README.md is where an agent learns how to use it.</EmptyState>
               ))}

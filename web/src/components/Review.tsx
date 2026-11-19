@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type DiffSpec, type ThreadSummary, type TurnInfo } from '../api'
 import { useTopic } from '../bus'
 import { useDetailChoice, useGroupingChoice } from '../detail'
+import { useTextSettings } from '../text'
 import type { DiffFile } from '../diffParse'
 import { type View, VIEWS, baseOf } from '../diffSpec'
 import { useHideGit, useHideOthers } from '../hideGit'
@@ -73,7 +74,8 @@ export function ReviewRoute() {
 function Review({ thread, summary }: { thread: string; summary: ThreadSummary }) {
   const navigate = useNavigate()
   const queries = useQueryClient()
-  const [kept, setKept] = useState(() => keptView(thread))
+  const preferredLayout = useTextSettings().shown.diff_layout
+  const [kept, setKept] = useState(() => keptView(thread, preferredLayout))
   const change = (next: Partial<Kept>) =>
     setKept((before) => {
       const after = { ...before, ...next }

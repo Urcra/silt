@@ -14,6 +14,7 @@ import { Orgs } from './Orgs'
 import { InSettings, SETTINGS_HEADING } from '../settingsContext'
 import { Page } from './Page'
 import { DesignSystemsSettings } from './DesignSystems'
+import { TextLayoutSettings } from './TextLayout'
 import { ThemeSettings } from './Themes'
 import { AddProjectPage, Projects } from './Projects'
 import { UpdatesSettings } from './Updates'
@@ -39,6 +40,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
       ...(hosted() ? [] : [{ id: 'models', label: 'Local models' }]),
       { id: 'notifications', label: 'Notifications' },
       { id: 'appearance', label: 'Appearance' },
+      { id: 'text', label: 'Text and layout' },
       ...(hosted() ? [] : [{ id: 'update', label: 'Updates' }]),
     ],
   },
@@ -380,6 +382,7 @@ export function Settings() {
     workspaces: <WorkspacesSettings />,
     plugins: <PluginsSettings />,
     appearance: <Appearance />,
+    text: <TextLayoutSettings />,
     update: <UpdatesSettings />,
     'design-systems': <DesignSystemsSettings />,
   }

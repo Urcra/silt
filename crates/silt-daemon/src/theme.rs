@@ -214,13 +214,14 @@ pub fn detail(data_dir: &Path, id: &str) -> Option<ThemeDetail> {
     entries(data_dir).0.iter().find(|entry| entry.theme.id.as_str() == id).map(ThemeEntry::detail)
 }
 
-/// The CSS for what's picked, or for `light` and `dark` in its place, as a
-/// preview asks.
-pub fn css(data_dir: &Path, light: Option<String>, dark: Option<String>) -> String {
+/// The CSS for what's picked, or for `light`, `dark` and `text` in its place,
+/// as a preview or a page changing them asks.
+pub fn css(data_dir: &Path, light: Option<String>, dark: Option<String>, text: Option<silt_theme::TextSettings>) -> String {
     let (entries, _) = entries(data_dir);
     let mut settings = appearance(data_dir);
     settings.light = light.unwrap_or(settings.light);
     settings.dark = dark.unwrap_or(settings.dark);
+    settings.text = text.unwrap_or(settings.text);
     views::css(&entries, &settings)
 }
 
@@ -297,9 +298,32 @@ pub fn duplicate(data_dir: &Path, from: &str) -> Result<ThemeSaved, CoreError> {
     Ok(saved(&path, &family, Vec::new()))
 }
 
-/// `index.html` with the picked theme's CSS and mode in it, so the page never
-/// shows Nous first.
-pub fn inject(html: &str, css: &str, mode: AppearanceMode) -> String {
+/// What `<html>` says of motion, as text and layout set it (ADR 0107).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionAttribute {
+    Reduced,
+    Full,
+}
+
+impl MotionAttribute {
+    pub fn of(text: &silt_theme::TextSettings) -> Option<Self> {
+        match text.motion_attribute()? {
+            "reduced" => Some(Self::Reduced),
+            _ => Some(Self::Full),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Reduced => "reduced",
+            Self::Full => "full",
+        }
+    }
+}
+
+/// `index.html` with the picked theme's CSS, its mode and the motion asked
+/// for in it, so the page never shows Nous first or at the wrong size.
+pub fn inject(html: &str, css: &str, mode: AppearanceMode, motion: Option<MotionAttribute>) -> String {
     let style = format!("<style id=\"silt-theme\">{css}</style></head>");
     let mut page = html.replacen("</head>", &style, 1);
     let theme = match mode {
@@ -309,6 +333,9 @@ pub fn inject(html: &str, css: &str, mode: AppearanceMode) -> String {
     };
     if let Some(theme) = theme {
         page = page.replacen("<html", &format!("<html data-theme=\"{theme}\""), 1);
+    }
+    if let Some(motion) = motion {
+        page = page.replacen("<html", &format!("<html data-motion=\"{}\"", motion.as_str()), 1);
     }
     page
 }
@@ -345,14 +372,48 @@ mod tests {
         assert_eq!(appearance(data.path()), AppearanceSettings::default());
         fs::create_dir_all(themes_dir(data.path())).expect("themes dir");
         fs::write(themes_dir(data.path()).join("mine.json"), MINE).expect("theme");
-        let picked = AppearanceSettings { mode: AppearanceMode::Dark, light: "mine".into(), dark: "nous-dark".into() };
+        let picked = AppearanceSettings {
+            mode: AppearanceMode::Dark,
+            light: "mine".into(),
+            dark: "nous-dark".into(),
+            text: silt_theme::TextSettings::default(),
+        };
         set_appearance(data.path(), &picked).expect("saved");
         assert_eq!(appearance(data.path()), picked);
-        assert!(css(data.path(), None, None).starts_with(":root:not([data-theme=dark]){--bg:#ffffff;"));
+        assert!(css(data.path(), None, None, None).starts_with(":root:not([data-theme=dark]){--bg:#ffffff;"));
         let wrong = AppearanceSettings { dark: "mine".into(), ..picked.clone() };
         assert!(set_appearance(data.path(), &wrong).is_err());
         fs::remove_file(themes_dir(data.path()).join("mine.json")).expect("removed");
-        assert!(css(data.path(), None, None).starts_with(":root:not([data-theme=dark]){--bg:#f6f1e8;"), "Nous stands in");
+        assert!(css(data.path(), None, None, None).starts_with(":root:not([data-theme=dark]){--bg:#f6f1e8;"), "Nous stands in");
+    }
+
+    #[test]
+    fn text_and_layout_are_kept_beside_the_pick_and_follow_the_theme_s_css() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let text: silt_theme::TextSettings =
+            serde_json::from_str(r#"{ "chat_size": 16, "code_font": "JetBrains Mono", "motion": "full" }"#).expect("text");
+        let picked = AppearanceSettings { text: text.clone(), ..AppearanceSettings::default() };
+        set_appearance(data.path(), &picked).expect("saved");
+        assert_eq!(appearance(data.path()).text, text);
+        let page = css(data.path(), None, None, None);
+        let (themes, ours) = page.split_once(":root:root:root{").expect("the text's block comes after the themes'");
+        assert!(themes.contains("--font-mono:"), "{themes}");
+        assert!(ours.starts_with("--chat-size:16px;--font-mono:\"JetBrains Mono\", ui-monospace"), "{ours}");
+        assert_eq!(MotionAttribute::of(&appearance(data.path()).text), Some(MotionAttribute::Full));
+    }
+
+    #[test]
+    fn a_text_setting_that_cant_be_read_keeps_the_theme_pick() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let json =
+            r#"{ "mode": "dark", "light": "nous-light", "dark": "fjord-dark", "text": { "ui_size": "huge", "chat_size": 15 } }"#;
+        fs::write(data.path().join(APPEARANCE), json).expect("written by hand");
+        let read = appearance(data.path());
+        assert_eq!((read.mode, read.dark.as_str()), (AppearanceMode::Dark, "fjord-dark"));
+        assert_eq!(read.text.ui_size, None);
+        assert_eq!(read.text.chat_size.map(silt_theme::text::ChatSize::get), Some(15));
+        fs::write(data.path().join(APPEARANCE), r#"{ "dark": "fjord-dark", "text": 7 }"#).expect("written by hand");
+        assert_eq!(appearance(data.path()).dark, "fjord-dark");
     }
 
     #[test]
@@ -402,7 +463,7 @@ mod tests {
         assert!(harbour.warnings.iter().any(|warning| warning.contains("gone.woff2 isn't in the theme's fonts/")));
         let picked = AppearanceSettings { light: "harbour".into(), ..AppearanceSettings::default() };
         set_appearance(data.path(), &picked).expect("picked");
-        let css = css(data.path(), None, None);
+        let css = css(data.path(), None, None, None);
         assert!(css.contains("url(theme-fonts/harbour/sans.woff2)"), "{css}");
         assert!(!css.contains("fake.woff2") && !css.contains("gone.woff2"));
     }
@@ -443,9 +504,11 @@ mod tests {
     #[test]
     fn the_page_gets_the_style_and_the_mode() {
         let html = "<!doctype html><html lang=\"en\"><head><title>Silt</title></head><body></body></html>";
-        let page = inject(html, ":root{--bg:#000000;}", AppearanceMode::Dark);
+        let page = inject(html, ":root{--bg:#000000;}", AppearanceMode::Dark, None);
         assert!(page.contains("<html data-theme=\"dark\" lang=\"en\">"), "{page}");
         assert!(page.contains("<style id=\"silt-theme\">:root{--bg:#000000;}</style></head>"), "{page}");
-        assert!(!inject(html, "", AppearanceMode::System).contains("data-theme"));
+        assert!(!inject(html, "", AppearanceMode::System, None).contains("data-theme"));
+        let calm = inject(html, "", AppearanceMode::System, Some(MotionAttribute::Reduced));
+        assert!(calm.contains("<html data-motion=\"reduced\" lang=\"en\">"), "{calm}");
     }
 }

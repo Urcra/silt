@@ -13,6 +13,7 @@ mod daemon;
 #[cfg(target_os = "linux")]
 mod microphone;
 mod theme;
+mod zoom;
 
 use std::collections::HashMap;
 use std::env;
@@ -178,6 +179,9 @@ fn open_window(
     let theme_file = dir.as_ref().map(|dir| dir.join(theme::LAST_THEME));
     let last_theme = theme_file.as_deref().and_then(theme::last);
     let themed = app.clone();
+    let zoom_file = dir.as_ref().map(|dir| dir.join(zoom::LAST_ZOOM));
+    let last_zoom = zoom_file.as_deref().and_then(zoom::last);
+    let zoomed = app.clone();
     let mut builder = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
         .title("Silt")
         .inner_size(1440.0, 900.0)
@@ -209,6 +213,19 @@ fn open_window(
                     }
                     if let Some(file) = file {
                         theme::keep(&file, &shown);
+                    }
+                });
+                return false;
+            }
+            // And how far to zoom, as text and layout set it (ADR 0107).
+            if let Some(level) = zoom::of_link(to) {
+                let (app, file) = (zoomed.clone(), zoom_file.clone());
+                std::thread::spawn(move || {
+                    if let Some(window) = app.get_webview_window(MAIN) {
+                        let _ = window.set_zoom(level.factor());
+                    }
+                    if let Some(file) = file {
+                        zoom::keep(&file, level);
                     }
                 });
                 return false;
@@ -248,6 +265,9 @@ fn open_window(
         .build()?;
     #[cfg(target_os = "linux")]
     microphone::enable(&window)?;
+    if let Some(level) = last_zoom {
+        window.set_zoom(level.factor())?;
+    }
     Ok(window)
 }
 

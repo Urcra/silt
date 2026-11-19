@@ -1,4 +1,7 @@
-import { createContext, useState } from 'react'
+import { createContext } from 'react'
+import { message } from './query'
+import { useTextSettings } from './text'
+import { toast } from './ui'
 
 /** How much each step of the agent's work shows: closed, or every fold open. */
 export type Detail = 'normal' | 'verbose'
@@ -29,36 +32,17 @@ export const LiveTool = createContext<{ id: string | null; text: string }>({ id:
 /** What the agent is thinking now, not recorded yet, for the running turn's card to show where it will land. */
 export const LiveThought = createContext('')
 
-const KEY = 'silt.transcript-detail'
-const GROUPING_KEY = 'silt.transcript-grouping'
-
-/** A choice kept for this browser, or `fallback`. */
-function useKept<T extends string>(key: string, choices: { id: T }[], fallback: T): [T, (chosen: T) => void] {
-  const [value, setValue] = useState<T>(() => {
-    try {
-      const kept = localStorage.getItem(key)
-      return choices.some((choice) => choice.id === kept) ? (kept as T) : fallback
-    } catch {
-      return fallback
-    }
-  })
-  const choose = (chosen: T) => {
-    setValue(chosen)
-    try {
-      localStorage.setItem(key, chosen)
-    } catch {
-      // Kept for this page only.
-    }
-  }
-  return [value, choose]
-}
-
-/** The detail the person chose, kept for this browser. Compact, which folded each turn, is now grouping by turn. */
+/** The detail the person chose, kept for this machine with text and layout (ADR 0107). */
 export function useDetailChoice(): [Detail, (detail: Detail) => void] {
-  return useKept(KEY, DETAILS, 'normal')
+  const { shown, set } = useTextSettings()
+  return [shown.detail, (detail) => void set('detail', detail).catch((failure: unknown) => toast(message(failure), 'danger'))]
 }
 
-/** The grouping the person chose, kept for this browser; by turn unless they chose otherwise. */
+/** The grouping the person chose, kept for this machine; by turn unless they chose otherwise. */
 export function useGroupingChoice(): [Grouping, (grouping: Grouping) => void] {
-  return useKept(GROUPING_KEY, GROUPINGS, 'turn')
+  const { shown, set } = useTextSettings()
+  return [
+    shown.grouping,
+    (grouping) => void set('grouping', grouping).catch((failure: unknown) => toast(message(failure), 'danger')),
+  ]
 }

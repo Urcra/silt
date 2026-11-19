@@ -11,6 +11,7 @@ import { useThreadDiff } from '../threadDiff'
 import { Button, Input, Select, Skeleton, Tabs } from '../ui'
 import { ChipSelect } from './ChipSelect'
 import { type DiffLayout, DiffView } from './DiffView'
+import { useTextSettings } from '../text'
 import { FinishReview } from './FinishReview'
 import { OutdatedDrafts } from './OutdatedDrafts'
 import { FilesByStats } from './StatDiff'
@@ -55,7 +56,9 @@ export const DiffPanel = memo(function DiffPanel({
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
-  const layout: DiffLayout = picked ?? (wide && fits ? 'split' : 'unified')
+  // Unified if text and layout ask for it; else side by side where it fits (ADR 0107).
+  const preferred = useTextSettings().shown.diff_layout
+  const layout: DiffLayout = picked ?? (preferred !== 'unified' && wide && fits ? 'split' : 'unified')
   const [reviewed] = useState(() => keptView(thread).file)
   const [other, setOther] = useState('merge-base')
   const [commit, setCommit] = useState('')

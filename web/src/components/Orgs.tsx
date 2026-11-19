@@ -60,7 +60,7 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
   return (
     <section aria-label={`${org.name}'s policy`} className="flex flex-col gap-2 rounded-md border border-line-subtle p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <h4 className="flex-1 font-mono text-[11px] tracking-wider text-fg-2 uppercase">Policy</h4>
+        <h4 className="flex-1 font-mono text-label tracking-wider text-fg-2 uppercase">Policy</h4>
         {rulesLine(org.policy) ? (
           <span className="text-xs">{rulesLine(org.policy)}</span>
         ) : (
@@ -250,7 +250,7 @@ function Org({ org, others }: { org: OrgInfo; others: OrgInfo[] }) {
       <OrgPolicyForm org={org} />
 
       <div>
-        <h4 className="mb-1 font-mono text-[11px] tracking-wider text-fg-3 uppercase">Members</h4>
+        <h4 className="mb-1 font-mono text-label tracking-wider text-fg-3 uppercase">Members</h4>
         <ul aria-label={`members of ${org.name}`} className="divide-y divide-line-subtle">
           {org.members.map((member) => (
             <li key={member.user} className="flex items-center gap-2 py-1">
@@ -286,7 +286,7 @@ function Org({ org, others }: { org: OrgInfo; others: OrgInfo[] }) {
       </div>
 
       <div>
-        <h4 className="mb-1 font-mono text-[11px] tracking-wider text-fg-3 uppercase">Teams</h4>
+        <h4 className="mb-1 font-mono text-label tracking-wider text-fg-3 uppercase">Teams</h4>
         {org.teams.length === 0 && <p className="text-xs text-fg-3">No teams yet.</p>}
         <ul className="space-y-2">
           {org.teams.map((team) => (
@@ -355,7 +355,7 @@ function Org({ org, others }: { org: OrgInfo; others: OrgInfo[] }) {
       </div>
 
       <div>
-        <h4 className="mb-1 font-mono text-[11px] tracking-wider text-fg-3 uppercase">Projects</h4>
+        <h4 className="mb-1 font-mono text-label tracking-wider text-fg-3 uppercase">Projects</h4>
         {org.projects.length === 0 && <p className="text-xs text-fg-3">No projects yet.</p>}
         <ul className="divide-y divide-line-subtle">
           {org.projects.map((repo) => (

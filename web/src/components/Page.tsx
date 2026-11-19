@@ -113,7 +113,7 @@ export function Page({
           {(title || actions) && (
             <header className="sticky top-0 z-10 flex min-h-12 shrink-0 items-center bg-bg gap-x-2.5 gap-y-0.5 border-b border-line-subtle px-4 max-md:flex-wrap max-md:py-1.5 md:h-12 md:pr-3 md:pl-5">
               <DrawerButton />
-              {title && <h1 className="max-w-[60%] min-w-0 shrink-0 truncate text-[15px] font-medium">{title}</h1>}
+              {title && <h1 className="max-w-[60%] min-w-0 shrink-0 truncate text-heading font-medium">{title}</h1>}
               {meta && (
                 <span className="min-w-0 truncate font-mono text-2xs whitespace-nowrap text-fg-2 max-md:order-last max-md:w-full md:flex-1">
                   {meta}
@@ -158,7 +158,7 @@ export function Page({
               </div>
             )}
             {inspectorTitle && (
-              <div className="flex h-12 shrink-0 items-center border-b border-line-subtle px-4 text-[13px] font-medium max-lg:hidden">
+              <div className="flex h-12 shrink-0 items-center border-b border-line-subtle px-4 text-ui font-medium max-lg:hidden">
                 {inspectorTitle}
               </div>
             )}

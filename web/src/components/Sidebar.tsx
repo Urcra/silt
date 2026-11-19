@@ -62,7 +62,7 @@ function ThreadItem({ thread, nested = false, current = true }: { thread: Thread
         to="/t/$id"
         params={{ id: thread.id }}
         title={[title, threadDoing(thread)].filter(Boolean).join(' · ')}
-        className={cx(ROW, 'flex-1 items-start py-[5px] pr-7', nested ? 'pl-[22px]' : 'pl-2')}
+        className={cx(ROW, 'flex-1 items-start py-[calc((var(--row)-20px)/2)] pr-7', nested ? 'pl-[22px]' : 'pl-2')}
         activeProps={current ? { className: ACTIVE } : undefined}
       >
         <span className="flex h-[18px] items-center">
@@ -279,7 +279,7 @@ function NavItem({
   also?: boolean
 }) {
   return (
-    <Link to={to} className={cx(ROW, 'h-[30px]', also && ACTIVE)} activeProps={{ className: ACTIVE }}>
+    <Link to={to} className={cx(ROW, 'h-(--row)', also && ACTIVE)} activeProps={{ className: ACTIVE }}>
       <Icon name={icon} className="h-[15px] w-[15px] shrink-0" />
       <span className="flex-1 truncate">{children}</span>
       {count !== undefined && <span className={cx('font-mono text-2xs', accent ? 'text-accent-fg' : 'text-fg-2')}>{count}</span>}
@@ -301,7 +301,7 @@ function UpdatePill() {
   const pill = pillOf(update.data)
   if (!pill) return null
   const look = cx(
-    'inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-px text-[11px] font-medium max-md:min-h-11',
+    'inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-px text-label font-medium max-md:min-h-11',
     PILL_TONE[pill.kind],
   )
   const icon =
@@ -440,10 +440,10 @@ export function Sidebar() {
     <>
       <nav
         aria-label="projects"
-        className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pt-2.5 pb-2 text-[13px] [&>*]:shrink-0"
+        className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pt-2.5 pb-2 text-ui [&>*]:shrink-0"
       >
         <div className="flex items-center gap-2 px-1.5 pb-2.5">
-          <Link to="/" className="text-[15px] font-medium tracking-[-0.04em] text-fg-1">
+          <Link to="/" className="text-heading font-medium tracking-[-0.04em] text-fg-1">
             silt
           </Link>
           {!hosted() && <WorkspaceSwitcher />}
@@ -458,14 +458,14 @@ export function Sidebar() {
           </button>
         </div>
         {!hosted() && (
-          <Link to="/new" className={cx(ROW, 'h-[30px]', (path === '/' || path === '/new') && ACTIVE)}>
+          <Link to="/new" className={cx(ROW, 'h-(--row)', (path === '/' || path === '/new') && ACTIVE)}>
             <Icon name="plus" className="h-[15px] w-[15px] shrink-0" />
             <span className="flex-1">New thread</span>
             <Kbd>{formatKeys('n')}</Kbd>
           </Link>
         )}
         {!hosted() && (
-          <Link to="/chat" className={cx(ROW, 'h-[30px]')} activeProps={{ className: ACTIVE }}>
+          <Link to="/chat" className={cx(ROW, 'h-(--row)')} activeProps={{ className: ACTIVE }}>
             <Icon name="comment" className="h-[15px] w-[15px] shrink-0" />
             <span className="flex-1">New chat</span>
             <Kbd>{formatKeys('c')}</Kbd>

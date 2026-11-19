@@ -262,7 +262,7 @@ function PaletteList({ close }: { close: () => void }) {
         {items.map((item, index) => (
           <li key={item.id} role="presentation">
             {(index === 0 || items[index - 1].group !== item.group) && (
-              <p role="presentation" className="px-2.5 pt-2 pb-1 font-mono text-[10px] tracking-[0.06em] text-fg-2 uppercase">
+              <p role="presentation" className="px-2.5 pt-2 pb-1 font-mono text-mini tracking-[0.06em] text-fg-2 uppercase">
                 {item.group}
               </p>
             )}
@@ -279,7 +279,7 @@ function PaletteList({ close }: { close: () => void }) {
             >
               {item.dot ?? (item.icon && <Icon name={item.icon} className="text-fg-2" />)}
               <span className="min-w-0 flex-1 truncate">{item.label}</span>
-              {item.hint && <span className="shrink-0 font-mono text-[10px] text-fg-2">{item.hint}</span>}
+              {item.hint && <span className="shrink-0 font-mono text-mini text-fg-2">{item.hint}</span>}
             </div>
           </li>
         ))}

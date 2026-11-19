@@ -1053,7 +1053,48 @@ proxy: boolean, };
 
 export type AppearanceMode = "system" | "light" | "dark";
 
-export type AppearanceSettings = { mode: AppearanceMode, light: string, dark: string, };
+export type AppearanceSettings = { mode: AppearanceMode, light: string, dark: string, 
+/**
+ * Sizes, fonts and spacing over the theme (ADR 0107).
+ */
+text: TextSettings, };
+
+export type TextSettings = { zoom?: Zoom | null, ui_size?: UiSize | null, chat_size?: ChatSize | null, code_size?: CodeSize | null, ui_font?: FontChoice | null, code_font?: FontChoice | null, 
+/**
+ * Ligatures in code, where the font has them.
+ */
+ligatures?: boolean | null, density?: Density | null, line_height?: LineHeight | null, width?: ReadingWidth | null, diff_layout?: DiffLayout | null, 
+/**
+ * Long lines in a unified diff wrap at the panel's edge rather than
+ * scroll; the web UI draws it, so it adds no CSS.
+ */
+wrap?: boolean | null, tab_width?: TabWidth | null, detail?: Detail | null, grouping?: Grouping | null, motion?: Motion | null, };
+
+export type Zoom = number;
+
+export type UiSize = number;
+
+export type ChatSize = number;
+
+export type CodeSize = number;
+
+export type TabWidth = number;
+
+export type FontChoice = string;
+
+export type Density = "compact" | "regular" | "roomy";
+
+export type LineHeight = "tight" | "regular" | "loose";
+
+export type ReadingWidth = "narrow" | "regular" | "wide" | "full";
+
+export type DiffLayout = "unified" | "split";
+
+export type Detail = "normal" | "verbose";
+
+export type Grouping = "turn" | "run";
+
+export type Motion = "system" | "reduced" | "full";
 
 export type ThemeSource = "bundled" | "yours" | "replaces_bundled";
 

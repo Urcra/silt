@@ -1,10 +1,11 @@
-import { type ReactNode, memo, useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, createContext, memo, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { CommentView } from '../api'
 import { type CodeLine, type DiffFile, type Hunk, LARGE_DIFF, diffSize, parseFiles, splitRows } from '../diffParse'
 import { type Token, languageOf, useHighlighted } from '../highlight'
 import { appHref, filePath } from '../permalink'
 import { message } from '../query'
 import { type Draft, type Lines, type ReviewState, type Side, linesOf, quoteOf, sideOf } from '../review'
+import { useTextSettings } from '../text'
 import { Button, Counts, DiffBlock, Icon, Textarea, cx } from '../ui'
 import { CommentThread } from './CommentThread'
 
@@ -78,8 +79,11 @@ function Tokens({ tokens, text }: { tokens: Token[] | undefined; text: string })
 
 const SHEET_BUTTON = 'justify-center max-md:text-sm'
 
-/** A row's height, as `leading-5` draws it, for what isn't drawn yet. */
-const ROW_PX = 20
+/** A row's height at code's size, as `leading-code` draws it, for what isn't drawn yet. */
+const rowPx = (codeSize: number) => (codeSize * 20) / 12
+
+/** How a diff draws code, from text and layout (ADR 0107): whether long lines wrap, and a row's height. */
+const DiffText = createContext({ wrap: true, row: rowPx(12) })
 /** Past this many rows, a diff draws only what's near the view: 30,000 lines drawn at once were half a million
  * elements, seconds to open and to scroll. */
 const LAZY_ROWS = 1500
@@ -287,7 +291,9 @@ function PendingComment({ draft, review }: { draft: Draft; review: ReviewState }
 }
 
 function Gutter({ line, kind = 'context', children }: { line: number | null; kind?: CodeLine['kind']; children?: ReactNode }) {
-  return <span className={cx('px-1.5 text-right text-[10px] leading-5 select-none', GUTTER[kind])}>{children ?? line ?? ''}</span>
+  return (
+    <span className={cx('px-1.5 text-right text-gutter leading-code select-none', GUTTER[kind])}>{children ?? line ?? ''}</span>
+  )
 }
 
 /** A line's number on `side`, where it has one. */
@@ -328,6 +334,7 @@ const HunkView = memo(function HunkView({
   /** Only the rows near the view are drawn. */
   lazy?: boolean
 }) {
+  const { wrap, row: rowHeight } = useContext(DiffText)
   const code = useMemo(() => hunk.lines.map((line) => line.text).join('\n'), [hunk])
   const highlighted = useHighlighted(code, languageOf(file.path))
   const tokens = useMemo(() => new Map(hunk.lines.map((line, index) => [line, highlighted?.[index]])), [hunk, highlighted])
@@ -465,10 +472,11 @@ const HunkView = memo(function HunkView({
       </>
     )
   }
-  const codeCell = (line: CodeLine | null, withPlus = true) =>
+  // Long lines wrap rather than run past the panel's edge, where they were cut off; unless text and layout say not
+  // to, when a unified diff scrolls sideways as one. Side by side, each half always wraps.
+  const codeCell = (line: CodeLine | null, withPlus = true, wraps = true) =>
     line ? (
-      // Long lines wrap rather than run past the panel's edge, where they were cut off.
-      <span className="relative min-w-0 pr-3 whitespace-pre-wrap [overflow-wrap:anywhere]">
+      <span className={cx('relative min-w-0 pr-3', wraps ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre')}>
         {withPlus && plus(line)}
         <span className={cx('select-none', line.kind === 'add' ? 'text-ok' : line.kind === 'del' ? 'text-danger' : 'text-fg-3')}>
           {SIGN[line.kind]}
@@ -485,7 +493,8 @@ const HunkView = memo(function HunkView({
     <div key={index}>
       <div
         className={cx(
-          'grid grid-cols-[32px_minmax(0,1fr)] pointer-coarse:leading-7',
+          'grid pointer-coarse:leading-7',
+          wrap ? 'grid-cols-[32px_minmax(0,1fr)]' : 'grid-cols-[32px_minmax(max-content,1fr)]',
           ROW[line.kind],
           picked(line, sideFor(line)) && ring,
         )}
@@ -493,7 +502,7 @@ const HunkView = memo(function HunkView({
         <Gutter line={line.newLine ?? line.oldLine} kind={line.kind}>
           {sideFor(line) && numberOf(line, sideFor(line)!)}
         </Gutter>
-        {codeCell(line)}
+        {codeCell(line, true, wrap)}
       </div>
       {after(line)}
     </div>
@@ -502,7 +511,8 @@ const HunkView = memo(function HunkView({
     <div key={index}>
       <div
         className={cx(
-          'group grid grid-cols-[36px_36px_minmax(0,1fr)]',
+          'group grid',
+          wrap ? 'grid-cols-[36px_36px_minmax(0,1fr)]' : 'grid-cols-[36px_36px_minmax(max-content,1fr)]',
           ROW[line.kind],
           picked(line, sideFor(line)) && ring,
           isFresh(line) && freshEdge,
@@ -515,7 +525,7 @@ const HunkView = memo(function HunkView({
         <Gutter line={line.newLine} kind={line.kind}>
           {numberOf(line, 'new')}
         </Gutter>
-        {codeCell(line)}
+        {codeCell(line, true, wrap)}
       </div>
       {after(line)}
     </div>
@@ -568,7 +578,7 @@ const HunkView = memo(function HunkView({
       const from = chunk * CHUNK_ROWS
       const to = Math.min(count, from + CHUNK_ROWS)
       return (
-        <NearView key={from} height={(to - from) * ROW_PX}>
+        <NearView key={from} height={(to - from) * rowHeight}>
           {() => all(from, to)}
         </NearView>
       )
@@ -697,88 +707,94 @@ export function DiffView({
   const parsed = useMemo(() => given ?? parseFiles(text ?? ''), [given, text])
   const files = useMemo(() => parsed.filter((file) => only === undefined || file.path === only), [parsed, only])
   const lazy = useMemo(() => files.reduce((total, file) => total + rowsIn(file, layout), 0) > LAZY_ROWS, [files, layout])
+  const { shown } = useTextSettings()
+  const drawing = useMemo(() => ({ wrap: shown.wrap, row: rowPx(shown.code_size) }), [shown.wrap, shown.code_size])
   if (files.length === 0) return <p className="text-sm text-fg-2">No changes.</p>
   if (bare)
     return (
-      <div data-testid="diff" className="overflow-x-auto font-mono text-xs leading-5">
-        <div className="min-w-fit">
-          {files.map((file) => (
-            <FileHunks key={file.path} file={file} layout="unified" commenting={commenting} bare />
-          ))}
+      <DiffText.Provider value={drawing}>
+        <div data-testid="diff" className="overflow-x-auto font-mono text-code">
+          <div className="min-w-fit">
+            {files.map((file) => (
+              <FileHunks key={file.path} file={file} layout="unified" commenting={commenting} bare />
+            ))}
+          </div>
         </div>
-      </div>
+      </DiffText.Provider>
     )
   return (
-    <div data-testid="diff" className="flex flex-col gap-3">
-      {files.map((file) => (
-        <DiffBlock
-          key={file.path}
-          id={anchors ? `file-${file.path}` : undefined}
-          className={cx(file.path === picked && 'ring-2 ring-accent')}
-          path={
-            <>
-              {file.path}
-              {file.note && <span className="ml-2 text-fg-2">{file.note}</span>}
-            </>
-          }
-          actions={
-            <>
-              <Counts added={file.added} removed={file.removed} binary={file.binary} />
-              {viewFiles && (
-                <a
-                  aria-label="view file"
-                  className="font-sans text-accent-fg hover:text-fg-1 max-md:inline-flex max-md:min-h-11 max-md:items-center"
-                  href={appHref(filePath(viewFiles, file.path))}
-                >
-                  View file
-                </a>
-              )}
-              {actions?.(file)}
-            </>
-          }
-        >
-          <div
-            className="overflow-x-auto font-mono text-xs leading-5 [content-visibility:auto]"
-            style={{ containIntrinsicSize: `auto ${heightOf(file, layout)}px` }}
+    <DiffText.Provider value={drawing}>
+      <div data-testid="diff" className="flex flex-col gap-3">
+        {files.map((file) => (
+          <DiffBlock
+            key={file.path}
+            id={anchors ? `file-${file.path}` : undefined}
+            className={cx(file.path === picked && 'ring-2 ring-accent')}
+            path={
+              <>
+                {file.path}
+                {file.note && <span className="ml-2 text-fg-2">{file.note}</span>}
+              </>
+            }
+            actions={
+              <>
+                <Counts added={file.added} removed={file.removed} binary={file.binary} />
+                {viewFiles && (
+                  <a
+                    aria-label="view file"
+                    className="font-sans text-accent-fg hover:text-fg-1 max-md:inline-flex max-md:min-h-11 max-md:items-center"
+                    href={appHref(filePath(viewFiles, file.path))}
+                  >
+                    View file
+                  </a>
+                )}
+                {actions?.(file)}
+              </>
+            }
           >
-            <div className="min-w-fit">
-              {lazy ? (
-                <NearView height={heightOf(file, layout)}>
-                  {() => (
-                    <FileHunks
-                      file={file}
-                      layout={layout}
-                      commenting={commenting}
-                      note={hunkNote}
-                      cursor={cursor}
-                      ask={ask}
-                      fresh={fresh?.(file.path)}
-                      lazy
-                    />
-                  )}
-                </NearView>
-              ) : (
-                <FileHunks
-                  file={file}
-                  layout={layout}
-                  commenting={commenting}
-                  note={hunkNote}
-                  cursor={cursor}
-                  ask={ask}
-                  fresh={fresh?.(file.path)}
-                />
-              )}
+            <div
+              className="overflow-x-auto font-mono text-code [content-visibility:auto]"
+              style={{ containIntrinsicSize: `auto ${heightOf(file, layout, drawing.row)}px` }}
+            >
+              <div className="min-w-fit">
+                {lazy ? (
+                  <NearView height={heightOf(file, layout, drawing.row)}>
+                    {() => (
+                      <FileHunks
+                        file={file}
+                        layout={layout}
+                        commenting={commenting}
+                        note={hunkNote}
+                        cursor={cursor}
+                        ask={ask}
+                        fresh={fresh?.(file.path)}
+                        lazy
+                      />
+                    )}
+                  </NearView>
+                ) : (
+                  <FileHunks
+                    file={file}
+                    layout={layout}
+                    commenting={commenting}
+                    note={hunkNote}
+                    cursor={cursor}
+                    ask={ask}
+                    fresh={fresh?.(file.path)}
+                  />
+                )}
+              </div>
             </div>
-          </div>
-        </DiffBlock>
-      ))}
-    </div>
+          </DiffBlock>
+        ))}
+      </div>
+    </DiffText.Provider>
   )
 }
 
 /** About how tall a file's lines are, in pixels, until they're first drawn. Files out of view aren't laid out or
  * painted (`content-visibility`): with thousands of lines, each frame of a sidebar or panel dragged took 100 ms. */
-function heightOf(file: DiffFile, layout: DiffLayout): number {
+function heightOf(file: DiffFile, layout: DiffLayout, row: number): number {
   if (diffSize(file) > LARGE_DIFF) return 40
-  return rowsIn(file, layout) * ROW_PX
+  return rowsIn(file, layout) * row
 }

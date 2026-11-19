@@ -93,7 +93,7 @@ export type Tone = keyof typeof TONE
 /** A short label: a status, a kind, a count. */
 export function Tag({ tone = 'neutral', children, className }: { tone?: Tone; children: ReactNode; className?: string }) {
   return (
-    <span className={cx('inline-flex items-center rounded-sm px-1.5 font-mono text-[11px]', TONE[tone], className)}>
+    <span className={cx('inline-flex items-center rounded-sm px-1.5 font-mono text-label', TONE[tone], className)}>
       {children}
     </span>
   )

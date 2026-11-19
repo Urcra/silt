@@ -241,7 +241,7 @@ function Output({ lines, open, failed }: { lines: string[]; open: boolean; faile
       <summary className="cursor-pointer pb-2 text-xs text-fg-2">Output</summary>
       <pre
         ref={end}
-        className="max-h-[320px] overflow-auto rounded-md border border-line bg-surface-1 px-3 py-2.5 font-mono text-[11.5px] leading-relaxed text-fg-2"
+        className="max-h-[320px] overflow-auto rounded-md border border-line bg-surface-1 px-3 py-2.5 font-mono text-output leading-relaxed text-fg-2"
         data-testid="update-output"
       >
         {lines.map((line, index) => (

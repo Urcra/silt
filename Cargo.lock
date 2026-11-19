@@ -6491,6 +6491,7 @@ dependencies = [
  "serde_json",
  "silt-design",
  "thiserror 2.0.21",
+ "ts-rs",
 ]
 
 [[package]]

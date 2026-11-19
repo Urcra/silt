@@ -49,6 +49,24 @@ export function themeLink(appearance: 'light' | 'dark', bg: string, fg: string):
 
 let told = ''
 
+const waiting: string[] = []
+
+/** Sends the window a `silt://` link, one at a time: a second navigation in the same moment could cancel the first. */
+function tellWindow(link: string) {
+  waiting.push(link)
+  if (waiting.length === 1) sendNext()
+}
+
+function sendNext() {
+  const next = waiting[0]
+  if (next === undefined) return
+  window.location.href = next
+  setTimeout(() => {
+    waiting.shift()
+    sendNext()
+  }, 50)
+}
+
 /** Tells the desktop app's window the theme shown, so its frame and next start follow it; nothing in a browser. */
 export function tellDesktopTheme(appearance: 'light' | 'dark') {
   if (!window.__siltBackends) return
@@ -59,7 +77,7 @@ export function tellDesktopTheme(appearance: 'light' | 'dark') {
   const link = themeLink(appearance, bg, fg)
   if (link === told) return
   told = link
-  window.location.href = link
+  tellWindow(link)
 }
 
 /** The commit the desktop app showing this page was built from, or none outside the app. */
@@ -74,4 +92,18 @@ export function inDesktop(): boolean {
 /** Asks the desktop app to restart itself, on the build an update installed. */
 export function relaunchDesktop() {
   window.location.href = 'silt://relaunch'
+}
+
+/** The link that tells the desktop app's window how far to zoom, in percent (ADR 0107). */
+export function zoomLink(percent: number): string {
+  return `silt://zoom/?${new URLSearchParams({ percent: String(percent) })}`
+}
+
+let toldZoom: number | undefined
+
+/** Zooms the desktop app's window, which keeps the level for its next start; nothing in a browser, which has its own. */
+export function tellDesktopZoom(percent: number) {
+  if (!inDesktop() || percent === toldZoom) return
+  toldZoom = percent
+  tellWindow(zoomLink(percent))
 }

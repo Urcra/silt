@@ -8,6 +8,7 @@ import { askedServer } from './workspace'
 import type {
   AppearanceMode,
   AppearanceSettings,
+  TextSettings,
   ThemeCatalog,
   ThemeDetail,
   ThemeSaved,
@@ -498,8 +499,10 @@ export const api = {
   designKeep: (thread: string, name: string) => request<DesignSummary>('POST', '/api/design-systems/keep', { thread, name }),
   themes: () => request<ThemeCatalog>('GET', '/api/themes'),
   themeDetail: (id: string) => request<ThemeDetail>('GET', `/api/themes/detail?id=${encodeURIComponent(id)}`),
-  themeCss: (pick: { light?: string; dark?: string } = {}) => {
-    const query = new URLSearchParams(Object.entries(pick).filter((entry): entry is [string, string] => Boolean(entry[1])))
+  themeCss: (pick: { light?: string; dark?: string; text?: TextSettings } = {}) => {
+    const { text, ...themes } = pick
+    const query = new URLSearchParams(Object.entries(themes).filter((entry): entry is [string, string] => Boolean(entry[1])))
+    if (text) query.set('text', JSON.stringify(text))
     return request<{ css: string; mode: AppearanceMode }>('GET', `/api/themes/css${query.size ? `?${query}` : ''}`)
   },
   setAppearance: (settings: AppearanceSettings) => request<string>('PUT', '/api/appearance', settings),

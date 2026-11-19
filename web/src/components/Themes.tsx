@@ -353,7 +353,7 @@ export function ThemePage() {
                   >
                     <span
                       aria-hidden="true"
-                      className="grid h-[18px] w-[26px] shrink-0 place-items-center border border-line-subtle text-[10px] font-semibold"
+                      className="grid h-[18px] w-[26px] shrink-0 place-items-center border border-line-subtle text-mini font-semibold"
                       style={{ background: check.back, color: check.fore }}
                     >
                       Aa

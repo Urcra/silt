@@ -85,7 +85,7 @@ async function shoot(page: Page, name: string, ready: (page: Page) => Promise<vo
 
 // First, on the fixture as it was made: later screens add threads to the sidebar.
 /** Picks Alice's light and dark theme through her daemon, as Settings does. */
-async function pickThemes(page: Page, settings: { mode: string; light: string; dark: string }) {
+async function pickThemes(page: Page, settings: { mode: string; light: string; dark: string; text?: object }) {
   await page.evaluate(async (settings) => {
     const response = await fetch('/api/appearance', {
       method: 'PUT',
@@ -116,6 +116,63 @@ test('Settings › Appearance, and a thread in a bundled pair (ADR 0098)', async
       await expect(page.getByText('Please add a farewell line to main').first()).toBeVisible()
       await expect(page).toHaveScreenshot(`thread-catppuccin-desktop-${colorScheme}.png`, shotOptions(page))
     }
+  } finally {
+    await pickThemes(page, NOUS)
+  }
+})
+
+test('Settings › Text and layout, and a thread at larger sizes (ADR 0107)', async ({ page }) => {
+  await open(page, '/settings/text')
+  await shoot(page, 'text-layout', async (shown) => {
+    await expect(shown.getByRole('region', { name: 'preview' }).getByText('whitespace-pre-wrap').first()).toBeVisible()
+  })
+  const larger = { chat_size: 17, code_size: 14, ui_size: 15, density: 'roomy', line_height: 'loose', width: 'wide' }
+  try {
+    await pickThemes(page, { ...NOUS, text: larger })
+    await open(page, '/settings/text')
+    await shoot(page, 'text-layout-changed', async (shown) => {
+      await expect(shown.getByRole('button', { name: 'reset conversation text' })).toBeVisible()
+    })
+    await open(page, `/t/${world.thread}`)
+    await page.setViewportSize({ width: 1440, height: 900 })
+    for (const colorScheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' })
+      await expect(page.getByText('Please add a farewell line to main').first()).toBeVisible()
+      await expect(page).toHaveScreenshot(`thread-larger-desktop-${colorScheme}.png`, shotOptions(page))
+    }
+  } finally {
+    await pickThemes(page, NOUS)
+  }
+})
+
+test('text and layout set in Settings reach the page, are kept, and reset (ADR 0107)', async ({ page }) => {
+  await open(page, '/settings/text')
+  const section = page.getByRole('region', { name: 'Text and layout' })
+  const variable = (name: string) =>
+    page.evaluate((name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim(), name)
+  try {
+    await section.getByRole('button', { name: 'bigger conversation text' }).click()
+    await section.getByRole('button', { name: 'smaller code text' }).click()
+    await section.getByRole('radiogroup', { name: 'density' }).getByRole('radio', { name: 'Compact' }).click()
+    await section.getByRole('radiogroup', { name: 'reduce motion' }).getByRole('radio', { name: 'Always' }).click()
+    await expect.poll(() => variable('--chat-size')).toBe('14px')
+    await expect.poll(() => variable('--code-size')).toBe('11px')
+    await expect.poll(() => variable('--row')).toBe('26px')
+    await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduced')
+    // Kept by the daemon, and put in the page it serves, so the first frame is at the size set.
+    const served = await page.request.get(`${new URL(world.alice).origin}/`)
+    expect(await served.text()).toContain('--chat-size:14px;--code-size:11px;--row:26px;--density:0.6;')
+    await open(page, `/t/${world.thread}`)
+    const reply = page.getByText('Done: farewell added.').first()
+    await expect(reply).toHaveCSS('font-size', '14px')
+    await open(page, '/settings/text')
+    await expect(section.locator('[data-modified]')).toHaveCount(4)
+    await section.getByRole('button', { name: 'reset conversation text' }).click()
+    await expect.poll(() => variable('--chat-size')).toBe('13px')
+    await section.getByRole('button', { name: 'Reset all' }).click()
+    await expect(section.locator('[data-modified]')).toHaveCount(0)
+    await expect.poll(() => variable('--code-size')).toBe('12px')
+    await expect(page.locator('html')).not.toHaveAttribute('data-motion', 'reduced')
   } finally {
     await pickThemes(page, NOUS)
   }

@@ -231,6 +231,9 @@ struct ThemeQuery {
     light: Option<String>,
     #[serde(default)]
     dark: Option<String>,
+    /// Text and layout as JSON, which the hosted app keeps in the browser (ADR 0107).
+    #[serde(default)]
+    text: Option<String>,
 }
 
 async fn theme_detail(
@@ -253,10 +256,11 @@ async fn theme_css(
     let settings = silt_proto::view::AppearanceSettings {
         light: query.light.unwrap_or(defaults.light),
         dark: query.dark.unwrap_or(defaults.dark),
+        text: query.text.as_deref().and_then(|text| serde_json::from_str(text).ok()).unwrap_or_default(),
         ..defaults
     };
     let css = silt_proto::theme::css(&theme_entries(&server, &browser).await, &settings);
-    Json(json!({ "css": css, "mode": "system" })).into_response()
+    Json(json!({ "css": css, "mode": "system", "motion": settings.text.motion_attribute() })).into_response()
 }
 
 async fn status(State(server): State<Server>, Extension(browser): Extension<Browser>) -> Response {

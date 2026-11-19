@@ -390,10 +390,15 @@ async fn asset(State(web): State<Web>, request: HttpRequest) -> HttpResponse {
 /// The page with the picked theme in it (ADR 0098); as built if the daemon
 /// doesn't answer.
 async fn themed(web: &Web, html: &str) -> String {
-    let Ok(theme) = answer(web, Request::ThemeCss { light: None, dark: None }).await else { return html.to_owned() };
+    let Ok(theme) = answer(web, Request::ThemeCss { light: None, dark: None, text: None }).await else { return html.to_owned() };
     let css = theme["css"].as_str().unwrap_or_default();
     let mode = serde_json::from_value(theme["mode"].clone()).unwrap_or_default();
-    crate::theme::inject(html, css, mode)
+    let motion = match theme["motion"].as_str() {
+        Some("reduced") => Some(crate::theme::MotionAttribute::Reduced),
+        Some("full") => Some(crate::theme::MotionAttribute::Full),
+        _ => None,
+    };
+    crate::theme::inject(html, css, mode, motion)
 }
 
 /// Sends a request through the daemon's event loop.
@@ -914,6 +919,8 @@ struct ThemeQuery {
     light: Option<String>,
     #[serde(default)]
     dark: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
 }
 
 async fn theme_detail(State(web): State<Web>, Query(query): Query<ThemeQuery>) -> HttpResponse {
@@ -921,7 +928,8 @@ async fn theme_detail(State(web): State<Web>, Query(query): Query<ThemeQuery>) -
 }
 
 async fn theme_css(State(web): State<Web>, Query(query): Query<ThemeQuery>) -> HttpResponse {
-    ask(&web, Request::ThemeCss { light: query.light, dark: query.dark }).await
+    let text = query.text.as_deref().and_then(|text| serde_json::from_str(text).ok());
+    ask(&web, Request::ThemeCss { light: query.light, dark: query.dark, text }).await
 }
 
 async fn theme_font(State(web): State<Web>, Path((id, file)): Path<(String, String)>) -> HttpResponse {

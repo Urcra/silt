@@ -66,12 +66,17 @@ export function CodeBlock({ text, language }: { text: string; language: string }
       ) : (
         button
       )}
-      <pre className="overflow-x-auto px-2.5 py-2 font-mono text-xs leading-5">
+      <pre className="overflow-x-auto px-2.5 py-2 font-mono text-code">
         <Code code={text} language={languageOf(language)} />
       </pre>
     </div>
   )
 }
+
+const PROSE = 'min-w-0 leading-(--chat-leading) break-words text-fg-1 [&>:first-child]:mt-0 [&>:last-child]:mb-0'
+
+/** Whether the caller gave a size of its own; else the conversation's, as text and layout set it (ADR 0107). */
+const sized = (className?: string) => /(^|\s)text-(2xs|xs|sm|base|lg|ui|ui-lg|label)(\s|$)/.test(className ?? '')
 
 /**
  * A message as Markdown. Its HTML is shown as text and its images by name
@@ -79,9 +84,7 @@ export function CodeBlock({ text, language }: { text: string; language: string }
  */
 export const Markdown = memo(function Markdown({ text, className }: { text: string; className?: string }) {
   return (
-    <div
-      className={cx('min-w-0 text-sm leading-[1.6] break-words text-fg-1 [&>:first-child]:mt-0 [&>:last-child]:mb-0', className)}
-    >
+    <div className={cx(PROSE, !sized(className) && 'text-chat', className)}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS} skipHtml>
         {text}
       </ReactMarkdown>
@@ -107,9 +110,7 @@ export function StreamingMarkdown({ text, className }: { text: string; className
   const shown = useDeferredValue(text)
   const blocks = markdownBlocks(shown)
   return (
-    <div
-      className={cx('min-w-0 text-sm leading-[1.6] break-words text-fg-1 [&>:first-child]:mt-0 [&>:last-child]:mb-0', className)}
-    >
+    <div className={cx(PROSE, !sized(className) && 'text-chat', className)}>
       {blocks.map((block, index) => (
         // Blocks only grow at the end, so each keeps its place.
         <MarkdownBlock key={index} text={block} />

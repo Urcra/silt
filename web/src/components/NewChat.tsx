@@ -115,7 +115,7 @@ export function NewChat() {
   return (
     <Page title="New chat" flush label="new chat">
       <div className="mx-auto flex w-full max-w-[760px] flex-1 flex-col justify-center gap-[18px] px-4 pt-10 pb-16 md:px-6 md:pt-14">
-        <h2 className="text-center text-[26px] font-medium tracking-[-0.015em] max-md:text-xl">What do you want to know?</h2>
+        <h2 className="text-center text-display font-medium tracking-[-0.015em] max-md:text-xl">What do you want to know?</h2>
         <form
           aria-label="new chat"
           className="flex flex-col"

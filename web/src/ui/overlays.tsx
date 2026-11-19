@@ -369,7 +369,7 @@ export function Dialog({
       {open && !bare && (
         <div>
           <div className="flex items-center gap-2 border-b border-line px-5 py-3">
-            <h2 id={heading} className="min-w-0 truncate text-[16px] font-medium">
+            <h2 id={heading} className="min-w-0 truncate text-dialog font-medium">
               {title}
             </h2>
             <button
