@@ -309,3 +309,40 @@ test("Settings › Plugins lists the plugins here, and a plugin's page sets what
   await rules.scrollIntoViewIfNeeded()
   await shoot(page, '11-folder-rules', 1600)
 })
+
+test('a plugin from git says when a newer version is out, asks for what it adds, and shows its calls (ADR 0103)', async ({
+  page,
+}) => {
+  // Two builds of a third party's plugin, each offline in a sandbox.
+  test.setTimeout(240_000)
+  const repository = join(fixture.dir, 'probe-repo')
+  execFileSync(join(import.meta.dirname, 'probe-repo.sh'), [repository])
+  const home = join(fixture.dir, 'ada')
+  // The real home, for the toolchain a sandboxed build is given.
+  execFileSync(SILT, ['plugin', 'add', `file://${repository}#v1.0.0`, '--yes'], {
+    cwd: join(home, 'app'),
+    encoding: 'utf8',
+    env: { ...process.env, SILT_HOME: join(home, 'silt') },
+  })
+  execFileSync(join(import.meta.dirname, 'probe-repo.sh'), [repository, 'bump'])
+
+  await page.goto(`${new URL(fixture.ada).origin}/settings/plugins${new URL(fixture.ada).hash}`)
+  const plugins = page.getByRole('region', { name: 'Plugins', exact: true })
+  await expect(plugins.getByRole('link', { name: 'Probe', exact: true })).toBeVisible()
+  const update = plugins.getByLabel('update to 1.1.0')
+  await expect(update).toContainText('1.1.0 is out at v1.1.0; this is 1.0.0')
+  await expect(update).toContainText('elsewhere.test')
+  await update.scrollIntoViewIfNeeded()
+  await shoot(page, '5-update-waiting', 900)
+
+  await plugins.getByRole('link', { name: 'Probe', exact: true }).click()
+  const status = page.getByRole('region', { name: 'Status' })
+  await expect(status).toContainText('yes, offering')
+  await expect(status).toContainText('none yet')
+  await expect(page.getByRole('region', { name: 'Calls' })).toContainText('None yet')
+  await page.getByLabel('update to 1.1.0').getByRole('button', { name: 'Agree and update' }).click()
+  await expect(page.getByText('Updated test.probe to 1.1.0')).toBeVisible({ timeout: 180_000 })
+  await expect(page.getByLabel('update to 1.1.0')).toHaveCount(0)
+  expect(ada(['plugin', 'list'])).toContain('test.probe 1.1.0')
+  await shoot(page, '6-plugin-status', 1400)
+})

@@ -6,7 +6,6 @@ import {
   type AgentStatus,
   type ApprovalView,
   type BackendView,
-  type CallView,
   type Extra,
   type GrantScope,
   type Installed,
@@ -24,6 +23,7 @@ import { hosted } from '../served'
 import { useShortcut } from '../shortcuts'
 import { Button, Icon, Input, Kbd, Popover, Select, Tag, buttonClass, cx } from '../ui'
 import { PluginCard } from './PluginCard'
+import { TONE_DOT, callSaid, clock } from '../calls'
 
 function networkLine(reach: Reach): string {
   switch (reach.network) {
@@ -855,35 +855,6 @@ export function WorkspacePlugins({ workspace, name }: { workspace: string; name:
 function Heading({ children }: { children: ReactNode }) {
   return <h3 className="font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">{children}</h3>
 }
-
-function clock(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-function callSaid(call: CallView): { tone: 'ok' | 'warn' | 'danger' | 'neutral'; said: string } {
-  const outcome = call.outcome
-  if (call.state === 'pending') return { tone: 'warn', said: 'waiting for you' }
-  if (call.state === 'running') return { tone: 'warn', said: 'running' }
-  if (call.state === 'expired') return { tone: 'neutral', said: 'approval expired' }
-  if (!outcome) return { tone: 'neutral', said: call.state }
-  switch (outcome.status) {
-    case 'done':
-      return {
-        tone: 'ok',
-        said: call.asked ? 'you approved · ran' : call.grant !== null ? 'ran under a grant' : 'ran without asking',
-      }
-    case 'refused':
-      return { tone: 'danger', said: `refused: ${outcome.why}` }
-    case 'failed':
-      return { tone: 'danger', said: `failed before it was sent: ${outcome.error}` }
-    case 'unknown':
-      return { tone: 'warn', said: `outcome unknown: ${outcome.why}` }
-    case 'pending':
-      return { tone: 'warn', said: 'waiting for you' }
-  }
-}
-
-const TONE_DOT = { ok: 'bg-ok', warn: 'bg-warn', danger: 'bg-danger', neutral: 'bg-fg-3' } as const
 
 /**
  * The thread's Access tab (ADR 0093): what its sandbox reaches, the grants in force, each plugin call and how it

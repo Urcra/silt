@@ -346,6 +346,22 @@ devices: Array<RelayView>,
  */
 folders: Array<FolderView>, };
 
+export type ThreadCall = { thread: string, call: CallView, };
+
+export type PluginActivity = { built_ms: number | null, 
+/**
+ * The tools it offers agents, by its own names.
+ */
+tools: Array<string>, 
+/**
+ * Why it doesn't load here, when it doesn't.
+ */
+broken: string | null, 
+/**
+ * Newest first.
+ */
+calls: Array<ThreadCall>, };
+
 export type Installed = { id: string, source: PluginSource, version: string, 
 /**
  * The capabilities the person granted, by name.
@@ -386,7 +402,30 @@ manifest: Manifest | null, readme: string | null, trusted: boolean,
 /**
  * Its hosts, those its settings name included.
  */
-hosts: Array<string>, };
+hosts: Array<string>, 
+/**
+ * A newer version from its git repository, waiting for the person.
+ */
+update: GitUpdate | null, };
+
+export type GitUpdate = { id: string, 
+/**
+ * The commit installed when it was found.
+ */
+from_commit: string, from: string, to: string, 
+/**
+ * The tag or branch it's at.
+ */
+reference: string, commit: string, 
+/**
+ * What came in since, newest first, as `<short id> <subject>`.
+ */
+commits: Array<string>, 
+/**
+ * What it asks for that the installed version doesn't: updating it
+ * needs agreeing to these.
+ */
+adds: Array<string>, };
 
 export type Preview = { id: string, commit: string, 
 /**

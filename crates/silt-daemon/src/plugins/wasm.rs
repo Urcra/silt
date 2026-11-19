@@ -88,6 +88,11 @@ impl Wasm {
         Ok(tools)
     }
 
+    /// The names of the tools `installed` offers, or why it doesn't load.
+    pub(crate) fn tool_names(&self, data_dir: &Path, installed: &Installed) -> Result<Vec<String>, String> {
+        Ok(self.tools_of(data_dir, installed)?.into_iter().map(|tool| tool.name).collect())
+    }
+
     /// The tools of the plugins on in `workspace`, as agents see them.
     pub(crate) fn tools(&self, data_dir: &Path, workspace: &str, policy: Option<&Policy>) -> Vec<PluginTool> {
         let mut offered = Vec::new();

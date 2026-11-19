@@ -16,10 +16,12 @@ pub(crate) mod capabilities;
 pub mod install;
 pub mod installed;
 mod local;
+pub mod updates;
 pub(crate) mod wasm;
 
 pub use calls::{
-    AccessView, ApprovalState, ApprovalView, Approvals, CallView, FolderView, GrantScope, GrantView, NetworkRefusal, RelayView,
+    AccessView, ApprovalState, ApprovalView, Approvals, CallView, FolderView, GrantScope, GrantView, NetworkRefusal,
+    PluginActivity, RelayView, ThreadCall,
 };
 
 /// A tool a plugin offers agents.

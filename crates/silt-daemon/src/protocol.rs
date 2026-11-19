@@ -845,6 +845,10 @@ pub enum Request {
         name: String,
         patterns: Vec<String>,
     },
+    /// How a plugin is doing: its build, its tools and its calls.
+    PluginActivity {
+        id: String,
+    },
     /// Trusts a publisher, or stops trusting it.
     PluginTrust {
         publisher: String,
@@ -2550,8 +2554,11 @@ mod tests {
             crate::plugins::CallView::decl(&config),
             crate::plugins::GrantView::decl(&config),
             crate::plugins::AccessView::decl(&config),
+            crate::plugins::ThreadCall::decl(&config),
+            crate::plugins::PluginActivity::decl(&config),
             crate::plugins::installed::Installed::decl(&config),
             crate::plugins::installed::PluginView::decl(&config),
+            crate::plugins::updates::GitUpdate::decl(&config),
             crate::plugins::install::Preview::decl(&config),
             silt_plugin::Manifest::decl(&config),
             silt_plugin::Build::decl(&config),

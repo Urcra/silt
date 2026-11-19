@@ -215,11 +215,14 @@ pub struct PluginView {
     pub trusted: bool,
     /// Its hosts, those its settings name included.
     pub hosts: Vec<String>,
+    /// A newer version from its git repository, waiting for the person.
+    pub update: Option<super::updates::GitUpdate>,
 }
 
 /// Every plugin installed here, as the web UI shows them.
 pub fn views(data_dir: &Path) -> Vec<PluginView> {
     let trusted = trusted(data_dir);
+    let updates = super::updates::waiting(data_dir);
     load(data_dir)
         .into_iter()
         .map(|installed| {
@@ -237,6 +240,7 @@ pub fn views(data_dir: &Path) -> Vec<PluginView> {
             hosts.sort();
             hosts.dedup();
             PluginView {
+                update: updates.iter().find(|update| update.id == installed.id).cloned(),
                 readme: readme(data_dir, &installed.id),
                 trusted: manifest.as_ref().is_some_and(|manifest| trusted.contains(&manifest.publisher)),
                 manifest,

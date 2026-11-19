@@ -169,6 +169,21 @@ impl Store {
         rows.into_iter().map(|row| call_from_row!(row)).collect()
     }
 
+    /// Plugin `plugin`'s calls across every thread, newest first.
+    pub async fn plugin_calls_of(&self, plugin: &str, limit: i64) -> Result<Vec<PluginCallRecord>, StoreError> {
+        let rows = sqlx::query!(
+            r#"SELECT id AS "id!", thread_id, run_hash, workspace, request, hash, change, asked, state, outcome, grant_id, created_ms, answered_ms, kind
+               FROM plugin_calls
+               WHERE COALESCE(json_extract(request, '$.prepared.plugin'), json_extract(request, '$.plugin')) = ?1
+               ORDER BY id DESC LIMIT ?2"#,
+            plugin,
+            limit
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(|row| call_from_row!(row)).collect()
+    }
+
     pub async fn add_grant(&self, grant: &GrantRecord) -> Result<i64, StoreError> {
         let thread = id_bytes(grant.thread.0);
         let change = i64::from(grant.change);
@@ -285,6 +300,20 @@ mod tests {
             answered_ms: None,
             kind: "legacy".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn a_plugins_calls_are_found_across_threads() {
+        let data = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).await.unwrap();
+        let prepared = |plugin: &str| format!(r#"{{"prepared":{{"plugin":"{plugin}"}}}}"#);
+        let unprepared = r#"{"plugin":"acme.deploys","tool":"run"}"#.to_owned();
+        for (thread, request) in [(1, prepared("acme.deploys")), (2, prepared("silt.github")), (3, unprepared)] {
+            store.add_plugin_call(&PluginCallRecord { request, kind: "wasm".into(), ..call(ThreadId(thread)) }).await.unwrap();
+        }
+        let found = store.plugin_calls_of("acme.deploys", 10).await.unwrap();
+        assert_eq!(found.iter().map(|call| call.thread).collect::<Vec<_>>(), [ThreadId(3), ThreadId(1)]);
+        assert_eq!(store.plugin_calls_of("acme.deploys", 1).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

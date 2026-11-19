@@ -91,9 +91,10 @@ fn build_cargo(dir: &Path, package: &str, toolchain: &str, trusted_code: bool) -
     let manifest = dir.join("Cargo.toml");
     if !trusted_code {
         // Fetching runs none of the plugin's code: no build scripts, no
-        // macros. It's the only step that reaches the network.
+        // macros. It's the only step that reaches the network. Every
+        // target's crates, as build scripts and macros build for this one.
         let mut fetch = cargo(toolchain);
-        fetch.args(["fetch", "--target", "wasm32-wasip2", "--manifest-path"]).arg(&manifest).env("CARGO_HOME", &cargo_home);
+        fetch.args(["fetch", "--manifest-path"]).arg(&manifest).env("CARGO_HOME", &cargo_home);
         run(fetch, "fetching its crates")?;
     }
     let mut build = cargo(toolchain);
@@ -125,8 +126,13 @@ fn sandboxed(command: Command, dir: &Path) -> Result<Command, CoreError> {
     for system in ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/nix", "/opt"] {
         sandbox.args(["--ro-bind-try", system, system]);
     }
-    for tool in [home.join(".rustup"), home.join(".cargo/bin")] {
-        sandbox.arg("--ro-bind-try").arg(&tool).arg(&tool);
+    // The toolchain where it is: `RUSTUP_HOME` and the `cargo` on `PATH`,
+    // which needn't be under the home.
+    let rustup = std::env::var_os("RUSTUP_HOME").map_or_else(|| home.join(".rustup"), PathBuf::from);
+    let cargo_bin =
+        which("cargo").and_then(|cargo| cargo.parent().map(Path::to_owned)).unwrap_or_else(|| home.join(".cargo/bin"));
+    for tool in [&rustup, &cargo_bin] {
+        sandbox.arg("--ro-bind-try").arg(tool).arg(tool);
     }
     sandbox.arg("--bind").arg(dir).arg(dir);
     sandbox.env_clear();
@@ -135,10 +141,7 @@ fn sandboxed(command: Command, dir: &Path) -> Result<Command, CoreError> {
             sandbox.env(name, value);
         }
     }
-    sandbox.env("HOME", &home).env("PATH", format!("{}:/usr/bin:/bin", home.join(".cargo/bin").display()));
-    if let Ok(rustup) = std::env::var("RUSTUP_HOME") {
-        sandbox.env("RUSTUP_HOME", rustup);
-    }
+    sandbox.env("HOME", &home).env("PATH", format!("{}:/usr/bin:/bin", cargo_bin.display())).env("RUSTUP_HOME", &rustup);
     sandbox.arg("--chdir").arg(dir).arg("--").arg(command.get_program()).args(command.get_args());
     Ok(sandbox)
 }

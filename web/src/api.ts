@@ -79,6 +79,8 @@ import type {
   GrantScope,
   Installed,
   PluginView,
+  PluginActivity,
+  GitUpdate,
   Preview,
   Rule,
   VoiceStatus,
@@ -527,6 +529,10 @@ export const api = {
     request<string>('PUT', `/api/publishers/${encodeURIComponent(publisher)}`, { trusted }),
   previewPlugin: (url: string) => request<Preview>('POST', '/api/plugins/preview', { url }),
   addPlugin: (url: string, commit: string) => request<Installed>('POST', '/api/plugins/add', { url, commit }),
+  checkPluginUpdates: () => request<GitUpdate[]>('POST', '/api/plugins/check'),
+  updatePlugin: (id: string, consented: boolean) =>
+    request<Installed>('POST', `/api/plugins/${encodeURIComponent(id)}/update`, { consented }),
+  pluginActivity: (id: string) => request<PluginActivity>('GET', `/api/plugins/${encodeURIComponent(id)}/activity`),
   removePlugin: (id: string) => request<string>('DELETE', `/api/plugins/${encodeURIComponent(id)}`),
   turnPlugin: (id: string, workspace: string, on: boolean) =>
     request<string>('PUT', `/api/plugins/${encodeURIComponent(id)}/workspaces/${encodeURIComponent(workspace)}`, { on }),

@@ -836,6 +836,7 @@ impl Core {
             Request::PluginEnvironment { id, name, patterns } => {
                 to_response(crate::plugins::installed::set_environment(&self.data_dir, &id, &name, &patterns).map(|()| "saved"))
             }
+            Request::PluginActivity { id } => to_response(self.plugin_activity(&id).await),
             Request::PluginTrust { publisher, trusted } => {
                 to_response(crate::plugins::installed::set_trusted(&self.data_dir, &publisher, trusted).map(|()| "saved"))
             }
@@ -1482,6 +1483,7 @@ impl Core {
         self.drive_sync();
         if self.resident {
             self.updates.check_if_due();
+            crate::plugins::updates::check_if_due(&self.data_dir);
         }
         self.drive_notes_settings();
         if self.resident {

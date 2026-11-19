@@ -260,6 +260,9 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/plugins/{id}/environments/{name}", put(plugin_environment))
         .route("/api/publishers/{publisher}", put(plugin_trust))
         .route("/api/plugins/preview", post(plugin_preview))
+        .route("/api/plugins/check", post(plugin_check))
+        .route("/api/plugins/{id}/update", post(plugin_update))
+        .route("/api/plugins/{id}/activity", get(plugin_activity))
         .route("/api/plugins/add", post(plugin_add))
         .route("/api/mrs", get(merge_requests))
         .route("/api/mrs/{id}", get(merge_request))
@@ -2116,6 +2119,10 @@ struct PluginTrustBody {
     trusted: bool,
 }
 
+async fn plugin_activity(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
+    ask(&web, Request::PluginActivity { id }).await
+}
+
 async fn plugin_trust(State(web): State<Web>, Path(publisher): Path<String>, Json(body): Json<PluginTrustBody>) -> HttpResponse {
     ask(&web, Request::PluginTrust { publisher, trusted: body.trusted }).await
 }
@@ -2141,6 +2148,34 @@ async fn plugin_preview(Json(body): Json<PluginSourceBody>) -> HttpResponse {
 /// Adds a plugin from git, built here, off the core: building takes a while.
 async fn plugin_add(State(web): State<Web>, Json(body): Json<PluginSourceBody>) -> HttpResponse {
     match crate::plugins::install::add_from_git(&crate::paths::data_dir(), &body.url, &body.commit, &body.workspaces).await {
+        Ok(installed) => {
+            let _ = web.bus.send(BusEvent::Approvals);
+            Json(installed).into_response()
+        }
+        Err(error) => Failed { status: StatusCode::BAD_REQUEST, message: error.to_string() }.into_response(),
+    }
+}
+
+/// Looks for updates of the plugins added from git, off the core: it asks
+/// each repository.
+async fn plugin_check() -> HttpResponse {
+    match tokio::task::spawn_blocking(|| crate::plugins::updates::check(&crate::paths::data_dir())).await {
+        Ok(updates) => Json(updates).into_response(),
+        Err(error) => Failed { status: StatusCode::INTERNAL_SERVER_ERROR, message: error.to_string() }.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct PluginUpdateBody {
+    /// The person agreed to what the update adds.
+    #[serde(default)]
+    consented: bool,
+}
+
+/// Updates a plugin added from git to the version waiting, built here, off
+/// the core.
+async fn plugin_update(State(web): State<Web>, Path(id): Path<String>, Json(body): Json<PluginUpdateBody>) -> HttpResponse {
+    match crate::plugins::updates::apply(&crate::paths::data_dir(), &id, body.consented).await {
         Ok(installed) => {
             let _ = web.bus.send(BusEvent::Approvals);
             Json(installed).into_response()

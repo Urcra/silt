@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use exn::{Exn, ResultExt as _};
 use silt_daemon::paths;
-use silt_daemon::plugins::{AccessView, ApprovalState, ApprovalView, GrantScope, Outcome, install, installed};
+use silt_daemon::plugins::{AccessView, ApprovalState, ApprovalView, GrantScope, Outcome, install, installed, updates};
 use silt_daemon::protocol::Request;
 
 use crate::CliError;
@@ -383,33 +383,11 @@ fn add_from_git(data: &std::path::Path, source: &str, workspaces: &[String], yes
 fn update(data: &std::path::Path, id: &str, yes: bool) -> Result<(), Exn<CliError>> {
     let record = installed::find(data, id).ok_or_else(|| fail(format!("no plugin {id}")))?;
     let package = match &record.source {
-        installed::PluginSource::Git { url, follow, commit: old } => {
-            let checkout = tempfile::tempdir().or_raise(|| CliError("cannot make a folder to clone into".into()))?;
-            let commit = install::clone(url, follow.as_deref(), checkout.path()).map_err(core_error)?;
-            if commit == *old {
-                println!("{id} is up to date at {}", &commit[..commit.len().min(7)]);
-                return Ok(());
-            }
-            match install::commits_between(checkout.path(), old, &commit) {
-                Ok(commits) => {
-                    println!(
-                        "{} since {}:",
-                        if commits.len() == 1 { "1 commit".to_owned() } else { format!("{} commits", commits.len()) },
-                        &old[..old.len().min(7)]
-                    );
-                    for line in commits {
-                        println!("  {line}");
-                    }
-                }
-                Err(_) => println!(
-                    "{} isn't an ancestor of {}: its history was rewritten",
-                    &old[..old.len().min(7)],
-                    &commit[..commit.len().min(7)]
-                ),
-            }
-            let package = runtime()?.block_on(install::package(checkout.path(), false)).map_err(core_error)?;
-            (package, installed::PluginSource::Git { url: url.clone(), commit, follow: follow.clone() })
+        installed::PluginSource::Git { follow: None, commit, .. } => {
+            println!("{id} is pinned to {}; add it again at a tag or branch to follow one", &commit[..commit.len().min(7)]);
+            return Ok(());
         }
+        installed::PluginSource::Git { .. } => return update_from_git(data, &record, yes),
         installed::PluginSource::Dev { path } => {
             let package = runtime()?.block_on(install::package(std::path::Path::new(path), true)).map_err(core_error)?;
             (package, record.source.clone())
@@ -433,6 +411,44 @@ fn update(data: &std::path::Path, id: &str, yes: bool) -> Result<(), Exn<CliErro
     let updated = install::install(data, &package, source, &[], true).map_err(core_error)?;
     println!("{} is now {}", updated.id, updated.version);
     Ok(())
+}
+
+/// Updates `record`, added from git, to the newest version its tag or
+/// branch is offered, asking for what it adds.
+fn update_from_git(data: &std::path::Path, record: &installed::Installed, yes: bool) -> Result<(), Exn<CliError>> {
+    let Some(update) = updates::find(data, record, &[]).map_err(core_error)? else {
+        println!("{} is up to date at {}", record.id, record.version);
+        return Ok(());
+    };
+    if update.commits.is_empty() {
+        println!("{} isn't an ancestor of {}: its history was rewritten", short(&update.from_commit), short(&update.commit));
+    } else {
+        let count = update.commits.len();
+        println!(
+            "{} since {}:",
+            if count == 1 { "1 commit".to_owned() } else { format!("{count} commits") },
+            short(&update.from_commit)
+        );
+        for line in &update.commits {
+            println!("  {line}");
+        }
+    }
+    if !update.adds.is_empty() {
+        let mut lines = vec![format!("{} {} asks for more:", record.id, update.to)];
+        lines.extend(update.adds.iter().map(|line| format!("  {line}")));
+        if !agreed(&lines, yes)? {
+            println!("not updated; {} {} keeps running", record.id, record.version);
+            return Ok(());
+        }
+    }
+    updates::remember(data, &update);
+    let updated = runtime()?.block_on(updates::apply(data, &record.id, true)).map_err(core_error)?;
+    println!("{} is now {} ({})", updated.id, updated.version, update.reference);
+    Ok(())
+}
+
+fn short(commit: &str) -> &str {
+    &commit[..commit.len().min(7)]
 }
 
 fn set_rule(data: &std::path::Path, id: &str, action: &str, rule: &str, matching: Option<&str>) -> Result<(), Exn<CliError>> {

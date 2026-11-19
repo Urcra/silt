@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearch } from '@tanstack/react-router'
 import { type ReactNode, useState } from 'react'
-import { api, type ActionSpec, type PluginView, type Rule, type SettingSpec } from '../api'
+import { api, type ActionSpec, type GitUpdate, type PluginView, type Rule, type SettingSpec } from '../api'
 import { keys, message } from '../query'
 import { SETTINGS_HEADING } from '../settingsContext'
 import { Banner, Button, Chip, Dialog, EmptyState, Icon, Input, Select, Skeleton, Tag, cx, toast } from '../ui'
 import { Markdown } from './Markdown'
 import { Page } from './Page'
+import { TONE_DOT, callSaid, clock } from '../calls'
 
 /** A manifest's text, its `backticked` parts as code. */
 function withCode(text: string): ReactNode[] {
@@ -95,7 +96,18 @@ function OnIn({ view }: { view: PluginView }) {
 
 /** Settings › Plugins (ADR 0103): every plugin installed here, by where it came from. */
 export function PluginsSettings() {
+  const queries = useQueryClient()
   const plugins = useQuery({ queryKey: keys.plugins, queryFn: api.plugins })
+  // Opening the list asks each git plugin's repository whether a newer version is out.
+  useQuery({
+    queryKey: keys.pluginUpdates,
+    queryFn: async () => {
+      const updates = await api.checkPluginUpdates()
+      void queries.invalidateQueries({ queryKey: keys.plugins, exact: true })
+      return updates
+    },
+    staleTime: 5 * 60_000,
+  })
   const [adding, setAdding] = useState(false)
   const views = plugins.data ?? []
   const groups = new Map<string, PluginView[]>()
@@ -157,6 +169,7 @@ function PluginRow({ view }: { view: PluginView }) {
         {!view.trusted && view.installed.source.type !== 'shipped' && <Tag tone="warn">publisher not trusted</Tag>}
       </span>
       {view.manifest && <span className="text-sm text-fg-2">{withCode(view.manifest.description)}</span>}
+      {view.update && <UpdateWaiting update={view.update} />}
       <span className="font-mono text-2xs text-fg-2">
         {origin(view)} · WebAssembly, run by Silt
         {view.hosts.length > 0 ? ` · reaches ${view.hosts.join(', ')}` : ''}
@@ -283,11 +296,13 @@ export function PluginPage() {
       {view && manifest && (
         <div className="flex max-w-[860px] flex-col gap-6">
           <p className="text-sm text-fg-2">{withCode(manifest.description)}</p>
+          {view.update && <UpdateWaiting update={view.update} />}
           {!view.trusted && <Untrusted publisher={manifest.publisher} />}
           <HowItWorks view={view} />
           {manifest.environments && <Environments view={view} />}
           {manifest.settings.length > 0 && <PluginSettings view={view} />}
           <Actions view={view} />
+          <Status view={view} />
           {view.readme && (
             <section aria-label="About" className="flex flex-col gap-2">
               <h3 className="text-sm font-medium">About</h3>
@@ -300,6 +315,121 @@ export function PluginPage() {
         </div>
       )}
     </Page>
+  )
+}
+
+/** A newer version from the plugin's repository: what came in, and what it asks for that this one doesn't. */
+function UpdateWaiting({ update }: { update: GitUpdate }) {
+  const queries = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const asks = update.adds.length > 0
+  const apply = () => {
+    setBusy(true)
+    api
+      .updatePlugin(update.id, asks)
+      .then(
+        () => {
+          void queries.invalidateQueries({ queryKey: keys.plugins })
+          toast(`Updated ${update.id} to ${update.to}`, 'ok')
+        },
+        (failure: unknown) => toast(message(failure), 'danger'),
+      )
+      .finally(() => setBusy(false))
+  }
+  return (
+    <Banner tone={asks ? 'warn' : 'info'}>
+      <span className="flex flex-col gap-1.5" aria-label={`update to ${update.to}`}>
+        <span className="flex flex-wrap items-center gap-2">
+          <span>
+            {update.to} is out at <code className="font-mono">{update.reference}</code>; this is {update.from}.
+          </span>
+          <Button size="sm" disabled={busy} onClick={apply}>
+            {busy ? 'Updating…' : asks ? 'Agree and update' : 'Update'}
+          </Button>
+        </span>
+        {asks && (
+          <span className="flex flex-col gap-0.5 text-xs">
+            <span>It asks for more than this version has:</span>
+            {update.adds.map((line) => (
+              <span key={line} className="font-mono whitespace-pre-wrap">
+                {line.trim()}
+              </span>
+            ))}
+          </span>
+        )}
+        {update.commits.length > 0 && (
+          <details className="text-xs">
+            <summary className="cursor-pointer">
+              {update.commits.length === 1 ? '1 commit' : `${update.commits.length} commits`} since this one
+            </summary>
+            <ul className="mt-1 flex flex-col gap-0.5 font-mono text-2xs">
+              {update.commits.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </details>
+        )}
+        <span className={SUB}>It's built here, offline, in a sandbox, from that commit and no other.</span>
+      </span>
+    </Banner>
+  )
+}
+
+/** How the plugin is doing: when it was built, whether it loads, and its calls across threads. */
+function Status({ view }: { view: PluginView }) {
+  const activity = useQuery({
+    queryKey: keys.pluginActivity(view.installed.id),
+    queryFn: () => api.pluginActivity(view.installed.id),
+  })
+  const data = activity.data
+  return (
+    <>
+      <Section label="Status">
+        {activity.isPending && <Skeleton className="m-3 h-12" />}
+        {activity.isError && (
+          <p className="px-4 py-3 text-sm text-danger">Its status couldn't be read: {message(activity.error)}</p>
+        )}
+        {data && (
+          <dl className="grid grid-cols-[minmax(110px,max-content)_minmax(0,1fr)] gap-x-4 gap-y-2 px-4 py-3 text-sm">
+            <dt className="text-fg-2">Built</dt>
+            <dd>{data.built_ms !== null ? new Date(data.built_ms).toLocaleString() : 'not yet'}</dd>
+            <dt className="text-fg-2">Loads</dt>
+            <dd className={cx(data.broken && 'text-danger')}>
+              {data.broken ??
+                `yes, offering ${data.tools.length === 1 ? '1 tool' : `${data.tools.length} tools`}${data.tools.length ? `: ${data.tools.join(', ')}` : ''}`}
+            </dd>
+            <dt className="text-fg-2">Last call</dt>
+            <dd>
+              {data.calls[0] ? `${callSaid(data.calls[0].call).said} · ${clock(data.calls[0].call.created_ms)}` : 'none yet'}
+            </dd>
+          </dl>
+        )}
+      </Section>
+      <Section label="Calls" note="Its calls in every thread on this machine, newest first.">
+        {data && data.calls.length === 0 && <p className="px-4 py-3 text-sm text-fg-2">None yet.</p>}
+        {data?.calls.map(({ thread, call }) => {
+          const { tone, said } = callSaid(call)
+          return (
+            <div key={call.id} className="flex items-start gap-2 border-b border-line-subtle px-4 py-2.5 last:border-b-0">
+              <span className={cx('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', TONE_DOT[tone])} />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-sm">
+                  {call.tool}
+                  {call.environment ? ` · ${call.environment}` : ''}
+                  {call.target ? ` · ${call.target}` : ''}
+                </span>
+                <span className="truncate font-mono text-2xs text-fg-2">
+                  {clock(call.created_ms)} · {said}
+                </span>
+              </span>
+              <Link to="/t/$id" params={{ id: thread }} className="shrink-0 text-xs text-accent-fg">
+                its thread
+              </Link>
+            </div>
+          )
+        })}
+      </Section>
+    </>
   )
 }
 

@@ -109,6 +109,27 @@ pub struct CallView {
     pub effects: Vec<silt_plugin::Effect>,
 }
 
+/// A plugin's call, with the thread it was made in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct ThreadCall {
+    pub thread: String,
+    pub call: CallView,
+}
+
+/// How a plugin is doing, for its page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct PluginActivity {
+    pub built_ms: Option<i64>,
+    /// The tools it offers agents, by its own names.
+    pub tools: Vec<String>,
+    /// Why it doesn't load here, when it doesn't.
+    pub broken: Option<String>,
+    /// Newest first.
+    pub calls: Vec<ThreadCall>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct GrantView {
@@ -194,6 +215,28 @@ fn state_of(call: &PluginCallRecord, now: i64) -> ApprovalState {
         "rejected" => ApprovalState::Rejected,
         "expired" => ApprovalState::Expired,
         _ => ApprovalState::Approved,
+    }
+}
+
+fn call_view(call: &PluginCallRecord, now: i64) -> CallView {
+    let seen = described(call);
+    let state = if state_of(call, now) == ApprovalState::Expired { "expired".to_owned() } else { call.state.clone() };
+    CallView {
+        id: id_of(call.id),
+        plugin: seen.plugin,
+        tool: seen.tool,
+        environment: seen.environment,
+        target: seen.target,
+        shown: seen.shown,
+        change: call.change,
+        asked: call.asked,
+        grant: call.grant.map(id_of),
+        state,
+        outcome: outcome_of(call),
+        created_ms: call.created_ms,
+        answered_ms: call.answered_ms,
+        card: seen.card,
+        effects: seen.effects,
     }
 }
 
@@ -496,39 +539,35 @@ impl Core {
             .collect())
     }
 
+    /// How plugin `id` is doing: when it was built, whether it loads, the
+    /// tools it offers, and its calls across threads.
+    pub(crate) async fn plugin_activity(&self, id: &str) -> Result<PluginActivity, CoreError> {
+        let installed =
+            super::installed::find(&self.data_dir, id).ok_or_else(|| CoreError::Invalid(format!("no plugin {id} here")))?;
+        let (tools, broken) = match self.approvals.wasm.tool_names(&self.data_dir, &installed) {
+            Ok(tools) => (tools, None),
+            Err(why) => (Vec::new(), Some(why)),
+        };
+        let now = now_ms();
+        let calls = self
+            .store
+            .plugin_calls_of(id, LISTED)
+            .await?
+            .iter()
+            .map(|call| ThreadCall { thread: call.thread.to_string(), call: call_view(call, now) })
+            .collect();
+        let built_ms = super::installed::built(&self.data_dir, id)
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|since| i64::try_from(since.as_millis()).ok());
+        Ok(PluginActivity { built_ms, tools, broken, calls })
+    }
+
     /// What reached the thread's sandboxes through Silt: plugin calls,
     /// grants, and what the gateway refused.
     pub(crate) async fn access_view(&self, thread: &str) -> Result<AccessView, CoreError> {
         let thread = self.find_thread(thread)?;
         let now = now_ms();
-        let calls = self
-            .store
-            .plugin_calls(Some(thread), None, LISTED)
-            .await?
-            .into_iter()
-            .map(|call| {
-                let seen = described(&call);
-                let state =
-                    if state_of(&call, now) == ApprovalState::Expired { "expired".to_owned() } else { call.state.clone() };
-                CallView {
-                    id: id_of(call.id),
-                    plugin: seen.plugin,
-                    tool: seen.tool,
-                    environment: seen.environment,
-                    target: seen.target,
-                    shown: seen.shown,
-                    change: call.change,
-                    asked: call.asked,
-                    grant: call.grant.map(id_of),
-                    state,
-                    outcome: outcome_of(&call),
-                    created_ms: call.created_ms,
-                    answered_ms: call.answered_ms,
-                    card: seen.card,
-                    effects: seen.effects,
-                }
-            })
-            .collect();
+        let calls = self.store.plugin_calls(Some(thread), None, LISTED).await?.iter().map(|call| call_view(call, now)).collect();
         let grants = self
             .store
             .grants(thread)
@@ -959,6 +998,14 @@ mod tests {
         let access = core.access_view(&ThreadId(7).to_string()).await.expect("access");
         assert_eq!(access.calls.len(), 3);
         assert!(access.grants.iter().any(|grant| grant.plugin == "test.probe"));
+
+        // Its page shows its calls across threads, newest first, and that it loads.
+        let activity = core.plugin_activity("test.probe").await.expect("its activity");
+        assert_eq!(activity.calls.len(), 3);
+        assert!(activity.calls.iter().all(|call| call.thread == ThreadId(7).to_string() && call.call.plugin == "test.probe"));
+        assert!(activity.calls[0].call.id > activity.calls[2].call.id);
+        assert!(activity.broken.is_none() && activity.tools.contains(&"files".to_owned()), "{activity:?}");
+        assert!(core.plugin_activity("test.nothing").await.is_err());
     }
 
     async fn ask_for(core: &mut Core, token: &str, path: &std::path::Path, writable: bool) -> oneshot::Receiver<Response> {
