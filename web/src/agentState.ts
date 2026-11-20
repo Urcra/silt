@@ -1,4 +1,4 @@
-import type { AgentChoiceItem, AgentSetting, AgentState, Preset } from './api'
+import type { AgentChoice, AgentChoiceItem, AgentModes, AgentSetting, AgentState, AgentStatus, Preset } from './api'
 import type { Tone } from './ui'
 
 /** Which of the agent's permission requests the daemon answers by itself (ADR 0022), and Plan,
@@ -52,6 +52,41 @@ export function presetDriven(setting: AgentSetting): boolean {
  */
 export function startSettings(settings: AgentSetting[], modes: AgentChoiceItem[] | null | undefined): AgentSetting[] {
   return settings.filter((setting) => !(modes?.length && setting.category === 'mode') && !presetDriven(setting))
+}
+
+/**
+ * The agent a thread whose agent stopped starts again: the one it ran, as the daemon still knows it or as the thread
+ * names it, while it may run here; else the first that may.
+ */
+export function threadAgent(
+  agents: AgentChoice[],
+  stopped: AgentStatus | null,
+  named: string | null | undefined,
+  refused: (agent: string) => string | undefined,
+): string {
+  const may = (id: string | undefined) => (id && agents.some((choice) => choice.id === id) && !refused(id) ? id : undefined)
+  const ran = stopped?.agent_id || agents.find((choice) => choice.name === named || choice.id === named)?.id
+  return may(ran) ?? agents.find((choice) => !refused(choice.id))?.id ?? ''
+}
+
+/**
+ * The modes and settings `agent` starts again with in a thread whose agent stopped. The thread's own, as its agent
+ * left them, when it's the same agent, so the session goes on with the model it had; the agent's as it last ran
+ * anywhere on this machine otherwise, under the workspace's defaults.
+ */
+export function restartChoices(
+  agent: string,
+  stopped: AgentStatus | null,
+  seen: AgentChoice | undefined,
+  preferred: Record<string, string> | undefined,
+): { modes: AgentModes | null; settings: AgentSetting[]; value: (setting: AgentSetting, chosen: string | undefined) => string } {
+  const own = stopped?.agent_id === agent ? stopped : undefined
+  const modes = own ? own.modes : (seen?.modes ?? null)
+  return {
+    modes,
+    settings: startSettings((own ?? seen)?.settings ?? [], modes?.available),
+    value: (setting, chosen) => (own ? (chosen ?? setting.current) : startingValue(setting, chosen, preferred?.[setting.id])),
+  }
 }
 
 /** What a setting starts with: the person's choice, else the workspace's default while the agent still lists it, else as it last ran. */

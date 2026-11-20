@@ -26,7 +26,7 @@ use serde_json::Value;
 use crate::host::{
     Changing, Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label,
 };
-use crate::modes::{Setting, commands_v2, modes_in, settings_v2};
+use crate::modes::{Setting, commands_v2, modes_in, settings_v2, with_change};
 use crate::prompt::{Accepts, blocks_v2};
 
 type Waiting = Arc<Mutex<HashMap<u64, Responder<RequestPermissionResponse>>>>;
@@ -257,7 +257,7 @@ impl ConnectTo<Agent> for V2 {
                             };
                             let request = SetSessionConfigOptionRequest::new(
                                 session.clone(),
-                                setting,
+                                setting.clone(),
                                 SessionConfigValueId::new(mode.clone()),
                             );
                             let (told, read) = (events.clone(), reading.clone());
@@ -266,7 +266,9 @@ impl ConnectTo<Agent> for V2 {
                             connection.spawn(async move {
                                 match sent.block_task().await {
                                     Ok(response) => {
-                                        for event in read.lock().expect("lock").settings(settings_v2(response.config_options)) {
+                                        // As v1 takes a mode change answered without error as made.
+                                        let settings = with_change(settings_v2(response.config_options), &setting, &mode);
+                                        for event in read.lock().expect("lock").settings(settings) {
                                             let _ = told.send(event);
                                         }
                                     }
@@ -279,15 +281,19 @@ impl ConnectTo<Agent> for V2 {
                             })?;
                         }
                         Command::SetSetting { id, value } => {
-                            let request =
-                                SetSessionConfigOptionRequest::new(session.clone(), id, SessionConfigValueId::new(value));
+                            let request = SetSessionConfigOptionRequest::new(
+                                session.clone(),
+                                id.clone(),
+                                SessionConfigValueId::new(value.clone()),
+                            );
                             let (told, read) = (events.clone(), reading.clone());
                             let answered = changing.asked();
                             let sent = connection.send_request(request);
                             connection.spawn(async move {
                                 match sent.block_task().await {
                                     Ok(response) => {
-                                        for event in read.lock().expect("lock").settings(settings_v2(response.config_options)) {
+                                        let settings = with_change(settings_v2(response.config_options), &id, &value);
+                                        for event in read.lock().expect("lock").settings(settings) {
                                             let _ = told.send(event);
                                         }
                                     }

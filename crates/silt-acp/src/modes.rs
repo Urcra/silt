@@ -176,6 +176,19 @@ fn setting_of(option: SessionConfigOption) -> Option<Setting> {
     })
 }
 
+/// The settings an agent answered a change of `id` to `value` with, the
+/// change taken as made. Copilot applies a model changed mid-turn only once
+/// the turn ends, and answers with the one it still runs on; taken at its
+/// word, the change would look refused and the old value would be kept.
+pub(crate) fn with_change(mut settings: Vec<Setting>, id: &str, value: &str) -> Vec<Setting> {
+    if let Some(setting) =
+        settings.iter_mut().find(|setting| setting.id == id && setting.choices.iter().any(|choice| choice.id == value))
+    {
+        value.clone_into(&mut setting.current);
+    }
+    settings
+}
+
 /// v2's settings, as v1's: settings of other kinds than choices are left out.
 pub(crate) fn settings_v2(options: Vec<v2::SessionConfigOption>) -> Vec<Setting> {
     options.into_iter().filter_map(setting_v2).collect()
@@ -225,5 +238,24 @@ mod tests {
         assert_eq!(plan_mode(&modes).map(|mode| mode.id.as_str()), Some("p"));
         let none = Modes { current: "a".into(), available: vec![choice("a", "Ask"), choice("code", "Code")] };
         assert!(plan_mode(&none).is_none());
+    }
+
+    #[test]
+    fn a_change_answered_with_the_old_value_is_taken_as_made() {
+        let choice = |id: &str| Choice { id: id.into(), name: id.into(), description: None };
+        let setting = |id: &str, current: &str| Setting {
+            id: id.into(),
+            name: id.into(),
+            category: None,
+            current: current.into(),
+            choices: vec![choice("gpt-6.2-sol"), choice("claude-opus-5.5"), choice("high")],
+        };
+        // As Copilot answers mid-turn: still on the model it runs.
+        let answered = vec![setting("model", "gpt-6.2-sol"), setting("reasoning_effort", "high")];
+        let taken = with_change(answered.clone(), "model", "claude-opus-5.5");
+        assert_eq!(taken[0].current, "claude-opus-5.5");
+        assert_eq!(taken[1], answered[1], "other settings stay as answered");
+        assert_eq!(with_change(answered.clone(), "model", "not-offered"), answered, "only a value the agent offers");
+        assert_eq!(with_change(answered.clone(), "other", "high"), answered);
     }
 }

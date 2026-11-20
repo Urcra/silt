@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::host::{
     Changing, Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label,
 };
-use crate::modes::{commands_of, modes_of, settings_of};
+use crate::modes::{commands_of, modes_of, settings_of, with_change};
 use crate::prompt::{Accepts, blocks};
 use crate::sign_in::{SignInHow, SignInMethod};
 
@@ -328,15 +328,17 @@ impl ConnectTo<Agent> for V1 {
                         Command::SetSetting { id, value } => {
                             let request = SetSessionConfigOptionRequest::new(
                                 session.clone(),
-                                SessionConfigId::new(id),
-                                SessionConfigValueId::new(value),
+                                SessionConfigId::new(id.clone()),
+                                SessionConfigValueId::new(value.clone()),
                             );
                             let told = events.clone();
                             let answered = changing.asked();
                             let sent = connection.send_request(request);
                             connection.spawn(async move {
                                 let event = match sent.block_task().await {
-                                    Ok(response) => Event::Settings(settings_of(response.config_options)),
+                                    Ok(response) => {
+                                        Event::Settings(with_change(settings_of(response.config_options), &id, &value))
+                                    }
                                     Err(error) => Event::Refused(format!("the agent kept its setting: {error}")),
                                 };
                                 let _ = told.send(event);
