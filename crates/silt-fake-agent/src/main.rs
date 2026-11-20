@@ -18,6 +18,8 @@
 //! `FAKE_ACP_HANG` it never answers at all, as an agent stuck starting.
 //! `Which model` makes it answer with its model, which `FAKE_ACP_SLOW_SETTINGS`
 //! makes it take only a while after it's asked for (see `settle`).
+//! `Long` runs a command a steer can be added to while it runs, with
+//! `FAKE_ACP_STEERING` (see `steering`).
 //! It speaks ACP v1, as Copilot does, answering a client that asks for v2
 //! with v1; with `FAKE_ACP_V2` it speaks v2 instead, as Claude's adapter
 //! does (see `v2`). With `FAKE_ACP_SIGN_IN` naming a file, it needs a sign-in
@@ -28,6 +30,7 @@
 //! given anything else, it says so and waits, as Claude's does.
 
 mod mcp;
+mod steering;
 mod v2;
 
 use std::collections::HashMap;
@@ -37,13 +40,13 @@ use std::sync::{Arc, Mutex};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema::{
-    AgentCapabilities, ContentBlock, ContentChunk, CreateElicitationRequest, EmbeddedResourceResource, Implementation,
-    InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
-    PermissionOption, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption, SessionId, SessionMode,
-    SessionModeState, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
-    SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
+    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, CreateElicitationRequest, EmbeddedResourceResource,
+    Implementation, InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
+    NewSessionResponse, PermissionOption, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
+    SessionId, SessionMode, SessionModeState, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent, ToolCall,
+    ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, Result, Stdio};
 
@@ -172,6 +175,13 @@ async fn agent() -> Result<()> {
     Agent
         .v1()
         .name("silt-fake-agent")
+        .on_receive_notification(
+            async move |_cancel: CancelNotification, _connection| {
+                steering::cancel();
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .on_receive_request(
             async move |initialize: InitializeRequest, responder, _connection| {
                 // As Antigravity's `agy acp` does, it may list its terminal
@@ -185,16 +195,16 @@ async fn agent() -> Result<()> {
                 } else {
                     sign_in_methods("id")
                 };
-                responder.respond(
-                    InitializeResponse::new(ProtocolVersion::V1)
-                        .agent_capabilities(
-                            AgentCapabilities::new()
-                                .load_session(true)
-                                .prompt_capabilities(PromptCapabilities::new().image(has_modes()).embedded_context(has_modes())),
-                        )
-                        .agent_info(Implementation::new("fake-agent", "1.0"))
-                        .auth_methods(serde_json::from_value(methods).map_err(agent_client_protocol::Error::into_internal_error)?),
-                )
+                let mut response = InitializeResponse::new(ProtocolVersion::V1)
+                    .agent_capabilities(
+                        AgentCapabilities::new()
+                            .load_session(true)
+                            .prompt_capabilities(PromptCapabilities::new().image(has_modes()).embedded_context(has_modes())),
+                    )
+                    .agent_info(Implementation::new("fake-agent", "1.0"))
+                    .auth_methods(serde_json::from_value(methods).map_err(agent_client_protocol::Error::into_internal_error)?);
+                response.meta = steering::meta().and_then(|meta| meta.as_object().cloned());
+                responder.respond(response)
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -318,6 +328,32 @@ async fn agent() -> Result<()> {
                     }
                     notify(&worker, &session, SessionUpdate::AgentThoughtChunk(text("Thinking about the prompt.")))?;
                     notify(&worker, &session, SessionUpdate::UsageUpdate(UsageUpdate::new(53_000, 200_000)))?;
+                    if prompt.contains("Long") {
+                        let build = ToolCall::new("long-1", "cargo build")
+                            .kind(ToolKind::Execute)
+                            .status(ToolCallStatus::InProgress)
+                            .raw_input(serde_json::json!({"command": "cargo build"}));
+                        notify(&worker, &session, SessionUpdate::ToolCall(build))?;
+                        let ran = steering::long(|steer| {
+                            notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(format!("Heard while the command ran: {steer}\n\n"))))
+                        })
+                        .await?;
+                        let killed = matches!(ran, steering::Ran::Killed);
+                        let (status, output) = if killed {
+                            (ToolCallStatus::Failed, "The command was killed.")
+                        } else {
+                            (ToolCallStatus::Completed, "The command ran to its end.")
+                        };
+                        let ended = ToolCallUpdateFields::new().status(status).raw_output(serde_json::json!(output));
+                        notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("long-1", ended)))?;
+                        if killed {
+                            return responder.respond(PromptResponse::new(StopReason::Cancelled));
+                        }
+                        let reply = format!("Done: {prompt}");
+                        notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
+                        state.lock().expect("lock").said.entry(session.to_string()).or_default().extend([(true, prompt), (false, reply)]);
+                        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+                    }
                     if planning || prompt.contains("Which model") {
                         let reply = if planning { format!("Plan: {prompt}") } else { format!("Model: {model}") };
                         notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
@@ -508,6 +544,17 @@ async fn agent() -> Result<()> {
                     }
                     Ok(())
                 })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: agent_client_protocol::UntypedMessage,
+                        responder: agent_client_protocol::v1::Responder<serde_json::Value>,
+                        _connection| {
+                match steering::answer(&request.method, &request.params) {
+                    Ok(answer) => responder.respond(answer),
+                    Err(error) => responder.respond_with_error(error),
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )

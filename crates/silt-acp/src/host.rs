@@ -76,6 +76,10 @@ pub enum Command {
         attachments: Vec<Attachment>,
     },
     Cancel,
+    /// Adds `text` to the turn the agent runs, for an agent that takes
+    /// steers ([`Event::Ready`]'s `steers`); [`Event::Steered`] says how it
+    /// went.
+    Steer(String),
     /// The person's answer to a permission request: an option id, or none
     /// to refuse.
     Answer {
@@ -333,6 +337,13 @@ pub enum Event {
         /// it takes up by itself, between prompts, starts with
         /// [`Event::Working`] and ends with [`Event::TurnEnded`] too.
         reports_work: bool,
+        /// The agent takes [`Command::Steer`], as its `initialize` says.
+        steers: bool,
+    },
+    /// How the agent took a [`Command::Steer`] of `text`.
+    Steered {
+        text: String,
+        outcome: crate::Steered,
     },
     /// The agent works, on a prompt or on something it took up by itself.
     Working,

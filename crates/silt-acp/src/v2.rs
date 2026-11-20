@@ -107,6 +107,7 @@ impl ConnectTo<Agent> for V2 {
                 )
                 .capabilities(capabilities);
                 let init = connection.send_request(request).block_task().await?;
+                let steers = crate::steering::supported(init.meta.as_ref());
                 let methods = crate::sign_in::methods(&serde_json::to_value(&init.auth_methods).unwrap_or_default());
                 reading.lock().expect("lock").sign_in.clone_from(&methods);
                 if let Some(method) = start.sign_in_first.clone()
@@ -180,6 +181,7 @@ impl ConnectTo<Agent> for V2 {
                     settings,
                     accepts,
                     reports_work: true,
+                    steers,
                 });
                 // Later changes come as updates.
                 let _ = events.send(Event::Commands(commands_v2(offered)));
@@ -233,6 +235,15 @@ impl ConnectTo<Agent> for V2 {
                                     serde_json::from_value(serde_json::json!({"action": "cancel"})).expect("a cancel action"),
                                 )?;
                             }
+                        }
+                        Command::Steer(text) => {
+                            let request = crate::steering::request(&session.to_string(), &text)?;
+                            let (told, sent) = (events.clone(), connection.send_request(request));
+                            connection.spawn(async move {
+                                let outcome = crate::steering::outcome(sent.block_task().await);
+                                let _ = told.send(Event::Steered { text, outcome });
+                                Ok(())
+                            })?;
                         }
                         Command::Answer { id, option } => {
                             let responder = waiting.lock().expect("lock").remove(&id);

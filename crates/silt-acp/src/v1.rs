@@ -159,6 +159,7 @@ impl ConnectTo<Agent> for V1 {
             .connect_with(agent, async move |connection: ConnectionTo<Agent>| {
                 let request = initialize().map_err(agent_client_protocol::Error::into_internal_error)?;
                 let init = connection.send_request(request).block_task().await?;
+                let steers = crate::steering::supported(init.meta.as_ref());
                 let Some(mut commands) = commands.lock().expect("lock").take() else {
                     return Ok(());
                 };
@@ -209,6 +210,7 @@ impl ConnectTo<Agent> for V1 {
                             settings: settings_of(options.unwrap_or_default()),
                             accepts,
                             reports_work: false,
+                            steers,
                         });
                         SessionId::new(id)
                     }
@@ -236,6 +238,7 @@ impl ConnectTo<Agent> for V1 {
                             settings: settings_of(created.config_options.unwrap_or_default()),
                             accepts,
                             reports_work: false,
+                            steers,
                         });
                         created.session_id
                     }
@@ -293,6 +296,15 @@ impl ConnectTo<Agent> for V1 {
                                     serde_json::from_value(serde_json::json!({"action": "cancel"})).expect("a cancel action"),
                                 )?;
                             }
+                        }
+                        Command::Steer(text) => {
+                            let request = crate::steering::request(&session.to_string(), &text)?;
+                            let (told, sent) = (events.clone(), connection.send_request(request));
+                            connection.spawn(async move {
+                                let outcome = crate::steering::outcome(sent.block_task().await);
+                                let _ = told.send(Event::Steered { text, outcome });
+                                Ok(())
+                            })?;
                         }
                         Command::Answer { id, option } => {
                             let responder = waiting.lock().expect("lock").remove(&id);

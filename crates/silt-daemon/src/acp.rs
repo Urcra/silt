@@ -66,6 +66,11 @@ pub(crate) struct AcpRun {
     tool_output: HashMap<String, String>,
     /// What to tell the agent once the turn being cancelled for it ends.
     steering: Option<String>,
+    /// The agent adds a steer to the turn it runs (`_session/steering`), so
+    /// a steer needn't cancel it (ADR 0111).
+    steers: bool,
+    /// Steers that found no turn running, each to send as a prompt in turn.
+    steered: Vec<String>,
     /// Each tool call's kind as the agent announced it, for permission
     /// requests that don't repeat it.
     tool_kinds: HashMap<String, String>,
@@ -342,6 +347,16 @@ fn optional_text(field: &silt_acp::QuestionField) -> bool {
 }
 
 /// An answer in the person's own words, as Claude Code words a result.
+/// Cancels the agent's turn to say `said` once it ends, after what earlier
+/// steers left to say.
+fn cancel_to_say(run: &mut AcpRun, said: String) {
+    run.steering = Some(match run.steering.take() {
+        Some(before) => format!("{before}\n\n{said}"),
+        None => said,
+    });
+    send(run, Command::Cancel);
+}
+
 fn own_answer(question: &Question, text: &str) -> String {
     format!(
         "User has answered your questions: \"{}\"=\"{}\". You can now continue with the user's answers in mind.",
@@ -737,6 +752,8 @@ impl Core {
                 error: None,
                 tool_output: HashMap::new(),
                 steering: None,
+                steers: false,
+                steered: Vec::new(),
                 tool_kinds: HashMap::new(),
                 tool_said: HashMap::new(),
                 within: None,
@@ -904,9 +921,11 @@ impl Core {
         Ok(())
     }
 
-    /// Interrupts the agent's turn to tell it `text`: ACP can't add to a
-    /// running turn, so the turn is cancelled and `text` goes first once it
-    /// ends. An agent that isn't working hears it as its next prompt.
+    /// Tells the agent `text` while it works. An agent that takes steers
+    /// hears it in the turn it runs, which goes on, a command it runs
+    /// included (ADR 0111); for any other, the turn is cancelled and `text`
+    /// goes first once it ends. An agent that isn't working hears it as its
+    /// next prompt.
     pub(crate) async fn acp_steer(&mut self, thread: ThreadId, text: &str) -> Result<&'static str, CoreError> {
         let run = self.running(thread)?;
         if !matches!(run.state, AgentState::Working) {
@@ -915,17 +934,53 @@ impl Core {
         let run = self.acp.get_mut(&thread).expect("checked above");
         // Steering while the agent asks answers its question in your own words.
         let asked = std::mem::take(&mut run.questions);
-        run.steering = Some(match asked.first() {
+        let said = match asked.first() {
             Some(question) => format!("to your question \"{}\": {text}", question.message),
             None => text.to_owned(),
-        });
-        send(run, Command::Cancel);
+        };
+        if run.steers {
+            // Sent while the question is open, so an agent that holds a steer
+            // until its question is answered has it as it goes on.
+            send(run, Command::Steer(said));
+            for question in &asked {
+                send(run, Command::AnswerQuestion { id: question.id, answers: None });
+            }
+        } else {
+            cancel_to_say(run, said);
+        }
         for question in asked {
             let said = own_answer(&question, text);
             self.record_acp(thread, &acp::tool_result(&question_call(question.id), "completed", Some(&said))).await?;
         }
         self.agent_changed(thread).await;
         Ok("steering")
+    }
+
+    /// How the agent took a steer: in its turn, it's the person's message
+    /// there; with no turn running, it's a prompt of its own; refused, the
+    /// turn is cancelled for it, as for an agent that takes no steers.
+    async fn steered(&mut self, thread: ThreadId, text: String, outcome: silt_acp::Steered) -> Result<(), CoreError> {
+        use silt_acp::Steered;
+        match outcome {
+            Steered::Injected | Steered::StartedNewTurn => {
+                self.flush_acp(thread).await?;
+                let me = self.own_user(thread);
+                self.record_acp(thread, &acp::prompt(&text, &me, &[], &[])).await?;
+                return Ok(());
+            }
+            Steered::PromptRequired => {}
+            Steered::Failed | Steered::Error(_) => {
+                warn!(%thread, ?outcome, "the agent didn't take a steer; cancelling its turn instead");
+                let run = self.acp.get_mut(&thread).expect("caller checked");
+                if run.state == AgentState::Working {
+                    cancel_to_say(run, text);
+                    return Ok(());
+                }
+            }
+        }
+        let run = self.acp.get_mut(&thread).expect("caller checked");
+        run.steered.push(text);
+        self.next_prompt(thread).await
     }
 
     /// Sends the next prompt once a turn ended: a steer first, then the
@@ -942,6 +997,11 @@ impl Core {
             let me = self.own_user(thread);
             let said = format!("I interrupted your last turn to say: {steer}");
             return self.send_prompt(thread, &me, &said, Vec::new()).await;
+        }
+        if !run.steered.is_empty() {
+            let steer = run.steered.remove(0);
+            let me = self.own_user(thread);
+            return self.send_prompt(thread, &me, &steer, Vec::new()).await;
         }
         let Some(next) = self.store.take_next(thread).await? else {
             return Ok(());
@@ -1459,8 +1519,11 @@ impl Core {
                 run.state = AgentState::Error;
             }
             AcpEvent::Login { .. } => unreachable!("handled by acp_event"),
-            AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, modes, settings, accepts, reports_work, .. }) => {
+            AcpEvent::Agent(silt_acp::Event::Ready {
+                session, loaded, modes, settings, accepts, reports_work, steers, ..
+            }) => {
                 run.reports_work = reports_work;
+                run.steers = steers;
                 let preset = self.preset(thread);
                 // A thread whose mode was never chosen starts in the one its preset says; Plan's is
                 // entered by its first prompt, which knows to come back from it.
@@ -1545,6 +1608,7 @@ impl Core {
                 run.suggestion = suggestion.filter(|_| matches!(run.state, AgentState::Idle));
             }
             AcpEvent::Agent(silt_acp::Event::Refused(why)) => run.error = Some(why),
+            AcpEvent::Agent(silt_acp::Event::Steered { text, outcome }) => self.steered(thread, text, outcome).await?,
             AcpEvent::Agent(silt_acp::Event::Working) => {
                 run.suggestion = None;
                 // Working on a prompt of Silt's, it is already; else it took
