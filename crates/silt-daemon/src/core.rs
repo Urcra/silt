@@ -302,6 +302,10 @@ pub struct Core {
     /// When this daemon last asked each agent what it offers, by registry
     /// id, so one that doesn't answer isn't asked again on every look.
     pub(crate) asked: HashMap<String, i64>,
+    /// The agents being asked what they offer, and what tells them the
+    /// daemon is ending, so none is left running past it.
+    pub(crate) probes: tokio::task::JoinSet<()>,
+    pub(crate) ending: tokio::sync::watch::Sender<bool>,
     /// Whether this is the daemon, which holds every family and watches its
     /// checkouts, rather than a hook or wrapper holding only its own
     /// family and watching nothing (ADR 0018).
@@ -600,6 +604,8 @@ impl Core {
             uploaded: std::sync::Arc::default(),
             registry_checked: false,
             asked: HashMap::new(),
+            probes: tokio::task::JoinSet::new(),
+            ending: tokio::sync::watch::Sender::new(false),
             exe: std::env::current_exe().ok().and_then(|exe| ExeStamp::of(&exe).map(|stamp| (exe, stamp))),
             restart_when_idle: None,
             resident,
@@ -637,6 +643,12 @@ impl Core {
 
     /// Handles a request. Some answer `reply` later, off the event loop.
     pub async fn request(&mut self, request: Request, reply: oneshot::Sender<Response>) {
+        // A hook that stopped waiting captured in its own process, and its
+        // agent went on: taking it in now would record it after what came
+        // since, a new prompt after the tool it started, say.
+        if matches!(request, Request::Hook { .. }) && reply.is_closed() {
+            return;
+        }
         if let Request::OnServer { server, asking } = request {
             let server = server.trim_end_matches('/').to_owned();
             if !self.remotes.iter().any(|remote| remote.config.url == server) {

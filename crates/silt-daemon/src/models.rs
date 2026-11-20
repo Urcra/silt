@@ -129,6 +129,15 @@ impl LocalModelsHere {
     }
 
     pub(crate) async fn view(&self) -> LocalModels {
+        // Read before the models are listed: a download that ends between
+        // the two is then seen still going, rather than neither going nor
+        // listed.
+        let (pull, failed) = {
+            let pulling = self.pulling.lock().expect("lock");
+            let failed =
+                pulling.failed.as_ref().map(|(id, why)| crate::protocol::ModelFailure { id: id.clone(), reason: why.clone() });
+            (pulling.current.clone(), failed)
+        };
         let server = self.server();
         let budget = self.budget(server.as_deref()).await;
         let installed = self.models.list().await;
@@ -147,7 +156,6 @@ impl LocalModelsHere {
                 path: self.models.weights(model),
             })
             .collect();
-        let pulling = self.pulling.lock().expect("lock");
         LocalModels {
             server: server.map(|server| server.display().to_string()),
             devices: budget
@@ -162,11 +170,8 @@ impl LocalModelsHere {
                 .collect(),
             room: budget.room(),
             models,
-            pull: pulling.current.clone(),
-            failed: pulling
-                .failed
-                .as_ref()
-                .map(|(id, why)| crate::protocol::ModelFailure { id: id.clone(), reason: why.clone() }),
+            pull,
+            failed,
         }
     }
 

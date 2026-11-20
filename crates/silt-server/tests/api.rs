@@ -247,7 +247,11 @@ async fn a_stored_delta_that_no_longer_applies_does_not_block_pushes() {
 async fn routes_without_an_account_take_only_small_bodies() {
     let data = tempfile::tempdir().expect("temp dir");
     let base = start(data.path()).await;
-    let huge = vec![b'x'; 2 << 20];
+    // One byte over the server's 1 MiB: it reads the whole body before
+    // refusing it, as it stops at the limit. A bigger body leaves bytes
+    // unread when it closes, which Windows answers with a reset the client
+    // can see before the 413.
+    let huge = vec![b'x'; (1 << 20) + 1];
     let response = reqwest::Client::new()
         .post(format!("{base}/v1/login/password"))
         .header(silt_proto::PROTOCOL_HEADER, silt_proto::PROTOCOL.to_string())

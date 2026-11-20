@@ -305,11 +305,22 @@ async fn serve_as(
                 Response::error("a sandboxed agent's run may only ask with its run's token")
             }
             Ok(request) => {
+                let hook = matches!(request, Request::Hook { .. });
                 let (reply, response) = oneshot::channel();
                 if events.send(Event::Request(request, reply)).is_err() {
                     break;
                 }
-                response.await.unwrap_or_else(|_| Response::error("the daemon stopped"))
+                let answer = if hook {
+                    // A hook's connection carries it alone and closes once the
+                    // hook stops waiting, which the daemon then leaves to it.
+                    tokio::select! {
+                        answer = response => answer,
+                        _ = lines.next_line() => break,
+                    }
+                } else {
+                    response.await
+                };
+                answer.unwrap_or_else(|_| Response::error("the daemon stopped"))
             }
             Err(error) => Response::error(format!("invalid request: {error}")),
         };

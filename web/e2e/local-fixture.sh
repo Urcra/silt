@@ -7,6 +7,8 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 silt="$root/target/debug/silt"
 work=$(mktemp -d /tmp/silt-local-XXXXXX)
+# A failure partway leaves nothing running or on disk.
+trap 'status=$?; [ "$status" -eq 0 ] || "$root/web/e2e/abandon.sh" "$work" "$silt"; exit "$status"' EXIT
 
 git init -q -b main "$work/logs-seed"
 printf 'ERROR disk full\n' > "$work/logs-seed/app.log"

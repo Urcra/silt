@@ -36,10 +36,13 @@ impl Env {
     }
 
     fn with_claude(script: &'static str) -> Self {
-        // Under `/tmp` on Unix, which keeps the daemon's socket path short.
+        // Under a short temporary directory on Unix, which keeps the daemon's
+        // socket path short: `TMPDIR` when it is, else `/tmp`.
         let mut builder = tempfile::Builder::new();
         builder.prefix("silt");
-        let silt_home = if cfg!(unix) { builder.tempdir_in("/tmp") } else { builder.tempdir() }.expect("temp dir");
+        let temp = std::env::temp_dir();
+        let short = if temp.as_os_str().len() <= 40 { temp } else { "/tmp".into() };
+        let silt_home = if cfg!(unix) { builder.tempdir_in(short) } else { builder.tempdir() }.expect("temp dir");
         let claude_dir = tempfile::tempdir().expect("temp dir");
         let repo = tempfile::tempdir().expect("temp dir");
         let bin = tempfile::tempdir().expect("temp dir");

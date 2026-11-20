@@ -28,12 +28,20 @@ pub fn canonical(path: &Path) -> PathBuf {
     silt_os::canonicalize(path).expect("canonical")
 }
 
-/// A directory for one test's machines: under `/tmp` on Unix, which keeps
-/// the daemons' socket paths short enough, else where the system says.
+/// A directory for one test's machines: under `TMPDIR` on Unix when its path
+/// is short enough for the daemons' sockets beneath it, else under `/tmp`;
+/// elsewhere where the system says.
 pub fn temp_root(prefix: &str) -> tempfile::TempDir {
     let mut builder = tempfile::Builder::new();
     builder.prefix(prefix);
-    if cfg!(unix) { builder.tempdir_in("/tmp") } else { builder.tempdir() }.expect("temp dir")
+    if cfg!(unix) { builder.tempdir_in(short_temp_dir()) } else { builder.tempdir() }.expect("temp dir")
+}
+
+/// The system's temporary directory when its path leaves room for a
+/// machine's socket under it, else `/tmp`.
+fn short_temp_dir() -> PathBuf {
+    let temp = std::env::temp_dir();
+    if temp.as_os_str().len() <= 40 { temp } else { PathBuf::from("/tmp") }
 }
 
 pub const WAIT: Duration = Duration::from_secs(30);
