@@ -78,6 +78,9 @@ pub(crate) struct AcpRun {
     modes: Option<silt_acp::Modes>,
     settings: Vec<silt_acp::Setting>,
     commands: Vec<silt_acp::SlashCommand>,
+    /// The prompt the agent predicts the person sends next, until they
+    /// prompt or it works again.
+    suggestion: Option<String>,
     /// Settings chosen before the agent was up, by id and value, set once it
     /// says which it offers.
     chosen_settings: Vec<(String, String)>,
@@ -740,6 +743,7 @@ impl Core {
                 modes: None,
                 settings: Vec::new(),
                 commands: Vec::new(),
+                suggestion: None,
                 chosen_settings: options.settings,
                 planning: false,
                 presents_plans,
@@ -1006,6 +1010,7 @@ impl Core {
         let run = self.acp.get_mut(&thread).expect("caller checked");
         run.state = AgentState::Working;
         run.error = None;
+        run.suggestion = None;
         run.last_prompt = Some((prompt.clone(), attachments.clone()));
         send(run, Command::Prompt { text: prompt, attachments });
         self.agent_changed(thread).await;
@@ -1402,6 +1407,7 @@ impl Core {
             takes_images: run.accepts.image,
             takes_files: run.accepts.embedded,
             commands: run.commands.iter().map(Into::into).collect(),
+            suggestion: run.suggestion.clone(),
             stoppable: run.background.values().map(|task| task.call.clone()).collect(),
             sandbox: run.sandbox.as_ref().map(|(reach, _, _)| reach.clone()),
         })
@@ -1534,8 +1540,13 @@ impl Core {
                 run.commands = commands;
                 self.remember_seen(thread);
             }
+            AcpEvent::Agent(silt_acp::Event::Suggestion(suggestion)) => {
+                // One that comes while it works is for a turn already gone.
+                run.suggestion = suggestion.filter(|_| matches!(run.state, AgentState::Idle));
+            }
             AcpEvent::Agent(silt_acp::Event::Refused(why)) => run.error = Some(why),
             AcpEvent::Agent(silt_acp::Event::Working) => {
+                run.suggestion = None;
                 // Working on a prompt of Silt's, it is already; else it took
                 // something up by itself, and stops at its own turn's end.
                 if matches!(run.state, AgentState::Idle | AgentState::AwaitingInput) {

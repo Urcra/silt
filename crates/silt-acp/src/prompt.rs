@@ -1,11 +1,11 @@
 //! A prompt with files attached, as the content blocks the agent says it
 //! takes (ACP's prompt capabilities).
 
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     BlobResourceContents, ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent, TextContent,
     TextResourceContents,
 };
-use agent_client_protocol::schema::v2;
+use agent_client_protocol::v2::schema as v2;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 

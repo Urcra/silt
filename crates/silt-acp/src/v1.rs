@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::schema::{
     AuthCapabilities, AuthenticateRequest, CancelNotification, ClientCapabilities, ClientSessionCapabilities, ContentBlock,
     CreateElicitationRequest, CreateElicitationResponse, ElicitationCapabilities, ElicitationFormCapabilities, EnvVariable,
     Implementation, InitializeRequest, LoadSessionRequest, McpServer, McpServerStdio, Meta, NewSessionRequest, PromptRequest,
@@ -14,7 +14,8 @@ use agent_client_protocol::schema::v1::{
     SessionConfigValueId, SessionId, SessionModeId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
     SetSessionModeRequest, ToolCallContent,
 };
-use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Responder};
+use agent_client_protocol::v1::{ConnectionTo, Responder};
+use agent_client_protocol::{Agent, Client, ConnectTo};
 use serde_json::Value;
 
 use crate::host::{
@@ -35,6 +36,9 @@ pub(crate) fn initialize() -> Result<InitializeRequest, serde_json::Error> {
     // Silt shows a form of choices and text as a question; it has no browser to send the person to.
     let elicitation = ElicitationCapabilities::new().form(ElicitationFormCapabilities::new());
     // Every v2 client takes boolean settings; Silt leaves out any but choices.
+    // It takes suggested prompts only over v2: the SDK reuses a connection
+    // only when this says what v2's does as v1, which has no session
+    // capabilities of its own to carry them.
     let session: ClientSessionCapabilities = serde_json::from_value(serde_json::json!({"configOptions": {"boolean": {}}}))?;
     // Silt runs an agent's terminal sign-in in a terminal of its own, shown on a card (ADR 0056).
     let capabilities =
@@ -98,7 +102,7 @@ impl ConnectTo<Agent> for V1 {
         let early: Arc<Mutex<Option<Vec<Event>>>> = Arc::new(Mutex::new(Some(Vec::new())));
         let held_back = early.clone();
         Client
-            .builder()
+            .v1()
             .name(crate::host::NAME)
             .on_receive_notification(
                 async move |notification: SessionNotification, _connection| {
@@ -349,8 +353,8 @@ impl ConnectTo<Agent> for V1 {
     }
 }
 
-fn stop_reason(reason: agent_client_protocol::schema::v1::StopReason) -> StopReason {
-    use agent_client_protocol::schema::v1::StopReason as Acp;
+fn stop_reason(reason: agent_client_protocol::v1::schema::StopReason) -> StopReason {
+    use agent_client_protocol::v1::schema::StopReason as Acp;
     match reason {
         Acp::EndTurn => StopReason::EndTurn,
         Acp::MaxTokens => StopReason::MaxTokens,
@@ -461,11 +465,13 @@ impl Following {
         }
     }
 
-    /// News of shells an agent detached: "<command started in detached
-    /// background with shellId: 0>", and, when it reads one that ended,
-    /// "<detached command with shellId: 0 completed with exit code 0>", or
-    /// "<command with id: 0 stopped>" when it ends one. The news of its end
-    /// is the call's that started it.
+    /// News of shells an agent left running: "<command started in detached
+    /// background with shellId: 0>", or "<command started in background
+    /// with shellId: 0>" for an async one, and, when it reads one that
+    /// ended, "<detached command with shellId: 0 completed with exit code
+    /// 0>" or "<command with id: 0 exited with exit code 0>", or "<command
+    /// with id: 0 stopped>" when it ends one. The news of its end is the
+    /// call's that started it.
     fn follow_detached(&mut self, mut event: Event) -> Vec<Event> {
         let Event::Update(Update::ToolUpdate { id, status: Some(status), output: Some(output), task, .. }) = &mut event else {
             return vec![event];
@@ -473,7 +479,9 @@ impl Following {
         if status != "completed" || task.is_some() {
             return vec![event];
         }
-        if let Some(shell) = shell_id(output, "started in detached background with shellId: ") {
+        if let Some(shell) = shell_id(output, "started in detached background with shellId: ")
+            .or_else(|| shell_id(output, "<command started in background with shellId: "))
+        {
             self.detached.insert(shell.clone(), id.clone());
             *task =
                 Some(Box::new(TaskNews { id: Some(shell), kind: Some("background".to_owned()), status: "running".to_owned() }));
@@ -486,14 +494,15 @@ impl Following {
         {
             return vec![news(&call, &shell, "background", "stopped"), event];
         }
-        let Some(shell) = shell_id(output, "detached command with shellId: ") else {
+        let Some(shell) = shell_id(output, "detached command with shellId: ").or_else(|| {
+            shell_id(output, "<command with id: ").filter(|shell| output.contains(&format!("id: {shell} exited with")))
+        }) else {
             return vec![event];
         };
         let Some(call) = self.detached.remove(&shell) else {
             return vec![event];
         };
-        let ended =
-            output.split_once("completed with exit code ").and_then(|(_, code)| code.split(|c: char| !c.is_ascii_digit()).next());
+        let ended = output.split_once(" with exit code ").and_then(|(_, code)| code.split(|c: char| !c.is_ascii_digit()).next());
         let status = if ended == Some("0") { "completed" } else { "failed" };
         vec![news(&call, &shell, "background", status), event]
     }
@@ -607,7 +616,7 @@ fn simplify_own(update: SessionUpdate) -> Option<Update> {
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::v1::{ContentChunk, ToolCall, ToolCallUpdate, ToolCallUpdateFields};
+    use agent_client_protocol::v1::schema::{ContentChunk, ToolCall, ToolCallUpdate, ToolCallUpdateFields};
     use serde_json::json;
 
     use super::*;
@@ -684,6 +693,16 @@ mod tests {
         let stopped = following.follow(None, completed("s1", "<command with id: webdev stopped>"));
         assert_eq!(news(&stopped[0]), Some(("t3".into(), Some("webdev".into()), "stopped".into())));
         assert_eq!(following.follow(None, completed("s2", "<command with id: webdev stopped>")).len(), 1, "it ends once");
+        // Copilot's async shells, which aren't detached, as recorded.
+        let started = following.follow(None, completed("t4", "<command started in background with shellId: gate8>"));
+        assert_eq!(news(&started[0]), Some(("t4".into(), Some("gate8".into()), "running".into())));
+        let still = following.follow(None, completed("r4", "Running gate\n"));
+        assert_eq!(still.len(), 1, "reading it while it runs ends nothing");
+        let read = following.follow(None, completed("r5", "ok\n<command with id: gate8 exited with exit code 0>"));
+        assert_eq!(news(&read[0]), Some(("t4".into(), Some("gate8".into()), "completed".into())));
+        following.follow(None, completed("t5", "<command started in background with shellId: 29>"));
+        let piped = following.follow(None, completed("r6", ":\n<command with id: 29 exited with exit code 141>"));
+        assert_eq!(news(&piped[0]).map(|news| news.2), Some("failed".into()));
     }
 
     /// Copilot (1.0.104) running an explore subagent, as recorded: its tool

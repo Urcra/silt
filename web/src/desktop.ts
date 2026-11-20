@@ -16,10 +16,16 @@ export interface Backend {
   /** When `state` last changed, in milliseconds since the epoch. */
   since?: number | null
   lastShown?: number | null
-  /** The `silt --version` it answered with. */
+  /** The `silt --version` it answered with; This computer's is the build a machine is offered to update to (ADR 0109). */
   version?: string | null
   /** The window is switching to it, and still shows another. */
   switching?: boolean
+  /** Silt is being installed or updated there. */
+  installing?: boolean
+  /** It failed only because `silt` isn't there, which installing fixes. */
+  canInstall?: boolean
+  /** An update waits for this many agents to finish before its daemon restarts on it. */
+  pendingRestart?: number | null
 }
 
 /** A machine as the add and edit form fills it in. */
@@ -36,9 +42,13 @@ export interface TestStep {
 }
 
 export interface MachineTest extends MachineFields {
+  /** Testing it, or installing Silt there. */
+  action?: 'test' | 'install'
   steps: TestStep[]
   done: boolean
   ok: boolean
+  /** It failed only because `silt` isn't there. */
+  canInstall?: boolean
 }
 
 /** Why switching to a backend failed, which leaves the window where it was. */
@@ -97,7 +107,7 @@ export function useMachineTest(): [MachineTest | undefined, (test: MachineTest |
 
 /** The link asking the desktop app to change its machines; it carries the window's key, so another page's can't (ADR 0108). */
 export function machinesLink(
-  action: 'add' | 'change' | 'remove' | 'test' | 'disconnect',
+  action: 'add' | 'change' | 'remove' | 'test' | 'install' | 'disconnect',
   fields: Record<string, string | number | null | undefined>,
   key: string | undefined = window.__siltDesktop?.key,
 ): string {
@@ -130,6 +140,11 @@ export function disconnectMachine(name: string) {
 /** Tests reaching `machine`, reported through `useMachineTest`; `add` adds it once it passes. */
 export function testMachine(machine: MachineFields, add: boolean) {
   tellWindow(machinesLink('test', { ...asFields(machine), add: add ? 1 : undefined }))
+}
+
+/** Installs this computer's build of Silt on `machine`, or updates the one there to it, reported through `useMachineTest`; `add` adds it once it connects (ADR 0109). */
+export function installSilt(machine: MachineFields, add: boolean) {
+  tellWindow(machinesLink('install', { ...asFields(machine), add: add ? 1 : undefined }))
 }
 
 /** Asks the desktop app's window to show Silt from `backend`, which it does in place of opening the link. */

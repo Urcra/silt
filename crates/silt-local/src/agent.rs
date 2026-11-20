@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v1::{
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema::{
     AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, EmbeddedResourceResource, Implementation,
     InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse,
     PermissionOption, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome,
@@ -17,7 +18,7 @@ use agent_client_protocol::schema::v1::{
     TextContent, ToolCall, ToolCallContent, ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
     UsageUpdate,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Stdio};
+use agent_client_protocol::{Agent, Client, Error, Stdio};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::watch;
 
@@ -143,7 +144,7 @@ pub async fn serve(home: PathBuf) -> agent_client_protocol::Result<()> {
     let (created, loading, moded, configured, prompted, cancelled) =
         (state.clone(), state.clone(), state.clone(), state.clone(), state.clone(), state.clone());
     Agent
-        .builder()
+        .v1()
         .name("silt-local")
         .on_receive_request(
             async move |_initialize: InitializeRequest, responder, _connection| {
@@ -450,7 +451,7 @@ async fn use_tool(
     let mut content: Vec<ToolCallContent> = Vec::new();
     if let Some((path, before, after)) = &outcome.diff {
         content.push(ToolCallContent::Diff(
-            agent_client_protocol::schema::v1::Diff::new(path.clone(), after.clone()).old_text(before.clone()),
+            agent_client_protocol::v1::schema::Diff::new(path.clone(), after.clone()).old_text(before.clone()),
         ));
     } else {
         content.push(ToolCallContent::from(text_block(&outcome.text)));

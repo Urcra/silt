@@ -2,10 +2,10 @@
 //! settings such as its model (ACP's session config options), and the
 //! commands a prompt can run, simplified.
 
-use agent_client_protocol::schema::v1::{
-    self, SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions, SessionModeState,
+use agent_client_protocol::v1::schema::{
+    self as v1, SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions, SessionModeState,
 };
-use agent_client_protocol::schema::v2;
+use agent_client_protocol::v2::schema as v2;
 
 /// A mode, or one value of a setting.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,13 +60,23 @@ pub(crate) fn commands_of(commands: Vec<v1::AvailableCommand>) -> Vec<SlashComma
 pub(crate) fn commands_v2(commands: Vec<v2::AvailableCommand>) -> Vec<SlashCommand> {
     commands
         .into_iter()
-        .map(|command| SlashCommand {
-            hint: match command.input {
-                Some(v2::AvailableCommandInput::Text(input)) => Some(input.hint),
+        .map(|command| {
+            let input = match &command {
+                v2::AvailableCommand::Command(command) => command.input.clone(),
+                // A kind of command Silt doesn't know is still offered, as before v2 tagged them.
+                v2::AvailableCommand::Other(other) => {
+                    other.fields.get("input").and_then(|input| serde_json::from_value(input.clone()).ok())
+                }
                 _ => None,
-            },
-            name: command.name,
-            description: command.description,
+            };
+            SlashCommand {
+                hint: match input {
+                    Some(v2::AvailableCommandInput::Text(input)) => Some(input.hint),
+                    _ => None,
+                },
+                name: command.name().to_owned(),
+                description: command.description().to_owned(),
+            }
         })
         .collect()
 }

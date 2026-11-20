@@ -428,6 +428,7 @@ impl Core {
             takes_images: false,
             takes_files: false,
             commands: Vec::new(),
+            suggestion: None,
             stoppable: Vec::new(),
             sandbox: None,
         })

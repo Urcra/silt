@@ -10,6 +10,7 @@ import {
   addMachine,
   changeMachine,
   disconnectMachine,
+  installSilt,
   removeMachine,
   switchBackend,
   testMachine,
@@ -35,7 +36,15 @@ const since = (ms: number, now: number) => {
   return /^\d/.test(said) ? `${said} ago` : said
 }
 
-function Status({ backend, shown }: { backend: Backend; shown: boolean }) {
+function Status({ backend, shown, installing }: { backend: Backend; shown: boolean; installing?: string }) {
+  if (installing) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-fg-2">
+        <Spinner />
+        {installing}
+      </span>
+    )
+  }
   if (shown) {
     return (
       <span className="inline-flex items-center gap-1.5 text-xs">
@@ -128,38 +137,61 @@ function joined(parts: ReactNode[]): ReactNode {
   return parts.filter(Boolean).flatMap((part, at) => (at === 0 ? [part] : [' · ', part]))
 }
 
+const restarts = (agents: number) =>
+  agents === 1
+    ? 'its daemon restarts on it once its agent finishes'
+    : `its daemon restarts on it once its ${agents} agents finish`
+
 function MachineRow({
   machine,
   shown,
   editable,
+  latest,
   onEdit,
 }: {
   machine: Backend
   shown: boolean
   editable: boolean
+  /** This computer's build, which the machine is offered to update to. */
+  latest?: string | null
   onEdit: () => void
 }) {
   const now = useNow()
+  const [report, setReport] = useMachineTest()
   const fields: MachineFields = { name: machine.label, destination: machine.destination ?? '', port: machine.port }
   const alias = machine.destination && !machine.destination.includes('@') && !machine.destination.includes('.')
+  const install = report?.action === 'install' && report.name === machine.label ? report : undefined
+  const verb = machine.canInstall ? 'installing' : 'updating'
+  // An update that failed before it changed anything leaves the machine connected, on its old build.
+  const updateFailed = !machine.installing && install?.done && !install.ok && machine.state !== 'failed'
+  const failedStep = install?.steps.find((step) => step.state === 'failed')
+  const offered =
+    !machine.installing &&
+    !updateFailed &&
+    !!latest &&
+    !!machine.version &&
+    machine.version !== latest &&
+    (machine.state === 'connected' || shown)
   const meta =
     machine.state === 'connecting'
       ? machine.step
       : machine.state === 'failed'
         ? machine.since && `Tried ${since(machine.since, now)}`
-        : machine.state === 'connected' || shown
-          ? joined([
-              machine.version && `silt ${machine.version}`,
-              !shown && machine.since && `connected ${since(machine.since, now)}`,
-            ])
-          : joined([
-              machine.lastShown ? `Last shown ${since(machine.lastShown, now)}` : 'Not shown yet',
-              alias && (
-                <>
-                  a <code className="font-mono">Host</code> in <code className="font-mono">~/.ssh/config</code>
-                </>
-              ),
-            ])
+        : machine.pendingRestart && machine.state === 'connected'
+          ? joined([machine.version && `silt ${machine.version} installed`, restarts(machine.pendingRestart)])
+          : machine.state === 'connected' || shown
+            ? joined([
+                machine.version && `silt ${machine.version}`,
+                !shown && machine.since && `connected ${since(machine.since, now)}`,
+              ])
+            : joined([
+                machine.lastShown ? `Last shown ${since(machine.lastShown, now)}` : 'Not shown yet',
+                alias && (
+                  <>
+                    a <code className="font-mono">Host</code> in <code className="font-mono">~/.ssh/config</code>
+                  </>
+                ),
+              ])
   const live = machine.state === 'connected' || machine.state === 'connecting'
   return (
     <Row
@@ -167,11 +199,11 @@ function MachineRow({
       icon="terminal"
       destination={machine.destination}
       port={machine.port}
-      status={<Status backend={machine} shown={shown} />}
+      status={<Status backend={machine} shown={shown} installing={machine.installing ? `${verb}…` : undefined} />}
       meta={meta}
       actions={
         <>
-          {!shown && machine.state !== 'failed' && machine.state !== 'connecting' && (
+          {!shown && !machine.installing && machine.state !== 'failed' && machine.state !== 'connecting' && (
             <Button size="sm" onClick={() => switchBackend(machine.id)}>
               Open
             </Button>
@@ -183,6 +215,7 @@ function MachineRow({
               items={[
                 { label: 'Edit…', onSelect: onEdit },
                 { label: 'Test the connection', onSelect: () => testMachine(fields, false) },
+                ...(offered ? [{ label: 'Update Silt there', onSelect: () => installSilt(fields, false) }] : []),
                 { label: 'Disconnect', onSelect: () => disconnectMachine(machine.label), disabled: !live },
                 { label: 'Remove from this list', onSelect: () => removeMachine(machine.label), danger: true },
               ]}
@@ -191,12 +224,53 @@ function MachineRow({
         </>
       }
     >
-      {machine.state === 'failed' && machine.reason && (
+      {machine.installing && install && !install.done && <Steps test={install} label={verb} />}
+      {offered && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-fg-2">
+          {editable ? (
+            <>
+              <span>This computer has silt {latest}.</span>
+              <Button size="sm" icon="arrowUp" onClick={() => installSilt(fields, false)}>
+                Update {machine.label}
+              </Button>
+            </>
+          ) : (
+            <span>
+              This computer has silt {latest}. Update {machine.label} from This computer.
+            </span>
+          )}
+        </div>
+      )}
+      {updateFailed && (
+        <>
+          <Banner tone="danger" urgent>
+            {withCode(
+              `Couldn’t update \`${machine.label}\`. ${failedStep?.text ?? ''} \`${machine.label}\` still runs silt ${machine.version}.`,
+            )}
+          </Banner>
+          <div className="flex flex-wrap gap-2">
+            {editable && (
+              <Button size="sm" onClick={() => installSilt(fields, false)}>
+                Try again
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => setReport(undefined)}>
+              Dismiss
+            </Button>
+          </div>
+        </>
+      )}
+      {machine.state === 'failed' && machine.reason && !machine.installing && (
         <>
           <Banner tone="danger" urgent>
             {withCode(machine.reason)}
           </Banner>
           <div className="flex flex-wrap gap-2">
+            {editable && machine.canInstall && (
+              <Button size="sm" variant="primary" icon="download" onClick={() => installSilt(fields, false)}>
+                Install Silt there
+              </Button>
+            )}
             {/* A machine's own page can't edit the list, but it can still switch to another. */}
             <Button size="sm" onClick={() => (editable ? testMachine(fields, false) : switchBackend(machine.id))}>
               Retry
@@ -229,12 +303,9 @@ function StepMark({ state }: { state: TestStep['state'] }) {
   )
 }
 
-function Steps({ test }: { test: MachineTest }) {
+function Steps({ test, label = 'testing the connection' }: { test: MachineTest; label?: string }) {
   return (
-    <ol
-      aria-label="testing the connection"
-      className="flex flex-col gap-1.5 rounded-md border border-line-subtle bg-surface-1 px-3 py-2.5"
-    >
+    <ol aria-label={label} className="flex flex-col gap-1.5 rounded-md border border-line-subtle bg-surface-1 px-3 py-2.5">
       {test.steps
         .filter((step) => !test.done || step.state !== 'waiting')
         .map((step) => (
@@ -277,8 +348,9 @@ function MachineForm({ editing, taken, onDone }: { editing?: Backend; taken: str
   })
   const [touched, setTouched] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [action, setAction] = useState<'test' | 'install'>('test')
   const [report, setReport] = useMachineTest()
-  const test = testing && report?.name === form.name ? report : undefined
+  const test = testing && report?.name === form.name && (report.action ?? 'test') === action ? report : undefined
   const added = test?.done && test.ok
   useEffect(() => {
     // The desktop app adds it once the test passes.
@@ -290,13 +362,17 @@ function MachineForm({ editing, taken, onDone }: { editing?: Backend; taken: str
   const set = (field: keyof typeof form) => (event: { target: { value: string } }) => {
     setForm({ ...form, [field]: event.target.value })
     setTesting(false)
+    // Only the Install button installs: Enter after an edit tests again.
+    setAction('test')
   }
-  const start = () => {
+  const start = (next: 'test' | 'install' = 'test') => {
     setTouched(true)
     if (problem) return
     setReport(undefined)
     setTesting(true)
-    testMachine(fieldsOf(form), true)
+    setAction(next)
+    if (next === 'install') installSilt(fieldsOf(form), true)
+    else testMachine(fieldsOf(form), true)
   }
   const save = () => {
     setTouched(true)
@@ -313,7 +389,7 @@ function MachineForm({ editing, taken, onDone }: { editing?: Backend; taken: str
         onSubmit={(event) => {
           event.preventDefault()
           if (editing) save()
-          else start()
+          else start(action)
         }}
       >
         <Field id="machine-name" label="Name" hint="Shown under Runs on">
@@ -375,11 +451,16 @@ function MachineForm({ editing, taken, onDone }: { editing?: Backend; taken: str
         ) : running ? (
           <Button variant="primary" disabled>
             <Spinner />
-            Testing…
+            {action === 'install' ? 'Installing…' : 'Testing…'}
           </Button>
         ) : failed ? (
           <>
-            <Button variant="primary" onClick={start}>
+            {test.canInstall && (
+              <Button variant="primary" icon="download" onClick={() => start('install')}>
+                Install Silt on {form.name}
+              </Button>
+            )}
+            <Button variant={test.canInstall ? 'secondary' : 'primary'} onClick={() => start(action)}>
               Try again
             </Button>
             <Button
@@ -392,7 +473,7 @@ function MachineForm({ editing, taken, onDone }: { editing?: Backend; taken: str
             </Button>
           </>
         ) : (
-          <Button variant="primary" onClick={start}>
+          <Button variant="primary" onClick={() => start()}>
             Test and add
           </Button>
         )}
@@ -416,7 +497,10 @@ export function MachinesSettings() {
   const machines = backends.filter((backend) => backend.kind === 'ssh')
   const local = backends.filter((backend) => backend.kind !== 'ssh')
   const taken = machines.map((machine) => machine.label).filter((name) => name !== form?.editing?.label)
-  const version = !remote && status.data?.version && `silt ${status.data.version}`
+  // The build machines are offered: the `silt` the window runs here, which may differ from the daemon's.
+  const latest = local.find((backend) => backend.kind === 'native')?.version
+  const here = latest ?? (!remote && status.data?.version)
+  const version = here && `silt ${here}`
   return (
     <section aria-label="Machines" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -466,6 +550,7 @@ export function MachinesSettings() {
             machine={machine}
             shown={machine.id === current}
             editable={!remote}
+            latest={latest}
             onEdit={() => setForm({ editing: machine })}
           />
         ))}

@@ -342,6 +342,9 @@ pub enum Event {
     Settings(Vec<Setting>),
     /// The commands the agent offers as they now stand.
     Commands(Vec<crate::SlashCommand>),
+    /// The prompt the agent predicts the person sends next, or none once it
+    /// takes it back. Claude's adapter sends one after a turn.
+    Suggestion(Option<String>),
     /// The agent turned down a mode or setting.
     Refused(String),
     Permission(Permission),
@@ -478,6 +481,12 @@ impl Changing {
 
 pub(crate) fn label<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_value(value).ok().and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_default()
+}
+
+/// A suggested prompt's text, or none when it says nothing.
+pub(crate) fn suggested(text: String) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 /// What a session in either protocol starts from: how the agent was

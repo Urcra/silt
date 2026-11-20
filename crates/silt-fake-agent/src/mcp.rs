@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use agent_client_protocol::schema::v1::McpServer;
+use agent_client_protocol::v1::schema::McpServer;
 use serde_json::Value;
 
 /// The text of `tool`'s answer from the session's server named `silt`, or
