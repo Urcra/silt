@@ -2,13 +2,17 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { type ReactNode, useContext, useState } from 'react'
 import { STATE_TAG } from '../agentState'
-import { api, type Capabilities, type DeviceChange, type DeviceView, type PhonePairing } from '../api'
+import { api, type Capabilities, type DeviceChange, type DeviceView, type LanPhone, type PhonePairing } from '../api'
+import { useHasServer } from '../hasServer'
 import { useNow } from '../now'
 import { keys, message } from '../query'
 import { mockRows } from '../mocks'
+import { hosted, onLan } from '../served'
 import { InSettings, SETTINGS_HEADING } from '../settingsContext'
 import { ago } from '../time'
-import { Button, Dot, EmptyState, Icon, Input, KeyValue, Skeleton, Tag, buttonClass, cx, toast } from '../ui'
+import { Button, Chip, Dot, EmptyState, Icon, Input, KeyValue, Skeleton, Tag, buttonClass, cx, toast } from '../ui'
+import { useLan } from '../lan'
+import { LanCard } from './LanPhones'
 import { Mock } from './Mock'
 import { Page } from './Page'
 
@@ -21,25 +25,44 @@ const CAPABILITIES: { id: keyof Capabilities; label: string }[] = [
   { id: 'review', label: 'Review merge requests' },
 ]
 
-function useDeviceChange() {
+function useDeviceChange(lanPhone: LanPhone | undefined) {
   const queries = useQueryClient()
   return (device: DeviceView, change: Partial<DeviceChange>, said: string) =>
-    api.changeDevice(device.id, { name: null, capabilities: null, ...change }).then(
+    (lanPhone
+      ? api.lanPhoneChange(device.id, { name: change.name ?? undefined, capabilities: change.capabilities ?? undefined })
+      : api.changeDevice(device.id, { name: null, capabilities: null, ...change })
+    ).then(
       () => {
         toast(said, 'ok')
-        return queries.invalidateQueries({ queryKey: keys.devices })
+        return queries.invalidateQueries({ queryKey: lanPhone ? keys.lan : keys.devices })
       },
       (failure: unknown) => toast(message(failure), 'danger'),
     )
 }
 
-function Device({ device }: { device: DeviceView }) {
+/** A phone paired over the network, as Devices lists every device (ADR 0112). */
+function asDevice(phone: LanPhone): DeviceView {
+  return {
+    id: phone.id,
+    kind: 'phone',
+    name: phone.name,
+    created_ms: phone.created_ms,
+    last_used_ms: phone.last_seen_ms,
+    online: phone.online,
+    this: false,
+    capabilities: phone.capabilities,
+    agents: [],
+    startable: [],
+  }
+}
+
+function Device({ device, lanPhone }: { device: DeviceView; lanPhone?: LanPhone }) {
   const now = useNow()
   const queries = useQueryClient()
-  const change = useDeviceChange()
+  const change = useDeviceChange(lanPhone)
   const [name, setName] = useState<string | null>(null)
   const phone = device.kind === 'phone'
-  const rows: [ReactNode, ReactNode][] = phone
+  const rows: [ReactNode, ReactNode][] = lanPhone
     ? [
         [
           'Can',
@@ -47,6 +70,8 @@ function Device({ device }: { device: DeviceView }) {
             .map((capability) => capability.label.toLowerCase())
             .join(', ') || 'only read',
         ],
+        ['Reaches', 'on this network'],
+        ['Notifies', lanPhone.notifies ? 'on' : 'off: open Silt on it and allow notifications'],
         [
           'Last seen',
           <span key="seen" data-volatile>
@@ -54,38 +79,55 @@ function Device({ device }: { device: DeviceView }) {
           </span>,
         ],
       ]
-    : [
-        [
-          'Runs',
-          device.agents.length === 0 ? 'no agents' : `${device.agents.length} ${device.agents.length === 1 ? 'agent' : 'agents'}`,
-        ],
-        ...(!device.online
-          ? ([
-              [
-                'Last seen',
-                <span key="seen" data-volatile>
-                  {ago(Number(device.last_used_ms), now)}
-                </span>,
-              ],
-            ] as [ReactNode, ReactNode][])
-          : []),
-        ...mockRows<[ReactNode, ReactNode]>('devices.checkouts', [
+    : phone
+      ? [
           [
-            'Checkouts',
-            <Mock key="checkouts" id="devices.checkouts">
-              3
-            </Mock>,
+            'Can',
+            CAPABILITIES.filter((capability) => device.capabilities[capability.id])
+              .map((capability) => capability.label.toLowerCase())
+              .join(', ') || 'only read',
           ],
-        ]),
-        ...mockRows<[ReactNode, ReactNode]>('devices.version', [
           [
-            'Daemon',
-            <Mock key="daemon" id="devices.version">
-              0.0.1 · synced
-            </Mock>,
+            'Last seen',
+            <span key="seen" data-volatile>
+              {ago(Number(device.last_used_ms), now)}
+            </span>,
           ],
-        ]),
-      ]
+        ]
+      : [
+          [
+            'Runs',
+            device.agents.length === 0
+              ? 'no agents'
+              : `${device.agents.length} ${device.agents.length === 1 ? 'agent' : 'agents'}`,
+          ],
+          ...(!device.online
+            ? ([
+                [
+                  'Last seen',
+                  <span key="seen" data-volatile>
+                    {ago(Number(device.last_used_ms), now)}
+                  </span>,
+                ],
+              ] as [ReactNode, ReactNode][])
+            : []),
+          ...mockRows<[ReactNode, ReactNode]>('devices.checkouts', [
+            [
+              'Checkouts',
+              <Mock key="checkouts" id="devices.checkouts">
+                3
+              </Mock>,
+            ],
+          ]),
+          ...mockRows<[ReactNode, ReactNode]>('devices.version', [
+            [
+              'Daemon',
+              <Mock key="daemon" id="devices.version">
+                0.0.1 · synced
+              </Mock>,
+            ],
+          ]),
+        ]
   return (
     <section
       aria-label={device.name}
@@ -94,7 +136,9 @@ function Device({ device }: { device: DeviceView }) {
       <Icon name={phone ? 'phone' : 'laptop'} className="mt-0.5 h-5 w-5 text-fg-2" />
       <div className="flex min-w-0 flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          {name === null ? (
+          {device.id === 'this' ? (
+            <span className="text-sm font-medium">{device.name}</span>
+          ) : name === null ? (
             <button
               type="button"
               className="text-sm font-medium hover:text-accent-fg max-md:min-h-11"
@@ -120,6 +164,7 @@ function Device({ device }: { device: DeviceView }) {
           )}
           {device.this && <span className="text-xs text-fg-2">this device</span>}
           {phone && <span className="text-xs text-fg-2">phone</span>}
+          {lanPhone && <Tag tone="info">this network</Tag>}
           <span className="ml-auto inline-flex items-center gap-1.5 text-xs">
             <Dot tone={device.online ? 'ok' : 'idle'} />
             {device.online ? 'online' : 'offline'}
@@ -129,10 +174,10 @@ function Device({ device }: { device: DeviceView }) {
               variant="ghost"
               size="sm"
               onClick={() =>
-                void api.revokeDevice(device.id).then(
+                void (lanPhone ? api.lanPhoneRevoke(device.id) : api.revokeDevice(device.id)).then(
                   () => {
                     toast(`${device.name} is signed out`, 'ok')
-                    return queries.invalidateQueries({ queryKey: keys.devices })
+                    return queries.invalidateQueries({ queryKey: lanPhone ? keys.lan : keys.devices })
                   },
                   (failure: unknown) => toast(message(failure), 'danger'),
                 )
@@ -160,32 +205,34 @@ function Device({ device }: { device: DeviceView }) {
             ))}
           </ul>
         )}
-        <details className="group/may text-xs">
-          <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 [&::-webkit-details-marker]:hidden">
-            <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/may:rotate-90" />
-            What it may do on your other devices
-          </summary>
-          <fieldset className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
-            <legend className="sr-only">From this device you may, on your other devices:</legend>
-            {CAPABILITIES.map((capability) => (
-              <label key={capability.id} className="flex items-center gap-1.5 max-md:min-h-11">
-                <input
-                  type="checkbox"
-                  checked={device.capabilities[capability.id]}
-                  className="accent-[var(--accent)]"
-                  onChange={(event) =>
-                    void change(
-                      device,
-                      { capabilities: { ...device.capabilities, [capability.id]: event.target.checked } },
-                      'Saved',
-                    )
-                  }
-                />
-                {capability.label}
-              </label>
-            ))}
-          </fieldset>
-        </details>
+        {device.id !== 'this' && (
+          <details className="group/may text-xs">
+            <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 [&::-webkit-details-marker]:hidden">
+              <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/may:rotate-90" />
+              What it may do on your other devices
+            </summary>
+            <fieldset className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
+              <legend className="sr-only">From this device you may, on your other devices:</legend>
+              {CAPABILITIES.map((capability) => (
+                <label key={capability.id} className="flex items-center gap-1.5 max-md:min-h-11">
+                  <input
+                    type="checkbox"
+                    checked={device.capabilities[capability.id]}
+                    className="accent-[var(--accent)]"
+                    onChange={(event) =>
+                      void change(
+                        device,
+                        { capabilities: { ...device.capabilities, [capability.id]: event.target.checked } },
+                        'Saved',
+                      )
+                    }
+                  />
+                  {capability.label}
+                </label>
+              ))}
+            </fieldset>
+          </details>
+        )}
       </div>
     </section>
   )
@@ -263,9 +310,62 @@ function PairPhone() {
   )
 }
 
+/**
+ * How a phone joins: on this network, straight to this machine (ADR 0112), or through the server, from anywhere
+ * (ADR 0028). The hosted app has only the server's way, and a phone pairs no other phone.
+ */
+function Pairing({ hasServer }: { hasServer: boolean }) {
+  const [through, setThrough] = useState<'lan' | 'server'>('lan')
+  if (onLan()) return null
+  if (hosted()) return <PairPhone />
+  if (!hasServer) return <LanCard />
+  return (
+    <div className="flex flex-col gap-3">
+      <div role="group" aria-label="pair through" className="flex gap-1.5">
+        <Chip selected={through === 'lan'} onClick={() => setThrough('lan')}>
+          On this network
+        </Chip>
+        <Chip selected={through === 'server'} onClick={() => setThrough('server')}>
+          Through your server
+        </Chip>
+      </div>
+      {through === 'lan' ? <LanCard /> : <PairPhone />}
+    </div>
+  )
+}
+
 /** The person's devices: which are online, what runs on each, what each may do (ADR 0026, the Devices board). */
 export function Devices({ children }: { children?: ReactNode }) {
-  const devices = useQuery({ queryKey: keys.devices, queryFn: api.devices })
+  const hasServer = useHasServer()
+  const devices = useQuery({ queryKey: keys.devices, queryFn: api.devices, enabled: hasServer })
+  const lan = useLan()
+  const lanPhones = lan.data?.phones ?? []
+  // With no server, this machine is the one device besides its phones.
+  const machine: DeviceView | null =
+    !hasServer && lan.data
+      ? {
+          id: 'this',
+          kind: 'device',
+          name: lan.data.machine,
+          created_ms: 0,
+          last_used_ms: 0,
+          online: true,
+          this: true,
+          capabilities: {
+            answer_permissions: true,
+            send_prompts: true,
+            run_agents: true,
+            review: true,
+            sample: true,
+            page_tools: true,
+          },
+          agents: [],
+          startable: [],
+        }
+      : null
+  const listed = [...(hasServer ? (devices.data ?? []) : machine ? [machine] : [])].sort(
+    (a, b) => Number(b.this) - Number(a.this),
+  )
   // In Settings the column is Settings' own, so the page keeps its edge and stacks.
   const embedded = useContext(InSettings)
   return (
@@ -278,24 +378,25 @@ export function Devices({ children }: { children?: ReactNode }) {
           <p className="text-sm text-fg-2">
             Threads move between these. A device with a checkout can run agents; a phone can answer and review.
           </p>
-          {devices.isPending && <Skeleton className="h-24" />}
-          {devices.error && <p className="text-danger">{message(devices.error)}</p>}
-          {devices.data?.length === 0 && (
+          {(hasServer ? devices.isPending : lan.isPending && !onLan()) && <Skeleton className="h-24" />}
+          {hasServer && devices.error && <p className="text-danger">{message(devices.error)}</p>}
+          {hasServer && devices.data?.length === 0 && lanPhones.length === 0 && (
             <EmptyState title="Sign a machine in with `silt auth login`">It shows here, with what runs on it.</EmptyState>
           )}
-          {devices.data && devices.data.length > 0 && (
+          {listed.length + lanPhones.length > 0 && (
             <div className="overflow-hidden rounded-md border border-line bg-elevated">
-              {[...devices.data]
-                .sort((a, b) => Number(b.this) - Number(a.this))
-                .map((device) => (
-                  <Device key={device.id} device={device} />
-                ))}
+              {listed.map((device) => (
+                <Device key={device.id} device={device} />
+              ))}
+              {lanPhones.map((phone) => (
+                <Device key={`lan-${phone.id}`} device={asDevice(phone)} lanPhone={phone} />
+              ))}
             </div>
           )}
           {children}
         </div>
         <div className={cx(!embedded && 'lg:w-[380px] lg:shrink-0')}>
-          <PairPhone />
+          <Pairing hasServer={hasServer} />
         </div>
       </div>
     </Page>

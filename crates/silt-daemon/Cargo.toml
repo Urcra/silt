@@ -49,6 +49,16 @@ silt-types = { path = "../silt-types" }
 silt-update = { path = "../silt-update" }
 silt-workspace = { path = "../silt-workspace" }
 similar = "3.2.0"
+# Phones on the local network (ADR 0112): the machine's own CA, TLS, mDNS and pushes.
+rcgen = { version = "0.14.10", features = ["x509-parser"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+time = "0.3.55"
+if-addrs = "0.15.0"
+mdns-sd = "0.22.0"
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+web-push-native = "0.5.0"
+sha2 = "0.11.1"
 thiserror = "2.0.21"
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "net", "sync", "time", "macros", "fs", "io-util", "process"] }
 tracing = "0.1.44"

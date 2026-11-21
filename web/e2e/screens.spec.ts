@@ -401,8 +401,13 @@ test('needs you', async ({ page }) => {
 test('devices and pairing a phone', async ({ page }) => {
   await open(page, '/settings/devices')
   await shoot(page, 'devices', async (shown) => {
-    await expect(shown.getByRole('region', { name: 'pair a phone' })).toBeVisible()
+    await expect(shown.getByRole('region', { name: 'phones on this network' })).toBeVisible()
     await expect(shown.getByText('this device', { exact: true })).toBeVisible()
+  })
+  // Through the server, from anywhere (ADR 0028), beside pairing on this network (ADR 0112).
+  await page.getByRole('button', { name: 'Through your server' }).click()
+  await shoot(page, 'devices-server', async (shown) => {
+    await expect(shown.getByRole('region', { name: 'pair a phone' })).toBeVisible()
   })
 })
 

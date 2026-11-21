@@ -198,6 +198,14 @@ impl Machine {
 
     /// A machine of `user`, with a clone of `origin`, logged in to `server`.
     pub fn new_for(root: &Path, name: &str, user: &str, origin: &Path, server: &Server) -> Self {
+        let machine = Self::without_server(root, name, origin);
+        let code = server.pairing_code_for(user);
+        machine.silt(&["auth", "login", "--server", &server.url, "--code", &code, "--name", name]);
+        machine
+    }
+
+    /// A machine with a clone of `origin`, signed in to no server.
+    pub fn without_server(root: &Path, name: &str, origin: &Path) -> Self {
         let home = root.join(name);
         let silt_home = home.join("silt");
         let claude_dir = home.join("claude");
@@ -214,10 +222,7 @@ impl Machine {
             fs::create_dir_all(agents.join(name)).expect("mkdir");
         }
         fs::create_dir_all(agents.join("logs")).expect("mkdir");
-        let machine = Self { silt_home, claude_dir, repo: canonical(&home.join("repo")), fake, agents };
-        let code = server.pairing_code_for(user);
-        machine.silt(&["auth", "login", "--server", &server.url, "--code", &code, "--name", name]);
-        machine
+        Self { silt_home, claude_dir, repo: canonical(&home.join("repo")), fake, agents }
     }
 
     pub fn run(&self, args: &[&str]) -> Output {

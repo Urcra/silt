@@ -255,6 +255,11 @@ pub fn home_dir() -> Option<PathBuf> {
 }
 
 /// The machine's memory in bytes, which a CPU-only model runs in.
+/// This machine's name on its network, as the OS gives it.
+pub fn host_name() -> Option<String> {
+    sysinfo::System::host_name().ok().map(|name| name.trim().to_owned()).filter(|name| !name.is_empty())
+}
+
 pub fn total_memory() -> io::Result<u64> {
     let mut system = sysinfo::System::new().map_err(io::Error::other)?;
     system.refresh_memory();

@@ -104,6 +104,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     // After the requests that came during the load: rows a crash left
     // unwritten, then a store from an older Silt compacted.
     core.queue_index_pending();
+    core.start_lan_if_wanted().await;
     let _ = events.send(Event::Compact);
     let tick_events = events.clone();
     let idle = Arc::new(AtomicBool::new(false));

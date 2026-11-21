@@ -13,6 +13,8 @@ import { useActions } from '../shortcuts'
 import { useTextActions, useTextSync } from '../text'
 import { THEMES, useAppearance, useThemeSync } from '../theme'
 import { Dot, Icon, Toaster, cx } from '../ui'
+import { useLanUnpaired } from '../lan'
+import { LanAskPrompt, LanUnpaired } from './LanPhones'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Palette } from './Palette'
 import { Sidebar } from './Sidebar'
@@ -150,6 +152,7 @@ export function Layout() {
   useGlobalActions()
   useThemeActions()
   useNotifier()
+  const unpaired = useLanUnpaired()
   const aside = useRef<HTMLElement>(null)
   const sidebar = useDragWidth('silt-sidebar-width', SIDEBAR, 'right', '--sidebar', aside)
   const scroll = useRef<HTMLElement>(null)
@@ -198,7 +201,7 @@ export function Layout() {
           <ErrorBoundary>
             <MainScroll.Provider value={scroll}>
               <Drawer.Provider value={{ open: sidebarShown, toggle: () => setSidebarShown(!sidebarShown) }}>
-                <Outlet />
+                {unpaired ? <LanUnpaired /> : <Outlet />}
               </Drawer.Provider>
             </MainScroll.Provider>
           </ErrorBoundary>
@@ -208,6 +211,7 @@ export function Layout() {
       <Palette />
       <Toaster />
       <SwitchFailures />
+      <LanAskPrompt />
     </div>
   )
 }
