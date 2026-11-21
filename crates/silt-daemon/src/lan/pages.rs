@@ -239,8 +239,11 @@ pub(crate) fn denied(machine: &str) -> Response {
     )
 }
 
-pub(crate) fn paired(machine: &str, platform: Platform, can: &str) -> Response {
-    let (machine, can) = (escape(machine), escape(can));
+/// Paired: what the phone may do, and how it gets notifications. A phone
+/// paired past a certificate warning needs the certificate for those
+/// (ADR 0113), and `trust` is where it gets it.
+pub(crate) fn paired(machine: &str, platform: Platform, can: &str, trust: &str) -> Response {
+    let (machine, can, trust) = (escape(machine), escape(can), escape(trust));
     let install = match platform {
         Platform::Apple => {
             "Add Silt to your Home Screen first: Share › Add to Home Screen. Then open it from there and turn notifications on."
@@ -255,6 +258,7 @@ pub(crate) fn paired(machine: &str, platform: Platform, can: &str) -> Response {
         &format!(
             r#"<p class="lead">This phone can now {can} on {machine}.</p>
 <div class="note"><b>Get notified when an agent needs you</b>{install}</div>
+<div class="note"><b>Went past a certificate warning?</b>Then notifications and the Home Screen app need {machine}’s certificate first. The phone stays paired.<a href="{trust}">Get the certificate</a></div>
 <a class="button" href="/needs-you">Open Silt</a>"#
         ),
         None,

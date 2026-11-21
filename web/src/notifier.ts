@@ -40,6 +40,23 @@ function keyBytes(key: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))
 }
 
+let worker: Promise<boolean> | undefined
+
+/**
+ * Registers Silt's service worker, once, and says whether the browser refused it. A phone's browser refuses it to a
+ * page whose certificate it doesn't trust, even once the person went on past its warning (ADR 0113).
+ */
+export function workerRefused(): Promise<boolean> {
+  worker ??=
+    'serviceWorker' in navigator
+      ? navigator.serviceWorker.register('sw.js').then(
+          () => false,
+          () => true,
+        )
+      : Promise.resolve(false)
+  return worker
+}
+
 /** Whether this browser can take pushes at all: a phone's needs Silt on its Home Screen on iOS. */
 export function pushable(): boolean {
   return 'serviceWorker' in navigator && 'PushManager' in window && typeof Notification !== 'undefined'

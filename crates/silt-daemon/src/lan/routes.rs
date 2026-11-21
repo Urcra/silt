@@ -114,6 +114,19 @@ async fn enter(Query(typed): Query<Typed>) -> Response {
     }
 }
 
+/// The certificate page on the host the phone came by, which `known_host`
+/// has checked is this machine's own name or address.
+fn trust_url(headers: &HeaderMap, shared: &Shared) -> String {
+    let host = headers.get(header::HOST).and_then(|value| value.to_str().ok()).unwrap_or_default();
+    format!("http://{}:{}/trust", without_port(host), shared.port() + 1)
+}
+
+fn without_port(host: &str) -> &str {
+    host.rsplit_once(':')
+        .filter(|(name, port)| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()) && !name.ends_with(':'))
+        .map_or(host, |(name, _)| name)
+}
+
 fn set_cookie(name: &str, value: &str, path: &str, seconds: u32) -> (header::HeaderName, String) {
     (header::SET_COOKIE, format!("{name}={value}; Path={path}; Max-Age={seconds}; HttpOnly; Secure; SameSite=Lax"))
 }
@@ -130,7 +143,7 @@ async fn pair(
     let platform = Platform::of(user_agent(&headers));
     // Paired already: opening the link again, or reloading, says so.
     if let Some(caller) = cookie(&headers, SESSION_COOKIE).and_then(|token| shared.phone_by_token(&token)) {
-        return pages::paired(&shared.machine, platform, &describe(caller.capabilities));
+        return pages::paired(&shared.machine, platform, &describe(caller.capabilities), &trust_url(&headers, &shared));
     }
     if let Some(claim) = cookie(&headers, ASK_COOKIE) {
         let mut pairing = shared.pairing.lock().expect("lock");
@@ -150,7 +163,12 @@ async fn pair(
                         .iter()
                         .find(|found| found.id == phone)
                         .map(|found| found.capabilities);
-                    let mut response = pages::paired(&shared.machine, platform, &can.map(describe).unwrap_or_default());
+                    let mut response = pages::paired(
+                        &shared.machine,
+                        platform,
+                        &can.map(describe).unwrap_or_default(),
+                        &trust_url(&headers, &shared),
+                    );
                     if let Some(token) = token {
                         let headers = response.headers_mut();
                         for (name, value) in
@@ -229,6 +247,15 @@ mod tests {
     fn what_a_phone_may_do_reads_as_a_list() {
         assert_eq!(describe(silt_proto::Capabilities::PHONE), "answer permissions and review merge requests");
         assert_eq!(describe(silt_proto::Capabilities::default()), "read your threads");
+    }
+
+    #[test]
+    fn a_host_loses_its_port_but_keeps_its_address() {
+        assert_eq!(without_port("silt-workstation-6f6d.local:7419"), "silt-workstation-6f6d.local");
+        assert_eq!(without_port("192.168.1.23:7419"), "192.168.1.23");
+        assert_eq!(without_port("[fe80::1]:7419"), "[fe80::1]");
+        assert_eq!(without_port("[fe80::1]"), "[fe80::1]");
+        assert_eq!(without_port("silt-workstation-6f6d.local"), "silt-workstation-6f6d.local");
     }
 
     #[test]

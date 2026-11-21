@@ -3,14 +3,14 @@
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { api, type Capabilities, type LanAsk, type LanView } from '../api'
 import { useNow } from '../now'
-import { notificationsAllowed, pushable, subscribeToPush } from '../notifier'
+import { notificationsAllowed, pushable, subscribeToPush, workerRefused } from '../notifier'
 import { keys, message } from '../query'
 import { useLan, useLanMe } from '../lan'
 import { onLan } from '../served'
-import { Banner, Button, Chip, Dot, Icon, KeyValue, Skeleton, cx, toast } from '../ui'
+import { Banner, Button, Chip, Dot, Icon, KeyValue, Skeleton, buttonClass, cx, toast } from '../ui'
 
 function useLanChange() {
   const queries = useQueryClient()
@@ -64,10 +64,11 @@ function Fingerprint({ text }: { text: string }) {
   )
 }
 
-function Steps({ current }: { current: 1 | 2 }) {
+function Steps({ current, skipped = false }: { current: 1 | 2; skipped?: boolean }) {
   const step = (number: 1 | 2, label: string) => {
     const done = number < current
     const here = number === current
+    const passed = done && skipped
     return (
       <li
         className={cx('flex items-center gap-1.5', here ? 'font-medium text-fg-1' : 'text-fg-2')}
@@ -76,12 +77,13 @@ function Steps({ current }: { current: 1 | 2 }) {
         <span
           className={cx(
             'inline-flex h-5 w-5 items-center justify-center rounded-full font-mono text-2xs',
-            here ? 'bg-accent text-on-accent' : done ? 'bg-ok-tint text-ok' : 'bg-surface-2 text-fg-2',
+            here ? 'bg-accent text-on-accent' : done && !passed ? 'bg-ok-tint text-ok' : 'bg-surface-2 text-fg-2',
           )}
         >
-          {done ? <Icon name="check" className="h-3 w-3" /> : number}
+          {passed ? '–' : done ? <Icon name="check" className="h-3 w-3" /> : number}
         </span>
         {label}
+        {passed && <span className="text-fg-3">skipped</span>}
       </li>
     )
   }
@@ -175,84 +177,166 @@ function Installed({ view }: { view: LanView }) {
   )
 }
 
-function Trust({ view, onNext }: { view: LanView; onNext: () => void }) {
+const WITHOUT_CERTIFICATE = 'silt-lan-without-certificate'
+
+/** Whether the person pairs phones without the machine's certificate, as they last chose here (ADR 0113). */
+function useWithoutCertificate(): [boolean, (without: boolean) => void] {
+  const [without, setWithout] = useState(() => {
+    try {
+      return localStorage.getItem(WITHOUT_CERTIFICATE) === '1'
+    } catch {
+      return false
+    }
+  })
+  const choose = (chosen: boolean) => {
+    try {
+      if (chosen) localStorage.setItem(WITHOUT_CERTIFICATE, '1')
+      else localStorage.removeItem(WITHOUT_CERTIFICATE)
+    } catch {
+      // Kept for this page only.
+    }
+    setWithout(chosen)
+  }
+  return [without, choose]
+}
+
+function WithoutCertificate() {
+  return (
+    <Banner>
+      <div className="flex flex-col gap-1.5 text-xs leading-normal text-fg-1">
+        <p>The phone will warn that the connection isn’t private. Go on past the warning once, then pair.</p>
+        <p>Without the certificate, the phone:</p>
+        <ul className="flex list-disc flex-col gap-1 pl-4">
+          <li>gets no notifications when an agent needs you;</li>
+          <li>can’t add Silt to its Home Screen as an app;</li>
+          <li>may show the warning again after a while.</li>
+        </ul>
+        <p className="text-fg-2">Install the certificate later to get these back. The phone stays paired.</p>
+      </div>
+    </Banner>
+  )
+}
+
+function Trust({
+  view,
+  without,
+  onWithout,
+  onNext,
+}: {
+  view: LanView
+  without: boolean
+  onWithout: (without: boolean) => void
+  onNext: () => void
+}) {
   const [platform, setPlatform] = useState<'apple' | 'android'>('apple')
+  const next = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button variant="primary" onClick={onNext}>
+        Next: pair the phone
+      </Button>
+      {!without && <span className="text-xs text-fg-2">Trusted it before? Go straight on.</span>}
+    </div>
+  )
   return (
     <>
       <Address view={view} />
       <Steps current={1} />
-      <div className="flex flex-wrap items-start gap-4">
-        {view.trust_qr_svg && <Qr svg={view.trust_qr_svg} label={`QR code to get ${view.machine}'s certificate`} />}
-        <div className="flex flex-[1_1_220px] flex-col gap-2 text-xs leading-normal">
-          <p>
-            Scan with the phone’s camera to get {view.machine}’s certificate
-            {view.trust_url && (
+      <label className="flex items-center gap-1.5 text-xs max-md:min-h-11">
+        <input
+          type="checkbox"
+          checked={without}
+          className="accent-[var(--accent)]"
+          onChange={(event) => onWithout(event.target.checked)}
+        />
+        Pair without installing the certificate
+      </label>
+      {without ? (
+        <>
+          <WithoutCertificate />
+          {next}
+        </>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-start gap-4">
+            {view.trust_qr_svg && <Qr svg={view.trust_qr_svg} label={`QR code to get ${view.machine}'s certificate`} />}
+            <div className="flex flex-[1_1_220px] flex-col gap-2 text-xs leading-normal">
+              <p>
+                Scan with the phone’s camera to get {view.machine}’s certificate
+                {view.trust_url && (
+                  <>
+                    , or open{' '}
+                    <span className="font-mono break-all" data-volatile>
+                      {view.trust_url}
+                    </span>
+                  </>
+                )}
+                . The phone should show this fingerprint:
+              </p>
+              {view.fingerprint && <Fingerprint text={view.fingerprint} />}
+              <p className="text-fg-2">If it doesn’t match, don’t install it: something on this network is in the way.</p>
+            </div>
+          </div>
+          <div role="group" aria-label="phone" className="flex gap-1.5">
+            <Chip selected={platform === 'apple'} onClick={() => setPlatform('apple')}>
+              iPhone
+            </Chip>
+            <Chip selected={platform === 'android'} onClick={() => setPlatform('android')}>
+              Android
+            </Chip>
+          </div>
+          <ol className="flex list-decimal flex-col gap-1 pl-4 text-xs leading-normal">
+            {platform === 'apple' ? (
               <>
-                , or open{' '}
-                <span className="font-mono break-all" data-volatile>
-                  {view.trust_url}
-                </span>
+                <li>
+                  Allow the download, then in Settings open <b className="font-medium">Profile Downloaded</b> and install{' '}
+                  <b className="font-medium">
+                    <Installed view={view} />
+                  </b>
+                  .
+                </li>
+                <li>
+                  In Settings › General › About › Certificate Trust Settings, turn on{' '}
+                  <b className="font-medium">
+                    <Installed view={view} />
+                  </b>
+                  .
+                </li>
+              </>
+            ) : (
+              <>
+                <li>
+                  Open the downloaded file. If Android only offers to save it, go to Settings › Security › More security settings
+                  › Encryption &amp; credentials › Install a certificate › CA certificate, and pick it.
+                </li>
+                <li>
+                  Name it{' '}
+                  <b className="font-medium">
+                    <Installed view={view} />
+                  </b>
+                  . Android warns about network monitoring for any certificate you add; this one can only vouch for {view.machine}
+                  .
+                </li>
               </>
             )}
-            . The phone should show this fingerprint:
-          </p>
-          {view.fingerprint && <Fingerprint text={view.fingerprint} />}
-          <p className="text-fg-2">If it doesn’t match, don’t install it: something on this network is in the way.</p>
-        </div>
-      </div>
-      <div role="group" aria-label="phone" className="flex gap-1.5">
-        <Chip selected={platform === 'apple'} onClick={() => setPlatform('apple')}>
-          iPhone
-        </Chip>
-        <Chip selected={platform === 'android'} onClick={() => setPlatform('android')}>
-          Android
-        </Chip>
-      </div>
-      <ol className="flex list-decimal flex-col gap-1 pl-4 text-xs leading-normal">
-        {platform === 'apple' ? (
-          <>
-            <li>
-              Allow the download, then in Settings open <b className="font-medium">Profile Downloaded</b> and install{' '}
-              <b className="font-medium">
-                <Installed view={view} />
-              </b>
-              .
-            </li>
-            <li>
-              In Settings › General › About › Certificate Trust Settings, turn on{' '}
-              <b className="font-medium">
-                <Installed view={view} />
-              </b>
-              .
-            </li>
-          </>
-        ) : (
-          <>
-            <li>
-              Open the downloaded file. If Android only offers to save it, go to Settings › Security › More security settings ›
-              Encryption &amp; credentials › Install a certificate › CA certificate, and pick it.
-            </li>
-            <li>
-              Name it{' '}
-              <b className="font-medium">
-                <Installed view={view} />
-              </b>
-              . Android warns about network monitoring for any certificate you add; this one can only vouch for {view.machine}.
-            </li>
-          </>
-        )}
-      </ol>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="primary" onClick={onNext}>
-          Next: pair the phone
-        </Button>
-        <span className="text-xs text-fg-2">Trusted it before? Go straight on.</span>
-      </div>
+          </ol>
+          {next}
+        </>
+      )}
     </>
   )
 }
 
-function Pair({ view, onBack, onChanged }: { view: LanView; onBack: () => void; onChanged: (view: LanView) => void }) {
+function Pair({
+  view,
+  without,
+  onBack,
+  onChanged,
+}: {
+  view: LanView
+  without: boolean
+  onBack: () => void
+  onChanged: (view: LanView) => void
+}) {
   const now = useNow(1000)
   const [byAddress, setByAddress] = useState(false)
   const pairing = view.pairing
@@ -265,7 +349,7 @@ function Pair({ view, onBack, onChanged }: { view: LanView; onBack: () => void; 
   return (
     <>
       <Address view={view} />
-      <Steps current={2} />
+      <Steps current={2} skipped={without} />
       <div className="flex flex-wrap items-start gap-4">
         <Qr svg={address ? pairing.address_qr_svg! : pairing.qr_svg} label="QR code to pair a phone" />
         <ol className="flex flex-[1_1_180px] list-decimal flex-col gap-1 pl-4 text-xs leading-normal">
@@ -276,6 +360,13 @@ function Pair({ view, onBack, onChanged }: { view: LanView; onBack: () => void; 
             </span>{' '}
             and type the code.
           </li>
+          {without && (
+            <li>
+              The phone warns that the connection isn’t private. On an iPhone, choose <b className="font-medium">Show Details</b>,
+              then <b className="font-medium">visit this website</b>. On Android, choose <b className="font-medium">Advanced</b>,
+              then <b className="font-medium">Proceed</b>.
+            </li>
+          )}
           <li>Allow the phone here when it asks.</li>
         </ol>
       </div>
@@ -303,6 +394,19 @@ function Pair({ view, onBack, onChanged }: { view: LanView; onBack: () => void; 
           An address can change when the router restarts; the phone would then need pairing again. The name doesn’t.
         </p>
       )}
+      {without && view.fingerprint && (
+        <details className="group/check text-xs">
+          <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 [&::-webkit-details-marker]:hidden">
+            <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/check:rotate-90" />
+            Check it’s really {view.machine}
+          </summary>
+          <div className="mt-2 flex flex-col gap-1.5 leading-normal text-fg-2">
+            <p>Before going on, open the warning’s certificate details. Its SHA-256 fingerprint should be:</p>
+            <Fingerprint text={view.fingerprint} />
+            <p>If it isn’t, don’t go on: something on this network is in the way.</p>
+          </div>
+        </details>
+      )}
       <fieldset className="flex flex-col gap-1.5 text-xs">
         <legend className="mb-1.5 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">The phone may</legend>
         {PAIR_CAPABILITIES.map((capability) => (
@@ -327,7 +431,11 @@ function Pair({ view, onBack, onChanged }: { view: LanView; onBack: () => void; 
           <li>
             Some networks don’t pass <span className="font-mono">.local</span> names. Use the address instead.
           </li>
-          <li>A certificate warning means the phone doesn’t trust {view.machine} yet. Go back to the first step.</li>
+          <li>
+            {without
+              ? 'Without the certificate, the phone always warns first. Go on past the warning, or install the certificate: go back to the first step.'
+              : `A certificate warning means the phone doesn’t trust ${view.machine} yet. Go back to the first step.`}
+          </li>
           {view.firewall && (
             <li>
               A firewall may be blocking port {view.port}:{' '}
@@ -420,6 +528,7 @@ export function LanCard() {
   const lan = useLan()
   const changed = useLanChange()
   const [step, setStep] = useState<Step>('summary')
+  const [without, setWithout] = useWithoutCertificate()
   const turn = useMutation({
     mutationFn: (on: boolean) => api.lanTurn(on),
     onSuccess: (view) => {
@@ -547,8 +656,9 @@ export function LanCard() {
         <Summary view={view} onPair={() => void pair()} onTrust={() => setStep('trust')} />
       </>
     )
-  else if (step === 'trust') body = <Trust view={view} onNext={() => void pair()} />
-  else if (step === 'pair' && view.pairing) body = <Pair view={view} onBack={() => setStep('trust')} onChanged={changed} />
+  else if (step === 'trust') body = <Trust view={view} without={without} onWithout={setWithout} onNext={() => void pair()} />
+  else if (step === 'pair' && view.pairing)
+    body = <Pair view={view} without={without} onBack={() => setStep('trust')} onChanged={changed} />
   else body = <Summary view={view} onPair={() => setStep('trust')} onTrust={() => setStep('trust')} />
   return (
     <section aria-label="phones on this network" className="flex flex-col gap-3 rounded-md border border-line bg-elevated p-4">
@@ -628,7 +738,13 @@ export function LanNotifyBanner() {
     }
   })
   const [on, setOn] = useState(false)
-  if (!onLan() || !me.data || me.data.notifies || on || dismissed || notificationsAllowed()) return null
+  const [refused, setRefused] = useState(false)
+  useEffect(() => {
+    if (onLan()) void workerRefused().then(setRefused)
+  }, [])
+  if (!onLan() || !me.data || me.data.notifies || on || dismissed) return null
+  if (refused) return <NotifyNeedsCertificate machine={me.data.machine} onDismiss={() => setDismissed(dismiss())} />
+  if (notificationsAllowed()) return null
   const installable = !pushable()
   return (
     <section
@@ -660,17 +776,48 @@ export function LanNotifyBanner() {
             Turn on notifications
           </Button>
         )}
-        <Button
-          variant="ghost"
-          onClick={() => {
-            try {
-              localStorage.setItem(DISMISSED, '1')
-            } catch {
-              // Kept for this page only.
-            }
-            setDismissed(true)
-          }}
-        >
+        <Button variant="ghost" onClick={() => setDismissed(dismiss())}>
+          Not now
+        </Button>
+      </div>
+    </section>
+  )
+}
+
+function dismiss(): true {
+  try {
+    localStorage.setItem(DISMISSED, '1')
+  } catch {
+    // Kept for this page only.
+  }
+  return true
+}
+
+/** The certificate page, served over plain HTTP on the port after this one (ADR 0112). */
+function trustUrl(): string {
+  return `http://${location.hostname}:${Number(location.port || 443) + 1}/trust`
+}
+
+/** On a phone paired without the machine's certificate, whose browser refuses the service worker notifications need. */
+function NotifyNeedsCertificate({ machine, onDismiss }: { machine: string; onDismiss: () => void }) {
+  return (
+    <section
+      aria-label="notifications"
+      className="mx-4 mt-3 flex flex-col gap-2 rounded-md border border-line bg-elevated p-3 text-sm"
+    >
+      <div className="flex items-center gap-2">
+        <Icon name="bell" className="h-4 w-4 text-accent-fg" />
+        <span className="font-medium">Hear when an agent needs you</span>
+      </div>
+      <p className="text-xs text-fg-2">
+        This phone was paired without {machine}’s certificate, and notifications need it. Install it once, then come back here to
+        turn them on. The phone stays paired.
+      </p>
+      <div className="flex gap-2">
+        <a className={buttonClass('primary')} href={trustUrl()}>
+          Get the certificate
+        </a>
+        <Button variant="ghost" onClick={onDismiss}>
           Not now
         </Button>
       </div>
