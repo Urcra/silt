@@ -327,6 +327,8 @@ pub struct Core {
     pub(crate) sample_stops: HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// What changed, for browsers listening (ADR 0021).
     pub(crate) bus: tokio::sync::broadcast::Sender<crate::protocol::BusEvent>,
+    /// Phones on the local network (ADR 0112).
+    pub(crate) lan: crate::lan::Lan,
     /// The watch on `themes/`, from the first page that asks for a theme.
     themes_watch: Option<crate::watch::Watched>,
     /// How each thread's agent stands as last stored (ADR 0022).
@@ -545,7 +547,9 @@ impl Core {
         resident: bool,
     ) -> Result<Self, CoreError> {
         let models = std::sync::Arc::new(crate::models::LocalModelsHere::new(data_dir, store.clone()));
+        let bus = tokio::sync::broadcast::channel(crate::bus::CAPACITY).0;
         let mut core = Self {
+            lan: crate::lan::Lan::new(data_dir, bus.clone()),
             store,
             actor,
             families: HashMap::new(),
@@ -616,7 +620,7 @@ impl Core {
             sample_stops: HashMap::new(),
             page_clients: std::sync::Arc::default(),
             rooms: silt_proto::rooms::Hub::default(),
-            bus: tokio::sync::broadcast::channel(crate::bus::CAPACITY).0,
+            bus,
             agent_runs: HashMap::new(),
             summary_cache: Mutex::new(HashMap::new()),
             personal: crate::personal::Personal::default(),
@@ -1390,6 +1394,35 @@ impl Core {
             Request::Orgs => return answer_later(reply, self.orgs()),
             Request::Devices => return answer_later(reply, self.devices()),
             Request::PairPhone => return answer_later(reply, self.pair_phone()),
+            Request::LanStatus => Response::ok(self.lan.view()),
+            Request::LanTurn { on } => match self.lan_turn(on).await {
+                Ok(()) => Response::ok(self.lan.view()),
+                Err(error) => Response::error(error),
+            },
+            Request::LanPair { capabilities } => match self.lan.pair(capabilities) {
+                Ok(view) => Response::ok(view),
+                Err(error) => Response::Error { message: error },
+            },
+            Request::LanAnswer { ask, allow } => match self.lan.answer(&ask, allow) {
+                Ok(view) => Response::ok(view),
+                Err(error) => Response::Error { message: error },
+            },
+            Request::LanPhoneChange { phone, name, capabilities } => match self.lan.change(&phone, name, capabilities) {
+                Ok(view) => Response::ok(view),
+                Err(error) => Response::Error { message: error },
+            },
+            Request::LanPhoneRevoke { phone } => match self.lan.revoke(&phone) {
+                Ok(view) => Response::ok(view),
+                Err(error) => Response::Error { message: error },
+            },
+            Request::LanForget => match self.lan_forget().await {
+                Ok(()) => Response::ok(self.lan.view()),
+                Err(error) => Response::error(error),
+            },
+            Request::LanPush { phone, subscription } => match self.lan.subscribe(&phone, subscription) {
+                Ok(()) => Response::ok("saved"),
+                Err(error) => Response::Error { message: error },
+            },
             Request::ThreadLinks { thread } => return answer_later(reply, self.thread_links(&thread, None, None)),
             Request::ThreadLink { thread, link } => return answer_later(reply, self.thread_links(&thread, Some(link), None)),
             Request::ThreadLinkRevoke { thread, link } => {
@@ -1502,6 +1535,7 @@ impl Core {
 
     pub async fn tick(&mut self) {
         self.drive_sync();
+        self.lan.tick();
         if self.resident {
             self.updates.check_if_due();
             crate::plugins::updates::check_if_due(&self.data_dir);
@@ -2617,13 +2651,43 @@ impl Core {
         });
     }
 
-    /// The web UI's URL, starting it first if needed; with `once`, one that
-    /// works a single time, to hand to another program.
-    async fn open_web(&mut self, once: bool, project: Option<&Path>) -> Result<String, CoreError> {
+    /// The web UI, started if it isn't yet.
+    async fn web(&mut self) -> Result<&crate::web::WebInfo, CoreError> {
         if self.web.is_none() {
             self.web = Some(crate::web::start(self.events.clone(), self.bus.clone()).await?);
         }
-        let web = self.web.as_ref().expect("started above");
+        Ok(self.web.as_ref().expect("started above"))
+    }
+
+    /// Lets phones on the local network reach this machine, or stops (ADR 0112).
+    pub(crate) async fn lan_turn(&mut self, on: bool) -> Result<(), CoreError> {
+        let shared = self.lan.shared.clone();
+        let web = self.web().await?.clone();
+        self.lan.turn(on, || web.lan_router(shared)).await?;
+        Ok(())
+    }
+
+    /// Starts the network listener at the daemon's start, when the person
+    /// left it on.
+    pub(crate) async fn start_lan_if_wanted(&mut self) {
+        if self.lan.wanted()
+            && let Err(error) = self.lan_turn(true).await
+        {
+            warn!(%error, "could not let phones on the network reach this machine");
+        }
+    }
+
+    async fn lan_forget(&mut self) -> Result<(), CoreError> {
+        let shared = self.lan.shared.clone();
+        let web = self.web().await?.clone();
+        self.lan.forget(|| web.lan_router(shared)).await?;
+        Ok(())
+    }
+
+    /// The web UI's URL, starting it first if needed; with `once`, one that
+    /// works a single time, to hand to another program.
+    async fn open_web(&mut self, once: bool, project: Option<&Path>) -> Result<String, CoreError> {
+        let web = self.web().await?;
         Ok(if once { web.one_time_url(project) } else { web.url(project) })
     }
 

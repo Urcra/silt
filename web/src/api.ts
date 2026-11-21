@@ -88,6 +88,8 @@ import type {
   UpdateView,
   Workspaces,
   WorkspacesView,
+  Capabilities,
+  LanView,
 } from './api.generated'
 
 /** Who views a thread's pages: their id in page data, their level, and the names of the people the thread knows. */
@@ -96,6 +98,16 @@ export type SampleTool = { name: string; description: string; input_schema?: unk
 export type PageViewer = { id: string; level: 'read' | 'comment' | 'collaborator' | 'owner'; people: Record<string, string> }
 
 export type * from './api.generated'
+
+/** The phone asking, on the network listener (ADR 0112). */
+export type LanMe = {
+  phone: string
+  name: string | null
+  machine: string
+  capabilities: Capabilities
+  notifies: boolean
+  push_key: string | null
+}
 
 const TOKEN_KEY = 'silt-token'
 
@@ -583,6 +595,18 @@ export const api = {
   readNotifications: (read: Partial<InboxRead>, server?: string | null) =>
     request<string>('POST', `/api/inbox/read${onServer(server)}`, read),
   pushKey: () => request<string>('GET', '/api/push/key'),
+  // Phones on the local network (ADR 0112).
+  lan: () => request<LanView>('GET', '/api/lan'),
+  lanTurn: (on: boolean) => request<LanView>('PUT', '/api/lan', { on }),
+  lanPair: (capabilities: Capabilities) => request<LanView>('POST', '/api/lan/pair', { capabilities }),
+  lanAnswer: (ask: string, allow: boolean) => request<LanView>('POST', `/api/lan/asks/${encodeURIComponent(ask)}`, { allow }),
+  lanPhoneChange: (phone: string, change: { name?: string; capabilities?: Capabilities }) =>
+    request<LanView>('PATCH', `/api/lan/phones/${encodeURIComponent(phone)}`, change),
+  lanPhoneRevoke: (phone: string) => request<LanView>('POST', `/api/lan/phones/${encodeURIComponent(phone)}/revoke`),
+  lanForget: () => request<LanView>('POST', '/api/lan/forget'),
+  lanMe: () => request<LanMe>('GET', '/api/lan/me'),
+  lanPush: (subscription: PushSubscriptionJSON) => request<string>('POST', '/api/lan/push', subscription),
+  lanUnpush: () => request<string>('DELETE', '/api/lan/push'),
   subscribePush: (subscription: PushSubscriptionJSON) => request<null>('POST', '/api/push/subscriptions', subscription),
   notificationSettings: () => request<KindSetting[]>('GET', `/api/me/notifications${onServer(askedServer())}`),
   setNotification: (setting: KindSetting) =>

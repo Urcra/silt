@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { LanNotifyBanner } from './LanPhones'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { APPROVED } from '../agentState'
@@ -520,6 +521,7 @@ export function NeedsYou() {
     )
   return (
     <Page flush label="needs you" title="Needs you">
+      <LanNotifyBanner />
       <section aria-label="waiting on you" className="mx-auto flex w-full max-w-2xl flex-col gap-3 px-4 py-4">
         {threads.isPending && <Skeleton className="h-24" />}
         {threads.error && <p className="text-danger">{message(threads.error)}</p>}

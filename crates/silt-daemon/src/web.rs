@@ -25,8 +25,11 @@ use crate::protocol::{BusEvent, BusSubscription, CommentOn, Request, Response, S
 use crate::voice::{self, Voice};
 
 #[derive(Clone)]
-struct Web {
+pub(crate) struct Web {
     events: mpsc::UnboundedSender<Event>,
+    /// Set on the network listener's copy: requests come from paired
+    /// phones, each checked against what it may do (ADR 0112).
+    lan: Option<Arc<crate::lan::Shared>>,
     bus: broadcast::Sender<BusEvent>,
     token: String,
     port: u16,
@@ -54,11 +57,18 @@ const PAGE_FILE_BODY_BYTES: usize = 28 << 20;
 const CODE_TTL: Duration = Duration::from_secs(60);
 
 /// A running web UI.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct WebInfo {
     pub(crate) port: u16,
     pub(crate) token: String,
     codes: OneTimeCodes,
+    web: Web,
+}
+
+impl std::fmt::Debug for WebInfo {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("WebInfo").field("port", &self.port).finish_non_exhaustive()
+    }
 }
 
 impl WebInfo {
@@ -102,6 +112,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
     let codes = OneTimeCodes::default();
     let web = Web {
         events,
+        lan: None,
         bus,
         token: token.clone(),
         port,
@@ -112,7 +123,54 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         room_peers: Arc::default(),
         room_mux: Arc::default(),
     };
-    let api = Router::new()
+    let api = api_routes().layer(middleware::from_fn_with_state(web.clone(), authenticate));
+    let app = api
+        .route("/api/exchange", post(exchange))
+        // An artifact's frame has an opaque origin and no token; this serves
+        // only pinned files of the CDN allowlist.
+        .route("/vendor/{host}/{*path}", get(vendor_file))
+        // A frame has no token either: its key is the whole permission, and
+        // serves only its own version (ADR 0074).
+        // A theme's fonts, which its CSS loads with no token (ADR 0099); only
+        // faces of the person's current themes.
+        .route("/theme-fonts/{id}/{file}", get(theme_font))
+        .route("/f/{key}/", get(serve_frame))
+        .route("/f/{key}/{*path}", get(frame_file))
+        .fallback(asset)
+        .layer(middleware::from_fn_with_state(web.clone(), local_host_only))
+        .with_state(web.clone());
+    tokio::spawn(async move {
+        if let Err(error) = axum::serve(listener, app).await {
+            tracing::warn!(%error, "the web UI stopped");
+        }
+    });
+    Ok(WebInfo { port, token, codes, web })
+}
+
+impl WebInfo {
+    /// The app as the network listener serves it to paired phones: the same
+    /// API, behind each phone's session and what it may do (ADR 0112).
+    pub(crate) fn lan_router(&self, shared: Arc<crate::lan::Shared>) -> Router {
+        let web = Web { lan: Some(shared.clone()), ..self.web.clone() };
+        api_routes()
+            .route("/api/lan/me", get(lan_me))
+            .route("/api/lan/push", post(lan_push).delete(lan_unpush))
+            .layer(middleware::from_fn_with_state(web.clone(), phone_authenticate))
+            .route("/vendor/{host}/{*path}", get(vendor_file))
+            .route("/theme-fonts/{id}/{file}", get(theme_font))
+            .route("/f/{key}/", get(serve_frame))
+            .route("/f/{key}/{*path}", get(frame_file))
+            .fallback(asset)
+            .with_state(web)
+            .merge(crate::lan::routes::pair_routes(shared.clone()))
+            .layer(middleware::from_fn_with_state(shared, crate::lan::routes::known_host))
+    }
+}
+
+/// The API, for the loopback listener and the network one, each behind
+/// its own authentication.
+fn api_routes() -> Router<Web> {
+    Router::new()
         .route("/api/events", get(events_socket))
         .route("/api/rooms", get(rooms_socket))
         .route("/api/status", get(status))
@@ -289,28 +347,12 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
         .route("/api/voice", get(voice_status))
         .route("/api/voice/model", post(voice_model))
         .route("/api/voice/dictate", get(voice_dictate))
-        .layer(middleware::from_fn_with_state(web.clone(), authenticate));
-    let app = api
-        .route("/api/exchange", post(exchange))
-        // An artifact's frame has an opaque origin and no token; this serves
-        // only pinned files of the CDN allowlist.
-        .route("/vendor/{host}/{*path}", get(vendor_file))
-        // A frame has no token either: its key is the whole permission, and
-        // serves only its own version (ADR 0074).
-        // A theme's fonts, which its CSS loads with no token (ADR 0099); only
-        // faces of the person's current themes.
-        .route("/theme-fonts/{id}/{file}", get(theme_font))
-        .route("/f/{key}/", get(serve_frame))
-        .route("/f/{key}/{*path}", get(frame_file))
-        .fallback(asset)
-        .layer(middleware::from_fn_with_state(web.clone(), local_host_only))
-        .with_state(web);
-    tokio::spawn(async move {
-        if let Err(error) = axum::serve(listener, app).await {
-            tracing::warn!(%error, "the web UI stopped");
-        }
-    });
-    Ok(WebInfo { port, token, codes })
+        .route("/api/lan", get(lan_status).put(lan_turn))
+        .route("/api/lan/pair", post(lan_pair))
+        .route("/api/lan/asks/{id}", post(lan_answer))
+        .route("/api/lan/phones/{id}", axum::routing::patch(lan_phone_change))
+        .route("/api/lan/phones/{id}/revoke", post(lan_phone_revoke))
+        .route("/api/lan/forget", post(lan_forget))
 }
 
 #[derive(Deserialize)]
@@ -371,6 +413,14 @@ async fn asset(State(web): State<Web>, request: HttpRequest) -> HttpResponse {
         _ => match silt_web::Assets::get("index.html") {
             Some(file) => {
                 let html = String::from_utf8_lossy(&file.data);
+                if web.lan.is_some() {
+                    // The page loads before a phone has a session, and its
+                    // theme says nothing of the person's work.
+                    let html = themed(&Web { lan: None, ..web.clone() }, &html).await;
+                    let html =
+                        html.replace(r#"name="silt-served-by" content="daemon""#, r#"name="silt-served-by" content="lan""#);
+                    return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response();
+                }
                 return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], themed(&web, &html).await).into_response();
             }
             None => {
@@ -423,6 +473,9 @@ impl IntoResponse for Failed {
 }
 
 async fn answer(web: &Web, request: Request) -> Result<serde_json::Value, Failed> {
+    if let Some(lan) = &web.lan {
+        allowed_for_phone(lan, &request)?;
+    }
     let unavailable = |message: &str| Failed { status: StatusCode::SERVICE_UNAVAILABLE, message: message.to_owned() };
     let (reply, answer) = oneshot::channel();
     if web.events.send(Event::Request(request, reply)).is_err() {
@@ -471,7 +524,17 @@ async fn events_socket(State(web): State<Web>, upgrade: WebSocketUpgrade) -> Htt
 }
 
 async fn rooms_socket(State(web): State<Web>, upgrade: WebSocketUpgrade) -> HttpResponse {
-    upgrade.max_message_size(64 * 1024).on_upgrade(move |socket| serve_room(socket, web))
+    let caller = crate::lan::CALLER.try_with(Clone::clone).ok();
+    upgrade.max_message_size(64 * 1024).on_upgrade(move |socket| as_caller(caller, serve_room(socket, web)))
+}
+
+/// Runs `work`, which a socket's upgrade moved to a task of its own, as
+/// the phone whose request it was; requests from it are checked as theirs.
+async fn as_caller<T>(caller: Option<crate::lan::Caller>, work: impl Future<Output = T>) -> T {
+    match caller {
+        Some(caller) => crate::lan::CALLER.scope(caller, work).await,
+        None => work.await,
+    }
 }
 
 #[derive(Deserialize)]
@@ -2412,20 +2475,21 @@ mod tests {
     async fn a_one_time_code_gives_the_token_once() {
         let (events, _inbox) = mpsc::unbounded_channel();
         let codes = OneTimeCodes::default();
-        let info = WebInfo { port: 1, token: "secret".into(), codes: codes.clone() };
         let bus = broadcast::channel(1).0;
         let web = Web {
             events,
+            lan: None,
             bus,
-            token: info.token.clone(),
+            token: "secret".into(),
             port: 1,
-            codes,
+            codes: codes.clone(),
             voice: Arc::new(Voice::new()),
             vendor: Arc::new(silt_vendor::Vendor::new(std::path::Path::new("vendor"))),
             frames: Arc::default(),
             room_peers: Arc::default(),
             room_mux: Arc::default(),
         };
+        let info = WebInfo { port: 1, token: "secret".into(), codes, web: web.clone() };
         let url = info.one_time_url(None);
         assert!(!url.contains("secret"), "{url}");
         let code = url.split("code=").nth(1).expect("a code").to_owned();
@@ -2449,4 +2513,122 @@ mod tests {
         assert!(!same_token("abc1234", "abc123"));
         assert!(!same_token("", "abc123"));
     }
+}
+
+/// Whether the phone asking may make `request`; on the network listener,
+/// a request with no phone behind it is refused outright (ADR 0112).
+fn allowed_for_phone(lan: &crate::lan::Shared, request: &Request) -> Result<(), Failed> {
+    let refused = |message: String| Failed { status: StatusCode::FORBIDDEN, message };
+    let caller = crate::lan::CALLER.try_with(Clone::clone).map_err(|_| refused("this phone isn't paired".to_owned()))?;
+    request
+        .needs()
+        .allowed(&caller.capabilities)
+        .map_err(|needs| refused(format!("refused: this phone may not {needs}; give it more from Devices on {}", lan.machine)))
+}
+
+/// Lets in a paired phone's requests, by its session cookie, and only
+/// changes sent by the app itself (ADR 0026's header and `Origin`).
+async fn phone_authenticate(State(web): State<Web>, mut request: HttpRequest, next: Next) -> HttpResponse {
+    let Some(lan) = web.lan.clone() else {
+        return (StatusCode::UNAUTHORIZED, "not the network listener").into_response();
+    };
+    let unpaired = || {
+        (StatusCode::UNAUTHORIZED, Json(json!({"error": "pair this phone again from Devices on the machine"}))).into_response()
+    };
+    let Some(token) = crate::lan::routes::cookie(request.headers(), crate::lan::routes::SESSION_COOKIE) else {
+        return unpaired();
+    };
+    let Some(caller) = lan.phone_by_token(&token) else { return unpaired() };
+    let reads = matches!(*request.method(), axum::http::Method::GET | axum::http::Method::HEAD);
+    if !reads {
+        let headers = request.headers();
+        let sent_by_app = headers.get("x-silt-request").is_some_and(|value| value == "1");
+        let host = headers.get(header::HOST).and_then(|value| value.to_str().ok()).unwrap_or_default();
+        let same_origin = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) == Some(&format!("https://{host}"));
+        if !sent_by_app || !same_origin {
+            return (StatusCode::FORBIDDEN, Json(json!({"error": "this request was sent from another site"}))).into_response();
+        }
+    }
+    request.extensions_mut().insert(caller.clone());
+    crate::lan::CALLER.scope(caller, next.run(request)).await
+}
+
+/// Which phone this is, what it may do, and the key its pushes come with.
+async fn lan_me(State(web): State<Web>, axum::Extension(caller): axum::Extension<crate::lan::Caller>) -> HttpResponse {
+    let Some(lan) = web.lan else { return StatusCode::NOT_FOUND.into_response() };
+    let phones = lan.phones.read().expect("lock");
+    let phone = phones.phones.iter().find(|phone| phone.id == caller.phone);
+    Json(json!({
+        "phone": caller.phone,
+        "name": phone.map(|phone| phone.name.clone()),
+        "machine": lan.machine,
+        "capabilities": caller.capabilities,
+        "notifies": phone.is_some_and(|phone| phone.push.is_some()),
+        "push_key": lan.push.public_key(),
+    }))
+    .into_response()
+}
+
+async fn lan_push(
+    State(web): State<Web>,
+    axum::Extension(caller): axum::Extension<crate::lan::Caller>,
+    Json(subscription): Json<crate::lan::Subscription>,
+) -> HttpResponse {
+    ask(&web, Request::LanPush { phone: caller.phone, subscription: Some(subscription) }).await
+}
+
+async fn lan_unpush(State(web): State<Web>, axum::Extension(caller): axum::Extension<crate::lan::Caller>) -> HttpResponse {
+    ask(&web, Request::LanPush { phone: caller.phone, subscription: None }).await
+}
+
+async fn lan_status(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::LanStatus).await
+}
+
+#[derive(Deserialize)]
+struct LanTurn {
+    on: bool,
+}
+
+async fn lan_turn(State(web): State<Web>, Json(body): Json<LanTurn>) -> HttpResponse {
+    ask(&web, Request::LanTurn { on: body.on }).await
+}
+
+#[derive(Deserialize)]
+struct LanPair {
+    #[serde(default)]
+    capabilities: Option<silt_proto::Capabilities>,
+}
+
+async fn lan_pair(State(web): State<Web>, Json(body): Json<LanPair>) -> HttpResponse {
+    ask(&web, Request::LanPair { capabilities: body.capabilities.unwrap_or(silt_proto::Capabilities::PHONE) }).await
+}
+
+#[derive(Deserialize)]
+struct LanAnswer {
+    allow: bool,
+}
+
+async fn lan_answer(State(web): State<Web>, Path(id): Path<String>, Json(body): Json<LanAnswer>) -> HttpResponse {
+    ask(&web, Request::LanAnswer { ask: id, allow: body.allow }).await
+}
+
+#[derive(Deserialize)]
+struct LanPhoneChange {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    capabilities: Option<silt_proto::Capabilities>,
+}
+
+async fn lan_phone_change(State(web): State<Web>, Path(id): Path<String>, Json(body): Json<LanPhoneChange>) -> HttpResponse {
+    ask(&web, Request::LanPhoneChange { phone: id, name: body.name, capabilities: body.capabilities }).await
+}
+
+async fn lan_phone_revoke(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
+    ask(&web, Request::LanPhoneRevoke { phone: id }).await
+}
+
+async fn lan_forget(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::LanForget).await
 }

@@ -208,6 +208,9 @@ export function useBusInvalidation() {
       case 'appearance':
         refetch(keys.themes)
         break
+      case 'lan':
+        refetch(keys.lan)
+        break
       case 'lagged':
         if (Date.now() - laggedAt.current < LAGGED_MS) break
         laggedAt.current = Date.now()

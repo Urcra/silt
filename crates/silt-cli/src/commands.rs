@@ -1252,6 +1252,77 @@ pub fn inbox(all: bool) -> Result<(), Exn<CliError>> {
     Ok(())
 }
 
+pub fn lan_turn(on: bool) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let view: silt_daemon::lan::LanView = call(&Request::LanTurn { on })?;
+    print!("{}", render::safe(&render::lan(&view)));
+    Ok(())
+}
+
+pub fn lan_status() -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    let view: silt_daemon::lan::LanView = call(&Request::LanStatus)?;
+    print!("{}", render::safe(&render::lan(&view)));
+    Ok(())
+}
+
+pub fn lan_revoke(phone: &str) -> Result<(), Exn<CliError>> {
+    ensure_daemon()?;
+    call::<silt_daemon::lan::LanView>(&Request::LanPhoneRevoke { phone: phone.to_owned() })?;
+    println!("signed out");
+    Ok(())
+}
+
+/// Shows a code to pair with, then asks here about each phone that opens it.
+pub fn lan_pair(prompts: bool) -> Result<(), Exn<CliError>> {
+    use std::io::{BufRead as _, Write as _};
+    ensure_daemon()?;
+    let capabilities = silt_proto::Capabilities { send_prompts: prompts, ..silt_proto::Capabilities::PHONE };
+    let view: silt_daemon::lan::LanView = call(&Request::LanPair { capabilities })?;
+    let Some(pairing) = view.pairing.as_ref() else {
+        return Err(fail("phones on this network are off; turn them on with `silt lan on`"));
+    };
+    if let Some(trust) = &view.trust_url {
+        println!("First time on this phone? Open {trust} on it to trust {}.", render::safe(&view.machine));
+        if let Some(fingerprint) = &view.fingerprint {
+            println!("It should show the fingerprint {fingerprint}\n");
+        }
+    }
+    println!("{}", render::qr(&pairing.url));
+    println!(
+        "Scan with the phone's camera, or open {} and type {}.",
+        pairing.url.rsplit_once('/').map_or(pairing.url.as_str(), |(base, _)| base),
+        pairing.code
+    );
+    if let Some(address) = &pairing.address_url {
+        println!("If the phone can't open it, use the address: {address}");
+    }
+    println!("Waiting for the phone (the code works for 10 minutes)…");
+    let stdin = std::io::stdin();
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let view: silt_daemon::lan::LanView = call(&Request::LanStatus)?;
+        if let Some(ask) = view.asks.first() {
+            print!(
+                "{} from {} asks to pair, showing code {}. Allow it only if it's your phone, in your hand. Allow? [y/N] ",
+                render::safe(&ask.phone),
+                render::safe(&ask.from),
+                ask.code
+            );
+            std::io::stdout().flush().map_err(|error| fail(error.to_string()))?;
+            let mut line = String::new();
+            stdin.lock().read_line(&mut line).map_err(|error| fail(error.to_string()))?;
+            let allow = matches!(line.trim(), "y" | "Y" | "yes");
+            call::<silt_daemon::lan::LanView>(&Request::LanAnswer { ask: ask.id.clone(), allow })?;
+            println!("{}", if allow { "paired" } else { "denied" });
+            return Ok(());
+        }
+        if view.pairing.is_none() {
+            return Err(fail("the code expired; run `silt lan pair` again"));
+        }
+    }
+}
+
 pub fn inbox_read(ids: Vec<i64>, all: bool) -> Result<(), Exn<CliError>> {
     if ids.is_empty() && !all {
         return Err(fail("name the notifications to mark read, or pass --all"));
