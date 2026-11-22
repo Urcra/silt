@@ -980,6 +980,10 @@ subject: string | null,
  */
 detail: string | null, 
 /**
+ * The name a subagent was given to be addressed by, beside its kind.
+ */
+subagent: string | null, 
+/**
  * What a question tool asked.
  */
 questions: Array<QuestionView>, };

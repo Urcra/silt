@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
 import type { HistoryEntry, TaskView } from './api'
 import { mayRun, QUIET_MS, running, tasksOf } from './tasks'
-import { piecesOf, rowsOf } from './transcript'
+import { callsById, piecesOf, rowsOf, stepsOf } from './transcript'
 
 const entry = (index: number, kind: string, text: string, more: Partial<HistoryEntry> = {}): HistoryEntry =>
   ({
@@ -24,7 +24,7 @@ const news = (index: number, task: Partial<TaskView> & { id: string }, side: str
   })
 
 const call = (index: number, id: string, name: string, kind: string, subject: string): HistoryEntry =>
-  entry(index, 'tool_call', `${name} {}`, { tool: { id, name, kind, subject, detail: null, questions: [] } })
+  entry(index, 'tool_call', `${name} {}`, { tool: { id, name, kind, subject, detail: null, subagent: null, questions: [] } })
 
 test("a subagent's entries leave the thread's turns and fold under the call that started it", () => {
   const entries = [
@@ -69,4 +69,15 @@ test('tasks may run only while their session does', () => {
   expect(mayRun(0, true, QUIET_MS * 2)).toBe(true)
   expect(mayRun(QUIET_MS, false, QUIET_MS + 1000)).toBe(true)
   expect(mayRun(0, false, QUIET_MS + 1)).toBe(false)
+})
+
+test("a call's later record that lost its kind keeps what the call runs", () => {
+  const started = call(1, 'b1', 'sleep 600', 'execute', 'sleep 600')
+  const updated = entry(2, 'tool_call', 'sleep 600 {}', {
+    tool: { id: 'b1', name: 'sleep 600', kind: 'other', subject: null, detail: null, subagent: null, questions: [] },
+  })
+  const renamed = call(3, 'b1', 'sleep 900', 'execute', 'sleep 900')
+  expect(callsById([started, updated]).get('b1')).toBe(started)
+  expect(stepsOf([started, updated]).map((step) => step.call)).toEqual([started])
+  expect(callsById([started, updated, renamed]).get('b1')).toBe(renamed)
 })

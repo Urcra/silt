@@ -228,7 +228,7 @@ pub async fn main() -> Result<()> {
                     }
                     if prompt.contains("Subagent") {
                         let child = v2::SessionId::new("fake-child-1");
-                        say(&worker, &session, json!({"sessionUpdate": "subagent_update", "sessionId": "fake-child-1", "title": "general-purpose", "description": "Count lines", "capabilities": {"cancel": {}}, "state": {"state": "running"}}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "subagent_update", "sessionId": "fake-child-1", "title": "Count lines", "description": "general-purpose", "capabilities": {"cancel": {}}, "state": {"state": "running"}}))?;
                         say(&worker, &session, json!({"sessionUpdate": "session_message", "messageId": "agent-1", "senderSessionId": session.to_string(), "recipientSessionId": "fake-child-1", "content": [{"type": "text", "text": "Count the lines of src/main.rs."}]}))?;
                         say(&worker, &child, json!({"sessionUpdate": "agent_message_chunk", "messageId": "child-1", "content": {"type": "text", "text": "Counted the lines."}}))?;
                         say(&worker, &session, json!({"sessionUpdate": "subagent_update", "sessionId": "fake-child-1", "state": {"state": "idle", "stopReason": "end_turn"}}))?;

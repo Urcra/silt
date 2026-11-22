@@ -249,6 +249,17 @@ pub fn left_running<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<String>
         .collect()
 }
 
+/// A subagent's call as an ACP v2 agent labels it. Calls recorded before
+/// Silt read `subagent_update` as ACP means it have its labels the wrong way
+/// round: its kind as `description` and its name or task as `subagent_type`.
+fn subagent_labels(title: &str, kind: Option<&str>, input: Value) -> Value {
+    let swapped = title == "Agent" && kind == Some("other") && input.get("subagent_type").is_some();
+    if !swapped {
+        return input;
+    }
+    json!({"title": input["subagent_type"], "role": input["description"], "prompt": input["prompt"]})
+}
+
 pub fn stop(reason: &str) -> String {
     json!({"t": "stop", "reason": reason}).to_string()
 }
@@ -288,12 +299,9 @@ pub fn read_line(line: &str) -> Read {
             if record["update"] != true {
                 read.marks.push(Mark::ToolStarted { tool_use_id: field("id"), tool: field("title") });
             }
-            read.entries.push(Entry::ToolCall {
-                id: field("id"),
-                name: field("title"),
-                input: record["input"].clone(),
-                kind: Some(field("kind")).filter(|kind| !kind.is_empty()),
-            });
+            let kind = Some(field("kind")).filter(|kind| !kind.is_empty());
+            let input = subagent_labels(&field("title"), kind.as_deref(), record["input"].clone());
+            read.entries.push(Entry::ToolCall { id: field("id"), name: field("title"), input, kind });
         }
         "tool_result" => {
             read.marks.push(Mark::ToolFinished { tool_use_id: field("id") });
@@ -428,6 +436,26 @@ mod tests {
             ]
         );
         assert!(left_running(lines.iter().chain(&stopped).map(String::as_str)).is_empty());
+    }
+
+    #[test]
+    fn a_subagent_recorded_with_its_labels_swapped_reads_with_its_task_as_its_subject() {
+        let swapped =
+            json!({"description": "general-purpose", "subagent_type": "Bevy walk: Linux + headless", "prompt": "Make it"});
+        let labelled = json!({"title": "Bevy walk: Linux + headless", "role": "general-purpose", "prompt": "Make it"});
+        for input in [swapped, labelled] {
+            let read = read_line(&tool_call("toolu_A", "Agent", "other", Some(&input)));
+            let [Entry::ToolCall { name, input, kind, .. }] = &read.entries[..] else { panic!("{:?}", read.entries) };
+            let tool = crate::tool::describe(name, kind.as_deref(), input);
+            assert_eq!(
+                (tool.subject.as_deref(), tool.detail.as_deref()),
+                (Some("Bevy walk: Linux + headless"), Some("general-purpose"))
+            );
+        }
+        let claude = json!({"description": "Map the lexer", "subagent_type": "Explore", "prompt": "Map it"});
+        let read = read_line(&tool_call("toolu_B", "Map the lexer", "think", Some(&claude)));
+        let [Entry::ToolCall { input, .. }] = &read.entries[..] else { panic!("{:?}", read.entries) };
+        assert_eq!(input, &claude);
     }
 
     #[test]
