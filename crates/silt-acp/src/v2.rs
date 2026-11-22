@@ -364,9 +364,11 @@ pub(crate) struct Reading {
 struct Child {
     /// The call that started it, which the prompt the parent sent it names.
     call: Option<String>,
-    /// Its kind, as Claude's `subagent_type`.
+    /// What tells it from its siblings: Claude's adapter gives its name,
+    /// else its task's description, else its kind.
     title: Option<String>,
-    description: Option<String>,
+    /// Its role, as Claude's `subagent_type`.
+    role: Option<String>,
     ended: bool,
 }
 
@@ -447,8 +449,8 @@ impl Reading {
         if let MaybeUndefined::Value(title) = update.title {
             child.title = Some(title);
         }
-        if let MaybeUndefined::Value(description) = update.description {
-            child.description = Some(description);
+        if let MaybeUndefined::Value(role) = update.description {
+            child.role = Some(role);
         }
         let MaybeUndefined::Value(StateUpdate::Idle(idle)) = update.state else {
             return Vec::new();
@@ -482,7 +484,7 @@ impl Reading {
             }
             let call = message.message_id.to_string();
             child.call = Some(call.clone());
-            let input = serde_json::json!({"description": child.description, "subagent_type": child.title, "prompt": text});
+            let input = serde_json::json!({"title": child.title, "role": child.role, "prompt": text});
             self.calls.insert(call.clone());
             return vec![
                 Event::Update(Update::ToolCall {
@@ -960,7 +962,7 @@ mod tests {
         read(
             &mut reading,
             &s,
-            serde_json::json!({"sessionUpdate": "subagent_update", "sessionId": "a260308e0ffbde619", "title": "general-purpose", "description": "Say ok", "capabilities": {"cancel": {}}, "state": {"state": "running"}}),
+            serde_json::json!({"sessionUpdate": "subagent_update", "sessionId": "a260308e0ffbde619", "title": "Say ok", "description": "general-purpose", "capabilities": {"cancel": {}}, "state": {"state": "running"}}),
         );
         assert!(read(&mut reading, &child, serde_json::json!({"sessionUpdate": "state_update", "state": "running"})).is_empty());
         let started = read(
@@ -972,7 +974,7 @@ mod tests {
             panic!("the call that started it: {started:?}");
         };
         assert_eq!((id.as_str(), title.as_str()), ("toolu_A", "Agent"));
-        assert_eq!((input["description"].as_str(), input["subagent_type"].as_str()), (Some("Say ok"), Some("general-purpose")));
+        assert_eq!((input["title"].as_str(), input["role"].as_str()), (Some("Say ok"), Some("general-purpose")));
         assert_eq!(task_of(&started[1]), Some(("toolu_A", Some("a260308e0ffbde619"), Some("subagent"), "running")));
         assert_eq!(reading.running_children(), std::slice::from_ref(&child));
 

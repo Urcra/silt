@@ -49,6 +49,8 @@ pub struct ToolUse {
     pub kind: ToolKind,
     pub subject: Option<String>,
     pub detail: Option<String>,
+    /// A subagent's own name, as Claude Code's and Copilot's `name`.
+    pub subagent: Option<String>,
 }
 
 /// Reads a call from its tool's name, the kind its agent gave it if any
@@ -72,11 +74,12 @@ pub fn describe(name: &str, kind: Option<&str>, input: &Value) -> ToolUse {
         ToolKind::Fetch => (text(&["url", "query"]), None),
         ToolKind::Subagent => (
             text(&["description", "title", "prompt", "task", "message", "query", "Role", "Prompt"]),
-            text(&["subagent_type", "agent_type", "agent", "agent_name", "name", "TypeName"]),
+            text(&["subagent_type", "agent_type", "role", "agent", "agent_name", "TypeName"]),
         ),
         ToolKind::Other => (None, None),
     };
-    ToolUse { kind, subject, detail }
+    let subagent = if kind == ToolKind::Subagent { text(&["name"]) } else { None };
+    ToolUse { kind, subject, detail, subagent }
 }
 
 /// The kinds ACP names (`ToolKind` in its schema).
@@ -224,6 +227,7 @@ pub fn shown(entry: crate::Entry) -> Option<Shown> {
                 kind: tool.kind.as_str().to_owned(),
                 subject: tool.subject,
                 detail: tool.detail,
+                subagent: tool.subagent,
                 questions: if tool.kind == ToolKind::Question { questions(&input) } else { Vec::new() },
             };
             Shown { tool: Some(view), plan: plan_of(&name, &input), ..Shown::plain("tool_call", format!("{name} {input}")) }
@@ -367,7 +371,8 @@ mod tests {
             ToolUse {
                 kind: ToolKind::Execute,
                 subject: Some("cargo test upload".into()),
-                detail: Some("Run the upload tests".into())
+                detail: Some("Run the upload tests".into()),
+                subagent: None,
             }
         );
         let codex = describe("shell", None, &json!({"command": ["bash", "-lc", "cargo test"]}));
@@ -393,6 +398,19 @@ mod tests {
             (copilot.kind, copilot.subject.as_deref(), copilot.detail.as_deref()),
             (ToolKind::Subagent, Some("Count README lines"), Some("explore"))
         );
+        assert_eq!(copilot.subagent.as_deref(), Some("readme-lines"));
+        let claude = describe(
+            "Agent",
+            None,
+            &json!({"description": "Map the lexer", "subagent_type": "Explore", "name": "lexer-scout", "prompt": "Map it"}),
+        );
+        assert_eq!(
+            (claude.subject.as_deref(), claude.detail.as_deref(), claude.subagent.as_deref()),
+            (Some("Map the lexer"), Some("Explore"), Some("lexer-scout"))
+        );
+        let unnamed = describe("Agent", None, &json!({"description": "Map the lexer", "subagent_type": "Explore"}));
+        assert_eq!(unnamed.subagent, None);
+        assert_eq!(describe("Bash", None, &json!({"command": "ls", "name": "list"})).subagent, None);
     }
 
     #[test]

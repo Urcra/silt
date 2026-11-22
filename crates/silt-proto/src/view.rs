@@ -664,6 +664,9 @@ pub struct ToolView {
     pub subject: Option<String>,
     /// Where a search looked, or what a command was for.
     pub detail: Option<String>,
+    /// The name a subagent was given to be addressed by, beside its kind.
+    #[serde(default)]
+    pub subagent: Option<String>,
     /// What a question tool asked.
     #[serde(default)]
     pub questions: Vec<QuestionView>,

@@ -1947,13 +1947,16 @@ impl Core {
                 self.acp.get_mut(&thread).expect("caller checked").within = Some((parent, text));
             }
             Update::ToolCall { id, title, kind, input } => {
+                let run = self.acp.get_mut(&thread).expect("caller checked");
+                run.tool_kinds.insert(id.clone(), kind.clone());
                 self.flush_within(thread).await?;
                 self.record_acp(thread, &acp::within(&acp::tool_call(&id, &title, &kind, input.as_ref()), &parent)).await?;
             }
             Update::ToolUpdate { id, status, output, title, input, task } => {
                 self.flush_within(thread).await?;
                 if let Some(title) = title {
-                    let record = acp::tool_update(&id, &title, "", input.as_ref());
+                    let kind = self.acp[&thread].tool_kinds.get(&id).cloned().unwrap_or_default();
+                    let record = acp::tool_update(&id, &title, &kind, input.as_ref());
                     self.record_acp(thread, &acp::within(&record, &parent)).await?;
                 }
                 if let Some(status @ ("completed" | "failed")) = status.as_deref() {

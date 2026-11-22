@@ -362,6 +362,25 @@ export interface ToolStep {
   images: HistoryEntry[]
 }
 
+/**
+ * What a call says now, given a later record of it. A subagent's updates were once recorded without their call's kind,
+ * and so without what it runs: such a record doesn't replace the one that said.
+ */
+function updatedCall(earlier: HistoryEntry, later: HistoryEntry): HistoryEntry {
+  return later.tool?.subject || !earlier.tool?.subject ? later : earlier
+}
+
+/** Each call by its id, as its records say it now. */
+export function callsById(entries: HistoryEntry[]): Map<string, HistoryEntry> {
+  const calls = new Map<string, HistoryEntry>()
+  for (const entry of entries) {
+    if (entry.kind !== 'tool_call' || !entry.tool) continue
+    const earlier = calls.get(entry.tool.id)
+    calls.set(entry.tool.id, earlier ? updatedCall(earlier, entry) : entry)
+  }
+  return calls
+}
+
 /** A run's calls each with its result: by the call's id where the history names it, else the next result after the call. */
 export function stepsOf(entries: HistoryEntry[]): ToolStep[] {
   const results = entries.filter((entry) => entry.kind === 'tool_result')
@@ -372,7 +391,7 @@ export function stepsOf(entries: HistoryEntry[]): ToolStep[] {
     const earlier =
       entry.kind === 'tool_call' && entry.tool ? steps.find((step) => step.call?.tool?.id === entry.tool!.id) : undefined
     if (earlier) {
-      earlier.call = entry
+      earlier.call = updatedCall(earlier.call!, entry)
       continue
     }
     if (entry.kind === 'tool_call') {
