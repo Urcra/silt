@@ -50,6 +50,7 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
   const took =
     status === 'running' ? (quiet ? null : duration(call.time_ms, now)) : ended !== null ? duration(call.time_ms, ended) : null
   const kind = subagent ? call.tool?.detail?.trim() || 'Subagent' : 'In the background'
+  const name = subagent ? call.tool?.subagent?.trim() : undefined
   // What came back: a subagent's report, or a background command's launch message and what it said when it ended.
   const report = subagent && status !== 'running' ? result?.text.trim() : undefined
   const said = task?.summary?.trim()
@@ -73,6 +74,11 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
             <Spinner />
           ) : (
             <Icon name={subagent ? 'agent' : 'terminal'} className="h-3.5 w-3.5 shrink-0 text-fg-2" />
+          )}
+          {name && (
+            <span data-testid="task-name" className="max-w-[40%] shrink-0 truncate font-medium text-fg-1">
+              {name}
+            </span>
           )}
           <span className="shrink-0 text-fg-2">{kind}</span>
           <span className="min-w-0 flex-1 truncate text-fg-1 group-hover/row:text-accent-fg">{titleOf(step, subagent)}</span>
@@ -140,7 +146,7 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
  * Above the composer: the subagents and background commands still running beside the agent, each a link to its card.
  * Only while the session may still run them; a task its session left running and never reported on shows only on its card.
  */
-export function RunningStrip({ titles }: { titles: (task: TaskState) => string }) {
+export function RunningStrip({ labels }: { labels: (task: TaskState) => { title: string; name: string | null } }) {
   const tasks = useContext(TasksContext)
   const live = useContext(SessionLive)
   const stoppable = useContext(StoppableTasks)
@@ -154,41 +160,45 @@ export function RunningStrip({ titles }: { titles: (task: TaskState) => string }
       className="flex flex-col gap-1 rounded-md border border-line bg-elevated px-3 py-1.5 text-xs"
     >
       <span className="text-2xs font-medium text-fg-2">Still running beside the agent</span>
-      {still.map((task) => (
-        <div key={task.call ?? task.ids[0]} className="flex min-w-0 items-center gap-2">
-          <a
-            href={task.call ? `#task-${task.call}` : undefined}
-            onClick={(event) => {
-              const card = task.call ? document.getElementById(`task-${task.call}`) : null
-              if (!card) return
-              event.preventDefault()
-              card.scrollIntoView({ block: 'center', behavior: 'smooth' })
-            }}
-            className="flex min-w-0 flex-1 items-center gap-2 text-fg-1 hover:text-accent-fg max-md:min-h-11"
-          >
-            <Spinner />
-            <span className="shrink-0 text-fg-2">
-              {task.kind === 'subagent' ? 'Subagent' : task.kind === 'background' ? 'Background' : 'Task'}
-            </span>
-            <span className="min-w-0 flex-1 truncate">{titles(task)}</span>
-            <span className="shrink-0 font-mono text-fg-3 tabular-nums" data-volatile>
-              {duration(task.started_ms, now) ?? '0s'}
-            </span>
-          </a>
-          {task.call && stoppable.calls.has(task.call) && (
-            <Button
-              variant="ghost"
-              size="sm"
-              icon="stop"
-              aria-label={`Stop ${titles(task)}`}
-              title="End the command and what it started"
-              onClick={() => stoppable.stop(task.call!)}
+      {still.map((task) => {
+        const { title, name } = labels(task)
+        return (
+          <div key={task.call ?? task.ids[0]} className="flex min-w-0 items-center gap-2">
+            <a
+              href={task.call ? `#task-${task.call}` : undefined}
+              onClick={(event) => {
+                const card = task.call ? document.getElementById(`task-${task.call}`) : null
+                if (!card) return
+                event.preventDefault()
+                card.scrollIntoView({ block: 'center', behavior: 'smooth' })
+              }}
+              className="flex min-w-0 flex-1 items-center gap-2 text-fg-1 hover:text-accent-fg max-md:min-h-11"
             >
-              Stop
-            </Button>
-          )}
-        </div>
-      ))}
+              <Spinner />
+              <span className="shrink-0 text-fg-2">
+                {task.kind === 'subagent' ? 'Subagent' : task.kind === 'background' ? 'Background' : 'Task'}
+              </span>
+              {name && <span className="max-w-[40%] shrink-0 truncate font-medium">{name}</span>}
+              <span className="min-w-0 flex-1 truncate">{title}</span>
+              <span className="shrink-0 font-mono text-fg-3 tabular-nums" data-volatile>
+                {duration(task.started_ms, now) ?? '0s'}
+              </span>
+            </a>
+            {task.call && stoppable.calls.has(task.call) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="stop"
+                aria-label={`Stop ${name ?? title}`}
+                title="End the command and what it started"
+                onClick={() => stoppable.stop(task.call!)}
+              >
+                Stop
+              </Button>
+            )}
+          </div>
+        )
+      })}
     </section>
   )
 }

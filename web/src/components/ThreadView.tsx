@@ -69,6 +69,7 @@ import {
   keepRows,
   sameList,
   taskEntries,
+  callsById,
 } from '../transcript'
 import { SessionLive, type Stoppable, StoppableTasks, type TaskState, type Tasks, TasksContext, mayRun, tasksOf } from '../tasks'
 import { RunningStrip, TaskCard } from './Tasks'
@@ -2392,18 +2393,15 @@ function ThreadBody({
     [stoppableCalls, thread],
   )
   // A running task's line names it as its card does.
-  const calls = useMemo(
-    () =>
-      new Map(entries.flatMap((entry) => (entry.kind === 'tool_call' && entry.tool ? [[entry.tool.id, entry] as const] : []))),
-    [entries],
-  )
-  const taskTitle = (task: TaskState) => {
+  const calls = useMemo(() => callsById(entries), [entries])
+  const taskLabels = (task: TaskState) => {
     const call = task.call ? calls.get(task.call) : undefined
     const said =
       call?.tool?.kind === 'subagent' || task.kind === 'subagent'
         ? call?.tool?.subject
         : (call?.tool?.detail ?? call?.tool?.subject)
-    return said?.split('\n')[0] ?? task.summary?.split('\n')[0] ?? task.ids[0] ?? 'A task'
+    const title = said?.split('\n')[0] ?? task.summary?.split('\n')[0] ?? task.ids[0] ?? 'A task'
+    return { title, name: call?.tool?.subagent ?? null }
   }
   // A link into the history may name an inherited turn, so it shows them all.
   const folded = useMemo(
@@ -2709,7 +2707,7 @@ function ThreadBody({
                             </div>
                             <div className="sticky bottom-0 z-10 mt-auto bg-bg pt-1 pb-3 before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-6 before:bg-gradient-to-t before:from-bg before:to-transparent md:pb-5">
                               <div className="mb-2 empty:hidden">
-                                <RunningStrip titles={taskTitle} />
+                                <RunningStrip labels={taskLabels} />
                               </div>
                               <ThreadComposer
                                 thread={thread}

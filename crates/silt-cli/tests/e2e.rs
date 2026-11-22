@@ -986,7 +986,10 @@ fn subagents_and_background_commands_of_an_agent_speaking_v2_are_tasks() {
     let own_words = entries.iter().find(|entry| entry["text"] == "Counted the lines.").expect("the subagent's words");
     assert_eq!(own_words["side"], "agent-1", "the subagent's, not the thread's");
     let call = entries.iter().find(|entry| entry["kind"] == "tool_call" && entry["tool"]["id"] == "agent-1").expect("its call");
-    assert_eq!(call["tool"]["subject"], "Count lines");
+    assert_eq!(
+        (call["tool"]["subject"].as_str(), call["tool"]["detail"].as_str()),
+        (Some("Count lines"), Some("general-purpose"))
+    );
     let wake = entries.iter().find(|entry| entry["kind"] == "wake").expect("the turn it set off");
     assert_eq!(wake["text"], "`sleep 1 && echo BG` finished in the background, and the agent went on by itself.");
     let turns = api.ok("GET", &format!("/api/threads/{thread}/turns"), None);
@@ -1215,7 +1218,10 @@ fn a_subagent_of_an_agent_speaking_v1_is_kept_inside_the_call_that_started_it() 
         entries.iter().filter_map(|entry| Some((entry["task"]["call"].as_str()?, entry["task"]["status"].as_str()?))).collect();
     assert_eq!(news, [("task-1", "running"), ("task-1", "completed")]);
     let call = entries.iter().find(|entry| entry["kind"] == "tool_call" && entry["tool"]["id"] == "task-1").expect("its call");
-    assert_eq!((call["tool"]["subject"].as_str(), call["tool"]["detail"].as_str()), (Some("Count lines"), Some("explore")));
+    assert_eq!(
+        (call["tool"]["subject"].as_str(), call["tool"]["detail"].as_str(), call["tool"]["subagent"].as_str()),
+        (Some("Count lines"), Some("explore"), Some("count"))
+    );
 }
 
 /// An agent on v1, as Copilot, ignores a cancel when no prompt is out, so
