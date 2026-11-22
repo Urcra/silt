@@ -145,6 +145,10 @@ fn a_phone_on_the_network_pairs_with_no_server_and_may_do_only_what_it_was_given
     let (status, paired) = phone.get(&format!("/pair/{code}"));
     assert_eq!(status, 200);
     assert!(paired.contains("answer permissions and review merge requests"), "{paired}");
+    assert!(
+        paired.contains(&format!(":{}/trust\"", port + 1)),
+        "the certificate, for a phone that went past the warning: {paired}"
+    );
 
     // Paired: it reads, and is refused what it wasn't given.
     let (status, threads) = phone.get("/api/threads");

@@ -1739,6 +1739,8 @@ test('a typed path completes from the folders on this machine, as a shell comple
   const options = picker.getByRole('listbox', { name: `folders in ${picks}/` }).getByRole('option')
 
   await path.fill(picks.slice(0, -1))
+  // Tab completes from the folders listed so far, so wait for them, as a person sees them before pressing it.
+  await expect(picker.getByRole('listbox', { name: `folders in ${live.work}/` }).getByRole('option')).toHaveText(['picks/'])
   await path.press('Tab')
   await expect(path).toHaveValue(`${picks}/`)
   await path.pressSequentially('t')

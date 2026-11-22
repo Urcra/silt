@@ -119,6 +119,24 @@ test('a phone pairs with this machine over the network, once allowed here', asyn
     await expect(onPhone).toHaveScreenshot(`lan-phone-trust-${scheme}.png`, shotOptions(onPhone))
   }
 
+  // Without the certificate (ADR 0113): what the phone gives up, then how it goes on past its warning.
+  const without = card.getByRole('checkbox', { name: 'Pair without installing the certificate' })
+  await without.check()
+  await expect(card.getByText('gets no notifications when an agent needs you')).toBeVisible()
+  await expect(card.getByTestId('ca-fingerprint')).toBeHidden()
+  await page.mouse.move(1439, 899)
+  await shoot(page, 'lan-trust-without')
+  await card.getByRole('button', { name: 'Next: pair the phone' }).click()
+  await expect(card.getByText('skipped')).toBeVisible()
+  await expect(card.getByText('The phone warns that the connection isn’t private.')).toBeVisible()
+  await card.getByText(`Check it’s really ${NAME}`).click()
+  expect((await card.getByTestId('ca-fingerprint').innerText()).replace(/\s+/g, '')).toBe(fingerprint)
+  await page.mouse.move(1439, 899)
+  await shoot(page, 'lan-pair-without')
+  await card.getByRole('button', { name: 'Back' }).click()
+  await without.uncheck()
+  await expect(card.getByTestId('ca-fingerprint')).toBeVisible()
+
   await card.getByRole('button', { name: 'Next: pair the phone' }).click()
   const code = (await card.getByTestId('lan-pairing-code').innerText()).replace('-', '')
   await shoot(page, 'lan-pair')
@@ -150,14 +168,36 @@ test('a phone pairs with this machine over the network, once allowed here', asyn
     await onPhone.emulateMedia({ colorScheme: scheme })
     await expect(onPhone).toHaveScreenshot(`lan-phone-paired-${scheme}.png`, shotOptions(onPhone))
   }
+  expect(await onPhone.getByRole('link', { name: 'Get the certificate' }).getAttribute('href')).toBe(
+    `http://${host}:${port + 1}/trust`,
+  )
 
-  // Paired, the phone opens the app itself, and is asked about notifications.
+  // Paired, the phone opens the app itself, and is asked about notifications. This browser refuses the service
+  // worker, as it ignores the certificate rather than trusting it, so here it registers as on a phone that trusts it.
+  await phone.addInitScript(() => {
+    navigator.serviceWorker.register = () => Promise.resolve({} as ServiceWorkerRegistration)
+  })
   await onPhone.getByRole('link', { name: 'Open Silt' }).click()
   await expect(onPhone.getByRole('region', { name: 'notifications' })).toBeVisible()
   await expect(onPhone.getByRole('region', { name: 'waiting on you' }).getByText('Add forked')).toBeVisible()
   for (const scheme of ['light', 'dark'] as const) {
     await onPhone.emulateMedia({ colorScheme: scheme })
     await expect(onPhone).toHaveScreenshot(`lan-phone-needs-you-${scheme}.png`, shotOptions(onPhone))
+  }
+
+  // A phone that went past the certificate warning has its service worker refused, so it's offered the certificate.
+  await phone.addInitScript(() => {
+    navigator.serviceWorker.register = () => Promise.reject(new DOMException('refused', 'SecurityError'))
+  })
+  await onPhone.reload()
+  const needsCertificate = onPhone.getByRole('region', { name: 'notifications' })
+  await expect(needsCertificate.getByText(`This phone was paired without ${NAME}’s certificate`)).toBeVisible()
+  expect(await needsCertificate.getByRole('link', { name: 'Get the certificate' }).getAttribute('href')).toBe(
+    `http://${host}:${port + 1}/trust`,
+  )
+  for (const scheme of ['light', 'dark'] as const) {
+    await onPhone.emulateMedia({ colorScheme: scheme })
+    await expect(onPhone).toHaveScreenshot(`lan-phone-needs-certificate-${scheme}.png`, shotOptions(onPhone))
   }
 
   // The machine lists it, and the phone may not change the machine.
