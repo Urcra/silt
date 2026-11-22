@@ -51,6 +51,7 @@ pub(crate) fn trust_routes(shared: Arc<Shared>) -> Router {
         .route("/trust", get(trust))
         .route("/silt-ca.crt", get(certificate))
         .route("/silt.mobileconfig", get(profile))
+        .route("/fonts/{name}", get(pages::font))
         .with_state(shared)
 }
 
@@ -104,7 +105,11 @@ struct Typed {
 
 /// Pairing, on the HTTPS listener: no phone has a session yet.
 pub(crate) fn pair_routes(shared: Arc<Shared>) -> Router {
-    Router::new().route("/pair", get(enter)).route("/pair/{code}", get(pair)).with_state(shared)
+    Router::new()
+        .route("/pair", get(enter))
+        .route("/pair/{code}", get(pair))
+        .route("/fonts/{name}", get(pages::font))
+        .with_state(shared)
 }
 
 async fn enter(Query(typed): Query<Typed>) -> Response {
