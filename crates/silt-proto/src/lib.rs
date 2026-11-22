@@ -34,8 +34,9 @@ pub mod view;
 /// 20: a person's own themes for Silt's UI, synced through each server
 /// they use (ADR 0099). 21: the folders an org lets its members' agents
 /// ask for, and the plugins it installs, allows and holds (ADR 0102,
-/// ADR 0104).
-pub const PROTOCOL: u32 = 21;
+/// ADR 0104). 22: the Auto preset, which a workspace's or an org's cap may
+/// name (ADR 0114).
+pub const PROTOCOL: u32 = 22;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -1256,6 +1257,10 @@ pub struct AgentReport {
     #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub thread: ThreadId,
     pub agent: String,
+    /// The agent's registry id, so a browser can show its mark; empty from
+    /// a daemon that predates it.
+    #[serde(default)]
+    pub agent_id: String,
     pub state: AgentState,
     /// What it waits on the person to answer.
     #[serde(default)]

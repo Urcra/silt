@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { AgentMark } from './AgentMark'
 import { Link } from '@tanstack/react-router'
 import { type ReactNode, useContext, useState } from 'react'
 import { STATE_TAG } from '../agentState'
@@ -192,6 +193,9 @@ function Device({ device, lanPhone }: { device: DeviceView; lanPhone?: LanPhone 
           <ul aria-label={`running on ${device.name}`} className="flex flex-col gap-1 text-xs">
             {device.agents.map((agent) => (
               <li key={agent.thread} className="flex items-center gap-2">
+                <span className="flex text-fg-2" title={agent.agent}>
+                  <AgentMark agent={agent.agent_id || agent.agent} name={agent.agent} labelled className="h-3.5 w-3.5" />
+                </span>
                 <Link
                   to="/t/$id"
                   params={{ id: agent.thread }}
@@ -199,7 +203,6 @@ function Device({ device, lanPhone }: { device: DeviceView; lanPhone?: LanPhone 
                 >
                   {agent.title ?? 'Untitled thread'}
                 </Link>
-                <span className="font-mono text-2xs text-fg-2">{agent.agent}</span>
                 <Tag tone={STATE_TAG[agent.state].tone}>{STATE_TAG[agent.state].label}</Tag>
               </li>
             ))}

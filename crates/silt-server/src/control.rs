@@ -827,6 +827,7 @@ mod tests {
         let agent = |thread| AgentReport {
             thread,
             agent: "claude".into(),
+            agent_id: String::new(),
             state: AgentState::AwaitingPermission,
             permissions: Vec::new(),
             questions: Vec::new(),
@@ -861,6 +862,7 @@ mod tests {
         AgentReport {
             thread: ThreadId(7),
             agent: "Fake agent".into(),
+            agent_id: String::new(),
             state,
             permissions: asked
                 .map(|id| silt_proto::AskedPermission {

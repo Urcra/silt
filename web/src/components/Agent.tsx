@@ -15,7 +15,9 @@ import {
   DEFAULT_PRESETS,
   PRESETS,
   STATE_PHRASE,
+  nextPreset,
   permissionModes,
+  presetUnavailable,
   restartChoices,
   running,
   threadAgent,
@@ -28,6 +30,7 @@ import { UsageRing } from './UsageRing'
 import { formatKeys, useActions, useShortcut } from '../shortcuts'
 import { Button, Dot, Icon, Input, Kbd, Spinner, buttonClass, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
+import { AgentChip, PermissionChip } from './AgentPickers'
 import { agentRefused, modeRefused, presetRefused, workspaceOf } from '../rules'
 import { ATTACH, useAttachments } from '../attachments'
 import { AttachedFiles } from './Attachments'
@@ -64,6 +67,14 @@ export function AgentPicker({
   )
 }
 
+/** The workspace a thread is in, whose rules grey out what the daemon would refuse (ADR 0065). */
+function useThreadWorkspace(thread: string) {
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads, enabled: !hosted() })
+  const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
+  const summary = threads.data?.find((candidate) => candidate.id === thread)
+  return summary ? workspaceOf(workspaces.data, summary.repo, summary.workspace) : undefined
+}
+
 /** Whether a prompt goes straight to the agent rather than its queue. */
 function ready(status: AgentStatus): boolean {
   return status.state === 'idle' || status.state === 'awaiting_input'
@@ -93,15 +104,25 @@ export function PermissionCard({
   first: boolean
 }) {
   const [error, setError] = useState<string>()
-  const answer = (option: string | null) => {
+  // Full access, which the agent's plan answers don't offer, is the preset moved to once it approves (ADR 0114).
+  const answer = (option: string | null, after?: Preset) => {
     setError(undefined)
-    api.answer(thread, asked.id, option).catch((failure: unknown) => setError(message(failure)))
+    api
+      .answer(thread, asked.id, option)
+      .then(() => after && api.setPreset(thread, after))
+      .catch((failure: unknown) => setError(message(failure)))
   }
+  const workspace = useThreadWorkspace(thread)
   const plan = asked.plan ? planChoices(asked.options) : null
-  const [then, setThen] = useState(plan?.approve[0]?.[0])
-  const allow = plan?.approve.length ? then : asked.options[0]?.[0]
+  const [then, setThen] = useState<Preset | undefined>(
+    plan?.approve.find(([preset]) => preset === 'ask_before_commands')?.[0] ?? plan?.approve[0]?.[0],
+  )
+  const approving = plan?.approve.find(([preset]) => preset === then)
+  const approve = () => approving && answer(approving[1], approving[0] === 'full_access' ? 'full_access' : undefined)
   useShortcut('enter', 'Allow what the agent asks', () => {
-    if (first && allow && !document.querySelector('dialog[open]')) answer(allow)
+    if (!first || document.querySelector('dialog[open]')) return
+    if (plan?.approve.length) approve()
+    else if (asked.options[0]) answer(asked.options[0][0])
   })
   useShortcut('escape', 'Answer neither and stop the turn', () => {
     if (first && !document.querySelector('dialog[open]')) answer(null)
@@ -129,7 +150,15 @@ export function PermissionCard({
         </div>
       )}
       {plan && then && plan.approve.length > 0 ? (
-        <PlanChoices choices={plan} then={then} onThen={setThen} answer={answer} first={first} />
+        <PlanChoices
+          choices={plan}
+          then={then}
+          onThen={setThen}
+          approve={approve}
+          answer={answer}
+          first={first}
+          refused={(preset) => presetRefused(workspace, preset)}
+        />
       ) : (
         <span className="flex flex-wrap gap-1.5">
           {asked.options.map(([option, label], index) => (
@@ -290,18 +319,24 @@ export function SignInCard({ thread, asked, agent }: { thread: string; asked: Si
   )
 }
 
-/** How approving a plan leaves the thread, in Silt's presets, by the option each is answered with (Claude's ExitPlanMode). */
-const PLAN_PRESETS: [option: string, preset: string][] = [
-  ['exit-plan-accept-edits', 'Ask before commands'],
-  ['exit-plan-default', 'Ask for everything'],
-  ['exit-plan-auto', 'Full access'],
+/** How approving a plan leaves the thread, in Silt's presets, by the options each may be answered with (Claude's
+ * ExitPlanMode), the first the agent offers. Full access, which it doesn't offer, approves as Ask before commands and
+ * then moves the thread's preset (ADR 0114). */
+const PLAN_PRESETS: [preset: Preset, options: string[]][] = [
+  ['ask_for_everything', ['exit-plan-default']],
+  ['ask_before_commands', ['exit-plan-accept-edits']],
+  ['auto', ['exit-plan-auto']],
+  ['full_access', ['exit-plan-accept-edits', 'exit-plan-default']],
 ]
 const KEEP_PLANNING = 'reject'
 
 function planChoices(options: [string, string][]) {
   const ids = new Set(options.map(([id]) => id))
-  const approve = PLAN_PRESETS.filter(([option]) => ids.has(option))
-  const known = new Set([...approve.map(([option]) => option), KEEP_PLANNING])
+  const approve = PLAN_PRESETS.flatMap(([preset, answers]): [Preset, string][] => {
+    const option = answers.find((id) => ids.has(id))
+    return option ? [[preset, option]] : []
+  })
+  const known = new Set([...PLAN_PRESETS.flatMap(([, answers]) => answers), KEEP_PLANNING])
   return { approve, keep: ids.has(KEEP_PLANNING), others: options.filter(([id]) => !known.has(id)) }
 }
 
@@ -310,28 +345,37 @@ function PlanChoices({
   choices: { approve, keep, others },
   then,
   onThen,
+  approve: approvePlan,
   answer,
   first,
+  refused,
 }: {
   choices: ReturnType<typeof planChoices>
-  then: string
-  onThen: (option: string) => void
+  then: Preset
+  onThen: (preset: Preset) => void
+  approve: () => void
   answer: (option: string | null) => void
   first: boolean
+  /** Why the workspace refuses a preset to go on with. */
+  refused: (preset: Preset) => string | undefined
 }) {
+  const offered = new Set(approve.map(([preset]) => preset))
   return (
     <div className="flex flex-col gap-2">
       <span className="flex flex-wrap items-center gap-1.5">
-        <Button variant="primary" onClick={() => answer(then)}>
+        <Button variant="primary" onClick={approvePlan}>
           Approve plan {first && <Kbd onAccent>⏎</Kbd>}
         </Button>
-        <ChipSelect
+        <span className="text-xs text-fg-2">then</span>
+        <PermissionChip
+          ghost={false}
           label="after approving, the permissions"
-          prefix="then"
-          icon="lock"
           value={then}
           onChange={onThen}
-          options={approve.map(([option, preset]) => ({ id: option, name: preset }))}
+          presets={PRESETS.filter((preset) => preset.id !== 'plan')}
+          refused={(preset) =>
+            refused(preset) ?? (offered.has(preset) ? undefined : 'The agent offers no way to go on with this')
+          }
         />
         {keep && (
           <Button
@@ -363,6 +407,7 @@ function PlanChoices({
 export function PlanCard({ thread, preset, onPreset }: { thread: string; preset: Preset; onPreset: (preset: Preset) => void }) {
   const [error, setError] = useState<string>()
   const [after, setAfter] = useState<Preset>('ask_before_commands')
+  const workspace = useThreadWorkspace(thread)
   const approve = () => {
     setError(undefined)
     const moving = preset === 'plan' ? api.setPreset(thread, after).then(() => onPreset(after)) : Promise.resolve()
@@ -383,14 +428,17 @@ export function PlanCard({ thread, preset, onPreset }: { thread: string; preset:
           Approve plan
         </Button>
         {preset === 'plan' && (
-          <ChipSelect
-            label="after approving, the preset"
-            prefix="then"
-            icon="lock"
-            value={after}
-            onChange={(chosen) => setAfter(chosen as Preset)}
-            options={DEFAULT_PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
-          />
+          <>
+            <span className="text-xs text-fg-2">then</span>
+            <PermissionChip
+              ghost={false}
+              label="after approving, the preset"
+              value={after}
+              onChange={setAfter}
+              presets={DEFAULT_PRESETS}
+              refused={(preset) => presetRefused(workspace, preset)}
+            />
+          </>
         )}
       </span>
       {error && <span className="text-xs text-danger">{error}</span>}
@@ -573,17 +621,13 @@ export function AgentDock({
   const seen = agents.find((choice) => choice.id === agent)
   const restart = restartChoices(agent, stopped, seen, workspace?.workspace.defaults.agents?.[agent]?.settings)
   const seenModes = restart.modes?.available
-  // Before it runs, its mode is offered where its modes are its permissions; else the preset says which it starts in.
-  const startModes = permissionModes(seenModes) ? seenModes : undefined
+  // Before it runs, the preset says which mode it starts in (ADR 0114).
   const seenSettings = restart.settings
-  const [mode, setChosenMode] = useState<string>()
-  const chosenMode = mode ?? restart.modes?.current
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
   const startValue = (setting: AgentSetting) => restart.value(setting, chosenSettings[setting.id])
   const { attached, add, remove, clear, restore } = useAttachments()
   const chooseAgent = (chosen: string) => {
     setAgent(chosen)
-    setChosenMode(undefined)
     setChosenSettings({})
   }
   // Another agent takes the thread over: this one stops, keeping all it did, and the other starts here.
@@ -636,12 +680,11 @@ export function AgentDock({
   const start = () => {
     if (!startable) return
     const settings = seenSettings.map((setting): [string, string] => [setting.id, startValue(setting)])
-    const mode = startModes ? (chosenMode ?? null) : null
     optimistic((text, files) => {
       const started = api.startAgent(
         agent,
         { thread },
-        { preset, mode, settings, prompt: text.trim() ? text : null, attachments: files },
+        { preset, mode: null, settings, prompt: text.trim() ? text : null, attachments: files },
       )
       starting.current = started
       const failed = () => {
@@ -709,18 +752,11 @@ export function AgentDock({
     })
   }
 
-  // Shift+Tab moves to the agent's next mode, or Silt's next preset for an agent without modes.
+  // Shift+Tab moves to the next preset the agent and the workspace allow; the agent's mode follows (ADR 0114).
   const cycle = () => {
-    if (live && status.modes && permissionModes(status.modes.available)) {
-      const modes = status.modes.available
-      const at = modes.findIndex((mode) => mode.id === status.modes!.current)
-      const next = modes[(at + 1) % modes.length]
-      if (next) act(api.setMode(thread, next.id))
-      return
-    }
     if (hosted() && !live) return
-    const at = PRESETS.findIndex((choice) => choice.id === preset)
-    choosePreset(PRESETS[(at + 1) % PRESETS.length]!.id)
+    const next = nextPreset(preset, refusedPreset)
+    if (next) choosePreset(next)
   }
 
   // Ready, waiting or planned, the page shows it already (the header, the cards); this says it only to a screen reader.
@@ -767,16 +803,25 @@ export function AgentDock({
   const attachable = (live || startable) && !hosted()
   const attach = (files: File[], pasted = false) => act(add(files, pasted))
 
+  // The modes the agent has, live or as it last ran here: permission modes follow the preset rather than show (ADR 0114).
+  const agentModes = live ? status.modes?.available : seenModes
+  const ownModes = permissionModes(agentModes) ? undefined : agentModes
+  const agentCalled = live ? status.agent : (seen?.name ?? '')
+  const refusedPreset = (id: Preset) => presetRefused(workspace, id) ?? presetUnavailable(id, agentModes, agentCalled)
   const tools = (
     <>
-      {/* The same row as New thread's: which agent, then its mode and settings. Another agent here takes the thread over. */}
+      {/* The same row as New thread's: the permissions, which agent, then its model and settings (ADR 0114). */}
+      {(live || !hosted()) && (live || startable || elsewhere || agents.length > 0) && (
+        <PermissionChip value={preset} onChange={choosePreset} refused={refusedPreset} />
+      )}
+      {/* Another agent here takes the thread over. */}
       {(live ? !hosted() && status.agent_id !== '' : !elsewhere && !hosted()) && agents.length > 0 && (
-        <ChipSelect
-          ghost
-          label="agent to start"
+        <AgentChip
           value={live ? status.agent_id : agent}
+          agents={agents}
           onChange={(chosen) => (live ? switchAgent(chosen) : chooseAgent(chosen))}
-          options={agents.map((choice) => ({ id: choice.id, name: choice.name, description: choice.description }))}
+          refused={(id) => agentRefused(workspace, id)}
+          footer={live ? 'Another agent here takes the thread over' : undefined}
         />
       )}
       {!live && !elsewhere && !hosted() && choices.isSuccess && agents.length === 0 && (
@@ -787,7 +832,7 @@ export function AgentDock({
       {!live && !elsewhere && hosted() && <ContinueOn thread={thread} act={act} />}
       {live ? (
         <AgentSettings
-          modes={status.modes?.available}
+          modes={ownModes}
           mode={status.modes?.current}
           onMode={(mode) => act(api.setMode(thread, mode))}
           refusedMode={(mode) => modeRefused(workspace, status.agent_id, mode)}
@@ -808,31 +853,12 @@ export function AgentDock({
       ) : (
         startable && (
           <AgentSettings
-            modes={startModes}
-            mode={chosenMode}
-            onMode={setChosenMode}
             settings={seenSettings}
             value={startValue}
             onSetting={(id, value) => setChosenSettings({ ...chosenSettings, [id]: value })}
             narrow={narrow}
           />
         )
-      )}
-      {/* An agent whose modes are about permissions has them as its one control; the preset follows them (ADR 0048). */}
-      {(live || !hosted()) && !(live ? permissionModes(status.modes?.available) : startable && permissionModes(seenModes)) && (
-        <ChipSelect
-          ghost
-          label="permissions"
-          icon="lock"
-          value={preset}
-          onChange={(chosen) => choosePreset(chosen as Preset)}
-          options={PRESETS.map((choice) => ({
-            id: choice.id,
-            name: choice.label,
-            description: choice.says,
-            refused: presetRefused(workspace, choice.id),
-          }))}
-        />
       )}
       {(live ? status.agent_id : startable && agent) && <UsageRing agent={live ? status.agent_id : agent} thread={thread} />}
     </>

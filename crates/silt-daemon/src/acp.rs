@@ -1526,10 +1526,17 @@ impl Core {
                 run.steers = steers;
                 let preset = self.preset(thread);
                 // A thread whose mode was never chosen starts in the one its preset says; Plan's is
-                // entered by its first prompt, which knows to come back from it.
-                let kept = self.agent_runs.get(&thread).and_then(|record| record.mode.clone()).or_else(|| {
-                    modes.as_ref().filter(|_| preset != Preset::Plan).and_then(|modes| mode_for_preset(preset, modes))
-                });
+                // entered by its first prompt, which knows to come back from it. A kept mode that is a
+                // permission goes only while the preset still says it, as the preset is the one control
+                // (ADR 0114); one that says how the agent works, such as OpenCode's Build, stays.
+                let kept = self
+                    .agent_runs
+                    .get(&thread)
+                    .and_then(|record| record.mode.clone())
+                    .filter(|mode| preset_for_mode(mode).is_none_or(|meant| meant == preset))
+                    .or_else(|| {
+                        modes.as_ref().filter(|_| preset != Preset::Plan).and_then(|modes| mode_for_preset(preset, modes))
+                    });
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.modes = modes;
                 run.settings = settings;
@@ -2531,7 +2538,8 @@ fn preset_for_mode(mode: &str) -> Option<Preset> {
     match mode_key(mode) {
         "default" | "read-only" | silt_local::CHAT => Some(Preset::AskForEverything),
         "acceptEdits" => Some(Preset::AskBeforeCommands),
-        "bypassPermissions" | "auto" | "dontAsk" | "full-access" | "autopilot" => Some(Preset::FullAccess),
+        "auto" => Some(Preset::Auto),
+        "bypassPermissions" | "dontAsk" | "full-access" | "autopilot" => Some(Preset::FullAccess),
         _ => None,
     }
 }
@@ -2555,6 +2563,8 @@ fn mode_for_preset(preset: Preset, modes: &silt_acp::Modes) -> Option<String> {
         Preset::Plan => return silt_acp::plan_mode(modes).map(|mode| mode.id.clone()),
         Preset::AskForEverything => &["default", "read-only", "agent"],
         Preset::AskBeforeCommands => &["acceptEdits", "agent"],
+        // An agent without an auto mode asks as for Ask before commands.
+        Preset::Auto => &["auto", "acceptEdits", "agent"],
         Preset::FullAccess => &["bypassPermissions", "full-access", "dontAsk"],
     };
     wanted.iter().find_map(|id| modes.available.iter().find(|mode| mode_key(&mode.id) == *id)).map(|mode| mode.id.clone())
@@ -2788,6 +2798,7 @@ mod tests {
         assert_eq!(preset_following("acceptEdits", false, Preset::Plan), Preset::AskBeforeCommands);
         assert_eq!(preset_following("default", false, Preset::Plan), Preset::AskForEverything);
         assert_eq!(preset_following("bypassPermissions", false, Preset::AskForEverything), Preset::FullAccess);
+        assert_eq!(preset_following("auto", false, Preset::FullAccess), Preset::Auto);
         assert_eq!(
             preset_following("code", false, Preset::AskForEverything),
             Preset::AskForEverything,

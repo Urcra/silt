@@ -829,7 +829,11 @@ export type SignIn = { url: string, user: string, device: string,
  */
 name: string, sync_error: string | null, };
 
-export type DeviceAgent = { thread: string, title: string | null, agent: string, state: AgentState, };
+export type DeviceAgent = { thread: string, title: string | null, agent: string, 
+/**
+ * The agent's registry id, for its mark; empty where its daemon didn't say.
+ */
+agent_id: string, state: AgentState, };
 
 export type DeviceChange = { name: string | null, capabilities: Capabilities | null, };
 
@@ -1578,7 +1582,7 @@ plan: string | null,
  */
 tool_call: string | null, };
 
-export type Preset = "ask_before_commands" | "ask_for_everything" | "full_access" | "plan";
+export type Preset = "ask_before_commands" | "ask_for_everything" | "auto" | "full_access" | "plan";
 
 export type Project = { 
 /**
@@ -2131,7 +2135,11 @@ added: boolean,
  */
 sessions: Array<FoundSessions>, last_ms: number | null, };
 
-export type FoundSessions = { agent: string, count: number, };
+export type FoundSessions = { agent: string, 
+/**
+ * The agent's id, for its mark.
+ */
+agent_id: string, count: number, };
 
 export type Subfolder = { name: string, 
 /**

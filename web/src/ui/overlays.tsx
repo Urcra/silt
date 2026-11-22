@@ -218,11 +218,17 @@ export function Popover({
   className,
   openOnMount = false,
   opener,
+  triggerTitle,
+  triggerValue,
 }: {
   trigger: ReactNode
   children: ReactNode | ((close: () => void) => ReactNode)
   label: string
   triggerLabel?: string
+  /** The trigger's tooltip. */
+  triggerTitle?: string
+  /** What the trigger has chosen, as `data-value`, where it picks one of several. */
+  triggerValue?: string
   triggerClassName?: string
   panelClassName?: string
   align?: 'left' | 'right'
@@ -310,6 +316,8 @@ export function Popover({
         aria-expanded={open}
         aria-controls={id}
         aria-label={triggerLabel}
+        title={triggerTitle}
+        data-value={triggerValue}
         onClick={toggle}
         className={triggerClassName ?? 'inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs text-fg-2 hover:bg-surface-2'}
       >

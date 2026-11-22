@@ -17,7 +17,9 @@ pub(crate) fn decide<'a>(preset: Preset, tool_kind: Option<&str>, option_kinds: 
         Preset::AskForEverything => false,
         Preset::Plan => tool_kind.is_some_and(|kind| LOOKING_TOOLS.contains(&kind)),
         Preset::FullAccess => true,
-        Preset::AskBeforeCommands => tool_kind.is_some_and(|kind| QUIET_TOOLS.contains(&kind)),
+        // What an agent's auto mode still asks about is what its own check
+        // found risky, so only what Ask before commands lets through goes.
+        Preset::AskBeforeCommands | Preset::Auto => tool_kind.is_some_and(|kind| QUIET_TOOLS.contains(&kind)),
     };
     if !allows {
         return None;
@@ -53,6 +55,8 @@ mod tests {
         assert_eq!(decide(Preset::Plan, Some("read"), &options), Some("yes"), "a plan looks around");
         assert_eq!(decide(Preset::Plan, Some("edit"), &options), None, "a plan asks before it edits");
         assert_eq!(decide(Preset::FullAccess, Some("execute"), &options), Some("yes"));
+        assert_eq!(decide(Preset::Auto, Some("edit"), &options), Some("yes"));
+        assert_eq!(decide(Preset::Auto, Some("execute"), &options), None, "what auto mode asks about, the person answers");
         let always_only = vec![("a".to_owned(), "allow_always".to_owned()), ("n".to_owned(), "reject_once".to_owned())];
         assert_eq!(decide(Preset::FullAccess, Some("execute"), &always_only), Some("a"));
         let reject_only = vec![("n".to_owned(), "reject_once".to_owned())];

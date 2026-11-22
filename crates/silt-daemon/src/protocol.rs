@@ -1926,6 +1926,8 @@ pub struct Subfolder {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct FoundSessions {
     pub agent: String,
+    /// The agent's id, for its mark.
+    pub agent_id: String,
     pub count: u32,
 }
 
