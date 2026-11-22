@@ -19,15 +19,28 @@ export const KNOWN_AGENTS: { key: string; ids: string[]; name: string }[] = [
 export const LOCAL_AGENTS = ['local', 'claude']
 
 export function agentKey(id: string): string {
-  return KNOWN_AGENTS.find((agent) => agent.ids.includes(id))?.key ?? id.toLowerCase()
+  return KNOWN_AGENTS.find((agent) => agent.ids.includes(id) || agent.key === id)?.key ?? id.toLowerCase()
 }
 
-const LATITUDE: Record<Preset, number> = { ask_for_everything: 0, plan: 1, ask_before_commands: 2, full_access: 3 }
+/** What an agent is called, by its id, key or command; itself where Silt doesn't know it. */
+export function agentName(id: string): string {
+  const key = agentKey(id)
+  return KNOWN_AGENTS.find((agent) => agent.key === key)?.name ?? id
+}
+
+const LATITUDE: Record<Preset, number> = {
+  ask_for_everything: 0,
+  plan: 1,
+  ask_before_commands: 2,
+  auto: 3,
+  full_access: 4,
+}
 
 export const PRESET_LABELS: Record<Preset, string> = {
   ask_for_everything: 'Ask for everything',
   plan: 'Plan',
   ask_before_commands: 'Ask before commands',
+  auto: 'Auto',
   full_access: 'Full access',
 }
 
@@ -103,7 +116,8 @@ function modePreset(mode: string): Preset | undefined {
   if (key === 'plan') return 'plan'
   if (key === 'default' || key === 'read-only') return 'ask_for_everything'
   if (key === 'acceptEdits') return 'ask_before_commands'
-  if (['bypassPermissions', 'auto', 'dontAsk', 'full-access', 'autopilot'].includes(key)) return 'full_access'
+  if (key === 'auto') return 'auto'
+  if (['bypassPermissions', 'dontAsk', 'full-access', 'autopilot'].includes(key)) return 'full_access'
   return undefined
 }
 

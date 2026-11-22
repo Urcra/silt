@@ -9,6 +9,9 @@ use axum::response::{IntoResponse, Response};
 const NOUS: &str = include_str!("../../../../web/src/nous.css");
 
 const STYLE: &str = r#"
+@font-face { font-family: 'IBM Plex Sans'; font-weight: 400; font-display: swap; src: url(/fonts/ibm-plex-sans-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'IBM Plex Sans'; font-weight: 500; font-display: swap; src: url(/fonts/ibm-plex-sans-latin-500-normal.woff2) format('woff2'); }
+@font-face { font-family: 'IBM Plex Mono'; font-weight: 400; font-display: swap; src: url(/fonts/ibm-plex-mono-latin-400-normal.woff2) format('woff2'); }
 body { margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 48px; box-sizing: border-box; }
 main { width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 20px; }
 .mark { font-weight: 500; font-size: 28px; letter-spacing: -0.04em; }
@@ -60,12 +63,24 @@ pub(crate) fn page(status: StatusCode, title: &str, body: &str, refresh: Option<
             (header::CACHE_CONTROL, "no-store"),
             (
                 header::CONTENT_SECURITY_POLICY,
-                "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+                "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; form-action 'self'; frame-ancestors 'none'",
             ),
         ],
         html,
     )
         .into_response()
+}
+
+/// IBM Plex, from the UI's build, so the pages draw in Silt's faces rather
+/// than whatever sans the phone, or the machine taking screen references,
+/// has.
+pub(crate) async fn font(axum::extract::Path(name): axum::extract::Path<String>) -> Response {
+    match silt_web::font(&name) {
+        Some(data) => {
+            ([(header::CONTENT_TYPE, "font/woff2"), (header::CACHE_CONTROL, "public, max-age=86400")], data).into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// Which phone the page is for, by its browser: the steps differ.

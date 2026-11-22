@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { runFixture, stopAgent } from './fixture'
+import { pick, runFixture, stopAgent } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -55,7 +55,7 @@ test('a local model answers in a Local only workspace, and its thread can be era
 
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })
-  await form.getByLabel('agent to start').selectOption({ label: 'Silt (local model)' })
+  await pick(form, 'agent to start', { label: 'Silt (local model)' })
   await form.getByRole('radio', { name: 'Local' }).click()
   await form.getByLabel('first prompt').fill('What failed in app.log?')
   await form.getByLabel('first prompt').press('Enter')

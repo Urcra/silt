@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentChoice, AgentSetting, AgentStatus } from './api'
-import { restartChoices, threadAgent } from './agentState'
+import { modeForPreset, nextPreset, presetUnavailable, restartChoices, threadAgent } from './agentState'
 
 const model = (current: string): AgentSetting => ({
   id: 'model',
@@ -54,5 +54,30 @@ describe('restartChoices', () => {
     expect(plain.value(plain.settings[0]!, undefined)).toBe('gpt-6.2-sol')
     const other = restartChoices('github-copilot-cli', stopped('antigravity-acp', 'x'), copilot, undefined)
     expect(other.value(other.settings[0]!, undefined)).toBe('gpt-6.2-sol')
+  })
+})
+
+describe('presets', () => {
+  const modes = (...ids: string[]) => ids.map((id) => ({ id, name: id, description: null }))
+
+  it('step to the next one allowed, past what is refused', () => {
+    const noFull = (preset: string) => (preset === 'full_access' ? 'capped' : undefined)
+    expect(nextPreset('ask_before_commands', noFull)).toBe('auto')
+    expect(nextPreset('auto', noFull)).toBe('plan')
+    expect(nextPreset('plan', () => 'all refused')).toBeUndefined()
+  })
+
+  it('offer Auto only to an agent with an auto mode, once its modes are known', () => {
+    expect(presetUnavailable('auto', modes('default', 'acceptEdits', 'auto'), 'Claude Code')).toBeUndefined()
+    expect(presetUnavailable('auto', modes('read-only', 'auto', 'full-access'), 'Codex')).toBeUndefined()
+    const copilot = modes('#agent', '#plan', '#autopilot').map((mode) => ({ ...mode, id: `https://x/session-modes${mode.id}` }))
+    expect(presetUnavailable('auto', copilot, 'GitHub Copilot')).toBe('GitHub Copilot has no auto mode')
+    expect(presetUnavailable('auto', undefined, 'GitHub Copilot')).toBeUndefined()
+    expect(presetUnavailable('full_access', copilot, 'GitHub Copilot')).toBeUndefined()
+  })
+
+  it('move an agent without an auto mode to the one for Ask before commands', () => {
+    expect(modeForPreset('auto', modes('default', 'acceptEdits', 'auto'))).toBe('auto')
+    expect(modeForPreset('auto', modes('default', 'acceptEdits', 'bypassPermissions'))).toBe('acceptEdits')
   })
 })

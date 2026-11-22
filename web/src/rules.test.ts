@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { WorkspaceView } from './api'
-import { agentKey, agentRefused, presetRefused, rulesLine, within } from './rules'
+import { agentKey, agentName, agentRefused, presetRefused, rulesLine, within } from './rules'
 
 function work(org: boolean): WorkspaceView {
   const policy = { agents: ['copilot'], max_preset: 'ask_before_commands' as const }
@@ -36,4 +36,19 @@ test('an agent the rules refuse says whose rule it is', () => {
   expect(presetRefused(work(false), 'full_access')).toBe('Your rules allow at most Ask before commands')
   expect(presetRefused(work(true), 'plan')).toBeUndefined()
   expect(rulesLine(work(true).effective)).toBe('GitHub Copilot only · at most Ask before commands')
+})
+
+test('agents are known by their ids, keys and commands', () => {
+  expect(agentKey('claude-acp')).toBe('claude')
+  expect(agentKey('claude')).toBe('claude')
+  expect(agentKey('github-copilot-cli')).toBe('copilot')
+  expect(agentName('codex-acp')).toBe('Codex')
+  expect(agentName('junie')).toBe('junie')
+})
+
+test('Auto sits between Ask before commands and Full access', () => {
+  expect(within('auto', 'ask_before_commands')).toBe(false)
+  expect(within('ask_before_commands', 'auto')).toBe(true)
+  expect(within('auto', 'auto')).toBe(true)
+  expect(within('full_access', 'auto')).toBe(false)
 })

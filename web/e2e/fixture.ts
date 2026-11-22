@@ -114,3 +114,25 @@ export function teardown(silt: string, work: string, siltHomes: string[], pidFil
   // A daemon's agents, or a server just killed, can still be writing there for a moment.
   rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 }
+
+/** A chip in a composer's row that opens a menu, such as the agent to start or the permissions (ADR 0114). */
+export function chip(scope: Page | Locator, label: string): Locator {
+  return scope.getByRole('button', { name: label, exact: true })
+}
+
+/** Picks one of a chip's choices: by its id, such as a preset's, or by its name. */
+export async function pick(scope: Page | Locator, label: string, choice: string | { label: string }) {
+  const page = 'page' in scope && typeof scope.page === 'function' ? (scope as Locator).page() : (scope as Page)
+  await chip(scope, label).click()
+  const menu = page.getByRole('menu', { name: label, exact: true })
+  await (
+    typeof choice === 'string' ? menu.locator(`[data-id="${choice}"]`) : menu.getByRole('menuitemradio', { name: choice.label })
+  ).click()
+}
+
+/** Picks the agent's model, from the chip that shows it with its effort. */
+export async function pickModel(scope: Page | Locator, name: string) {
+  await scope.getByRole('button', { name: /^model and effort/ }).click()
+  const page = 'page' in scope && typeof scope.page === 'function' ? (scope as Locator).page() : (scope as Page)
+  await page.getByRole('menu', { name: 'model' }).getByRole('menuitemradio', { name }).click()
+}

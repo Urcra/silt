@@ -74,7 +74,7 @@ pub enum WorkspaceCommand {
         /// Whether agents from agents.json are allowed: on or off
         #[arg(long, value_parser = crate::admin::parse_on_off)]
         custom_agents: Option<bool>,
-        /// The most an agent may do without asking: ask_for_everything, plan, ask_before_commands, full_access, or `any`
+        /// The most an agent may do without asking: ask_for_everything, plan, ask_before_commands, auto, full_access, or `any`
         #[arg(long)]
         max_preset: Option<String>,
         /// Agents run only with their own sandbox on: on or off

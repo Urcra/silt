@@ -6,7 +6,7 @@
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
-import { runFixture, teardown } from './fixture'
+import { chip, pick, runFixture, teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -385,7 +385,7 @@ test("a new thread's project picker", async ({ page }) => {
     // The page fills in as its lists load, each on its own, after the picker opens.
     await expect(picker.getByText('tools', { exact: true })).toBeVisible()
     const main = shown.getByRole('main')
-    await expect(main.getByLabel('agent to start')).toHaveValue('plain')
+    await expect(chip(main, 'agent to start')).toHaveAttribute('data-value', 'plain')
     await expect(main.getByText('Add a farewell')).toBeVisible()
     await expect(main.getByText('Retry blob uploads on a 5xx')).toBeVisible()
   })
@@ -522,7 +522,7 @@ test('the first open, with no projects yet', async ({ page }) => {
           repo: 'github.com/acme/api',
           git: true,
           added: false,
-          sessions: [{ agent: 'Claude Code', count: 12 }],
+          sessions: [{ agent: 'Claude Code', agent_id: 'claude', count: 12 }],
           last_ms: Date.now() - 7_200_000,
         },
         {
@@ -530,7 +530,7 @@ test('the first open, with no projects yet', async ({ page }) => {
           repo: 'github.com/acme/site',
           git: true,
           added: false,
-          sessions: [{ agent: 'Codex', count: 3 }],
+          sessions: [{ agent: 'Codex', agent_id: 'codex', count: 3 }],
           last_ms: Date.now() - 86_400_000 * 3,
         },
         {
@@ -538,7 +538,7 @@ test('the first open, with no projects yet', async ({ page }) => {
           repo: '',
           git: false,
           added: false,
-          sessions: [{ agent: 'Claude Code', count: 2 }],
+          sessions: [{ agent: 'Claude Code', agent_id: 'claude', count: 2 }],
           last_ms: Date.now() - 86_400_000 * 9,
         },
       ],
@@ -555,8 +555,8 @@ async function startFake(page: Page, prompt: string, preset?: string) {
   await page.setViewportSize({ width: 1440, height: 900 })
   await open(page, '/')
   const form = page.getByRole('form', { name: 'new thread' })
-  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  if (preset) await form.getByLabel('permissions').selectOption({ label: preset })
+  await pick(form, 'agent to start', { label: 'Fake agent' })
+  if (preset) await pick(form, 'permissions', { label: preset })
   await form.getByRole('radio', { name: 'Worktree' }).click()
   await form.getByLabel('first prompt').fill(prompt)
   await form.getByLabel('first prompt').press('Enter')
@@ -588,7 +588,7 @@ test('a plan to approve', async ({ page }) => {
     await expect(shown.getByRole('group', { name: 'plan' })).toBeVisible()
     await expect(shown.getByText('Plan: Retry the upload twice')).toBeVisible()
     await expect(shown.getByLabel(/^after approving, the /)).toBeVisible()
-    await expect(shown.getByLabel('permissions', { exact: true })).toHaveValue('plan')
+    await expect(chip(shown, 'permissions')).toHaveAttribute('data-value', 'plan')
     await expectInNeedsYou(shown, 'Retry the upload twice')
   })
 })

@@ -945,6 +945,8 @@ pub struct DeviceAgent {
     pub thread: String,
     pub title: Option<String>,
     pub agent: String,
+    /// The agent's registry id, for its mark; empty where its daemon didn't say.
+    pub agent_id: String,
     pub state: AgentState,
 }
 

@@ -138,6 +138,7 @@ impl Core {
             agents.push(AgentReport {
                 thread,
                 agent: status.agent,
+                agent_id: status.agent_id,
                 state: status.state,
                 permissions: status
                     .permissions

@@ -560,10 +560,12 @@ impl Rules<'_> {
         })
     }
 
-    /// `flag` is one the agent's adapter knows to stop it asking.
+    /// `flag` is one the agent's adapter knows to stop it asking; Claude's
+    /// `--permission-mode auto` asks for Auto, any other for Full access.
     pub fn check_flag(&self, flag: &str, agent: &str) -> Result<(), Refusal> {
+        let asked = if flag.ends_with(" auto") { Preset::Auto } else { Preset::FullAccess };
         self.check(|policy| {
-            policy.max_preset.filter(|cap| *cap != Preset::FullAccess).map(|cap| Broken::Flag {
+            policy.max_preset.filter(|cap| !asked.within(*cap)).map(|cap| Broken::Flag {
                 flag: flag.to_owned(),
                 agent: agent.to_owned(),
                 cap,
@@ -772,6 +774,17 @@ mod tests {
         let rules = Rules { workspace: "Personal", local: &open, org: None };
         assert_eq!(rules.check_mode("whatever-new", ModeMeaning::Unknown), Ok(()));
         assert_eq!(rules.check_flag("--dangerously-skip-permissions", "Claude Code"), Ok(()));
+    }
+
+    #[test]
+    fn claude_s_auto_flag_asks_only_for_auto() {
+        let capped = Policy { max_preset: Some(Preset::Auto), ..Policy::default() };
+        let rules = Rules { workspace: "Personal", local: &capped, org: None };
+        assert_eq!(rules.check_flag("--permission-mode auto", "Claude Code"), Ok(()));
+        assert!(rules.check_flag("--permission-mode bypassPermissions", "Claude Code").is_err());
+        let edits = Policy { max_preset: Some(Preset::AskBeforeCommands), ..Policy::default() };
+        let rules = Rules { workspace: "Personal", local: &edits, org: None };
+        assert!(rules.check_flag("--permission-mode auto", "Claude Code").is_err());
     }
 
     #[test]

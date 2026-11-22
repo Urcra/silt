@@ -695,7 +695,7 @@ enum OrgCommand {
         /// Refuse the agents of a machine's agents.json
         #[arg(long)]
         no_custom_agents: bool,
-        /// The most an agent may do without asking: ask_for_everything, plan, ask_before_commands or full_access
+        /// The most an agent may do without asking: ask_for_everything, plan, ask_before_commands, auto or full_access
         #[arg(long)]
         max_preset: Option<String>,
         /// Agents run only with their own sandbox on
@@ -772,7 +772,7 @@ enum ProjectCommand {
         /// The agent's registry id, such as claude-acp
         #[arg(long)]
         agent: Option<String>,
-        /// ask_before_commands, ask_for_everything or full_access
+        /// ask_before_commands, ask_for_everything, auto or full_access
         #[arg(long)]
         preset: Option<String>,
         /// Git notes on its threads' commits: off, local, or push to origin too

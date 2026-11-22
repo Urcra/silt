@@ -14,13 +14,14 @@ import {
   type Workspaces as WorkspacesFile,
 } from '../api'
 import { keys, message } from '../query'
-import { KNOWN_AGENTS, PRESET_LABELS, rulesLine, serverLine } from '../rules'
+import { PRESET_LABELS, rulesLine, serverLine, within } from '../rules'
 import { serverName } from '../served'
 import { SETTINGS_HEADING } from '../settingsContext'
 import { Button, EmptyState, Input, Select, cx, toast } from '../ui'
 import { settingLabel } from '../agentSettings'
 import { ReachSettings, WorkspacePlugins } from './Sandbox'
 import { WorkspaceBadge } from './WorkspaceSwitcher'
+import { AgentMarks, AgentToggles, CapText, PresetSteps } from './PolicyControls'
 
 /** A workspace's id from its name, as `silt workspace new` makes it. */
 function slug(name: string): string {
@@ -378,22 +379,34 @@ export function WorkspacesSettings() {
             <tbody>
               <Rule
                 name="Agents"
-                mine={<AgentsInput value={workspace.policy.agents ?? null} onChange={(agents) => changePolicy({ agents })} />}
-                theirs={org ? agentsText(org.policy.agents) : '—'}
-                effect={agentsText(effective.agents)}
+                mine={
+                  <AgentsInput
+                    value={workspace.policy.agents ?? null}
+                    onChange={(agents) => changePolicy({ agents })}
+                    refused={(key) =>
+                      org?.policy.agents && !org.policy.agents.includes(key) ? `${org.org} doesn't allow it` : undefined
+                    }
+                  />
+                }
+                theirs={org ? <AgentMarks agents={org.policy.agents} /> : '—'}
+                effect={<AgentMarks agents={effective.agents} />}
               />
               <Rule
                 name="Most it may do without asking"
                 mine={
-                  <PresetSelect
+                  <PresetSteps
                     label="most it may do without asking"
                     value={workspace.policy.max_preset ?? null}
                     onChange={(max_preset) => changePolicy({ max_preset })}
-                    anyLabel="Any"
+                    refused={(preset) =>
+                      org && !within(preset, org.policy.max_preset)
+                        ? `${org.org} caps it at ${PRESET_LABELS[org.policy.max_preset!]}`
+                        : undefined
+                    }
                   />
                 }
-                theirs={org?.policy.max_preset ? PRESET_LABELS[org.policy.max_preset] : '—'}
-                effect={effective.max_preset ? PRESET_LABELS[effective.max_preset] : 'Full access'}
+                theirs={org?.policy.max_preset ? <CapText cap={org.policy.max_preset} /> : '—'}
+                effect={<CapText cap={effective.max_preset} />}
               />
               <Rule
                 name="Agent's own sandbox"
@@ -506,7 +519,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-function Rule({ name, mine, theirs, effect }: { name: string; mine: ReactNode; theirs: string; effect: string }) {
+function Rule({ name, mine, theirs, effect }: { name: string; mine: ReactNode; theirs: ReactNode; effect: ReactNode }) {
   return (
     <tr className="border-b border-line-subtle align-middle last:border-b-0">
       <td className="px-3 py-2">{name}</td>
@@ -515,12 +528,6 @@ function Rule({ name, mine, theirs, effect }: { name: string; mine: ReactNode; t
       <td className="bg-accent-tint px-3 py-2 font-medium">{effect}</td>
     </tr>
   )
-}
-
-function agentsText(agents: string[] | null | undefined): string {
-  if (!agents) return 'Any'
-  if (agents.length === 0) return 'None'
-  return agents.map((key) => KNOWN_AGENTS.find((agent) => agent.key === key)?.name ?? key).join(', ')
 }
 
 function projectsBy(view: WorkspaceView | undefined, rule: MatchRule): string {
@@ -660,32 +667,48 @@ function Toggle({
   )
 }
 
-function AgentsInput({ value, onChange }: { value: string[] | null; onChange: (agents: string[] | null) => void }) {
+/** Any agent, or only those chosen, as chips with their marks (ADR 0114); with Any they show, disabled. */
+function AgentsInput({
+  value,
+  onChange,
+  refused,
+}: {
+  value: string[] | null
+  onChange: (agents: string[] | null) => void
+  refused?: (key: string) => string | undefined
+}) {
   return (
-    <span className="flex flex-wrap gap-x-3 gap-y-1">
-      <label className="inline-flex items-center gap-1 text-xs">
-        <input
-          type="checkbox"
-          aria-label="any agent"
-          checked={value === null}
-          onChange={(event) => onChange(event.target.checked ? null : [])}
-        />
-        Any
-      </label>
-      {value !== null &&
-        KNOWN_AGENTS.map((agent) => (
-          <label key={agent.key} className="inline-flex items-center gap-1 text-xs">
-            <input
-              type="checkbox"
-              aria-label={agent.name}
-              checked={value.includes(agent.key)}
-              onChange={(event) =>
-                onChange(event.target.checked ? [...value, agent.key] : value.filter((kept) => kept !== agent.key))
-              }
-            />
-            {agent.name}
-          </label>
+    <span className="flex flex-col gap-1.5">
+      <span
+        role="radiogroup"
+        aria-label="which agents"
+        className="inline-flex self-start overflow-hidden rounded-sm border border-line text-xs"
+      >
+        {[
+          { id: 'any', label: 'Any agent', on: value === null, pick: () => onChange(null) },
+          { id: 'only', label: 'Only these', on: value !== null, pick: () => value === null && onChange([]) },
+        ].map((choice, index) => (
+          <button
+            key={choice.id}
+            type="button"
+            role="radio"
+            aria-checked={choice.on}
+            aria-label={choice.id === 'any' ? 'any agent' : 'only these agents'}
+            onClick={choice.pick}
+            className={cx(
+              'px-2.5 py-1 max-md:min-h-11',
+              index > 0 && 'border-l border-line',
+              choice.on ? 'bg-accent-tint text-accent-fg' : 'text-fg-2 hover:bg-surface-2',
+            )}
+          >
+            {choice.label}
+          </button>
         ))}
+      </span>
+      <AgentToggles label="allows" value={value ?? []} onChange={onChange} refused={refused} disabled={value === null} />
+      {value !== null && value.length === 0 && (
+        <span className="text-2xs text-warn-fg">No agent can start here until one is chosen</span>
+      )}
     </span>
   )
 }

@@ -1,4 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { AgentMark } from './AgentMark'
+import { agentName } from '../rules'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
@@ -1677,7 +1679,14 @@ export function ThreadHeader({
               <span className="truncate">{where.label}</span>
             </span>
           )}
-          {summary?.agent && <span className="shrink-0">· {summary.agent}</span>}
+          {summary?.agent && (
+            <span
+              className="inline-flex shrink-0 items-center gap-1"
+              title={`${agentName(summary.agent)} · recorded its latest session`}
+            >
+              · <AgentMark agent={summary.agent} labelled className="h-[13px] w-[13px]" />
+            </span>
+          )}
           {summary?.forked_from && !summary.title?.startsWith('Fork of ') && (
             <span className="inline-flex min-w-0 shrink items-center gap-1">
               · fork of

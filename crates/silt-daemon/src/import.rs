@@ -119,7 +119,7 @@ fn folders_of(candidates: Vec<ImportCandidate>, clones: &[PathBuf]) -> Result<Ve
         let folder = &mut folders[index];
         match folder.sessions.iter_mut().find(|sessions| sessions.agent == agent) {
             Some(sessions) => sessions.count += 1,
-            None => folder.sessions.push(FoundSessions { agent, count: 1 }),
+            None => folder.sessions.push(FoundSessions { agent, agent_id: candidate.agent.clone(), count: 1 }),
         }
         folder.last_ms = folder.last_ms.max(candidate.started_ms);
     }

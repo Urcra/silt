@@ -59,7 +59,13 @@ async fn list(server: &Server, user: UserId, this: Option<DeviceId>) -> Result<V
                 .into_iter()
                 .filter_map(|agent| {
                     let title = titles.get(&agent.thread)?.clone();
-                    Some(DeviceAgent { thread: agent.thread.to_string(), title, agent: agent.agent, state: agent.state })
+                    Some(DeviceAgent {
+                        thread: agent.thread.to_string(),
+                        title,
+                        agent: agent.agent,
+                        agent_id: agent.agent_id,
+                        state: agent.state,
+                    })
                 })
                 .collect(),
             startable: report.startable,

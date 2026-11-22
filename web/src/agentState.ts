@@ -1,14 +1,52 @@
 import type { AgentChoice, AgentChoiceItem, AgentModes, AgentSetting, AgentState, AgentStatus, Preset } from './api'
 import type { Tone } from './ui'
 
-/** Which of the agent's permission requests the daemon answers by itself (ADR 0022), and Plan,
- * which asks for a plan before every new prompt (ADR 0044). */
-export const PRESETS: { id: Preset; label: string; says: string }[] = [
-  { id: 'plan', label: 'Plan', says: 'reads and writes a plan for you to approve; everything else asks' },
-  { id: 'ask_for_everything', label: 'Ask for everything', says: 'edits and commands ask' },
-  { id: 'ask_before_commands', label: 'Ask before commands', says: 'edits apply, every command asks' },
-  { id: 'full_access', label: 'Full access', says: "nothing asks; the agent's own sandbox is all that limits it" },
+/** Which of the agent's permission requests the daemon answers by itself (ADR 0022), and Plan, which asks for a plan
+ * before every new prompt (ADR 0044); the same for every agent, by how much they let through (ADR 0114). `short` is
+ * what a chip shows. */
+export const PRESETS: { id: Preset; label: string; short: string; says: string }[] = [
+  { id: 'plan', label: 'Plan', short: 'Plan', says: 'reads and writes a plan for you to approve; everything else asks' },
+  { id: 'ask_for_everything', label: 'Ask for everything', short: 'Ask', says: 'edits and commands ask' },
+  { id: 'ask_before_commands', label: 'Ask before commands', short: 'Edits', says: 'edits apply, every command asks' },
+  {
+    id: 'auto',
+    label: 'Auto',
+    short: 'Auto',
+    says: "the agent's own check lets safe actions through and asks about risky ones",
+  },
+  {
+    id: 'full_access',
+    label: 'Full access',
+    short: 'Full',
+    says: "nothing asks; the agent's own sandbox is all that limits it",
+  },
 ]
+
+/** The preset as `PRESETS` describes it. */
+export function presetOf(id: Preset): (typeof PRESETS)[number] {
+  return PRESETS.find((preset) => preset.id === id) ?? PRESETS[2]!
+}
+
+/** The preset after `preset` that may be picked, for Shift+Tab; none where none other may. */
+export function nextPreset(preset: Preset, refused: (preset: Preset) => string | undefined): Preset | undefined {
+  const at = PRESETS.findIndex((choice) => choice.id === preset)
+  for (let step = 1; step < PRESETS.length; step++) {
+    const next = PRESETS[(at + step) % PRESETS.length]!.id
+    if (!refused(next)) return next
+  }
+  return undefined
+}
+
+/** Why the agent can't take `preset` itself, or nothing: Auto needs an auto mode of its own, so one without asks as
+ * for Ask before commands. Nothing while its modes aren't known. */
+export function presetUnavailable(
+  preset: Preset,
+  modes: AgentChoiceItem[] | null | undefined,
+  agent: string,
+): string | undefined {
+  if (preset !== 'auto' || !modes || modes.some((mode) => (mode.id.split('#').pop() ?? mode.id) === 'auto')) return undefined
+  return `${agent || 'This agent'} has no auto mode`
+}
 
 /** The presets a project can start its threads with: Plan is chosen per thread. */
 export const DEFAULT_PRESETS = PRESETS.filter((preset) => preset.id !== 'plan')
@@ -16,7 +54,7 @@ export const DEFAULT_PRESETS = PRESETS.filter((preset) => preset.id !== 'plan')
 /** Modes that say what the agent may do without asking, by the ids Claude's and Codex's adapters use; the daemon maps them to presets. */
 const PERMISSION_MODES = new Set(['default', 'read-only', 'acceptEdits', 'auto', 'bypassPermissions', 'dontAsk', 'full-access'])
 
-/** Whether an agent's modes are its permissions, which then stand in for Silt's preset (ADR 0048). */
+/** Whether an agent's modes are its permissions, which then follow Silt's preset rather than show (ADR 0114). */
 export function permissionModes(modes: AgentChoiceItem[] | null | undefined): boolean {
   return modes?.some((mode) => PERMISSION_MODES.has(mode.id)) ?? false
 }
@@ -27,6 +65,7 @@ export function modeForPreset(preset: Preset, modes: AgentChoiceItem[] | null | 
     plan: ['plan'],
     ask_for_everything: ['default', 'read-only', 'agent'],
     ask_before_commands: ['acceptEdits', 'agent'],
+    auto: ['auto', 'acceptEdits', 'agent'],
     full_access: ['bypassPermissions', 'full-access', 'dontAsk'],
   }
   const key = (id: string) => id.split('#').pop() ?? id

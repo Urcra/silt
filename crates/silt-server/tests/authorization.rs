@@ -529,6 +529,7 @@ async fn the_hosted_app_directs_an_agent_only_through_its_owners_machine() {
         agents: vec![AgentReport {
             thread: THREAD,
             agent: "Fake agent".into(),
+            agent_id: String::new(),
             state: AgentState::AwaitingPermission,
             permissions: Vec::new(),
             questions: Vec::new(),
@@ -601,6 +602,7 @@ async fn people_see_their_devices_what_runs_on_each_and_choose_what_each_may_do(
         agents: vec![AgentReport {
             thread: THREAD,
             agent: "Fake agent".into(),
+            agent_id: String::new(),
             state: AgentState::Working,
             permissions: Vec::new(),
             questions: Vec::new(),
@@ -679,6 +681,7 @@ async fn a_thread_continues_only_on_an_online_device_of_ones_own_once_its_agent_
         agents: vec![AgentReport {
             thread: THREAD,
             agent: "Fake agent".into(),
+            agent_id: String::new(),
             state,
             permissions: Vec::new(),
             questions: Vec::new(),
@@ -837,6 +840,7 @@ async fn what_a_device_reports_reaches_its_persons_inbox_with_what_to_do() {
         agents: vec![AgentReport {
             thread: THREAD,
             agent: "Fake agent".into(),
+            agent_id: String::new(),
             state,
             permissions: asked
                 .map(|id| AskedPermission { id, title: "Edit a.rs".into(), options: vec![("allow".into(), "Allow".into())] })
@@ -976,6 +980,7 @@ async fn notifying_notifications_are_pushed_encrypted_to_the_persons_browsers() 
         agents: vec![AgentReport {
             thread: THREAD,
             agent: "Fake agent".into(),
+            agent_id: String::new(),
             state,
             permissions: asked
                 .map(|id| AskedPermission { id, title: "Edit a.rs".into(), options: vec![("allow".into(), "Allow".into())] })
