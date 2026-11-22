@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
-import { stopAgent } from './fixture'
+import { runFixture, stopAgent } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -22,10 +22,7 @@ const machine = () => ({
 })
 
 test.beforeAll(() => {
-  const output = execFileSync(join(import.meta.dirname, 'local-fixture.sh'), {
-    encoding: 'utf8',
-  })
-  fixture = JSON.parse(output.trim().split('\n').pop() ?? '{}') as Fixture
+  fixture = JSON.parse(runFixture('local-fixture.sh') || '{}') as Fixture
 })
 
 test.afterAll(() => {
@@ -53,7 +50,8 @@ test('a local model answers in a Local only workspace, and its thread can be era
   await expect(quantizations).toContainText('Q4_K_M')
   await expect(quantizations).toContainText('Fits')
   await quantizations.getByRole('button', { name: 'Download' }).click()
-  await expect(models.getByRole('list', { name: 'models here' })).toContainText('tiny-q4_k_m')
+  // A download ends with an fsync, which a disk as busy as the gate's can hold for seconds.
+  await expect(models.getByRole('list', { name: 'models here' })).toContainText('tiny-q4_k_m', { timeout: 20_000 })
 
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()
   const form = page.getByRole('form', { name: 'new thread' })

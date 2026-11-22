@@ -26,7 +26,7 @@ use serde_json::Value;
 use crate::host::{
     Changing, Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label,
 };
-use crate::modes::{Setting, commands_v2, modes_in, settings_v2};
+use crate::modes::{Setting, commands_v2, modes_in, settings_v2, with_change};
 use crate::prompt::{Accepts, blocks_v2};
 
 type Waiting = Arc<Mutex<HashMap<u64, Responder<RequestPermissionResponse>>>>;
@@ -107,6 +107,7 @@ impl ConnectTo<Agent> for V2 {
                 )
                 .capabilities(capabilities);
                 let init = connection.send_request(request).block_task().await?;
+                let steers = crate::steering::supported(init.meta.as_ref());
                 let methods = crate::sign_in::methods(&serde_json::to_value(&init.auth_methods).unwrap_or_default());
                 reading.lock().expect("lock").sign_in.clone_from(&methods);
                 if let Some(method) = start.sign_in_first.clone()
@@ -180,6 +181,7 @@ impl ConnectTo<Agent> for V2 {
                     settings,
                     accepts,
                     reports_work: true,
+                    steers,
                 });
                 // Later changes come as updates.
                 let _ = events.send(Event::Commands(commands_v2(offered)));
@@ -234,6 +236,15 @@ impl ConnectTo<Agent> for V2 {
                                 )?;
                             }
                         }
+                        Command::Steer(text) => {
+                            let request = crate::steering::request(&session.to_string(), &text)?;
+                            let (told, sent) = (events.clone(), connection.send_request(request));
+                            connection.spawn(async move {
+                                let outcome = crate::steering::outcome(sent.block_task().await);
+                                let _ = told.send(Event::Steered { text, outcome });
+                                Ok(())
+                            })?;
+                        }
                         Command::Answer { id, option } => {
                             let responder = waiting.lock().expect("lock").remove(&id);
                             if let Some(responder) = responder {
@@ -257,7 +268,7 @@ impl ConnectTo<Agent> for V2 {
                             };
                             let request = SetSessionConfigOptionRequest::new(
                                 session.clone(),
-                                setting,
+                                setting.clone(),
                                 SessionConfigValueId::new(mode.clone()),
                             );
                             let (told, read) = (events.clone(), reading.clone());
@@ -266,7 +277,9 @@ impl ConnectTo<Agent> for V2 {
                             connection.spawn(async move {
                                 match sent.block_task().await {
                                     Ok(response) => {
-                                        for event in read.lock().expect("lock").settings(settings_v2(response.config_options)) {
+                                        // As v1 takes a mode change answered without error as made.
+                                        let settings = with_change(settings_v2(response.config_options), &setting, &mode);
+                                        for event in read.lock().expect("lock").settings(settings) {
                                             let _ = told.send(event);
                                         }
                                     }
@@ -279,15 +292,19 @@ impl ConnectTo<Agent> for V2 {
                             })?;
                         }
                         Command::SetSetting { id, value } => {
-                            let request =
-                                SetSessionConfigOptionRequest::new(session.clone(), id, SessionConfigValueId::new(value));
+                            let request = SetSessionConfigOptionRequest::new(
+                                session.clone(),
+                                id.clone(),
+                                SessionConfigValueId::new(value.clone()),
+                            );
                             let (told, read) = (events.clone(), reading.clone());
                             let answered = changing.asked();
                             let sent = connection.send_request(request);
                             connection.spawn(async move {
                                 match sent.block_task().await {
                                     Ok(response) => {
-                                        for event in read.lock().expect("lock").settings(settings_v2(response.config_options)) {
+                                        let settings = with_change(settings_v2(response.config_options), &id, &value);
+                                        for event in read.lock().expect("lock").settings(settings) {
                                             let _ = told.send(event);
                                         }
                                     }

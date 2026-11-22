@@ -39,7 +39,9 @@ impl Core {
         self.announce(BusEvent::Threads);
     }
 
-    pub(crate) fn announce_agent(&self, thread: ThreadId) {
+    pub(crate) fn announce_agent(&mut self, thread: ThreadId) {
+        let status = self.agent_status(thread);
+        self.lan.agent_changed(thread, status.as_ref());
         if self.heard() {
             self.announce(BusEvent::Agent { thread: thread.to_string(), status: self.shown_status(thread).map(Box::new) });
         }

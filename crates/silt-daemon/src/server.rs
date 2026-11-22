@@ -104,6 +104,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     // After the requests that came during the load: rows a crash left
     // unwritten, then a store from an older Silt compacted.
     core.queue_index_pending();
+    core.start_lan_if_wanted().await;
     let _ = events.send(Event::Compact);
     let tick_events = events.clone();
     let idle = Arc::new(AtomicBool::new(false));
@@ -305,11 +306,22 @@ async fn serve_as(
                 Response::error("a sandboxed agent's run may only ask with its run's token")
             }
             Ok(request) => {
+                let hook = matches!(request, Request::Hook { .. });
                 let (reply, response) = oneshot::channel();
                 if events.send(Event::Request(request, reply)).is_err() {
                     break;
                 }
-                response.await.unwrap_or_else(|_| Response::error("the daemon stopped"))
+                let answer = if hook {
+                    // A hook's connection carries it alone and closes once the
+                    // hook stops waiting, which the daemon then leaves to it.
+                    tokio::select! {
+                        answer = response => answer,
+                        _ = lines.next_line() => break,
+                    }
+                } else {
+                    response.await
+                };
+                answer.unwrap_or_else(|_| Response::error("the daemon stopped"))
             }
             Err(error) => Response::error(format!("invalid request: {error}")),
         };

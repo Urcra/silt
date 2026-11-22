@@ -16,7 +16,8 @@
 //! `count` and `compact` as it opens, and drops `compact` on a prompt.
 //! `Suggest` makes it predict the next prompt once it stopped, as Claude's
 //! adapter does, to a client that says it takes one.
-//! `Which model` and `FAKE_ACP_SLOW_SETTINGS` work as over v1.
+//! `Which model`, `Long`, `FAKE_ACP_SLOW_SETTINGS` and `FAKE_ACP_STEERING`
+//! work as over v1.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -76,6 +77,7 @@ pub async fn main() -> Result<()> {
         .on_receive_notification(
             async move |_cancel: v2::CancelSessionNotification, _connection: ConnectionTo<Client>| {
                 cancelling.store(true, Ordering::SeqCst);
+                crate::steering::cancel();
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
@@ -84,12 +86,16 @@ pub async fn main() -> Result<()> {
             async move |request: v2::InitializeRequest, responder: Responder<v2::InitializeResponse>, _connection: ConnectionTo<Client>| {
                 initialized.lock().expect("lock").suggestions =
                     request.capabilities.session.as_ref().is_some_and(|session| session.prompt_suggestions.is_some());
-                responder.respond(parse(json!({
+                let mut response = json!({
                     "protocolVersion": request.protocol_version,
                     "info": {"name": "fake-agent", "version": "2.0"},
                     "capabilities": {"session": {"prompt": {"image": {}, "embeddedContext": {}}}},
                     "authMethods": crate::sign_in_methods("methodId")
-                }))?)
+                });
+                if let Some(meta) = crate::steering::meta() {
+                    response["_meta"] = meta;
+                }
+                responder.respond(parse(response)?)
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -168,6 +174,25 @@ pub async fn main() -> Result<()> {
                     }
                     say(&worker, &session, json!({"sessionUpdate": "agent_thought_chunk", "messageId": "thought-1", "content": {"type": "text", "text": "Thinking about the prompt."}}))?;
                     say(&worker, &session, json!({"sessionUpdate": "usage_update", "used": 53_000, "size": 200_000}))?;
+                    if prompt.contains("Long") {
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "long-1", "name": "Bash", "rawInput": {"command": "cargo build"}, "status": "in_progress", "title": "cargo build", "kind": "execute", "content": [{"type": "terminal", "terminalId": "long-1"}]}))?;
+                        let mut heard = 0;
+                        let ran = crate::steering::long(|steer| {
+                            heard += 1;
+                            say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": format!("heard-{heard}"), "content": {"type": "text", "text": format!("Heard while the command ran: {steer}")}}))
+                        })
+                        .await?;
+                        let killed = matches!(ran, crate::steering::Ran::Killed);
+                        let (status, output) = if killed { ("failed", "The command was killed.") } else { ("completed", "The command ran to its end.") };
+                        let data = base64::engine::general_purpose::STANDARD.encode(output);
+                        say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "long-1", "output": {"data": data}}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "long-1", "status": status}))?;
+                        if killed {
+                            return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "cancelled"}));
+                        }
+                        say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "reply-1", "content": {"type": "text", "text": format!("Done: {prompt}")}}))?;
+                        return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}));
+                    }
                     say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "run-1", "name": "Bash", "rawInput": {}, "status": "pending", "title": "Terminal", "kind": "execute", "content": [{"type": "terminal", "terminalId": "run-1"}]}))?;
                     say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "run-1", "rawInput": {"command": "cat src/main.rs"}, "title": "cat src/main.rs"}))?;
                     let printed = tokio::fs::read_to_string(cwd.join("src/main.rs")).await.unwrap_or_default();
@@ -291,6 +316,15 @@ pub async fn main() -> Result<()> {
                     }
                     Ok(())
                 })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: agent_client_protocol::UntypedMessage, responder: Responder<Value>, _connection: ConnectionTo<Client>| {
+                match crate::steering::answer(&request.method, &request.params) {
+                    Ok(answer) => responder.respond(answer),
+                    Err(error) => responder.respond_with_error(error),
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )

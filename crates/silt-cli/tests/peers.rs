@@ -81,11 +81,16 @@ fn two_agents_in_one_clone_are_both_recorded(daemon: bool) {
     let b = finished(b);
     let (thread_a, thread_b) = (thread_named(&a.stderr), thread_named(&b.stderr));
     assert_ne!(thread_a, thread_b);
-    let (show_a, show_b) = (laptop.stdout(&["show", &thread_a]), laptop.stdout(&["show", &thread_b]));
-    for show in [&show_a, &show_b] {
-        assert!(show.contains("Done: farewell added."), "{show}");
-        assert!(show.contains("    ✎ src/main.rs +17 -0"), "each agent's own edit is under its tool call: {show}");
-    }
+    // Under load the daemon can still be taking a turn's edit in as its
+    // wrapper ends.
+    let shown = || (laptop.stdout(&["show", &thread_a]), laptop.stdout(&["show", &thread_b]));
+    let credited = |show: &str| show.contains("Done: farewell added.") && show.contains("    ✎ src/main.rs +17 -0");
+    let waited = eventually(|| {
+        let (show_a, show_b) = shown();
+        credited(&show_a) && credited(&show_b)
+    });
+    let (show_a, show_b) = shown();
+    assert!(waited, "each agent's own edit is under its tool call:\n{show_a}\n{show_b}");
     assert!(!show_a.contains("by another agent"), "B's edit came after A was done: {show_a}");
     let others = show_b.lines().find(|line| line.contains("by another agent")).unwrap_or_else(|| panic!("{show_b}"));
     assert!(others.starts_with("  ✎ by another agent (claude-code ") && others.ends_with("): src/main.rs +17 -0"), "{others}");

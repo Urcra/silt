@@ -8,6 +8,8 @@ silt="$root/target/debug/silt"
 # As screens-fixture.sh: no background answer may land in a screen.
 export SILT_ASK_AGENTS=0
 work=$(mktemp -d /tmp/silt-busy-XXXXXX)
+# A failure partway leaves nothing running or on disk.
+trap 'status=$?; [ "$status" -eq 0 ] || "$root/web/e2e/abandon.sh" "$work" "$silt"; exit "$status"' EXIT
 
 git init -q -b main "$work/seed"
 mkdir -p "$work/seed/src"

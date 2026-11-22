@@ -1,6 +1,7 @@
 //! `templates/plugin`, the template people start a plugin from, built and
 //! tested here against this repository's SDK and harness, so it can't rot.
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -11,11 +12,16 @@ fn repo() -> PathBuf {
 /// The template copied into `target/`, its git dependencies on Silt pointed
 /// at this checkout and its lock taken from the workspace's.
 pub(crate) fn template() -> &'static str {
-    static DIR: OnceLock<String> = OnceLock::new();
-    DIR.get_or_init(|| {
+    static DIR: OnceLock<(String, File)> = OnceLock::new();
+    &DIR.get_or_init(|| {
         let repo = repo();
         let into = repo.join("target/template-plugin");
-        let _ = std::fs::remove_dir_all(&into);
+        // nextest runs each test in a process of its own, and each copies the
+        // template again: held until the process ends, the lock keeps one from
+        // replacing the copy while another builds in it.
+        let lock = File::create(repo.join("target/template-plugin.lock")).expect("the copy's lock");
+        lock.lock().expect("takes the copy's lock");
+        clear(&into);
         copy(&repo.join("templates/plugin"), &into);
         let manifest = into.join("Cargo.toml");
         let text = std::fs::read_to_string(&manifest).expect("its Cargo.toml");
@@ -34,8 +40,26 @@ pub(crate) fn template() -> &'static str {
         }
         std::fs::write(&manifest, patched).expect("patched");
         std::fs::copy(repo.join("Cargo.lock"), into.join("Cargo.lock")).expect("the lock");
-        into.to_string_lossy().into_owned()
+        (into.to_string_lossy().into_owned(), lock)
     })
+    .0
+}
+
+/// Empties `dir` but for its `target/`, so the next build starts from the last.
+fn clear(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        if entry.file_name() == "target" {
+            continue;
+        }
+        let path = entry.path();
+        let removed = if entry.file_type().expect("its type").is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        removed.expect("cleared");
+    }
 }
 
 fn copy(from: &Path, to: &Path) {

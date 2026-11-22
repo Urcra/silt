@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { type Dispatch, type ReactNode, type SetStateAction, useEffect, useRef, useState } from 'react'
 import {
   api,
+  type AgentSetting,
   type AgentStatus,
   type PermissionAsked,
   type Presence,
@@ -9,7 +10,16 @@ import {
   type PromptAttachment,
   type SignInAsked,
 } from '../api'
-import { APPROVED, DEFAULT_PRESETS, PRESETS, STATE_PHRASE, permissionModes, running, startSettings } from '../agentState'
+import {
+  APPROVED,
+  DEFAULT_PRESETS,
+  PRESETS,
+  STATE_PHRASE,
+  permissionModes,
+  restartChoices,
+  running,
+  threadAgent,
+} from '../agentState'
 import { useNow } from '../now'
 import { tokens } from '../transcript'
 import { keys, message } from '../query'
@@ -546,27 +556,30 @@ export function AgentDock({
   const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
   const summary = threads.data?.find((candidate) => candidate.id === thread)
   const workspace = summary ? workspaceOf(workspaces.data, summary.repo, summary.workspace) : undefined
+  const live = status !== null && running(status.state)
+  // Stopped, the daemon still has the agent the thread ran and how it left it, until the daemon restarts.
+  const stopped = !live && status?.agent_id ? status : null
   const agent =
     (chosenAgent && !agentRefused(workspace, chosenAgent) ? chosenAgent : undefined) ??
-    agents.find((choice) => !agentRefused(workspace, choice.id))?.id ??
-    ''
+    threadAgent(agents, stopped, summary?.agent, (id) => agentRefused(workspace, id))
   const [error, setError] = useState<string>()
   const act = (action: Promise<unknown>, after?: () => void) => {
     setError(undefined)
     action.then(after, (failure: unknown) => setError(message(failure)))
   }
-  const live = status !== null && running(status.state)
   const elsewhere = people.find((person) => person.agent)
   const narrow = typeof window !== 'undefined' && window.matchMedia?.('(max-width: 767px)').matches
-  // Before an agent runs here, its modes and settings as it last ran on this machine, to start it with.
+  // Before an agent runs here, the modes and settings to start it with: the thread's own, else as it last ran on this machine.
   const seen = agents.find((choice) => choice.id === agent)
-  const seenModes = seen?.modes?.available
+  const restart = restartChoices(agent, stopped, seen, workspace?.workspace.defaults.agents?.[agent]?.settings)
+  const seenModes = restart.modes?.available
   // Before it runs, its mode is offered where its modes are its permissions; else the preset says which it starts in.
   const startModes = permissionModes(seenModes) ? seenModes : undefined
-  const seenSettings = startSettings(seen?.settings ?? [], seenModes)
+  const seenSettings = restart.settings
   const [mode, setChosenMode] = useState<string>()
-  const chosenMode = mode ?? seen?.modes?.current
+  const chosenMode = mode ?? restart.modes?.current
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
+  const startValue = (setting: AgentSetting) => restart.value(setting, chosenSettings[setting.id])
   const { attached, add, remove, clear, restore } = useAttachments()
   const chooseAgent = (chosen: string) => {
     setAgent(chosen)
@@ -622,7 +635,7 @@ export function AgentDock({
   // Idle, the box starts an agent here with the draft as its first prompt, as New thread does.
   const start = () => {
     if (!startable) return
-    const settings = seenSettings.map((setting): [string, string] => [setting.id, chosenSettings[setting.id] ?? setting.current])
+    const settings = seenSettings.map((setting): [string, string] => [setting.id, startValue(setting)])
     const mode = startModes ? (chosenMode ?? null) : null
     optimistic((text, files) => {
       const started = api.startAgent(
@@ -799,7 +812,7 @@ export function AgentDock({
             mode={chosenMode}
             onMode={setChosenMode}
             settings={seenSettings}
-            value={(setting) => chosenSettings[setting.id] ?? setting.current}
+            value={startValue}
             onSetting={(id, value) => setChosenSettings({ ...chosenSettings, [id]: value })}
             narrow={narrow}
           />
