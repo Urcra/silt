@@ -4,16 +4,26 @@
 
 import { type QueryClient, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { token, type BusEvent } from './api'
+import { abortReads, token, type BusEvent } from './api'
 import { keys } from './query'
 import { apiUrl, hosted } from './served'
 
 const RECONNECT_MS = 1000
 const HOSTED_REFRESH_MS = 3000
+/** How long an open socket may say nothing before it counts as dead; the daemon beats every 10 s. */
+export const QUIET_MS = 25_000
+/** How often the socket's quiet is checked. */
+const CHECK_MS = 5000
+/** How long the page may be hidden before what it was reading is read again as it shows. */
+export const ASLEEP_MS = 5000
 
 type Listener = (event: BusEvent) => void
 
-class Bus {
+/**
+ * One socket per tab to the daemon. A phone that sleeps or changes networks can leave it open to a peer long gone,
+ * hearing nothing and never closing, so it is given up once quiet for longer than the daemon's beat allows.
+ */
+export class Bus {
   private socket: WebSocket | null = null
   private topics = new Map<string, number>()
   private listeners = new Set<Listener>()
@@ -21,6 +31,13 @@ class Bus {
   /** The socket closed, or never opened, and hasn't opened since: not before the first try ends. */
   private lost = false
   private watchers = new Set<() => void>()
+  private resumers = new Set<() => void>()
+  /** When the open socket last said anything. */
+  private heardAt = 0
+  /** Whether any socket opened yet, so the next to open follows a lost one. */
+  private openedOnce = false
+  private hiddenAt: number | null = null
+  private checking: ReturnType<typeof setInterval> | null = null
 
   /** Whether the page hears the daemon, or hasn't yet found it doesn't; hosted pages, which poll, count as connected. */
   connected = (): boolean => !this.lost || hosted()
@@ -31,9 +48,24 @@ class Bus {
     return () => this.watchers.delete(watcher)
   }
 
+  /**
+   * Hears the page come back, woken or with its socket open again after losing it, until the returned function is
+   * called: what it was reading then may wait on a dead connection, and what changed meanwhile went unheard.
+   * Listeners then hear `lagged`.
+   */
+  onResume(resumer: () => void): () => void {
+    this.resumers.add(resumer)
+    return () => this.resumers.delete(resumer)
+  }
+
   private setOpen(open: boolean) {
     this.lost = !open
     for (const watcher of this.watchers) watcher()
+  }
+
+  private resume() {
+    for (const resumer of this.resumers) resumer()
+    for (const listener of this.listeners) listener({ event: 'lagged' })
   }
 
   /** Hears every event, until the returned function is called. */
@@ -64,7 +96,52 @@ class Bus {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message))
   }
 
+  /** Gives up an open socket that has said nothing for too long; answers whether it did. */
+  check(): boolean {
+    const socket = this.socket
+    if (!socket || socket.readyState !== WebSocket.OPEN || Date.now() - this.heardAt <= QUIET_MS) return false
+    socket.onopen = socket.onmessage = socket.onclose = null
+    socket.close()
+    this.closed()
+    return true
+  }
+
+  /** The page was hidden or shown. */
+  shown(visible: boolean) {
+    if (!visible) {
+      this.hiddenAt ??= Date.now()
+      return
+    }
+    const hiddenAt = this.hiddenAt
+    this.hiddenAt = null
+    // A socket given up opens again, and resumes then.
+    if (this.check()) return
+    if (hiddenAt !== null && Date.now() - hiddenAt > ASLEEP_MS) this.resume()
+  }
+
+  /** The network came back: connections opened before may be dead. */
+  online() {
+    if (!this.check()) this.resume()
+  }
+
+  private watchPage() {
+    if (this.checking || typeof document === 'undefined') return
+    this.checking = setInterval(() => this.check(), CHECK_MS)
+    document.addEventListener('visibilitychange', () => this.shown(document.visibilityState === 'visible'))
+    window.addEventListener('online', () => this.online())
+  }
+
+  private closed() {
+    this.socket = null
+    this.setOpen(false)
+    this.retry = setTimeout(() => {
+      this.retry = null
+      this.connect()
+    }, RECONNECT_MS)
+  }
+
   private connect() {
+    this.watchPage()
     if (hosted()) {
       // The server has no event socket yet, so everything shown is fetched
       // again every few seconds instead.
@@ -77,26 +154,21 @@ class Bus {
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const socket = new WebSocket(`${scheme}://${window.location.host}${apiUrl('/api/events')}?token=${token()}`)
     this.socket = socket
-    let opened = false
     socket.onopen = () => {
-      opened = true
+      this.heardAt = Date.now()
       this.setOpen(true)
       this.send({ subscribe: [...this.topics.keys()] })
+      // Whatever happened while no socket was open went unheard.
+      if (this.openedOnce) this.resume()
+      this.openedOnce = true
     }
     socket.onmessage = (message: MessageEvent<string>) => {
+      this.heardAt = Date.now()
       const event = JSON.parse(message.data) as BusEvent
+      if (event.event === 'beat') return
       for (const listener of this.listeners) listener(event)
     }
-    socket.onclose = () => {
-      this.socket = null
-      this.setOpen(false)
-      this.retry = setTimeout(() => {
-        this.retry = null
-        this.connect()
-      }, RECONNECT_MS)
-      // Whatever happened while it was closed went unheard.
-      if (opened) for (const listener of this.listeners) listener({ event: 'lagged' })
-    }
+    socket.onclose = () => this.closed()
   }
 }
 
@@ -167,6 +239,17 @@ export class Refetcher {
   }
 }
 
+/**
+ * Gives up the reads under way and fetches everything again: one waiting on a dead connection would otherwise keep
+ * what it reads from ever refreshing, as [`Refetcher`] lets a fetch under way finish.
+ */
+export async function readAgain(queries: QueryClient) {
+  const cancelled = queries.cancelQueries()
+  abortReads()
+  await cancelled
+  await queries.invalidateQueries()
+}
+
 /** How long a burst of `lagged` events counts as one. */
 const LAGGED_MS = 1000
 
@@ -177,6 +260,15 @@ export function useBusInvalidation() {
   const [refetcher] = useState(() => new Refetcher(queries))
   useEffect(() => refetcher.start(), [refetcher])
   const refetch = (queryKey?: readonly unknown[]) => refetcher.refetch(queryKey)
+  useEffect(
+    () =>
+      bus.onResume(() => {
+        // Its `lagged` follows at once; everything is fetched again here instead, once the reads under way are given up.
+        laggedAt.current = Date.now()
+        void readAgain(queries)
+      }),
+    [queries],
+  )
   useBusEvents((event) => {
     switch (event.event) {
       case 'threads':

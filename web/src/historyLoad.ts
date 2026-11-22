@@ -76,7 +76,7 @@ export function useHistory(id: string | null) {
     enabled: id !== null,
     queryFn: ({ signal }) =>
       loadHistory(
-        (offset, limit, known) => api.history(id!, offset, limit, { known }),
+        (offset, limit, known) => api.history(id!, offset, limit, { known, signal }),
         queries.getQueryData<Loaded>(queryKey),
         (loaded) => queries.setQueryData(queryKey, loaded),
         signal,

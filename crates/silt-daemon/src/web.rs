@@ -690,10 +690,17 @@ async fn relay_room(mut socket: WebSocket, server: &str, token: &str, join: Stri
 
 /// Sends the socket the events of the topics it subscribed to, until it
 /// closes.
+/// How often an events socket beats, whatever else it says; the page gives
+/// a socket up after 25 s of quiet (`QUIET_MS` in `web/src/bus.ts`).
+pub(crate) const BEAT: Duration = Duration::from_secs(10);
+
 async fn serve_events(mut socket: WebSocket, mut bus: broadcast::Receiver<BusEvent>) {
     let mut topics: HashSet<String> = HashSet::new();
+    let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + BEAT, BEAT);
+    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let event = tokio::select! {
+            _ = beat.tick() => BusEvent::Beat,
             message = socket.recv() => match message {
                 Some(Ok(Message::Text(text))) => {
                     if let Ok(change) = serde_json::from_str::<BusSubscription>(&text) {

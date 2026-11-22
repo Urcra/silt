@@ -139,9 +139,39 @@ export function token(): string {
   return sessionStorage.getItem(TOKEN_KEY) ?? ''
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** How long a presence beat waits for its answer. */
+const PRESENCE_MS = 10_000
+
+/** Reads under way, given up together once the page wakes or finds its connection again ([`abortReads`]). */
+let reads = new AbortController()
+
+/**
+ * Gives up every read under way. One sent before a phone slept or lost its network can wait on a dead connection
+ * long after the network is back, and what it reads can't refresh until it ends; while it waits it also holds one of
+ * the few connections a browser opens to the machine.
+ */
+export function abortReads() {
+  reads.abort()
+  reads = new AbortController()
+}
+
+/** A signal that aborts once any of `signals` does. */
+function either(signals: (AbortSignal | undefined)[]): AbortSignal {
+  const given = signals.filter((signal) => signal !== undefined)
+  if (given.length === 1) return given[0]
+  const both = new AbortController()
+  for (const signal of given) {
+    if (signal.aborted) both.abort(signal.reason)
+    else signal.addEventListener('abort', () => both.abort(signal.reason), { once: true })
+  }
+  return both.signal
+}
+
+async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(apiUrl(path), {
     method,
+    // A change isn't given up with the reads: it may have been made, and sending it again could make it twice.
+    signal: method === 'GET' ? either([reads.signal, signal]) : signal,
     headers: {
       Authorization: `Bearer ${sessionStorage.getItem(TOKEN_KEY) ?? ''}`,
       // The server takes changes only with it, which other sites can't add (ADR 0026).
@@ -380,14 +410,19 @@ export const api = {
   ) => request<{ path: string; expires_in_ms: number }>('POST', `${thread(id)}/artifacts/${artifact}/frame`, ask),
   /** A thread's history; with `limit`, only that many entries from the `offset`th, or from where it changed since
    * the version `known`. A page leaves out images and the start of long outputs unless asked for `whole`. */
-  history: (id: string, offset?: number, limit?: number, options: { known?: number | null; whole?: boolean } = {}) => {
+  history: (
+    id: string,
+    offset?: number,
+    limit?: number,
+    options: { known?: number | null; whole?: boolean; signal?: AbortSignal } = {},
+  ) => {
     const query = new URLSearchParams()
     if (limit !== undefined) query.set('offset', String(offset ?? 0))
     if (limit !== undefined) query.set('limit', String(limit))
     if (options.known !== undefined && options.known !== null) query.set('known', String(options.known))
     if (options.whole) query.set('whole', 'true')
     const asked = query.toString()
-    return request<HistoryPage>('GET', `${thread(id)}/history${asked ? `?${asked}` : ''}`)
+    return request<HistoryPage>('GET', `${thread(id)}/history${asked ? `?${asked}` : ''}`, undefined, options.signal)
   },
   turns: (id: string) => request<TurnInfo[]>('GET', `${thread(id)}/turns`),
   commits: (id: string) => request<CommitView[]>('GET', `${thread(id)}/commits`),
@@ -450,7 +485,8 @@ export const api = {
   gitText: (id: string, oid: string) => request<string>('GET', `${thread(id)}/git/${oid}`),
   sendDeltas: (id: string, deltas: string) => request<number>('POST', `${thread(id)}/replica`, { deltas }),
   presence: (id: string, state: { file: string | null; line: number | null; draft: string; leaving?: boolean }) =>
-    request<PresenceReply>('POST', `${thread(id)}/presence`, state),
+    // The heartbeat sends again every few seconds, so one that hangs is given up rather than holding a connection.
+    request<PresenceReply>('POST', `${thread(id)}/presence`, state, AbortSignal.timeout(PRESENCE_MS)),
   live: (id: string) => request<LiveState>('GET', `${thread(id)}/live`),
   agents: () => request<AgentChoices>('GET', '/api/agents'),
   /** How much of its plan `agent` has used, with the sign-in it runs with in `thread` (ADR 0095); a daemon's only. */
