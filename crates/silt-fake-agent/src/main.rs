@@ -481,6 +481,14 @@ async fn agent() -> Result<()> {
                         let mut count = ToolCall::new("count-1", "wc -l src/main.rs").kind(ToolKind::Execute);
                         count.meta = tagged.as_object().cloned();
                         notify(&worker, &session, SessionUpdate::ToolCall(count))?;
+                        let mut described = ToolCallUpdate::new(
+                            "count-1",
+                            ToolCallUpdateFields::new()
+                                .title("wc -l src/main.rs")
+                                .raw_input(serde_json::json!({"command": "wc -l src/main.rs", "description": "Count main's lines"})),
+                        );
+                        described.meta = tagged.as_object().cloned();
+                        notify(&worker, &session, SessionUpdate::ToolCallUpdate(described))?;
                         let mut counted = ToolCallUpdate::new(
                             "count-1",
                             ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("2 src/main.rs")),
