@@ -1216,6 +1216,13 @@ fn a_subagent_of_an_agent_speaking_v1_is_kept_inside_the_call_that_started_it() 
     assert_eq!(news, [("task-1", "running"), ("task-1", "completed")]);
     let call = entries.iter().find(|entry| entry["kind"] == "tool_call" && entry["tool"]["id"] == "task-1").expect("its call");
     assert_eq!((call["tool"]["subject"].as_str(), call["tool"]["detail"].as_str()), (Some("Count lines"), Some("explore")));
+    let described: Vec<(Option<&str>, Option<&str>)> = entries
+        .iter()
+        .filter(|entry| entry["kind"] == "tool_call" && entry["tool"]["id"] == "count-1")
+        .map(|entry| (entry["tool"]["subject"].as_str(), entry["tool"]["detail"].as_str()))
+        .collect();
+    let said = (Some("wc -l src/main.rs"), Some("Count main's lines"));
+    assert_eq!(described.last(), Some(&said), "the subagent's call, once updated, is still a command: {described:?}");
 }
 
 /// An agent on v1, as Copilot, ignores a cancel when no prompt is out, so
