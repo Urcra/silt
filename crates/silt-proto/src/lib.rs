@@ -35,8 +35,9 @@ pub mod view;
 /// they use (ADR 0099). 21: the folders an org lets its members' agents
 /// ask for, and the plugins it installs, allows and holds (ADR 0102,
 /// ADR 0104). 22: the Auto preset, which a workspace's or an org's cap may
-/// name (ADR 0114).
-pub const PROTOCOL: u32 = 22;
+/// name (ADR 0114). 23: the person's devices by name in the listing, and
+/// the machine holding each thread in its summary (ADR 0115).
+pub const PROTOCOL: u32 = 23;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -484,6 +485,14 @@ pub struct Listing {
     /// show and pass commands on to (ADR 0026).
     #[serde(default)]
     pub running: Vec<RunningElsewhere>,
+    /// The person's own devices by name, so a daemon can say which of them
+    /// holds a thread's lease.
+    #[serde(default)]
+    pub devices: Vec<(DeviceId, String)>,
+    /// The device that registered each listed thread, where the server
+    /// knows it: where a thread no device has taken over lives.
+    #[serde(default)]
+    pub made_on: Vec<(ThreadId, DeviceId)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,6 +1,6 @@
 //! What the views across families read of a family the daemon doesn't
 //! hold: its threads' summaries, merge requests, graph, commits and the
-//! files its threads changed (ADR 0115). It is taken from the family by
+//! files its threads changed (ADR 0116). It is taken from the family by
 //! the views' own code just before the family is let go of, so it says
 //! what they would; a family changes only once held again.
 

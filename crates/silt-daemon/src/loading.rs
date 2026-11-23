@@ -1,5 +1,5 @@
 //! Events that name a family the daemon doesn't hold wait while the loader
-//! loads it, and the core goes on with others (ADR 0115).
+//! loads it, and the core goes on with others (ADR 0116).
 
 use std::collections::{BTreeSet, HashMap};
 

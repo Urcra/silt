@@ -172,36 +172,46 @@ fn started(call: &str, tool: &str, state: &Value) -> Option<Task> {
         "task" | "subagent" => (from(&["sessionId", "sessionID"])?, TaskKind::Subagent),
         _ => (from(&["shellID", "shellId"])?, TaskKind::Background),
     };
+    // A subagent in the background goes on after its call answers: 1.x
+    // says `background`, 2.x, whose subagents all run so, `status`.
+    let background = metadata.and_then(|metadata| metadata.get("background")).and_then(Value::as_bool) == Some(true)
+        || from(&["status"]).as_deref() == Some("running");
     let status = match state.get("status").and_then(Value::as_str) {
         Some("error") => TaskStatus::Failed,
-        Some("completed") if kind == TaskKind::Subagent => TaskStatus::Completed,
+        Some("completed") if kind == TaskKind::Subagent && !background => TaskStatus::Completed,
         _ => TaskStatus::Running,
     };
     Some(Task { id, call: Some(call.to_owned()), kind: Some(kind), status, side: None, summary: None })
 }
 
 /// What OpenCode tells the agent once a background subagent or shell
-/// ends: `<subagent sessionID="…" state="completed" …>` or
-/// `<shell id="…" state="error" …>`, with what it said inside.
+/// ends, with what it said inside: 2.x up to 2.3 says
+/// `<subagent sessionID="…" state="completed" …>` or
+/// `<shell id="…" state="error" …>`, 2.4 on
+/// `<background-result kind="subagent" sessionID="…" state="…" …>`, and
+/// 1.x `<task id="…" state="…">`, its summary and its result.
 fn reported(text: &str) -> Option<Task> {
-    let text = text.trim_start();
-    let (kind, rest) = if let Some(rest) = text.strip_prefix("<subagent ") {
-        (TaskKind::Subagent, rest)
-    } else {
-        (TaskKind::Background, text.strip_prefix("<shell ")?)
-    };
+    let (tag, rest) = text.trim_start().strip_prefix('<')?.split_once(' ')?;
     let head = &rest[..rest.find('>')?];
     let attribute = |name: &str| {
-        let start = head.find(&format!("{name}=\""))? + name.len() + 2;
+        let start = format!(" {head}").find(&format!(" {name}=\""))? + name.len() + 2;
         Some(head[start..start + head[start..].find('"')?].to_owned())
     };
-    let id = attribute(if kind == TaskKind::Subagent { "sessionID" } else { "id" })?;
+    let (kind, id) = match tag {
+        "subagent" => (TaskKind::Subagent, attribute("sessionID")?),
+        "background-result" if attribute("kind").as_deref() == Some("subagent") => (TaskKind::Subagent, attribute("sessionID")?),
+        "task" => (TaskKind::Subagent, attribute("id")?),
+        "shell" | "background-result" => (TaskKind::Background, attribute("id")?),
+        _ => return None,
+    };
     let status = attribute("state").map_or(TaskStatus::Completed, |state| match state.as_str() {
         "error" => TaskStatus::Failed,
         other => TaskStatus::parse(other),
     });
     let body = rest[head.len() + 1..].rsplit_once("</").map_or("", |(body, _)| body).trim();
-    let summary = attribute("description").or_else(|| attribute("command"));
+    let summary =
+        attribute("description").or_else(|| attribute("command")).or_else(|| within(body, "summary").map(str::to_owned));
+    let body = within(body, "task_result").or_else(|| within(body, "task_error")).unwrap_or(body);
     let summary = match (summary, body.is_empty()) {
         (Some(summary), false) => Some(format!("{summary}\n\n{body}")),
         (Some(summary), true) => Some(summary),
@@ -209,6 +219,12 @@ fn reported(text: &str) -> Option<Task> {
         (None, true) => None,
     };
     Some(Task { id, call: None, kind: Some(kind), status, side: None, summary })
+}
+
+/// What `<tag>` holds in `text`, as 1.x reports wrap their summary and result.
+fn within<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let start = text.find(&format!("<{tag}>"))? + tag.len() + 2;
+    Some(text[start..start + text[start..].find(&format!("</{tag}>"))?].trim())
 }
 
 /// The export restoring `session` imports. A fork's records get ids of
@@ -499,6 +515,30 @@ mod tests {
         let child = reported("<subagent sessionID=\"ses_child\" state=\"completed\" description=\"look\">found it</subagent>");
         assert_eq!(child.map(|task| (task.id, task.status)), Some(("ses_child".into(), TaskStatus::Completed)));
         assert!(reported("plain text").is_none());
+        let current = reported(
+            "<background-result kind=\"subagent\" sessionID=\"ses_child\" state=\"cancelled\" description=\"look\">stopped</background-result>",
+        );
+        assert_eq!(
+            current.map(|task| (task.id, task.kind, task.status)),
+            Some(("ses_child".into(), Some(TaskKind::Subagent), TaskStatus::Stopped))
+        );
+        let one = reported(
+            "<task id=\"ses_child\" state=\"completed\"><summary>Background task completed: look</summary><task_result>found it</task_result></task>",
+        );
+        assert_eq!(
+            one.map(|task| (task.id, task.status, task.summary)),
+            Some(("ses_child".into(), TaskStatus::Completed, Some("Background task completed: look\n\nfound it".into())))
+        );
+    }
+
+    #[test]
+    fn a_subagent_in_the_background_runs_on_after_its_call_answers() {
+        let two = json!({"status": "completed", "metadata": {"sessionID": "ses_child", "status": "running"}});
+        assert_eq!(started("c1", "subagent", &two).map(|task| task.status), Some(TaskStatus::Running));
+        let one = json!({"status": "completed", "metadata": {"sessionId": "ses_child", "background": true}});
+        assert_eq!(started("c1", "task", &one).map(|task| task.status), Some(TaskStatus::Running));
+        let waited = json!({"status": "completed", "metadata": {"sessionId": "ses_child"}});
+        assert_eq!(started("c1", "task", &waited).map(|task| task.status), Some(TaskStatus::Completed));
     }
 
     #[test]

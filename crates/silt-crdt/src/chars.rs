@@ -1,6 +1,6 @@
 //! An insertion's characters, held as UTF-8 and indexed by character: a
 //! `Vec<char>` took four bytes for each, most of a long family's memory
-//! (ADR 0115).
+//! (ADR 0116).
 
 use std::fmt;
 use std::ops::Range;

@@ -108,7 +108,7 @@ pub struct Snapshot {
 }
 
 /// What the views across families read of a family, as of the store's
-/// position `position` in it (ADR 0115).
+/// position `position` in it (ADR 0116).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredDigest {
     pub format: i64,
@@ -393,7 +393,7 @@ pub struct RunToken {
 pub struct Store {
     pool: SqlitePool,
     blobs: BlobStore,
-    /// Families' files' states, kept apart from their snapshots (ADR 0115).
+    /// Families' files' states, kept apart from their snapshots (ADR 0116).
     files: BlobStore,
     watch: Arc<tokio::sync::Mutex<Watch>>,
 }

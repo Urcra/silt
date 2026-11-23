@@ -1,4 +1,4 @@
-//! The families the daemon knows, each held only while in use (ADR 0115):
+//! The families the daemon knows, each held only while in use (ADR 0116):
 //! loaded when something reads it, and let go of once unused.
 //!
 //! What names a family loads it ahead, on the loader's thread, while the

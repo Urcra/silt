@@ -1,4 +1,4 @@
-//! What the daemon holds of the store, kept to what is in use (ADR 0115).
+//! What the daemon holds of the store, kept to what is in use (ADR 0116).
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant, SystemTime};

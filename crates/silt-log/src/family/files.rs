@@ -1,6 +1,6 @@
 //! A family's files, each decoded from the state its snapshot keeps apart
 //! only when something reads it. A long family's files were most of its
-//! memory, though a session touches few of them (ADR 0115).
+//! memory, though a session touches few of them (ADR 0116).
 
 use std::collections::HashMap;
 use std::fmt;

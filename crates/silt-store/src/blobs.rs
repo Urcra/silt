@@ -20,7 +20,7 @@ impl BlobStore {
 
     /// Blobs whose loss a reader recovers from, kept without syncing each:
     /// a family's files' states, whose family is replayed when one is
-    /// missing or damaged (ADR 0115). A snapshot writes thousands at once.
+    /// missing or damaged (ADR 0116). A snapshot writes thousands at once.
     pub fn recoverable(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into(), durable: false }
     }
@@ -78,7 +78,7 @@ impl BlobStore {
     }
 
     /// [`Self::get`] for a caller that can't wait on the runtime, such as a
-    /// family reading a file's state when first used (ADR 0115).
+    /// family reading a file's state when first used (ADR 0116).
     pub fn read(&self, hash: BlobHash) -> io::Result<Vec<u8>> {
         let bytes = std::fs::read(self.path(hash))?;
         if Self::hash(&bytes) == hash {

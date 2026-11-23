@@ -6,7 +6,7 @@ use silt_crdt::is_git_dir_name;
 
 /// Files larger than this are kept whole, as blobs, rather than as text
 /// merged character by character: a long file's text history was most of
-/// a family's memory (ADR 0115). Whoever writes a delta applies it, never
+/// a family's memory (ADR 0116). Whoever writes a delta applies it, never
 /// whoever applies one, so every replica projects the same.
 pub const TEXT_LIMIT: usize = 5 * 1024 * 1024;
 

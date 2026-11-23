@@ -1110,6 +1110,31 @@ fn a_command_left_running_that_ended_unheard_is_marked_stopped_when_stopped() {
     assert_eq!(listed_background(&api, &thread), 0, "{live}");
 }
 
+/// Claude's adapter never says when a command Claude's PowerShell tool left
+/// running ends, only Claude Code's transcript does: Silt reads it there,
+/// rather than showing the command running for good.
+#[test]
+fn a_powershell_command_claude_left_running_ends_as_its_transcript_says() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "claude-acp", "name": "Fake Claude", "command": fake, "env": {"FAKE_ACP_V2": "1"}}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let start = serde_json::json!({"clone": env.repo, "agent": "claude-acp", "prompt": "add acp PowerShell"});
+    let started = api.ok("POST", "/api/agents/start", Some(start));
+    let thread =
+        started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("the thread").to_owned());
+    settled_history(&api, &thread, "The PowerShell command waited.");
+    assert!(
+        eventually(|| task_news(&api, &thread, "ps-1") == ["running", "completed"]),
+        "{:?}",
+        task_news(&api, &thread, "ps-1")
+    );
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["stoppable"], serde_json::json!([]), "{live}");
+    assert_eq!(listed_background(&api, &thread), 0, "{live}");
+}
+
 /// A shell Copilot detached and never reads ends without Silt hearing of
 /// it: Silt sees its process gone and marks it done, and leaves it running
 /// until then.
