@@ -11,6 +11,9 @@
 //! `Keep` makes it leave a real process running in the background, `silt-fake-agent
 //! keep-running <cwd>`, whose end it reports, as Claude does, and goes on about.
 //! `Unheard` makes it leave a command no process runs, whose end it never reports.
+//! `PowerShell` makes it leave a PowerShell command running, whose end, as
+//! Claude's adapter, it never reports: it goes only to Claude Code's
+//! transcript under `CLAUDE_CONFIG_DIR`, and sets the agent going again.
 //! `Present` makes it put a plan to the person, as Claude's ExitPlanMode
 //! does, by asking leave to quit its plan mode. Its session offers the commands
 //! `count` and `compact` as it opens, and drops `compact` on a prompt.
@@ -58,6 +61,25 @@ fn options(mode: &str, model: &str) -> Value {
 
 fn parse<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
     serde_json::from_value(value).map_err(agent_client_protocol::Error::into_internal_error)
+}
+
+/// Appends Claude Code's report that the background task `task`, started by
+/// `call`, completed to the transcript of `session` under
+/// `$CLAUDE_CONFIG_DIR`, as Claude Code keeps it for a session in `cwd`.
+fn report_in_transcript(cwd: &std::path::Path, session: &str, task: &str, call: &str) -> Result<()> {
+    let config = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_default();
+    let slug: String = cwd.to_string_lossy().chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' }).collect();
+    let project = config.join("projects").join(slug);
+    let report = format!(
+        "<task-notification>\n<task-id>{task}</task-id>\n<tool-use-id>{call}</tool-use-id>\n<status>completed</status>\n</task-notification>"
+    );
+    let line = json!({"type": "user", "origin": {"kind": "task-notification"}, "message": {"role": "user", "content": report}});
+    let written = std::fs::create_dir_all(&project).and_then(|()| {
+        let mut transcript =
+            std::fs::OpenOptions::new().create(true).append(true).open(project.join(format!("{session}.jsonl")))?;
+        std::io::Write::write_all(&mut transcript, format!("{line}\n").as_bytes())
+    });
+    written.map_err(agent_client_protocol::Error::into_internal_error)
 }
 
 fn say(connection: &ConnectionTo<Client>, session: &v2::SessionId, update: Value) -> Result<()> {
@@ -227,6 +249,12 @@ pub async fn main() -> Result<()> {
                         say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "unheard-1", "output": {"data": answer}}))?;
                         say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "unheard-1", "status": "completed"}))?;
                     }
+                    let powershell = prompt.contains("PowerShell");
+                    if powershell {
+                        let answer = "Command running in background with ID: bgps1. Output is being written to: bgps1.output";
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "ps-1", "name": "PowerShell", "rawInput": {"command": "Start-Sleep 1", "description": "Wait a second", "run_in_background": true}, "status": "pending", "title": "Start-Sleep 1", "kind": "execute"}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "ps-1", "status": "completed", "content": [{"type": "content", "content": {"type": "text", "text": answer}}]}))?;
+                    }
                     if prompt.contains("Keep") {
                         let command = format!("keep-running {}", cwd.display());
                         let answer = base64::engine::general_purpose::STANDARD.encode("Command running in background with ID: bgkeep1.");
@@ -275,6 +303,14 @@ pub async fn main() -> Result<()> {
                             return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "cancelled"}));
                         }
                         say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "later-bg", "content": {"type": "text", "text": "The background command printed BG."}}))?;
+                        return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}));
+                    }
+                    if powershell {
+                        // Its end goes only to Claude Code's transcript; the adapter says nothing of it.
+                        tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
+                        report_in_transcript(&cwd, &session.to_string(), "bgps1", "ps-1")?;
+                        say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "running"}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "later-ps", "content": {"type": "text", "text": "The PowerShell command waited."}}))?;
                         return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}));
                     }
                     if aside {
