@@ -85,16 +85,19 @@ export function AgentChip({
   )
 }
 
-/** How hard the agent thinks, as four bars filled by how far along its choices the chosen one is. */
-export function EffortBars({ at, of }: { at: number; of: number }) {
-  const filled = at < 0 || of === 0 ? 0 : Math.max(1, Math.round(((at + 1) / of) * 4))
+/**
+ * How hard the agent thinks, as one bar per level of `effortLevel`, filled up to the chosen one. The agent's default
+ * has no level, so no bars.
+ */
+export function EffortBars({ at, of }: { at: number | null; of: number }) {
+  if (at === null) return null
   return (
     <span className="inline-flex h-[11px] items-end gap-[1.5px]" aria-hidden="true">
-      {[4, 6, 8.5, 11].map((height, index) => (
+      {Array.from({ length: of }, (_, index) => (
         <i
-          key={height}
-          style={{ height }}
-          className={index < filled ? 'block w-[2.5px] rounded-[1px] bg-current' : 'block w-[2.5px] rounded-[1px] bg-line'}
+          key={index}
+          style={{ height: of === 1 ? 11 : 4 + (7 * index) / (of - 1) }}
+          className={index <= at ? 'block w-[2.5px] rounded-[1px] bg-current' : 'block w-[2.5px] rounded-[1px] bg-line'}
         />
       ))}
     </span>

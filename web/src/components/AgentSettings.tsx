@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode, useContext } from 'react'
 import { permissionModes, presetDriven } from '../agentState'
 import type { AgentChoiceItem, AgentSetting } from '../api'
-import { isEffort, isModel } from '../agentSettings'
+import { effortLevel, isEffort, isModel } from '../agentSettings'
 import { Icon, Popover, cx } from '../ui'
 import { EffortBars } from './AgentPickers'
 import { ChipSelect, GHOST_CHIP } from './ChipSelect'
@@ -76,9 +76,9 @@ export function AgentSettings({
     />
   )
   const modelName = model?.choices.find((choice) => choice.id === value(model))?.name
-  const effortAt = effort ? effort.choices.findIndex((choice) => choice.id === value(effort)) : -1
-  const effortName = effort?.choices[effortAt]?.name
-  const bars = effort && <EffortBars at={effortAt} of={effort.choices.length} />
+  const effortName = effort?.choices.find((choice) => choice.id === value(effort))?.name
+  const level = effort && effortLevel(effort.choices, value(effort))
+  const bars = level && level.at !== null && <EffortBars at={level.at} of={level.of} />
   const named = [modelName, effortName && `${effortName} effort`].filter(Boolean).join(' · ')
   const inMenu = folded ? [modeChip, ...shown.map(chip), more] : [...rest.map(chip), more]
   return (
@@ -90,7 +90,8 @@ export function AgentSettings({
           triggerLabel={named ? `model and effort: ${named}` : 'model and effort'}
           triggerTitle={named}
           triggerClassName={cx(GHOST_CHIP, 'aria-expanded:bg-surface-2')}
-          panelClassName="w-72 p-1"
+          // As wide as the effort steps need, so every step's name fits on one row.
+          panelClassName="w-max min-w-72 max-w-[calc(100vw-1rem)] p-1"
           trigger={
             <span className="inline-flex items-center gap-1.5 text-fg-1">
               {modelName ?? 'Effort'}
@@ -134,6 +135,9 @@ export function AgentSettings({
   )
 }
 
+/** Beyond this many steps of effort, the steps show their names alone so the row stays a panel's width. */
+const MAX_STEPS_WITH_BARS = 6
+
 /** The model chip's panel: the agent's models to pick one, then how hard it thinks, in steps. */
 function ModelAndEffort({
   model,
@@ -150,7 +154,8 @@ function ModelAndEffort({
   return (
     <div className="flex flex-col">
       {model && (
-        <div role="menu" aria-label="model" className="flex flex-col">
+        // Sized by the panel, not by its descriptions, which wrap.
+        <div role="menu" aria-label="model" className="flex w-0 min-w-full flex-col">
           <span className="px-2 pt-1.5 pb-1 text-2xs tracking-[0.06em] text-fg-3 uppercase">Model</span>
           {/* Its own scroll, so a long list of models keeps the effort steps in view. */}
           <div className="flex max-h-[min(18rem,45dvh)] flex-col overflow-y-auto">
@@ -194,6 +199,7 @@ function ModelAndEffort({
           >
             {effort.choices.map((choice, index) => {
               const checked = choice.id === value(effort)
+              const { at, of } = effortLevel(effort.choices, choice.id)
               return (
                 <button
                   key={choice.id}
@@ -203,12 +209,12 @@ function ModelAndEffort({
                   title={choice.description ?? undefined}
                   onClick={() => onSetting(effort.id, choice.id, false)}
                   className={cx(
-                    'inline-flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 px-1.5 text-xs max-md:min-h-11',
+                    'inline-flex h-7 flex-auto items-center justify-center gap-1.5 px-2 text-xs whitespace-nowrap max-md:min-h-11',
                     index > 0 && 'border-l border-line',
                     checked ? 'bg-accent-tint text-accent-fg' : 'text-fg-2 hover:bg-surface-2',
                   )}
                 >
-                  <EffortBars at={index} of={effort.choices.length} />
+                  {effort.choices.length <= MAX_STEPS_WITH_BARS && <EffortBars at={at} of={of} />}
                   {choice.name}
                 </button>
               )
