@@ -453,7 +453,7 @@ struct Fields {
     subtype: Option<Value>,
     message: Option<Message>,
     /// What a tool's result says beside its text: the subagent or
-    /// background command it started.
+    /// background command it started, or the subagent it resumed.
     #[serde(rename = "toolUseResult", default, deserialize_with = "started")]
     started: Option<Started>,
     attachment: Option<Attachment>,
@@ -463,6 +463,8 @@ struct Fields {
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Started {
     agent: Option<String>,
+    /// A finished subagent that `SendMessage` set running again.
+    resumed: Option<String>,
     background: Option<String>,
     status: Option<String>,
 }
@@ -477,9 +479,9 @@ struct Attachment {
     prompt: Option<Value>,
 }
 
-/// Reads only `agentId`, `backgroundTaskId` and `status` of a structured
-/// result, skipping its output, which can be long; a result that isn't an
-/// object gives none.
+/// Reads only `agentId`, `resumedAgentId`, `backgroundTaskId` and `status`
+/// of a structured result, skipping its output, which can be long; a result
+/// that isn't an object gives none.
 fn started<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Started>, D::Error> {
     use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
 
@@ -496,6 +498,7 @@ fn started<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<S
             while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
                 let field = match key.as_ref() {
                     "agentId" => &mut started.agent,
+                    "resumedAgentId" => &mut started.resumed,
                     "backgroundTaskId" => &mut started.background,
                     "status" => &mut started.status,
                     _ => {
@@ -624,7 +627,7 @@ fn started_task(started: Started, entries: &[Entry]) -> Option<Task> {
         Entry::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
         _ => None,
     });
-    let (id, kind) = match (started.agent, started.background) {
+    let (id, kind) = match (started.agent.or(started.resumed), started.background) {
         (Some(agent), _) => (agent, TaskKind::Subagent),
         (None, Some(background)) => (background, TaskKind::Background),
         (None, None) => return None,
@@ -863,6 +866,20 @@ mod tests {
         assert!(matches!(&normalize(&finished)[1], Entry::Task(Task { status: TaskStatus::Completed, .. })));
         let plain = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t3","type":"tool_result","content":"ok"}]},"toolUseResult":"Error: no"}"#;
         assert_eq!(normalize(plain).len(), 1);
+    }
+
+    #[test]
+    fn a_message_that_resumes_a_finished_subagent_sets_it_running_under_the_message_s_call() {
+        let resumed = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"s1","type":"tool_result","content":[{"type":"text","text":"{\"success\":true,\"message\":\"Resuming agent ad7\"}"}]}]},"toolUseResult":{"success":true,"message":"Resuming agent ad7","resumedAgentId":"ad7","revivedAgentId":"ad7","pin":{"id":"ad7","name":"ad7","ref":"450a12"}}}"#;
+        assert_eq!(
+            normalize(resumed)[1],
+            Entry::Task(Task {
+                side: Some("agent-ad7".into()),
+                ..task("ad7", Some("s1"), Some(TaskKind::Subagent), TaskStatus::Running)
+            })
+        );
+        let queued = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"s2","type":"tool_result","content":"queued"}]},"toolUseResult":{"success":true,"message":"Message queued for delivery to ad7 at its next tool round.","pin":{"id":"ad7"}}}"#;
+        assert_eq!(normalize(queued).len(), 1, "a message to a subagent still running starts nothing");
     }
 
     #[test]

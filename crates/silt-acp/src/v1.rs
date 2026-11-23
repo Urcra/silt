@@ -559,14 +559,15 @@ fn parent_of(meta: Option<&Meta>) -> Option<String> {
 /// What a call's update says it left running or saw end: Claude's adapter
 /// passes the tool's structured result as `_meta.claudeCode.toolResponse`,
 /// naming the subagent (`agentId`) or background command
-/// (`backgroundTaskId`) it started, and the exit of a background command as
+/// (`backgroundTaskId`) it started or the finished subagent `SendMessage`
+/// set running again (`resumedAgentId`), and the exit of a background command as
 /// `_meta.terminal_exit` once it ends. Claude Code gives that no exit code:
 /// the command ran its course.
 fn task_of(meta: Option<&Meta>) -> Option<TaskNews> {
     let meta = meta?;
     let response = meta.get("claudeCode").and_then(|claude| claude.get("toolResponse"));
     let field = |key: &str| response.and_then(|response| response.get(key)).and_then(Value::as_str).map(str::to_owned);
-    if let Some(agent) = field("agentId") {
+    if let Some(agent) = field("agentId").or_else(|| field("resumedAgentId")) {
         let status = match field("status").as_deref() {
             None | Some("async_launched") => "running".to_owned(),
             Some(status) => status.to_owned(),
@@ -774,6 +775,8 @@ mod tests {
         );
         let subagent = news(json!({"claudeCode": {"toolResponse": {"agentId": "ad7", "status": "completed"}}}));
         assert_eq!(subagent.map(|news| (news.kind, news.status)), Some((Some("subagent".into()), "completed".into())));
+        let resumed = news(json!({"claudeCode": {"toolResponse": {"success": true, "resumedAgentId": "ad7"}}}));
+        assert_eq!(resumed.map(|news| (news.id, news.status)), Some((Some("ad7".into()), "running".into())));
         let exited = news(json!({"terminal_exit": {"exit_code": 1, "terminal_id": "t1"}}));
         assert_eq!(exited.map(|news| news.status), Some("failed".into()));
         let ran = news(json!({"terminal_exit": {"exit_code": null, "signal": null, "terminal_id": "t1"}}));

@@ -495,9 +495,17 @@ export function keepRows(before: readonly Row[] | undefined, after: Row[]): Row[
   return same ? (before as Row[]) : kept
 }
 
-/** The entries `tasksOf` reads: task news and subagents' own. */
+/** The entries `tasksOf` reads: task news, subagents' own, and the calls that start or resume a subagent. */
 export function taskEntries(entries: HistoryEntry[]): HistoryEntry[] {
-  return entries.filter((entry) => entry.task || entry.side)
+  return entries.filter((entry) => entry.task || entry.side || (entry.kind === 'tool_call' && startsSubagent(entry)))
+}
+
+/** The tools that message a subagent already started, which may set a finished one running again; as Silt's `RESUMES`. */
+const RESUMES = new Set(['SendMessage', 'followup_task', 'send_message', 'send_input', 'write_agent'])
+
+/** A call that starts a subagent, or messages one, which may set it running again. */
+function startsSubagent(call: HistoryEntry): boolean {
+  return call.tool?.kind === 'subagent' || (call.tool !== null && call.tool !== undefined && RESUMES.has(call.tool.name))
 }
 
 export { sameList }

@@ -391,7 +391,8 @@ struct Child {
     /// Commands it left running in the background, by their calls.
     background: HashSet<String>,
     ended: bool,
-    /// Its end was told, which a later run doesn't undo.
+    /// Its end was told, which only a message that wakes it again undoes:
+    /// a later run of its own doesn't.
     end_told: bool,
 }
 
@@ -567,10 +568,15 @@ impl Reading {
             return Vec::new();
         }
         let child = self.children.entry(recipient.clone()).or_default();
-        // A later message to a subagent already started goes on its work.
-        if child.call.is_some() {
+        // A later message to a subagent at work goes on its work; one to a
+        // subagent whose end was told sets it running again, as its own
+        // call. Its `running` may come before the message, so its told end
+        // decides, not whether it's idle.
+        if child.call.is_some() && !child.end_told {
             return Vec::new();
         }
+        child.ended = false;
+        child.end_told = false;
         child.parent.get_or_insert(sender);
         let call = message.message_id.to_string();
         child.call = Some(call.clone());
@@ -1089,6 +1095,63 @@ mod tests {
         assert!(
             matches!(&reported[..], [Event::Update(Update::ToolUpdate { id, status: Some(status), output: Some(output), .. })] if id == "toolu_A" && status == "completed" && output == "SUB_OK")
         );
+    }
+
+    #[test]
+    fn a_message_to_a_subagent_gone_idle_runs_it_again_as_a_call_of_its_own() {
+        let (mut reading, s) = reading();
+        let child = SessionId::new("a260308e0ffbde619");
+        let message = |reading: &mut Reading, id: &str, text: &str| {
+            read(
+                reading,
+                &s,
+                serde_json::json!({"sessionUpdate": "session_message", "messageId": id, "senderSessionId": "s1", "recipientSessionId": "a260308e0ffbde619", "content": [{"type": "text", "text": text}]}),
+            )
+        };
+        let idle = |reading: &mut Reading| {
+            read(
+                reading,
+                &s,
+                serde_json::json!({"sessionUpdate": "subagent_update", "sessionId": "a260308e0ffbde619", "state": {"state": "idle", "stopReason": "end_turn"}}),
+            )
+        };
+        message(&mut reading, "toolu_A", "Build the hearth.");
+        assert!(message(&mut reading, "toolu_B", "Mind the chimney.").is_empty(), "it is still at work");
+        idle(&mut reading);
+        let resumed = message(&mut reading, "toolu_C", "Make the fire bigger.");
+        let Event::Update(Update::ToolCall { id, input: Some(input), .. }) = &resumed[0] else {
+            panic!("the call that set it running again: {resumed:?}");
+        };
+        assert_eq!((id.as_str(), input["prompt"].as_str()), ("toolu_C", Some("Make the fire bigger.")));
+        assert_eq!(task_of(&resumed[1]), Some(("toolu_C", Some("a260308e0ffbde619"), Some("subagent"), "running")));
+        assert_eq!(reading.running_children(), std::slice::from_ref(&child));
+        let said = read(
+            &mut reading,
+            &child,
+            serde_json::json!({"sessionUpdate": "agent_message_chunk", "messageId": "m2", "content": {"type": "text", "text": "Bigger."}}),
+        );
+        assert!(matches!(&said[..], [Event::Update(Update::Within { parent, .. })] if parent == "toolu_C"));
+        assert_eq!(task_of(&idle(&mut reading)[0]), Some(("toolu_C", Some("a260308e0ffbde619"), Some("subagent"), "completed")));
+    }
+
+    /// The adapter may say a subagent runs before the message that woke it.
+    #[test]
+    fn a_subagent_said_running_before_the_message_that_woke_it_runs_under_that_message() {
+        let (mut reading, s) = reading();
+        start_child(&mut reading, &s, "c1", "toolu_A");
+        assert_eq!(task_of(&read(&mut reading, &s, idle("c1"))[0]), Some(("toolu_A", Some("c1"), Some("subagent"), "completed")));
+        read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "subagent_update", "sessionId": "c1", "state": {"state": "running"}}),
+        );
+        let woke = read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "session_message", "messageId": "toolu_C", "senderSessionId": "s1", "recipientSessionId": "c1", "content": [{"type": "text", "text": "Again."}]}),
+        );
+        assert_eq!(task_of(&woke[1]), Some(("toolu_C", Some("c1"), Some("subagent"), "running")));
+        assert_eq!(task_of(&read(&mut reading, &s, idle("c1"))[0]), Some(("toolu_C", Some("c1"), Some("subagent"), "completed")));
     }
 
     /// Starts the subagent `child` of the agent `s1` with the call `call`.

@@ -2,6 +2,7 @@
 //! `$COPILOT_HOME/session-state/<id>/` with an append-only `events.jsonl`
 //! and a `workspace.yaml` naming its directory (docs/research/agents.md).
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -40,6 +41,12 @@ pub struct CopilotReader {
     /// don't write; a reply without tools then ends the turn itself.
     in_call: bool,
     asked_for_tools: bool,
+    /// `write_agent` calls not yet answered, with the agent each names.
+    messages: Vec<(String, Option<String>)>,
+    /// Subagents whose last turn ended: one woken by a message starts again
+    /// under the call that started it, which Silt credits to the message.
+    ended: HashSet<String>,
+    started: HashSet<String>,
 }
 
 impl Reader for CopilotReader {
@@ -50,6 +57,7 @@ impl Reader for CopilotReader {
             read.marks.clear();
             return read;
         }
+        self.woken(&mut read);
         let kind = serde_json::from_str::<Value>(line)
             .ok()
             .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_owned))
@@ -74,6 +82,38 @@ impl Reader for CopilotReader {
             _ => {}
         }
         read
+    }
+}
+
+impl CopilotReader {
+    /// Credits a subagent's turn a `write_agent` message woke it to with
+    /// that message: the one naming it, else the oldest unanswered.
+    fn woken(&mut self, read: &mut Read) {
+        for entry in &mut read.entries {
+            match entry {
+                Entry::ToolCall { id, name, input, .. } if name == "write_agent" => {
+                    let agent = input.get("agent_id").and_then(Value::as_str).map(str::to_owned);
+                    self.messages.push((id.clone(), agent));
+                }
+                // A message to a subagent still at work wakes nothing.
+                Entry::ToolResult { tool_use_id, is_error, .. } => {
+                    let at_work = |agent: &Option<String>| {
+                        agent.as_ref().is_some_and(|agent| self.started.contains(agent) && !self.ended.contains(agent))
+                    };
+                    self.messages.retain(|(call, agent)| call != tool_use_id || !(*is_error || at_work(agent)));
+                }
+                Entry::Task(task) if task.kind == Some(TaskKind::Subagent) => {
+                    self.started.insert(task.id.clone());
+                    if task.status != TaskStatus::Running {
+                        self.ended.insert(task.id.clone());
+                    } else if self.ended.remove(&task.id) && !self.messages.is_empty() {
+                        let at = self.messages.iter().position(|(_, agent)| agent.as_ref() == Some(&task.id)).unwrap_or(0);
+                        task.call = Some(self.messages.remove(at).0);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -584,6 +624,40 @@ mod tests {
             matches!(&shell.entries[0], Entry::Task(Task { id, status: TaskStatus::Failed, kind: Some(TaskKind::Background), .. }) if id == "sh-3")
         );
         assert_eq!(reader.push(r#"{"type":"user.message","data":{"content":"next"}}"#).marks, vec![Mark::PromptSubmitted]);
+    }
+
+    #[test]
+    fn a_subagent_a_message_wakes_runs_again_under_the_message_not_the_call_that_started_it() {
+        let mut reader = CopilotReader::default();
+        let calls = |reader: &mut CopilotReader, line: &str| -> Vec<Option<String>> {
+            let read = reader.push(line);
+            read.entries
+                .into_iter()
+                .filter_map(|entry| if let Entry::Task(task) = entry { Some(task.call) } else { None })
+                .collect()
+        };
+        let started = r#"{"type":"subagent.started","agentId":"helper","data":{"toolCallId":"call_1","agentName":"explore","agentDisplayName":"helper"}}"#;
+        let completed =
+            r#"{"type":"subagent.completed","agentId":"helper","data":{"toolCallId":"call_1","agentName":"explore"}}"#;
+        let message = |call: &str| {
+            format!(
+                r#"{{"type":"assistant.message","data":{{"content":"","toolRequests":[{{"toolCallId":"{call}","name":"write_agent","arguments":{{"agent_id":"helper","message":"and the docs"}}}}]}}}}"#
+            )
+        };
+        let delivered = |call: &str| {
+            format!(
+                r#"{{"type":"tool.execution_complete","data":{{"toolCallId":"{call}","success":true,"result":{{"content":"Message delivered to agent helper."}}}}}}"#
+            )
+        };
+        assert_eq!(calls(&mut reader, started), vec![Some("call_1".into())]);
+        calls(&mut reader, &message("call_2"));
+        calls(&mut reader, &delivered("call_2"));
+        assert_eq!(calls(&mut reader, completed), vec![None]);
+        calls(&mut reader, &message("call_3"));
+        calls(&mut reader, &delivered("call_3"));
+        assert_eq!(calls(&mut reader, started), vec![Some("call_3".into())], "woken by the message to an idle helper");
+        assert_eq!(calls(&mut reader, completed), vec![None]);
+        assert_eq!(calls(&mut reader, started), vec![Some("call_1".into())], "the message to it at work woke nothing");
     }
 
     #[test]
