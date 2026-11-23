@@ -6,4 +6,4 @@ mod policy;
 pub use bridge::{Bridge, BridgeError, DiskAction, DiskContent, DiskEntry, DiskFile, Forgotten, Ingested, file_actor};
 pub use diff::text_edits;
 pub use import::{ImportFile, import};
-pub use policy::{is_writable, unwritten, windows_can_hold};
+pub use policy::{TEXT_LIMIT, is_writable, unwritten, windows_can_hold};
