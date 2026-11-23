@@ -26,7 +26,7 @@ use serde_json::Value;
 use crate::host::{
     Changing, Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label,
 };
-use crate::modes::{Setting, commands_v2, modes_in, settings_v2};
+use crate::modes::{Setting, commands_v2, modes_in, settings_v2, with_change};
 use crate::prompt::{Accepts, blocks_v2};
 
 type Waiting = Arc<Mutex<HashMap<u64, Responder<RequestPermissionResponse>>>>;
@@ -107,6 +107,7 @@ impl ConnectTo<Agent> for V2 {
                 )
                 .capabilities(capabilities);
                 let init = connection.send_request(request).block_task().await?;
+                let steers = crate::steering::supported(init.meta.as_ref());
                 let methods = crate::sign_in::methods(&serde_json::to_value(&init.auth_methods).unwrap_or_default());
                 reading.lock().expect("lock").sign_in.clone_from(&methods);
                 if let Some(method) = start.sign_in_first.clone()
@@ -180,6 +181,7 @@ impl ConnectTo<Agent> for V2 {
                     settings,
                     accepts,
                     reports_work: true,
+                    steers,
                 });
                 // Later changes come as updates.
                 let _ = events.send(Event::Commands(commands_v2(offered)));
@@ -234,6 +236,15 @@ impl ConnectTo<Agent> for V2 {
                                 )?;
                             }
                         }
+                        Command::Steer(text) => {
+                            let request = crate::steering::request(&session.to_string(), &text)?;
+                            let (told, sent) = (events.clone(), connection.send_request(request));
+                            connection.spawn(async move {
+                                let outcome = crate::steering::outcome(sent.block_task().await);
+                                let _ = told.send(Event::Steered { text, outcome });
+                                Ok(())
+                            })?;
+                        }
                         Command::Answer { id, option } => {
                             let responder = waiting.lock().expect("lock").remove(&id);
                             if let Some(responder) = responder {
@@ -257,7 +268,7 @@ impl ConnectTo<Agent> for V2 {
                             };
                             let request = SetSessionConfigOptionRequest::new(
                                 session.clone(),
-                                setting,
+                                setting.clone(),
                                 SessionConfigValueId::new(mode.clone()),
                             );
                             let (told, read) = (events.clone(), reading.clone());
@@ -266,7 +277,9 @@ impl ConnectTo<Agent> for V2 {
                             connection.spawn(async move {
                                 match sent.block_task().await {
                                     Ok(response) => {
-                                        for event in read.lock().expect("lock").settings(settings_v2(response.config_options)) {
+                                        // As v1 takes a mode change answered without error as made.
+                                        let settings = with_change(settings_v2(response.config_options), &setting, &mode);
+                                        for event in read.lock().expect("lock").settings(settings) {
                                             let _ = told.send(event);
                                         }
                                     }
@@ -279,15 +292,19 @@ impl ConnectTo<Agent> for V2 {
                             })?;
                         }
                         Command::SetSetting { id, value } => {
-                            let request =
-                                SetSessionConfigOptionRequest::new(session.clone(), id, SessionConfigValueId::new(value));
+                            let request = SetSessionConfigOptionRequest::new(
+                                session.clone(),
+                                id.clone(),
+                                SessionConfigValueId::new(value.clone()),
+                            );
                             let (told, read) = (events.clone(), reading.clone());
                             let answered = changing.asked();
                             let sent = connection.send_request(request);
                             connection.spawn(async move {
                                 match sent.block_task().await {
                                     Ok(response) => {
-                                        for event in read.lock().expect("lock").settings(settings_v2(response.config_options)) {
+                                        let settings = with_change(settings_v2(response.config_options), &id, &value);
+                                        for event in read.lock().expect("lock").settings(settings) {
                                             let _ = told.send(event);
                                         }
                                     }
@@ -369,7 +386,14 @@ struct Child {
     title: Option<String>,
     /// Its role, as Claude's `subagent_type`.
     role: Option<String>,
+    /// The session that started it: the agent's own, or a subagent's.
+    parent: Option<String>,
+    /// Commands it left running in the background, by their calls.
+    background: HashSet<String>,
     ended: bool,
+    /// Its end was told, which only a message that wakes it again undoes:
+    /// a later run of its own doesn't.
+    end_told: bool,
 }
 
 impl Reading {
@@ -413,7 +437,7 @@ impl Reading {
             return self.child(session, update);
         }
         match update {
-            SessionUpdate::SubagentUpdate(update) => self.subagent(update),
+            SessionUpdate::SubagentUpdate(update) => self.subagent(session, update),
             SessionUpdate::SessionMessage(message) => self.message(message),
             SessionUpdate::ConfigOptionUpdate(update) => self.settings(settings_v2(update.config_options)),
             SessionUpdate::AvailableCommandsUpdate(update) => vec![Event::Commands(commands_v2(update.available_commands))],
@@ -427,92 +451,147 @@ impl Reading {
 
     /// What a subagent's own session says, inside the call that started it.
     fn child(&mut self, session: &SessionId, update: SessionUpdate) -> Vec<Event> {
-        let Some(parent) = self.children.get(&session.to_string()).and_then(|child| child.call.clone()) else {
+        let id = session.to_string();
+        let Some(parent) = self.children.get(&id).and_then(|child| child.call.clone()) else {
             return Vec::new();
         };
-        if matches!(update, SessionUpdate::StateUpdate(_)) {
-            return Vec::new();
+        let events = match update {
+            SessionUpdate::StateUpdate(_) => return Vec::new(),
+            // A subagent may start subagents of its own (Claude Code's
+            // `spawnDepth`), announced on its session.
+            SessionUpdate::SubagentUpdate(update) => return self.subagent(session, update),
+            SessionUpdate::SessionMessage(message) => return self.message(message),
+            update => self.said(update),
+        };
+        for event in &events {
+            if let Event::Update(Update::ToolUpdate { id: call, task: Some(news), .. }) = event
+                && news.kind.as_deref() == Some("background")
+            {
+                // Only a command whose end its terminal tells holds the
+                // subagent: the adapter tells no end of PowerShell's.
+                let told = self.terminals.values().any(|of| of == call);
+                let child = self.children.get_mut(&id).expect("looked up above");
+                if news.status == "running" && told {
+                    child.background.insert(call.clone());
+                } else {
+                    child.background.remove(call);
+                }
+            }
         }
-        self.said(update)
-            .into_iter()
-            .filter_map(|event| match event {
-                Event::Update(update) => Some(Event::Update(Update::Within { parent: parent.clone(), update: Box::new(update) })),
-                _ => None,
-            })
-            .collect()
+        inside(Some(parent), events)
     }
 
-    /// News of a subagent: what it is, and how it ended.
-    fn subagent(&mut self, update: SubagentUpdate) -> Vec<Event> {
+    /// Where the work of `session` is recorded: `Some(None)` for the
+    /// agent's own, inside the call that started it for a subagent's.
+    fn place(&self, session: &str) -> Option<Option<String>> {
+        if self.session.as_ref().is_some_and(|own| own.to_string() == session) {
+            return Some(None);
+        }
+        self.children.get(session)?.call.clone().map(Some)
+    }
+
+    /// Whether what the subagent `session` started still runs: commands it
+    /// left in the background, or subagents of its own.
+    fn still_working(&self, session: &str) -> bool {
+        let child = &self.children[session];
+        !child.background.is_empty()
+            || self.children.values().any(|other| other.parent.as_deref() == Some(session) && !other.ended)
+    }
+
+    /// News of a subagent, which `announcer` started: what it is, and how
+    /// it ended. Each of its runs ends idle, and one that ended its turn
+    /// while what it started still runs isn't its end: Claude Code takes it
+    /// up again once that ends.
+    fn subagent(&mut self, announcer: &SessionId, update: SubagentUpdate) -> Vec<Event> {
         let id = update.session_id.to_string();
         let child = self.children.entry(id.clone()).or_default();
+        child.parent.get_or_insert_with(|| announcer.to_string());
         if let MaybeUndefined::Value(title) = update.title {
             child.title = Some(title);
         }
         if let MaybeUndefined::Value(role) = update.description {
             child.role = Some(role);
         }
-        let MaybeUndefined::Value(StateUpdate::Idle(idle)) = update.state else {
-            return Vec::new();
+        let idle = match update.state {
+            MaybeUndefined::Value(StateUpdate::Idle(idle)) => idle,
+            MaybeUndefined::Value(StateUpdate::Running(_) | StateUpdate::RequiresAction(_)) => {
+                child.ended = false;
+                return Vec::new();
+            }
+            _ => return Vec::new(),
         };
-        child.ended = true;
         let status = match idle.stop_reason {
             None | Some(v2::StopReason::EndTurn) => "completed",
             Some(v2::StopReason::Cancelled) => "stopped",
             Some(_) => "failed",
         };
-        child.call.clone().map(|call| news(&call, &id, "subagent", status)).into_iter().collect()
+        if status == "completed" && self.still_working(&id) {
+            return Vec::new();
+        }
+        let child = self.children.get_mut(&id).expect("entered above");
+        child.ended = true;
+        if std::mem::replace(&mut child.end_told, true) {
+            return Vec::new();
+        }
+        let Some(call) = child.call.clone() else { return Vec::new() };
+        let Some(place) = self.place(&announcer.to_string()) else { return Vec::new() };
+        inside(place, vec![news(&call, &id, "subagent", status)])
     }
 
-    /// A message between the agent and a subagent: the prompt it gave one,
-    /// which names the call that started it, or what one reported back.
+    /// A message between the agent, or a subagent, and a subagent it
+    /// started: the prompt it gave one, which names the call that started
+    /// it, or what one reported back.
     fn message(&mut self, message: SessionMessage) -> Vec<Event> {
-        let (Some(sender), Some(recipient), Some(main)) =
-            (message.sender_session_id.take(), message.recipient_session_id.take(), self.session.clone())
-        else {
+        let (Some(sender), Some(recipient)) = (message.sender_session_id.take(), message.recipient_session_id.take()) else {
             return Vec::new();
         };
+        let (sender, recipient) = (sender.to_string(), recipient.to_string());
         let text = match &message.content {
             MaybeUndefined::Value(content) => all_text(content),
             _ => String::new(),
         };
-        if sender == main {
-            let child = self.children.entry(recipient.to_string()).or_default();
-            // A later message to a subagent at work goes on its work; one to
-            // a subagent gone idle sets it running again, as its own call.
-            if child.call.is_some() && !child.ended {
-                return Vec::new();
-            }
-            child.ended = false;
-            let call = message.message_id.to_string();
-            child.call = Some(call.clone());
-            let input = serde_json::json!({"title": child.title, "role": child.role, "prompt": text});
-            self.calls.insert(call.clone());
-            return vec![
-                Event::Update(Update::ToolCall {
-                    id: call.clone(),
-                    title: "Agent".to_owned(),
-                    kind: "other".to_owned(),
-                    input: Some(input),
-                }),
-                news(&call, &recipient.to_string(), "subagent", "running"),
-            ];
+        let reply = self.children.get(&sender).filter(|child| child.parent.as_deref() == Some(recipient.as_str()));
+        if let Some(call) = reply.and_then(|child| child.call.clone()) {
+            let Some(place) = self.place(&recipient) else { return Vec::new() };
+            let ended = Update::ToolUpdate {
+                id: call,
+                status: Some("completed".to_owned()),
+                output: Some(text),
+                title: None,
+                input: None,
+                task: None,
+            };
+            return inside(place, vec![Event::Update(ended)]);
         }
-        if recipient != main {
+        let Some(place) = self.place(&sender) else { return Vec::new() };
+        if self.place(&recipient) == Some(None) {
             return Vec::new();
         }
-        let Some(call) = self.children.get(&sender.to_string()).and_then(|child| child.call.clone()) else {
+        let child = self.children.entry(recipient.clone()).or_default();
+        // A later message to a subagent at work goes on its work; one to a
+        // subagent whose end was told sets it running again, as its own
+        // call. Its `running` may come before the message, so its told end
+        // decides, not whether it's idle.
+        if child.call.is_some() && !child.end_told {
             return Vec::new();
-        };
-        let ended = Update::ToolUpdate {
-            id: call,
-            status: Some("completed".to_owned()),
-            output: Some(text),
-            title: None,
-            input: None,
-            task: None,
-        };
-        vec![Event::Update(ended)]
+        }
+        child.ended = false;
+        child.end_told = false;
+        child.parent.get_or_insert(sender);
+        let call = message.message_id.to_string();
+        child.call = Some(call.clone());
+        let input = serde_json::json!({"title": child.title, "role": child.role, "prompt": text});
+        self.calls.insert(call.clone());
+        let started = vec![
+            Event::Update(Update::ToolCall {
+                id: call.clone(),
+                title: "Agent".to_owned(),
+                kind: "other".to_owned(),
+                input: Some(input),
+            }),
+            news(&call, &recipient, "subagent", "running"),
+        ];
+        inside(place, started)
     }
 
     /// What the agent itself did: its words, thoughts, tool calls and plan.
@@ -722,6 +801,19 @@ impl Reading {
             task: None,
         })]
     }
+}
+
+/// `events` as recorded inside the call `parent` that started the subagent
+/// they're of, or as they are where they're the agent's own.
+fn inside(parent: Option<String>, events: Vec<Event>) -> Vec<Event> {
+    let Some(parent) = parent else { return events };
+    events
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::Update(update) => Some(Event::Update(Update::Within { parent: parent.clone(), update: Box::new(update) })),
+            _ => None,
+        })
+        .collect()
 }
 
 /// News of work the call `call` left running beside the turn.
@@ -1040,6 +1132,126 @@ mod tests {
         );
         assert!(matches!(&said[..], [Event::Update(Update::Within { parent, .. })] if parent == "toolu_C"));
         assert_eq!(task_of(&idle(&mut reading)[0]), Some(("toolu_C", Some("a260308e0ffbde619"), Some("subagent"), "completed")));
+    }
+
+    /// The adapter may say a subagent runs before the message that woke it.
+    #[test]
+    fn a_subagent_said_running_before_the_message_that_woke_it_runs_under_that_message() {
+        let (mut reading, s) = reading();
+        start_child(&mut reading, &s, "c1", "toolu_A");
+        assert_eq!(task_of(&read(&mut reading, &s, idle("c1"))[0]), Some(("toolu_A", Some("c1"), Some("subagent"), "completed")));
+        read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "subagent_update", "sessionId": "c1", "state": {"state": "running"}}),
+        );
+        let woke = read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "session_message", "messageId": "toolu_C", "senderSessionId": "s1", "recipientSessionId": "c1", "content": [{"type": "text", "text": "Again."}]}),
+        );
+        assert_eq!(task_of(&woke[1]), Some(("toolu_C", Some("c1"), Some("subagent"), "running")));
+        assert_eq!(task_of(&read(&mut reading, &s, idle("c1"))[0]), Some(("toolu_C", Some("c1"), Some("subagent"), "completed")));
+    }
+
+    /// Starts the subagent `child` of the agent `s1` with the call `call`.
+    fn start_child(reading: &mut Reading, session: &SessionId, child: &str, call: &str) -> Vec<Event> {
+        read(
+            reading,
+            session,
+            serde_json::json!({"sessionUpdate": "subagent_update", "sessionId": child, "title": child, "state": {"state": "running"}}),
+        );
+        let message = serde_json::json!({"sessionUpdate": "session_message", "messageId": call, "senderSessionId": session.to_string(), "recipientSessionId": child, "content": [{"type": "text", "text": "Go."}]});
+        read(reading, session, message)
+    }
+
+    fn idle(child: &str) -> serde_json::Value {
+        serde_json::json!({"sessionUpdate": "subagent_update", "sessionId": child, "state": {"state": "idle", "stopReason": "end_turn"}})
+    }
+
+    /// A subagent that leaves a command running and ends its turn to wait
+    /// on it is taken up again once it ends: it runs on until it ends a turn
+    /// with nothing of its own left running.
+    #[test]
+    fn a_subagent_waiting_on_its_own_background_command_still_runs() {
+        let (mut reading, s) = reading();
+        let child = SessionId::new("c1");
+        start_child(&mut reading, &s, "c1", "toolu_A");
+        let call = serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "bg", "name": "Bash", "rawInput": {"command": "make", "run_in_background": true}, "status": "pending", "title": "make", "kind": "execute", "content": [{"type": "terminal", "terminalId": "bg"}]});
+        read(&mut reading, &child, call);
+        let answer = base64::engine::general_purpose::STANDARD.encode("Command running in background with ID: b1.");
+        read(
+            &mut reading,
+            &child,
+            serde_json::json!({"sessionUpdate": "terminal_update", "terminalId": "bg", "output": {"data": answer}}),
+        );
+        read(
+            &mut reading,
+            &child,
+            serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "bg", "status": "completed"}),
+        );
+
+        assert!(read(&mut reading, &s, idle("c1")).is_empty(), "its turn ended, not it");
+        assert_eq!(reading.running_children(), std::slice::from_ref(&child));
+        let ended = read(
+            &mut reading,
+            &child,
+            serde_json::json!({"sessionUpdate": "terminal_update", "terminalId": "bg", "exitStatus": {}}),
+        );
+        assert!(
+            matches!(&ended[..], [Event::Update(Update::Within { parent, update })] if parent == "toolu_A" && matches!(&**update, Update::ToolUpdate { task: Some(_), .. }))
+        );
+        read(
+            &mut reading,
+            &s,
+            serde_json::json!({"sessionUpdate": "subagent_update", "sessionId": "c1", "state": {"state": "running"}}),
+        );
+        let done = read(&mut reading, &s, idle("c1"));
+        assert_eq!(task_of(&done[0]), Some(("toolu_A", Some("c1"), Some("subagent"), "completed")));
+        assert!(read(&mut reading, &s, idle("c1")).is_empty(), "its end is told once");
+    }
+
+    /// A subagent's own subagent (Claude Code's `spawnDepth` 2) is announced
+    /// on its session: it's a task inside the call that started the first,
+    /// with its words inside its own, and the first runs while it does.
+    #[test]
+    fn a_subagent_s_own_subagent_is_a_task_inside_it() {
+        let (mut reading, s) = reading();
+        let child = SessionId::new("c1");
+        let grandchild = SessionId::new("g1");
+        start_child(&mut reading, &s, "c1", "toolu_A");
+        let started = start_child(&mut reading, &child, "g1", "toolu_B");
+        let inside_a = |event: &Event| match event {
+            Event::Update(Update::Within { parent, update }) if parent == "toolu_A" => Some((**update).clone()),
+            _ => None,
+        };
+        assert!(matches!(inside_a(&started[0]), Some(Update::ToolCall { id, .. }) if id == "toolu_B"), "{started:?}");
+        let news = inside_a(&started[1])
+            .map(|update| task_of(&Event::Update(update)).map(|(call, _, _, status)| (call.to_owned(), status.to_owned())));
+        assert_eq!(news, Some(Some(("toolu_B".to_owned(), "running".to_owned()))));
+
+        let said = read(
+            &mut reading,
+            &grandchild,
+            serde_json::json!({"sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": {"type": "text", "text": "Checked."}}),
+        );
+        assert!(matches!(&said[..], [Event::Update(Update::Within { parent, .. })] if parent == "toolu_B"));
+        assert!(read(&mut reading, &s, idle("c1")).is_empty(), "the first waits on its own");
+
+        let ended = read(&mut reading, &child, idle("g1"));
+        let news = inside_a(&ended[0])
+            .map(|update| task_of(&Event::Update(update)).map(|(call, _, _, status)| (call.to_owned(), status.to_owned())));
+        assert_eq!(news, Some(Some(("toolu_B".to_owned(), "completed".to_owned()))));
+        let reported = read(
+            &mut reading,
+            &child,
+            serde_json::json!({"sessionUpdate": "session_message", "messageId": "toolu_B:reply", "senderSessionId": "g1", "recipientSessionId": "c1", "content": [{"type": "text", "text": "All verified."}]}),
+        );
+        assert!(
+            matches!(inside_a(&reported[0]), Some(Update::ToolUpdate { id, output: Some(output), .. }) if id == "toolu_B" && output == "All verified.")
+        );
+        let done = read(&mut reading, &s, idle("c1"));
+        assert_eq!(task_of(&done[0]), Some(("toolu_A", Some("c1"), Some("subagent"), "completed")));
     }
 
     /// Claude's Bash with `run_in_background`, as recorded: it completes at

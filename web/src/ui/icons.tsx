@@ -102,12 +102,14 @@ const PATHS = {
   ),
   revert: <path d="M5.5 3 2.5 6l3 3M2.5 6H10a3.5 3.5 0 0 1 0 7H7" />,
   selector: <path d="M5 6l3-3 3 3M5 10l3 3 3-3" />,
+  // A cog, not rays: drawn as rays it read as the sun, the theme's icon.
   settings: (
     <>
-      <circle cx="8" cy="8" r="2" />
-      <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
+      <circle cx="8" cy="8" r="2.2" />
+      <path d="M12.8 6.5 14.5 6.9v2.2l-1.7.4-.4.8 1 1.5-1.6 1.6-1.5-1-.8.4-.4 1.7H6.9l-.4-1.7-.8-.4-1.5 1-1.6-1.6 1-1.5-.4-.8-1.7-.4V6.9l1.7-.4.4-.8-1-1.5 1.6-1.6 1.5 1 .8-.4.4-1.7h2.2l.4 1.7.8.4 1.5-1 1.6 1.6-1 1.5z" />
     </>
   ),
+  grid: <path d="M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h4v4H9z" />,
   file: <path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3" />,
   panel: <path d="M2.5 2.5h11v11h-11zM10 2.5v11" />,
   bell: <path d="M4 11V7a4 4 0 0 1 8 0v4l1 1.5H3zM6.5 14h3" />,

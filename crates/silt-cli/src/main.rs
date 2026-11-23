@@ -169,6 +169,11 @@ enum Command {
         #[command(subcommand)]
         command: Option<InboxCommand>,
     },
+    /// Phones on your local network, with no server: answer agents and review from the sofa
+    Lan {
+        #[command(subcommand)]
+        command: LanCommand,
+    },
     /// Orgs on the server: who is in them and what they default to
     Org {
         #[command(subcommand)]
@@ -626,6 +631,27 @@ enum ThreadCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum LanCommand {
+    /// Let phones on this network reach this machine, over HTTPS with a certificate of its own
+    On,
+    /// Stop letting phones on this network reach this machine
+    Off,
+    /// Whether phones can reach this machine, where, and which are paired
+    Status,
+    /// Show a code a phone pairs with, then allow or deny the phone here
+    Pair {
+        /// Let the phone send prompts too, not only answer permissions and review
+        #[arg(long)]
+        prompts: bool,
+    },
+    /// Sign a paired phone out
+    Revoke {
+        /// Its id, as `silt lan status` lists it
+        phone: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum InboxCommand {
     /// Mark notifications read
     Read {
@@ -669,7 +695,7 @@ enum OrgCommand {
         /// Refuse the agents of a machine's agents.json
         #[arg(long)]
         no_custom_agents: bool,
-        /// The most an agent may do without asking: ask_for_everything, plan, ask_before_commands or full_access
+        /// The most an agent may do without asking: ask_for_everything, plan, ask_before_commands, auto or full_access
         #[arg(long)]
         max_preset: Option<String>,
         /// Agents run only with their own sandbox on
@@ -746,7 +772,7 @@ enum ProjectCommand {
         /// The agent's registry id, such as claude-acp
         #[arg(long)]
         agent: Option<String>,
-        /// ask_before_commands, ask_for_everything or full_access
+        /// ask_before_commands, ask_for_everything, auto or full_access
         #[arg(long)]
         preset: Option<String>,
         /// Git notes on its threads' commits: off, local, or push to origin too
@@ -1016,6 +1042,13 @@ fn run() -> Result<(), Exn<CliError>> {
         Command::Inbox { all, command } => match command {
             None => commands::inbox(all),
             Some(InboxCommand::Read { ids, all }) => commands::inbox_read(ids, all),
+        },
+        Command::Lan { command } => match command {
+            LanCommand::On => commands::lan_turn(true),
+            LanCommand::Off => commands::lan_turn(false),
+            LanCommand::Status => commands::lan_status(),
+            LanCommand::Pair { prompts } => commands::lan_pair(prompts),
+            LanCommand::Revoke { phone } => commands::lan_revoke(&phone),
         },
         Command::Org { command } => match command {
             OrgCommand::List => admin::orgs(),

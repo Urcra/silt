@@ -39,3 +39,22 @@ export function unrecorded(said: Said, entries: Entry[]): Said {
     thought: said.thought && !recorded(said.thought, 'thinking', entries, said.thoughtAfter) ? said.thought : '',
   }
 }
+
+/**
+ * The words the page shows under the history: the status's own, else those it dropped, but neither once the
+ * history has them. The daemon records a reply before it sends the status that ends it, so a fetch can bring the
+ * reply while the status still streams it.
+ */
+export function shown(
+  status: { streaming: string; thinking: string },
+  said: Said,
+  began: number,
+  entries: Entry[],
+): { text: string; thought: string } {
+  const kept = unrecorded(said, entries)
+  const own = (words: string, kind: 'assistant' | 'thinking') => (recorded(words, kind, entries, began) ? '' : words)
+  return {
+    text: status.streaming ? own(status.streaming, 'assistant') : kept.text,
+    thought: status.thinking ? own(status.thinking, 'thinking') : kept.thought,
+  }
+}

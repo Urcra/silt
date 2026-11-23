@@ -6,7 +6,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef } from 'react'
 import { api, type InboxEntry } from './api'
 import { keys } from './query'
-import { hosted } from './served'
+import { hosted, onLan } from './served'
 
 const POLL_MS = 15_000
 
@@ -40,14 +40,42 @@ function keyBytes(key: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))
 }
 
-/** Subscribes this browser to the server's pushes, when the server serves the app and notifications are allowed. */
+let worker: Promise<boolean> | undefined
+
+/**
+ * Registers Silt's service worker, once, and says whether the browser refused it. A phone's browser refuses it to a
+ * page whose certificate it doesn't trust, even once the person went on past its warning (ADR 0113).
+ */
+export function workerRefused(): Promise<boolean> {
+  worker ??=
+    'serviceWorker' in navigator
+      ? navigator.serviceWorker.register('sw.js').then(
+          () => false,
+          () => true,
+        )
+      : Promise.resolve(false)
+  return worker
+}
+
+/** Whether this browser can take pushes at all: a phone's needs Silt on its Home Screen on iOS. */
+export function pushable(): boolean {
+  return 'serviceWorker' in navigator && 'PushManager' in window && typeof Notification !== 'undefined'
+}
+
+/**
+ * Subscribes this browser to pushes, when notifications are allowed: the server's, when it serves the app, or the
+ * machine's own, on a phone paired over the network (ADR 0112).
+ */
 export async function subscribeToPush(): Promise<void> {
-  if (!hosted() || !notificationsAllowed() || !('serviceWorker' in navigator) || !('PushManager' in window)) return
+  if (!(hosted() || onLan()) || !notificationsAllowed() || !pushable()) return
   const registration = await navigator.serviceWorker.register('sw.js')
+  const key = onLan() ? (await api.lanMe()).push_key : await api.pushKey()
+  if (!key) return
   const subscription =
     (await registration.pushManager.getSubscription()) ??
-    (await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(await api.pushKey()) }))
-  await api.subscribePush(subscription.toJSON())
+    (await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) }))
+  if (onLan()) await api.lanPush(subscription.toJSON())
+  else await api.subscribePush(subscription.toJSON())
   pushing = true
 }
 

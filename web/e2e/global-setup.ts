@@ -1,6 +1,10 @@
-import { createFixture, removeFixture } from './fixture'
+import { abandonFixtures, createFixture, removeFixture } from './fixture'
 
 export default function setup() {
+  abandonFixtures()
   createFixture()
-  return removeFixture
+  return () => {
+    removeFixture()
+    abandonFixtures()
+  }
 }

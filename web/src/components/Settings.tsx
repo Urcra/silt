@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
 import { type ReactNode, useState } from 'react'
-import { PRESETS } from '../agentState'
-import { api, type ChatSettings, type PageConnector, type Preset } from '../api'
+import { DEFAULT_PRESETS } from '../agentState'
+import { PermissionChip } from './AgentPickers'
+import { api, type ChatSettings, type PageConnector } from '../api'
 import { keys, message } from '../query'
 import { hosted, serverName } from '../served'
 import { Button, Dot, EmptyState, Input, cx, toast } from '../ui'
-import { ChipSelect } from './ChipSelect'
 import { Devices } from './Devices'
 import { inDesktop } from '../desktop'
 import { MachinesSettings } from './Machines'
@@ -122,13 +122,16 @@ function Chats() {
               A chat's folder holds only what its agent wrote there, so chats start with full access.
             </span>
             <span>
-              <ChipSelect
+              <PermissionChip
+                ghost={false}
                 label="default permissions for chats"
-                icon="lock"
                 value={current.preset}
-                onChange={(preset) => save({ ...current, preset: preset as Preset })}
-                options={PRESETS.map((choice) => ({ id: choice.id, name: choice.label, description: choice.says }))}
+                onChange={(preset) => save({ ...current, preset })}
+                presets={DEFAULT_PRESETS}
               />
+            </span>
+            <span className="text-xs text-fg-3">
+              Auto uses the agent&apos;s own auto mode; an agent without one starts at Ask before commands.
             </span>
           </div>
           <form

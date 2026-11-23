@@ -36,10 +36,13 @@ impl Env {
     }
 
     fn with_claude(script: &'static str) -> Self {
-        // Under `/tmp` on Unix, which keeps the daemon's socket path short.
+        // Under a short temporary directory on Unix, which keeps the daemon's
+        // socket path short: `TMPDIR` when it is, else `/tmp`.
         let mut builder = tempfile::Builder::new();
         builder.prefix("silt");
-        let silt_home = if cfg!(unix) { builder.tempdir_in("/tmp") } else { builder.tempdir() }.expect("temp dir");
+        let temp = std::env::temp_dir();
+        let short = if temp.as_os_str().len() <= 40 { temp } else { "/tmp".into() };
+        let silt_home = if cfg!(unix) { builder.tempdir_in(short) } else { builder.tempdir() }.expect("temp dir");
         let claude_dir = tempfile::tempdir().expect("temp dir");
         let repo = tempfile::tempdir().expect("temp dir");
         let bin = tempfile::tempdir().expect("temp dir");
@@ -1107,6 +1110,31 @@ fn a_command_left_running_that_ended_unheard_is_marked_stopped_when_stopped() {
     assert_eq!(listed_background(&api, &thread), 0, "{live}");
 }
 
+/// Claude's adapter never says when a command Claude's PowerShell tool left
+/// running ends, only Claude Code's transcript does: Silt reads it there,
+/// rather than showing the command running for good.
+#[test]
+fn a_powershell_command_claude_left_running_ends_as_its_transcript_says() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "claude-acp", "name": "Fake Claude", "command": fake, "env": {"FAKE_ACP_V2": "1"}}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let start = serde_json::json!({"clone": env.repo, "agent": "claude-acp", "prompt": "add acp PowerShell"});
+    let started = api.ok("POST", "/api/agents/start", Some(start));
+    let thread =
+        started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("the thread").to_owned());
+    settled_history(&api, &thread, "The PowerShell command waited.");
+    assert!(
+        eventually(|| task_news(&api, &thread, "ps-1") == ["running", "completed"]),
+        "{:?}",
+        task_news(&api, &thread, "ps-1")
+    );
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["stoppable"], serde_json::json!([]), "{live}");
+    assert_eq!(listed_background(&api, &thread), 0, "{live}");
+}
+
 /// A shell Copilot detached and never reads ends without Silt hearing of
 /// it: Silt sees its process gone and marks it done, and leaves it running
 /// until then.
@@ -1219,6 +1247,13 @@ fn a_subagent_of_an_agent_speaking_v1_is_kept_inside_the_call_that_started_it() 
         (call["tool"]["subject"].as_str(), call["tool"]["detail"].as_str(), call["tool"]["subagent"].as_str()),
         (Some("Count lines"), Some("explore"), Some("count"))
     );
+    let described: Vec<(Option<&str>, Option<&str>)> = entries
+        .iter()
+        .filter(|entry| entry["kind"] == "tool_call" && entry["tool"]["id"] == "count-1")
+        .map(|entry| (entry["tool"]["subject"].as_str(), entry["tool"]["detail"].as_str()))
+        .collect();
+    let said = (Some("wc -l src/main.rs"), Some("Count main's lines"));
+    assert_eq!(described.last(), Some(&said), "the subagent's call, once updated, is still a command: {described:?}");
 }
 
 /// An agent on v1, as Copilot, ignores a cancel when no prompt is out, so
@@ -2892,4 +2927,118 @@ fn a_terminals_sandboxed_agent_is_restarted_with_the_folder_it_was_granted() {
     let told = fs::read_to_string(env.repo.join("folder-told")).expect("resumed");
     assert!(told.starts_with(&format!("{} is now in your sandbox, read-only", lib.display())), "told: {told}");
     assert!(started.elapsed() < std::time::Duration::from_secs(25), "restarted at the turn's end, not after waiting");
+}
+
+/// Starts the fake agent speaking `protocol` (`v1` or `v2`) with
+/// `FAKE_ACP_STEERING` set to `steering`, or unset when it's empty.
+fn start_steerable(env: &Env, api: &Api, protocol: &str, steering: &str, prompt: &str) -> String {
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let mut vars = serde_json::json!({});
+    if protocol == "v2" {
+        vars["FAKE_ACP_V2"] = "1".into();
+    }
+    if !steering.is_empty() {
+        vars["FAKE_ACP_STEERING"] = steering.into();
+    }
+    let agents = serde_json::json!([{"id": "steerable", "name": "Fake steerable", "command": fake, "env": vars}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let started =
+        api.ok("POST", "/api/agents/start", Some(serde_json::json!({"clone": env.repo, "agent": "steerable", "prompt": prompt})));
+    started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("the thread").to_owned())
+}
+
+/// Steers `thread` once its agent runs the command of a `Long` prompt.
+fn steer_while_the_command_runs(api: &Api, thread: &str, text: &str) {
+    let running = eventually(|| serde_json::Value::Array(history_entries(api, thread)).to_string().contains("cargo build"));
+    assert!(running, "the command never started: {:?}", history_entries(api, thread));
+    let answer = api.ok("POST", &format!("/api/threads/{thread}/agent/steer"), Some(serde_json::json!({"text": text})));
+    assert_eq!(answer, "steering");
+}
+
+/// A steer to an agent that takes them (`_session/steering`) goes into the
+/// turn it runs: the command it runs goes on to its end, the agent hears the
+/// steer while it runs, and the history has it as the person's message
+/// there, not as a cancelled turn and a new prompt (ADR 0111).
+#[test]
+fn a_steer_reaches_an_agent_that_takes_steers_and_leaves_its_command_running() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    for protocol in ["v2", "v1"] {
+        let thread = start_steerable(&env, &api, protocol, "injected", "Long build");
+        steer_while_the_command_runs(&api, &thread, "use the release profile");
+        let entries = settled_history(&api, &thread, "Done: Long build");
+        let all = serde_json::Value::Array(history_entries(&api, &thread)).to_string();
+        assert!(all.contains("The command ran to its end."), "{protocol}: the command was left to run: {all}");
+        assert!(!all.contains("The command was killed."), "{protocol}: {all}");
+        assert!(!all.contains("I interrupted"), "{protocol}: the turn wasn't interrupted: {all}");
+        let said = said(&entries);
+        let steer = said.iter().position(|&(kind, text)| kind == "user" && text == "use the release profile");
+        let heard = said.iter().position(|&(kind, text)| {
+            kind == "assistant" && text.contains("Heard while the command ran: use the release profile")
+        });
+        assert!(steer.is_some() && heard.is_some() && steer < heard, "{protocol}: {said:?}");
+        assert_eq!(said.iter().filter(|&&(kind, _)| kind == "user").count(), 2, "{protocol}: one prompt and one steer: {said:?}");
+    }
+}
+
+/// An agent that doesn't take steers, or refuses one, has its turn
+/// cancelled, which kills the command it runs, and hears the steer as its
+/// next prompt, as before steering was taken (ADR 0111).
+#[test]
+fn a_steer_an_agent_doesnt_take_cancels_its_turn_and_follows_it() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    for steering in ["", "failed", "error"] {
+        let thread = start_steerable(&env, &api, "v2", steering, "Long build");
+        steer_while_the_command_runs(&api, &thread, "stop and use the release profile");
+        let interrupted = "I interrupted your last turn to say: stop and use the release profile";
+        let entries = settled_history(&api, &thread, &format!("Done: {interrupted}"));
+        let all = serde_json::Value::Array(history_entries(&api, &thread)).to_string();
+        assert!(all.contains("The command was killed."), "{steering:?}: {all}");
+        let said = said(&entries);
+        assert!(said.contains(&("user", interrupted)), "{steering:?}: {said:?}");
+        assert!(!said.iter().any(|(_, text)| text.contains("Heard while")), "{steering:?}: {said:?}");
+    }
+}
+
+/// A steer that finds no turn running, as one sent as the turn ends, comes
+/// back to Silt (`promptRequired`): the command runs to its end and the
+/// steer is the next prompt, as the person wrote it.
+#[test]
+fn a_steer_that_finds_no_turn_is_sent_as_the_next_prompt() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_steerable(&env, &api, "v2", "promptRequired", "Long build");
+    steer_while_the_command_runs(&api, &thread, "then run the tests");
+    let entries = settled_history(&api, &thread, "Done: then run the tests");
+    let all = serde_json::Value::Array(history_entries(&api, &thread)).to_string();
+    assert!(all.contains("The command ran to its end."), "{all}");
+    assert!(!all.contains("I interrupted"), "{all}");
+    let said = said(&entries);
+    let users: Vec<&str> = said.iter().filter(|(kind, _)| *kind == "user").map(|(_, text)| *text).collect();
+    assert_eq!(users, ["Long build", "then run the tests"], "{said:?}");
+    let ended = said.iter().position(|&(_, text)| text == "Done: Long build");
+    let steered = said.iter().position(|&(_, text)| text == "then run the tests");
+    assert!(ended < steered, "the steer came once the turn ended: {said:?}");
+}
+
+/// A steer while the agent asks a question still answers it in the
+/// person's own words, without cancelling the turn: the question is
+/// declined, and the steer, framed as its answer, goes to the agent (here
+/// once the turn ends, as it finds none running).
+#[test]
+fn a_steer_while_an_agent_that_takes_steers_asks_answers_its_question() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_steerable(&env, &api, "v1", "injected", "Ask me what to count");
+    let live = |api: &Api| api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert!(eventually(|| live(&api)["agent"]["questions"].as_array().is_some_and(|asked| !asked.is_empty())), "{}", live(&api));
+    api.ok("POST", &format!("/api/threads/{thread}/agent/steer"), Some(serde_json::json!({"text": "count the chunks"})));
+    let framed = "to your question \"What should the progress bar count?\": count the chunks";
+    let entries = settled_history(&api, &thread, &format!("Done: {framed}"));
+    let said = said(&entries);
+    assert!(said.contains(&("assistant", "You didn't choose.")), "the question was declined, not cancelled: {said:?}");
+    assert!(said.contains(&("user", framed)), "{said:?}");
+    let all = serde_json::Value::Array(history_entries(&api, &thread)).to_string();
+    assert!(!all.contains("I interrupted"), "{all}");
 }

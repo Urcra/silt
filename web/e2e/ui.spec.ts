@@ -80,7 +80,7 @@ test('lists threads and searches across compaction', async ({ page }) => {
 
   await page.keyboard.press('ControlOrMeta+Shift+F')
   await page.getByLabel('search', { exact: true }).fill('farewell')
-  await page.getByRole('button', { name: 'Search' }).click()
+  await page.getByRole('main').getByRole('button', { name: 'Search', exact: true }).click()
   const results = page.getByTestId('search-results')
   // The index brackets each match, which the page marks.
   await expect(results.locator('mark').first()).toHaveText('farewell')
@@ -104,7 +104,8 @@ test('shows a thread with compaction, turn diffs and comments', async ({ page })
   await expect(page.getByTestId('compaction')).toBeVisible()
   await page.getByTestId('compaction').getByRole('button', { name: 'Show summary' }).click()
   await expect(page.getByText('Compaction summary: Summary: farewell was added to main.')).toBeVisible()
-  await expect(page.getByRole('main').getByText(/^· claude$/)).toBeVisible()
+  // The agent that recorded it, by its mark (ADR 0114).
+  await expect(page.getByRole('main').getByRole('img', { name: 'Claude Code' })).toBeVisible()
   await page.getByRole('button', { name: 'More for this thread' }).click()
   await page.getByLabel('agent', { exact: true }).selectOption('codex')
   await expect(page.getByRole('button', { name: /^silt resume \w+ --agent codex$/ })).toBeVisible()

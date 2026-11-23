@@ -1,4 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { AgentMark } from './AgentMark'
+import { agentName } from '../rules'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
@@ -120,7 +122,7 @@ import { ArtifactActions, type Opened } from '../artifactActions'
 import { artifactsOf, shownImagesOf } from '../artifacts'
 import { CommandCard, ImageThumb, PlanSteps, ProposedPlan, QuestionCard, StepRow } from './ToolSteps'
 import { LiveQuestions } from '../liveQuestions'
-import { unrecorded } from '../unrecorded'
+import { shown, unrecorded } from '../unrecorded'
 import {
   DETAILS,
   GROUPINGS,
@@ -1690,7 +1692,14 @@ export function ThreadHeader({
               <span className="truncate">{where.label}</span>
             </span>
           )}
-          {summary?.agent && <span className="shrink-0">· {summary.agent}</span>}
+          {summary?.agent && (
+            <span
+              className="inline-flex shrink-0 items-center gap-1"
+              title={`${agentName(summary.agent)} · recorded its latest session`}
+            >
+              · <AgentMark agent={summary.agent} labelled className="h-[13px] w-[13px]" />
+            </span>
+          )}
           {summary?.forked_from && !summary.title?.startsWith('Fork of ') && (
             <span className="inline-flex min-w-0 shrink items-center gap-1">
               · fork of
@@ -1763,8 +1772,9 @@ export function ThreadHeader({
 
 /** Where the thread's work is, for its header: this machine by name, the server, or another device. */
 function whereSaid(summary: ThreadSummary, device: string | null): { label: string; icon: IconName } {
-  if (summary.location === 'moved') return { label: 'moved to another device', icon: 'handoff' }
-  if (summary.location === 'remote') return { label: 'on the server', icon: 'cloud' }
+  if (summary.location === 'moved') return { label: `moved to ${summary.machine ?? 'another device'}`, icon: 'handoff' }
+  if (summary.location === 'remote')
+    return summary.machine ? { label: `on ${summary.machine}`, icon: 'monitor' } : { label: 'on the server', icon: 'cloud' }
   return { label: device ?? 'this machine', icon: 'monitor' }
 }
 
@@ -2274,13 +2284,15 @@ function ThreadBody({
     if (id !== thread)
       void navigate({ to: '/t/$id', params: { id: thread }, hash: hash.replace(/^#/, '') || undefined, replace: true })
   }, [id, thread, hash, navigate])
-  const { agent: status, heard, tool, preset, setPreset, said } = useLive(thread, total)
-  // What the agent said stays where it was until the history has it, rather than blink out and come back above.
+  const { agent: status, heard, tool, preset, setPreset, said, began } = useLive(thread, total)
+  // What the agent said stays where it was until the history has it, rather than blink out and come back above,
+  // and goes once the history has it, rather than show twice.
   const pending = useMemo(() => unrecorded(said, entries), [said, entries])
-  const agent = useMemo(
-    () => status && { ...status, streaming: status.streaming || pending.text, thinking: status.thinking || pending.thought },
-    [status, pending],
-  )
+  const agent = useMemo(() => {
+    if (!status) return status
+    const words = shown(status, said, began, entries)
+    return { ...status, streaming: words.text, thinking: words.thought }
+  }, [status, said, began, entries])
   // Heard by the composer, which sends the draft as it's typed: typing draws the composer, not the page.
   const [people, setPeople] = useState<Presence[]>(NO_PEOPLE)
   const lastPrompt = entries.findLast((entry) => entry.kind === 'user')?.text

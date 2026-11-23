@@ -710,7 +710,7 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
     }
     let rows = sqlx::query!(
         r#"SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id AS "device_id?", l.epoch AS "epoch?", u.name AS owner,
-             t.visibility
+             t.visibility, t.made_on
          FROM threads t
          JOIN users u ON u.id = t.owner_id
          LEFT JOIN leases l ON l.thread_id = t.id
@@ -720,6 +720,7 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
     .await?;
     let mut shared = collab::collaborators(&server.shared.db).await?;
     let mut visibility = Vec::new();
+    let mut made_on = Vec::new();
     let threads = rows
         .into_iter()
         .map(|row| (ThreadId(id_from(&row.id)), row))
@@ -727,6 +728,9 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
         .inspect(|(id, row)| {
             if let Some(own) = row.visibility.as_deref().and_then(|own| own.parse::<silt_proto::Visibility>().ok()) {
                 visibility.push((*id, own));
+            }
+            if let Some(device) = row.made_on.as_deref() {
+                made_on.push((*id, DeviceId(id_from(device))));
             }
         })
         .map(|(id, row)| ThreadInfo {
@@ -744,7 +748,9 @@ async fn listing(State(server): State<Server>, Extension(caller): Extension<Call
         .collect();
     let (deleted, purged) = server.lifecycle(&viewer).await?;
     let running = control::running_elsewhere(&server, caller).await?;
-    Ok(Json(Listing { families, threads, deleted, purged, visibility, running }))
+    let devices =
+        accounts::devices_of(server.db(), caller.user).await?.into_iter().map(|device| (device.id, device.name)).collect();
+    Ok(Json(Listing { families, threads, deleted, purged, visibility, running, devices, made_on }))
 }
 
 async fn register_thread(
@@ -755,6 +761,8 @@ async fn register_thread(
     let db = &server.shared.db;
     claim_family(&server, thread.family, caller).await?;
     let (thread_id, family_id) = (id_bytes(thread.id.0), id_bytes(thread.family.0));
+    // The hosted app and phones register as no device.
+    let device_id = (caller.device != DeviceId(0)).then(|| id_bytes(caller.device.0));
     sqlx::query!(
         "UPDATE families SET root_thread = ?, repo = ? WHERE id = ? AND root_thread IS NULL",
         thread_id,
@@ -769,13 +777,15 @@ async fn register_thread(
     let visibility =
         visibility.or_else(|| chat.then_some(silt_proto::Visibility::Private)).map(|visibility| visibility.to_string());
     sqlx::query!(
-        "INSERT OR IGNORE INTO threads (id, family_id, repo, created_ms, owner_id, visibility) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO threads (id, family_id, repo, created_ms, owner_id, visibility, made_on)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
         thread_id,
         family_id,
         thread.repo,
         thread.created_ms,
         caller.user,
         visibility,
+        device_id,
     )
     .execute(db)
     .await?;

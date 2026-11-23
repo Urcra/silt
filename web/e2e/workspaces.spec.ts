@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
-import { stopAgent, teardown } from './fixture'
+import { pick, runFixture, stopAgent, teardown } from './fixture'
 
 const SILT = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt')
 
@@ -15,9 +15,12 @@ interface Fixture {
 
 let fixture: Fixture
 
+// Each test goes on from what the ones before it set up, such as the Personal workspace: after a failure, a new
+// worker's fixture would have none of it, so the rest don't run.
+test.describe.configure({ mode: 'serial' })
+
 test.beforeAll(() => {
-  const output = execFileSync(join(import.meta.dirname, 'workspaces-fixture.sh'), { encoding: 'utf8' })
-  fixture = JSON.parse(output.trim().split('\n').pop() ?? '{}') as Fixture
+  fixture = JSON.parse(runFixture('workspaces-fixture.sh') || '{}') as Fixture
 })
 
 test.afterAll(() => {
@@ -35,7 +38,7 @@ async function startIn(page: Page, project: RegExp, prompt: string) {
   await page.getByRole('dialog', { name: 'Pick a project' }).getByRole('option', { name: project }).click()
   await form.getByLabel('first prompt').fill(prompt)
   await form.getByRole('radio', { name: 'Worktree' }).click()
-  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await pick(form, 'agent to start', { label: 'Fake agent' })
   await form.getByLabel('first prompt').press('Enter')
   await expect(page.getByText(new RegExp(`^Done: [\\s\\S]*${prompt}$`))).toBeVisible()
   await stopAgent(page)
@@ -192,8 +195,8 @@ test("a workspace's defaults pick the agent's model, and the project picker move
   await page.keyboard.press('Enter')
   await expect(page.getByRole('button', { name: 'project: tools' })).toBeVisible()
   const form = page.getByRole('form', { name: 'new thread' })
-  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
-  await expect(form.getByLabel('model')).toHaveValue('smart')
+  await pick(form, 'agent to start', { label: 'Fake agent' })
+  await expect(form.getByRole('button', { name: /^model and effort: Smart/ })).toBeVisible()
 })
 
 test("a workspace's sandbox reach and its plugins are set in its settings, and a plugin is on only where turned on (ADR 0093)", async ({
@@ -280,7 +283,8 @@ test("Settings › Plugins lists the plugins here, and a plugin's page sets what
   const push = actions.getByLabel("Push a branch's rule")
   await expect(push).toHaveValue('ask')
   await push.selectOption('allow')
-  await expect(actions).toContainText('your rule')
+  // Once the daemon has the rule and the page has read it again.
+  await expect(actions).toContainText('your rule', { timeout: 15_000 })
   await page.reload()
   await expect(push).toHaveValue('allow')
   await shoot(page, '10-plugin-page', 1800)
@@ -374,7 +378,7 @@ test('an agent asks for a folder on a card, and goes on with it once approved (A
   await page.getByRole('dialog', { name: 'Pick a project' }).getByRole('option', { name: /tools/ }).click()
   await form.getByLabel('first prompt').fill(`Folder ${shared}`)
   await form.getByRole('radio', { name: 'Worktree' }).click()
-  await form.getByLabel('agent to start').selectOption({ label: 'Fake agent' })
+  await pick(form, 'agent to start', { label: 'Fake agent' })
   await form.getByLabel('first prompt').press('Enter')
 
   // No folder rule names it, so it's asked, on a card Silt draws.

@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { LanNotifyBanner } from './LanPhones'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { APPROVED } from '../agentState'
@@ -111,7 +112,11 @@ function AgentCard({ thread, review }: { thread: ThreadSummary; review: MrSummar
   const asked = status?.permissions[0]
   if (thread.review && review && !asked && status?.state !== 'awaiting_input') return <ReviewCard thread={thread} mr={review} />
   const where =
-    thread.location === 'remote' ? 'on the server' : thread.location === 'moved' ? 'on another device' : `on ${device}`
+    thread.location === 'remote'
+      ? `on ${thread.machine ?? 'the server'}`
+      : thread.location === 'moved'
+        ? `on ${thread.machine ?? 'another device'}`
+        : `on ${device}`
   const meta = [status?.agent ?? thread.agent, title, where].filter(Boolean).join(' · ')
   if (asked) {
     const [first, second, ...rest] = asked.options
@@ -520,6 +525,7 @@ export function NeedsYou() {
     )
   return (
     <Page flush label="needs you" title="Needs you">
+      <LanNotifyBanner />
       <section aria-label="waiting on you" className="mx-auto flex w-full max-w-2xl flex-col gap-3 px-4 py-4">
         {threads.isPending && <Skeleton className="h-24" />}
         {threads.error && <p className="text-danger">{message(threads.error)}</p>}

@@ -10,7 +10,7 @@ use silt_proto::{
     AgentReport, AgentState, AgentsReport, AskedPermission, CommandAnswer, ControlCommand, ErrorReply, RelayRequest,
     RemoteCommand, RunningElsewhere, Startable,
 };
-use silt_types::ThreadId;
+use silt_types::{DeviceId, ThreadId};
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
@@ -23,9 +23,13 @@ const POLL_WAIT: Duration = Duration::from_secs(25);
 /// Reports are sent this often even when nothing changed, so the server
 /// knows the device is still there.
 const HEARTBEAT: Duration = Duration::from_secs(30);
-/// How long to wait after the server failed a poll or report, such as one
-/// that doesn't know the control channel yet.
-const RETRY: Duration = Duration::from_secs(30);
+/// How long to wait after the server failed a poll or report: often a
+/// moment's trouble, such as a busy database, and a command relayed
+/// meanwhile expires unrun if the next poll comes too late. Each failure in
+/// a row doubles it, up to `RETRY_MAX`, as for a server that doesn't know
+/// the control channel yet.
+const RETRY: Duration = Duration::from_secs(1);
+const RETRY_MAX: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 pub(crate) struct Control {
@@ -34,14 +38,21 @@ pub(crate) struct Control {
     /// Agents running on the person's other online devices, by thread, as
     /// the last listing of the server named with each said.
     elsewhere: HashMap<ThreadId, (String, RunningElsewhere)>,
+    /// The person's devices by name, as each server's last listing said.
+    machines: HashMap<DeviceId, String>,
+    /// The device each thread was made on, as its server's listing said.
+    made_on: HashMap<ThreadId, DeviceId>,
 }
 
 #[derive(Default)]
 struct Channel {
     polling: bool,
     poll_after: Option<Instant>,
+    /// How long the last failed poll waited, while they fail in a row.
+    poll_retry: Option<Duration>,
     reporting: bool,
     report_after: Option<Instant>,
+    report_retry: Option<Duration>,
     /// What the server last took, and when.
     reported: Option<(Instant, Vec<AgentReport>)>,
 }
@@ -61,6 +72,13 @@ pub(crate) enum Elsewhere {
 
 fn waited(after: Option<Instant>) -> bool {
     after.is_none_or(|after| Instant::now() >= after)
+}
+
+/// When to try again after a failure, given the wait after the one before.
+fn retry(previous: &mut Option<Duration>) -> Instant {
+    let wait = previous.map_or(RETRY, |wait| (wait * 2).min(RETRY_MAX));
+    *previous = Some(wait);
+    Instant::now() + wait
 }
 
 impl Core {
@@ -124,6 +142,7 @@ impl Core {
             agents.push(AgentReport {
                 thread,
                 agent: status.agent,
+                agent_id: status.agent_id,
                 state: status.state,
                 permissions: status
                     .permissions
@@ -146,7 +165,9 @@ impl Core {
     pub(crate) async fn control_event(&mut self, event: ControlEvent) {
         match event {
             ControlEvent::Polled(server, Ok(commands)) => {
-                self.control.channels.entry(server.clone()).or_default().polling = false;
+                let channel = self.control.channels.entry(server.clone()).or_default();
+                channel.polling = false;
+                channel.poll_retry = None;
                 for command in commands {
                     self.run_command(&server, command).await;
                 }
@@ -156,18 +177,19 @@ impl Core {
                 warn!(%error, server, "could not poll the server for commands");
                 let channel = self.control.channels.entry(server).or_default();
                 channel.polling = false;
-                channel.poll_after = Some(Instant::now() + RETRY);
+                channel.poll_after = Some(retry(&mut channel.poll_retry));
             }
             ControlEvent::Reported(server, Ok(agents)) => {
                 let channel = self.control.channels.entry(server).or_default();
                 channel.reporting = false;
+                channel.report_retry = None;
                 channel.reported = Some((Instant::now(), agents));
             }
             ControlEvent::Reported(server, Err(error)) => {
                 warn!(%error, server, "could not report this device's agents");
                 let channel = self.control.channels.entry(server).or_default();
                 channel.reporting = false;
-                channel.report_after = Some(Instant::now() + RETRY);
+                channel.report_after = Some(retry(&mut channel.report_retry));
             }
         }
     }
@@ -366,6 +388,31 @@ impl Core {
         if !changed.is_empty() {
             self.announce(BusEvent::Threads);
         }
+    }
+
+    /// Takes in the person's devices by name, and where each thread was
+    /// made, from a server's listing.
+    pub(crate) fn take_machines(&mut self, machines: Vec<(DeviceId, String)>, made_on: Vec<(ThreadId, DeviceId)>) {
+        let mut changed = false;
+        for (device, name) in machines {
+            changed |= self.control.machines.insert(device, name.clone()).as_ref() != Some(&name);
+        }
+        for (thread, device) in made_on {
+            changed |= self.control.made_on.insert(thread, device) != Some(device);
+        }
+        if changed {
+            self.announce(BusEvent::Threads);
+        }
+    }
+
+    /// The name of one of the person's devices, as a server knows it.
+    pub(crate) fn machine_name(&self, device: DeviceId) -> Option<&str> {
+        self.control.machines.get(&device).map(String::as_str)
+    }
+
+    /// The device a thread was made on, as its server knows it.
+    pub(crate) fn made_on(&self, thread: ThreadId) -> Option<DeviceId> {
+        self.control.made_on.get(&thread).copied()
     }
 
     fn running_here(&self, thread: ThreadId) -> bool {

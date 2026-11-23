@@ -41,6 +41,14 @@ test('with no agent running here the review is copied, and an idle agent has no 
   expect(screen.queryByRole('radio', { name: /stopping the turn/ })).toBeNull()
 })
 
+test('an agent heard of after the review shows gets the review, rather than it being copied', () => {
+  const { rerender } = render(<FinishReview {...props} review={PENDING} reviewedTurn={3} />)
+  rerender(<FinishReview {...props} review={PENDING} reviewedTurn={3} agent="GitHub Copilot" />)
+  fireEvent.click(screen.getByRole('button', { name: 'Finish review' }))
+  expect(screen.getByRole('radio', { name: 'Request changes' })).toBeChecked()
+  expect(screen.getByRole('button', { name: 'Request changes' })).toBeInTheDocument()
+})
+
 test('nothing pending, nothing to finish', () => {
   render(<FinishReview {...props} review={reviewOf({ note: '', drafts: [] })} agent="Claude Agent" />)
   expect(screen.queryByRole('button', { name: 'Finish review' })).toBeNull()

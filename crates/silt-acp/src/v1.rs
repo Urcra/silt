@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::host::{
     Changing, Command, Event, HostError, Permission, Question, Shared, StopReason, TaskNews, Update, answered, label,
 };
-use crate::modes::{commands_of, modes_of, settings_of};
+use crate::modes::{commands_of, modes_of, settings_of, with_change};
 use crate::prompt::{Accepts, blocks};
 use crate::sign_in::{SignInHow, SignInMethod};
 
@@ -159,6 +159,7 @@ impl ConnectTo<Agent> for V1 {
             .connect_with(agent, async move |connection: ConnectionTo<Agent>| {
                 let request = initialize().map_err(agent_client_protocol::Error::into_internal_error)?;
                 let init = connection.send_request(request).block_task().await?;
+                let steers = crate::steering::supported(init.meta.as_ref());
                 let Some(mut commands) = commands.lock().expect("lock").take() else {
                     return Ok(());
                 };
@@ -209,6 +210,7 @@ impl ConnectTo<Agent> for V1 {
                             settings: settings_of(options.unwrap_or_default()),
                             accepts,
                             reports_work: false,
+                            steers,
                         });
                         SessionId::new(id)
                     }
@@ -236,6 +238,7 @@ impl ConnectTo<Agent> for V1 {
                             settings: settings_of(created.config_options.unwrap_or_default()),
                             accepts,
                             reports_work: false,
+                            steers,
                         });
                         created.session_id
                     }
@@ -294,6 +297,15 @@ impl ConnectTo<Agent> for V1 {
                                 )?;
                             }
                         }
+                        Command::Steer(text) => {
+                            let request = crate::steering::request(&session.to_string(), &text)?;
+                            let (told, sent) = (events.clone(), connection.send_request(request));
+                            connection.spawn(async move {
+                                let outcome = crate::steering::outcome(sent.block_task().await);
+                                let _ = told.send(Event::Steered { text, outcome });
+                                Ok(())
+                            })?;
+                        }
                         Command::Answer { id, option } => {
                             let responder = waiting.lock().expect("lock").remove(&id);
                             if let Some(responder) = responder {
@@ -328,15 +340,17 @@ impl ConnectTo<Agent> for V1 {
                         Command::SetSetting { id, value } => {
                             let request = SetSessionConfigOptionRequest::new(
                                 session.clone(),
-                                SessionConfigId::new(id),
-                                SessionConfigValueId::new(value),
+                                SessionConfigId::new(id.clone()),
+                                SessionConfigValueId::new(value.clone()),
                             );
                             let told = events.clone();
                             let answered = changing.asked();
                             let sent = connection.send_request(request);
                             connection.spawn(async move {
                                 let event = match sent.block_task().await {
-                                    Ok(response) => Event::Settings(settings_of(response.config_options)),
+                                    Ok(response) => {
+                                        Event::Settings(with_change(settings_of(response.config_options), &id, &value))
+                                    }
                                     Err(error) => Event::Refused(format!("the agent kept its setting: {error}")),
                                 };
                                 let _ = told.send(event);

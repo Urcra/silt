@@ -96,6 +96,11 @@ impl Core {
                     local_only: self.homes.get(&record.family) == Some(&crate::homes::Home::Local),
                     workspace: Some(self.family_workspace(record.family).id.to_string()),
                     cloud: logged.cloud,
+                    machine: lease
+                        .or_else(|| self.made_on(record.id))
+                        .filter(|holder| matches!(location, "moved" | "remote") && Some(*holder) != self.device_for(record.id))
+                        .and_then(|holder| self.machine_name(holder))
+                        .map(str::to_owned),
                 }
             })
             .collect();

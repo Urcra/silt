@@ -9,6 +9,10 @@ pub enum Preset {
     #[default]
     AskBeforeCommands,
     AskForEverything,
+    /// The agent's own auto mode: its check lets safe actions through and
+    /// asks about the rest, which the daemon answers as for Ask before
+    /// commands (ADR 0114).
+    Auto,
     /// Nothing asks.
     FullAccess,
     /// Every prompt asks for a plan first; reads and searches go through,
@@ -17,12 +21,13 @@ pub enum Preset {
 }
 
 impl Preset {
-    pub const ALL: [Self; 4] = [Self::AskForEverything, Self::Plan, Self::AskBeforeCommands, Self::FullAccess];
+    pub const ALL: [Self; 5] = [Self::AskForEverything, Self::Plan, Self::AskBeforeCommands, Self::Auto, Self::FullAccess];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AskBeforeCommands => "ask_before_commands",
             Self::AskForEverything => "ask_for_everything",
+            Self::Auto => "auto",
             Self::FullAccess => "full_access",
             Self::Plan => "plan",
         }
@@ -36,6 +41,7 @@ impl Preset {
         match self {
             Self::AskBeforeCommands => "Ask before commands",
             Self::AskForEverything => "Ask for everything",
+            Self::Auto => "Auto",
             Self::FullAccess => "Full access",
             Self::Plan => "Plan",
         }
@@ -48,7 +54,8 @@ impl Preset {
             Self::AskForEverything => 0,
             Self::Plan => 1,
             Self::AskBeforeCommands => 2,
-            Self::FullAccess => 3,
+            Self::Auto => 3,
+            Self::FullAccess => 4,
         }
     }
 
@@ -76,6 +83,9 @@ mod tests {
             (Plan, AskBeforeCommands, true),
             (AskBeforeCommands, Plan, false),
             (FullAccess, AskBeforeCommands, false),
+            (Auto, AskBeforeCommands, false),
+            (Auto, Auto, true),
+            (FullAccess, Auto, false),
             (FullAccess, FullAccess, true),
         ];
         for (preset, cap, within) in cases {

@@ -24,3 +24,8 @@ export function serverName(url: string): string {
 export function hosted(): boolean {
   return document.querySelector('meta[name="silt-served-by"]')?.getAttribute('content') === 'server'
 }
+
+/** Whether a daemon serves the app to a phone on its network (ADR 0112), rather than to its own machine. */
+export function onLan(): boolean {
+  return document.querySelector('meta[name="silt-served-by"]')?.getAttribute('content') === 'lan'
+}

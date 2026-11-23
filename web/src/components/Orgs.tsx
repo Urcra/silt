@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { api, type OrgChange, type OrgInfo, type Policy, type Preset } from '../api'
-import { KNOWN_AGENTS, PRESET_LABELS, rulesLine } from '../rules'
+import { api, type OrgChange, type OrgInfo, type Policy } from '../api'
+import { rulesLine } from '../rules'
 import { keys, message } from '../query'
-import { Button, EmptyState, Input, Select, Skeleton, Tag, cx, toast } from '../ui'
+import { Button, EmptyState, Input, Select, Skeleton, Tag, toast } from '../ui'
 import { SETTINGS_HEADING } from '../settingsContext'
 import { Page } from './Page'
+import { AgentToggles, PresetSteps } from './PolicyControls'
 
 /** Sends an org change and refreshes what depends on it. */
 function useOrgChange() {
@@ -56,7 +57,6 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
   const policy = draft ?? org.policy
   const owns = org.may_change
   const set = (next: Partial<Policy>) => setDraft({ ...policy, ...next })
-  const cap = policy.max_preset ?? 'full_access'
   return (
     <section aria-label={`${org.name}'s policy`} className="flex flex-col gap-2 rounded-md border border-line-subtle p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -74,24 +74,15 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
       <fieldset disabled={!owns} className="grid grid-cols-1 gap-3 md:grid-cols-[200px_minmax(0,1fr)]">
         <span className="flex flex-col">
           <span>Agents</span>
-          <span className="text-2xs text-fg-2">None checked allows any; a list allows no custom agent</span>
+          <span className="text-2xs text-fg-2">None chosen allows any; a list allows no custom agent</span>
         </span>
-        <span className="flex flex-wrap gap-x-3 gap-y-1">
-          {KNOWN_AGENTS.map((agent) => (
-            <label key={agent.key} className="inline-flex items-center gap-1 text-xs">
-              <input
-                type="checkbox"
-                aria-label={`${org.name} allows ${agent.name}`}
-                checked={policy.agents?.includes(agent.key) ?? false}
-                onChange={(event) => {
-                  const kept = (policy.agents ?? []).filter((key) => key !== agent.key)
-                  const agents = event.target.checked ? [...kept, agent.key] : kept
-                  set({ agents: agents.length > 0 ? agents : null })
-                }}
-              />
-              {agent.name}
-            </label>
-          ))}
+        <span className="flex flex-col gap-1.5">
+          <AgentToggles
+            label={`${org.name} allows`}
+            value={policy.agents ?? []}
+            onChange={(agents) => set({ agents: agents.length > 0 ? agents : null })}
+            disabled={!owns}
+          />
           {!policy.agents && (
             <label className="inline-flex items-center gap-1 text-xs">
               <input
@@ -108,27 +99,12 @@ function OrgPolicyForm({ org }: { org: OrgInfo }) {
           <span>Most an agent may do without asking</span>
           <span className="text-2xs text-fg-2">Caps the preset, and the agent's own modes</span>
         </span>
-        <span
-          role="radiogroup"
-          aria-label={`${org.name}'s most permissive preset`}
-          className="inline-flex self-start overflow-hidden rounded-sm border border-line text-xs"
-        >
-          {(['ask_for_everything', 'ask_before_commands', 'full_access'] as Preset[]).map((preset) => (
-            <button
-              key={preset}
-              type="button"
-              role="radio"
-              aria-checked={cap === preset}
-              onClick={() => set({ max_preset: preset === 'full_access' ? null : preset })}
-              className={cx(
-                'px-3 py-1 max-md:min-h-11',
-                cap === preset ? 'bg-accent-tint text-accent-fg' : 'text-fg-2 hover:bg-surface-2',
-              )}
-            >
-              {PRESET_LABELS[preset]}
-            </button>
-          ))}
-        </span>
+        <PresetSteps
+          label={`${org.name}'s most permissive preset`}
+          value={policy.max_preset ?? null}
+          onChange={(max_preset) => set({ max_preset })}
+          disabled={!owns}
+        />
         <label htmlFor={`${org.name}-connectors`} className="flex flex-col">
           <span>Page connectors</span>
           <span className="text-2xs text-fg-2">The connectors pages may call, by name, comma-separated; empty allows any</span>

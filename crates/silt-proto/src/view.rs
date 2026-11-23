@@ -73,6 +73,10 @@ pub struct ThreadSummary {
     /// (ADR 0040). A fork doesn't inherit it.
     #[serde(default)]
     pub cloud: Option<String>,
+    /// Which of the person's own machines holds it, by name, when it isn't
+    /// the one answering: the device of its lease.
+    #[serde(default)]
+    pub machine: Option<String>,
 }
 
 /// The cloud session among a thread's own deltas.
@@ -945,6 +949,8 @@ pub struct DeviceAgent {
     pub thread: String,
     pub title: Option<String>,
     pub agent: String,
+    /// The agent's registry id, for its mark; empty where its daemon didn't say.
+    pub agent_id: String,
     pub state: AgentState,
 }
 

@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { AgentMark } from './AgentMark'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useEffect, useId, useRef, useState } from 'react'
-import { PRESETS, permissionModes, startSettings, startingValue } from '../agentState'
+import { PRESETS, nextPreset, presetUnavailable, startSettings, startingValue } from '../agentState'
 import {
   type AgentSetting,
   api,
@@ -12,7 +13,7 @@ import {
   type ThreadSummary,
   type WorkspaceView,
 } from '../api'
-import { agentRefused, modeRefused, presetRefused, rulesLine, serverLine, within, workspaceOf } from '../rules'
+import { agentName, agentRefused, presetRefused, rulesLine, serverLine, within, workspaceOf } from '../rules'
 import { threadDoing } from '../threadLook'
 import { useNow } from '../now'
 import { projectName, shortPath } from '../projects'
@@ -25,6 +26,7 @@ import { store, stored } from '../stored'
 import { ago } from '../time'
 import { Button, Icon, Input, Kbd, Popover, Skeleton, Tabs, cx, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
+import { AgentChip, PermissionChip } from './AgentPickers'
 import { ATTACH, useAttachments } from '../attachments'
 import { NEW_THREAD_DRAFT, useDraft } from '../drafts'
 import { useHeldSend } from '../heldSend'
@@ -162,7 +164,13 @@ function OpenFolder({ found, onAdded }: { found: FoundFolder[]; onAdded: (path: 
                     {folder.name}
                     {completing.dir.slice(-1)}
                   </span>
-                  {(said || folder.git) && <span className="shrink-0 text-2xs text-fg-2">{said || 'git'}</span>}
+                  {known && said ? (
+                    <span className="shrink-0 text-2xs text-fg-2">
+                      <SessionMarks folder={known} />
+                    </span>
+                  ) : (
+                    folder.git && <span className="shrink-0 text-2xs text-fg-2">git</span>
+                  )}
                 </button>
               </li>
             )
@@ -179,8 +187,14 @@ function OpenFolder({ found, onAdded }: { found: FoundFolder[]; onAdded: (path: 
                   className="flex w-full flex-col rounded-sm px-2 py-1.5 text-left hover:bg-surface-2 max-md:min-h-11"
                 >
                   <span className="font-mono text-xs">{folder.path}</span>
-                  <span className="text-2xs text-fg-2">
-                    {[folder.repo || 'no remote', sessionsSaid(folder)].filter(Boolean).join(' · ')}
+                  <span className="inline-flex flex-wrap items-center gap-x-1 text-2xs text-fg-2">
+                    {folder.repo || 'no remote'}
+                    {folder.sessions.length > 0 && (
+                      <>
+                        {' · '}
+                        <SessionMarks folder={folder} />
+                      </>
+                    )}
                   </span>
                 </button>
               </li>
@@ -309,6 +323,26 @@ function sessionsSaid(folder: FoundFolder): string {
   const parts = folder.sessions.map((sessions) => `${sessions.count} ${sessions.agent}`)
   const total = folder.sessions.reduce((sum, sessions) => sum + sessions.count, 0)
   return `${parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0]} ${total === 1 ? 'session' : 'sessions'}`
+}
+
+/** A folder's sessions by their agents' marks and counts, most first: `[mark] 3 [mark] 2 sessions` (ADR 0114). */
+function SessionMarks({ folder }: { folder: FoundFolder }) {
+  const total = folder.sessions.reduce((sum, sessions) => sum + sessions.count, 0)
+  return (
+    <span role="img" aria-label={sessionsSaid(folder)} className="inline-flex items-center gap-2">
+      {folder.sessions.map((sessions) => (
+        <span
+          key={sessions.agent_id || sessions.agent}
+          className="inline-flex items-center gap-1 font-mono tabular-nums"
+          title={`${sessions.count} ${sessions.agent} ${sessions.count === 1 ? 'session' : 'sessions'}`}
+        >
+          <AgentMark agent={sessions.agent_id || sessions.agent} name={sessions.agent} className="h-3 w-3" />
+          {sessions.count}
+        </span>
+      ))}
+      <span>{total === 1 ? 'session' : 'sessions'}</span>
+    </span>
+  )
 }
 
 function cloneName(clone: CloneInfo): string {
@@ -512,14 +546,15 @@ function Welcome() {
               >
                 <span className="flex min-w-[220px] flex-1 flex-col">
                   <span className="font-mono font-medium">{folder.path}</span>
-                  <span className="text-xs text-fg-2">
-                    {[
-                      folder.git ? folder.repo || 'no remote' : 'not a git repository',
-                      sessionsSaid(folder),
-                      folder.last_ms !== null && `last ${ago(folder.last_ms, now)}`,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
+                  <span className="inline-flex flex-wrap items-center gap-x-1 text-xs text-fg-2">
+                    {folder.git ? folder.repo || 'no remote' : 'not a git repository'}
+                    {folder.sessions.length > 0 && (
+                      <>
+                        {' · '}
+                        <SessionMarks folder={folder} />
+                      </>
+                    )}
+                    {folder.last_ms !== null && ` · last ${ago(folder.last_ms, now)}`}
                   </span>
                   {!startable(folder) && (
                     <span className="text-xs text-fg-3">
@@ -624,7 +659,10 @@ function PickUp({ repo, drafts, onDraft }: { repo: string; drafts: Draft[]; onDr
             <span className="truncate">{thread.title ?? 'Untitled thread'}</span>
             <span className="truncate text-xs text-fg-2">{pickUpSays(thread)}</span>
           </span>
-          {thread.agent && <span className="shrink-0 text-xs text-fg-2">{thread.agent}</span>}
+          {/* A slot of its own, so the times line up whatever the agent (ADR 0114). */}
+          <span className="flex w-4 shrink-0 justify-center text-fg-2" title={thread.agent ? agentName(thread.agent) : undefined}>
+            {thread.agent && <AgentMark agent={thread.agent} labelled className="h-3.5 w-3.5" />}
+          </span>
           <span className="min-w-8 shrink-0 text-right font-mono text-2xs whitespace-nowrap text-fg-3" data-volatile>
             {ago(thread.last_ms, now)}
           </span>
@@ -698,7 +736,7 @@ export function NewThread() {
     workspace?.workspace.defaults.preset ??
     'ask_before_commands'
   const cap = workspace?.effective.max_preset
-  const preset: Preset = within(wanted, cap) ? wanted : cap!
+  const capped: Preset = within(wanted, cap) ? wanted : cap!
   const branches = useQuery({
     queryKey: keys.branches(project),
     queryFn: () => api.branches(project),
@@ -710,14 +748,13 @@ export function NewThread() {
   const seen = agents.find((candidate) => candidate.id === agent)
   const modes = seen?.modes?.available
   const settings = startSettings(seen?.settings ?? [], modes)
-  const [mode, setMode] = useState<string>()
   const agentDefaults = workspace?.workspace.defaults.agents?.[agent]
-  const defaultMode = modes?.find((choice) => choice.id === agentDefaults?.mode && !modeRefused(workspace, agent, choice.id))?.id
-  const chosenMode = mode ?? defaultMode ?? seen?.modes?.current
   const settingValue = (setting: AgentSetting) =>
     startingValue(setting, chosenSettings[setting.id], agentDefaults?.settings?.[setting.id])
-  // Claude's modes (Manual, Accept edits, Plan, Auto) are its permissions, which then stand in for the preset (ADR 0048).
-  const modesArePermissions = permissionModes(modes)
+  // The preset is the one control for every agent; the agent starts in the mode that does what it says (ADR 0114).
+  // One without an auto mode asks as for Ask before commands.
+  const refusedPreset = (id: Preset) => presetRefused(workspace, id) ?? presetUnavailable(id, modes, agentName)
+  const preset: Preset = refusedPreset(capped) && capped === 'auto' ? 'ask_before_commands' : capped
   const { attached, add, remove, clear } = useAttachments()
   const attach = (files: File[], pasted = false) => {
     setError(undefined)
@@ -779,8 +816,8 @@ export function NewThread() {
         {
           here: chosenWhere === 'local',
           base: chosenWhere === 'worktree' && base ? base : null,
-          // In the mode chosen here where its modes are its permissions, else the one its preset says; its model and the rest as shown.
-          mode: modesArePermissions ? (chosenMode ?? null) : null,
+          // In the mode its preset says; its model and the rest as shown.
+          mode: null,
           settings: settings.map((setting) => [setting.id, settingValue(setting)]),
           preset,
           visibility: null,
@@ -859,9 +896,8 @@ export function NewThread() {
             onChange={setPrompt}
             onSend={send}
             onCycle={() => {
-              if (modesArePermissions && modes)
-                setMode(modes[(modes.findIndex((choice) => choice.id === chosenMode) + 1) % modes.length]!.id)
-              else setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)
+              const next = nextPreset(preset, refusedPreset)
+              if (next) setPreset(next)
             }}
             placeholder={
               chosenWhere === 'cloud'
@@ -875,54 +911,30 @@ export function NewThread() {
             tools={
               chosenWhere !== 'cloud' && (
                 <>
+                  <PermissionChip value={preset} onChange={setPreset} refused={refusedPreset} />
                   {agents.length > 0 && !agent && workspace ? (
                     <span className="px-2 text-xs text-warn-fg">
                       No agent installed here is allowed in {workspace.workspace.name}
                     </span>
                   ) : agents.length > 0 ? (
-                    <ChipSelect
-                      ghost
-                      label="agent to start"
+                    <AgentChip
                       value={agent}
+                      agents={agents}
                       onChange={(chosen) => {
                         setAgent(chosen)
-                        setMode(undefined)
                         setChosenSettings({})
                       }}
-                      options={agents.map((choice) => ({
-                        id: choice.id,
-                        name: choice.name,
-                        description: choice.description,
-                        refused: agentRefused(workspace, choice.id),
-                      }))}
+                      refused={(id) => agentRefused(workspace, id)}
                     />
                   ) : (
                     choices.isSuccess && <span className="px-2 text-xs text-fg-2">No agent found</span>
                   )}
                   <AgentSettings
-                    modes={modesArePermissions ? modes : undefined}
-                    mode={chosenMode}
-                    onMode={setMode}
                     settings={settings}
                     value={settingValue}
                     onSetting={(id, value) => setChosenSettings({ ...chosenSettings, [id]: value })}
                     narrow={narrow}
                   />
-                  {!modesArePermissions && (
-                    <ChipSelect
-                      ghost
-                      label="permissions"
-                      icon="lock"
-                      value={preset}
-                      onChange={(chosen) => setPreset(chosen as Preset)}
-                      options={PRESETS.map((choice) => ({
-                        id: choice.id,
-                        name: choice.label,
-                        description: choice.says,
-                        refused: presetRefused(workspace, choice.id),
-                      }))}
-                    />
-                  )}
                   {agent && <UsageRing agent={agent} />}
                 </>
               )

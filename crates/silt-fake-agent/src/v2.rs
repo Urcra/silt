@@ -11,12 +11,16 @@
 //! `Keep` makes it leave a real process running in the background, `silt-fake-agent
 //! keep-running <cwd>`, whose end it reports, as Claude does, and goes on about.
 //! `Unheard` makes it leave a command no process runs, whose end it never reports.
+//! `PowerShell` makes it leave a PowerShell command running, whose end, as
+//! Claude's adapter, it never reports: it goes only to Claude Code's
+//! transcript under `CLAUDE_CONFIG_DIR`, and sets the agent going again.
 //! `Present` makes it put a plan to the person, as Claude's ExitPlanMode
 //! does, by asking leave to quit its plan mode. Its session offers the commands
 //! `count` and `compact` as it opens, and drops `compact` on a prompt.
 //! `Suggest` makes it predict the next prompt once it stopped, as Claude's
 //! adapter does, to a client that says it takes one.
-//! `Which model` and `FAKE_ACP_SLOW_SETTINGS` work as over v1.
+//! `Which model`, `Long`, `FAKE_ACP_SLOW_SETTINGS` and `FAKE_ACP_STEERING`
+//! work as over v1.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -60,6 +64,25 @@ fn parse<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
     serde_json::from_value(value).map_err(agent_client_protocol::Error::into_internal_error)
 }
 
+/// Appends Claude Code's report that the background task `task`, started by
+/// `call`, completed to the transcript of `session` under
+/// `$CLAUDE_CONFIG_DIR`, as Claude Code keeps it for a session in `cwd`.
+fn report_in_transcript(cwd: &std::path::Path, session: &str, task: &str, call: &str) -> Result<()> {
+    let config = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_default();
+    let slug: String = cwd.to_string_lossy().chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' }).collect();
+    let project = config.join("projects").join(slug);
+    let report = format!(
+        "<task-notification>\n<task-id>{task}</task-id>\n<tool-use-id>{call}</tool-use-id>\n<status>completed</status>\n</task-notification>"
+    );
+    let line = json!({"type": "user", "origin": {"kind": "task-notification"}, "message": {"role": "user", "content": report}});
+    let written = std::fs::create_dir_all(&project).and_then(|()| {
+        let mut transcript =
+            std::fs::OpenOptions::new().create(true).append(true).open(project.join(format!("{session}.jsonl")))?;
+        std::io::Write::write_all(&mut transcript, format!("{line}\n").as_bytes())
+    });
+    written.map_err(agent_client_protocol::Error::into_internal_error)
+}
+
 fn say(connection: &ConnectionTo<Client>, session: &v2::SessionId, update: Value) -> Result<()> {
     connection.send_notification(v2::UpdateSessionNotification::new(session.clone(), parse::<v2::SessionUpdate>(update)?))
 }
@@ -76,6 +99,7 @@ pub async fn main() -> Result<()> {
         .on_receive_notification(
             async move |_cancel: v2::CancelSessionNotification, _connection: ConnectionTo<Client>| {
                 cancelling.store(true, Ordering::SeqCst);
+                crate::steering::cancel();
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
@@ -84,12 +108,16 @@ pub async fn main() -> Result<()> {
             async move |request: v2::InitializeRequest, responder: Responder<v2::InitializeResponse>, _connection: ConnectionTo<Client>| {
                 initialized.lock().expect("lock").suggestions =
                     request.capabilities.session.as_ref().is_some_and(|session| session.prompt_suggestions.is_some());
-                responder.respond(parse(json!({
+                let mut response = json!({
                     "protocolVersion": request.protocol_version,
                     "info": {"name": "fake-agent", "version": "2.0"},
                     "capabilities": {"session": {"prompt": {"image": {}, "embeddedContext": {}}}},
                     "authMethods": crate::sign_in_methods("methodId")
-                }))?)
+                });
+                if let Some(meta) = crate::steering::meta() {
+                    response["_meta"] = meta;
+                }
+                responder.respond(parse(response)?)
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -168,6 +196,25 @@ pub async fn main() -> Result<()> {
                     }
                     say(&worker, &session, json!({"sessionUpdate": "agent_thought_chunk", "messageId": "thought-1", "content": {"type": "text", "text": "Thinking about the prompt."}}))?;
                     say(&worker, &session, json!({"sessionUpdate": "usage_update", "used": 53_000, "size": 200_000}))?;
+                    if prompt.contains("Long") {
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "long-1", "name": "Bash", "rawInput": {"command": "cargo build"}, "status": "in_progress", "title": "cargo build", "kind": "execute", "content": [{"type": "terminal", "terminalId": "long-1"}]}))?;
+                        let mut heard = 0;
+                        let ran = crate::steering::long(|steer| {
+                            heard += 1;
+                            say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": format!("heard-{heard}"), "content": {"type": "text", "text": format!("Heard while the command ran: {steer}")}}))
+                        })
+                        .await?;
+                        let killed = matches!(ran, crate::steering::Ran::Killed);
+                        let (status, output) = if killed { ("failed", "The command was killed.") } else { ("completed", "The command ran to its end.") };
+                        let data = base64::engine::general_purpose::STANDARD.encode(output);
+                        say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "long-1", "output": {"data": data}}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "long-1", "status": status}))?;
+                        if killed {
+                            return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "cancelled"}));
+                        }
+                        say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "reply-1", "content": {"type": "text", "text": format!("Done: {prompt}")}}))?;
+                        return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}));
+                    }
                     say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "run-1", "name": "Bash", "rawInput": {}, "status": "pending", "title": "Terminal", "kind": "execute", "content": [{"type": "terminal", "terminalId": "run-1"}]}))?;
                     say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "run-1", "rawInput": {"command": "cat src/main.rs"}, "title": "cat src/main.rs"}))?;
                     let printed = tokio::fs::read_to_string(cwd.join("src/main.rs")).await.unwrap_or_default();
@@ -227,6 +274,12 @@ pub async fn main() -> Result<()> {
                         say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "unheard-1", "output": {"data": answer}}))?;
                         say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "unheard-1", "status": "completed"}))?;
                     }
+                    let powershell = prompt.contains("PowerShell");
+                    if powershell {
+                        let answer = "Command running in background with ID: bgps1. Output is being written to: bgps1.output";
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "ps-1", "name": "PowerShell", "rawInput": {"command": "Start-Sleep 1", "description": "Wait a second", "run_in_background": true}, "status": "pending", "title": "Start-Sleep 1", "kind": "execute"}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "ps-1", "status": "completed", "content": [{"type": "content", "content": {"type": "text", "text": answer}}]}))?;
+                    }
                     if prompt.contains("Keep") {
                         let command = format!("keep-running {}", cwd.display());
                         let answer = base64::engine::general_purpose::STANDARD.encode("Command running in background with ID: bgkeep1.");
@@ -277,6 +330,14 @@ pub async fn main() -> Result<()> {
                         say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "later-bg", "content": {"type": "text", "text": "The background command printed BG."}}))?;
                         return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}));
                     }
+                    if powershell {
+                        // Its end goes only to Claude Code's transcript; the adapter says nothing of it.
+                        tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
+                        report_in_transcript(&cwd, &session.to_string(), "bgps1", "ps-1")?;
+                        say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "running"}))?;
+                        say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "later-ps", "content": {"type": "text", "text": "The PowerShell command waited."}}))?;
+                        return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}));
+                    }
                     if aside {
                         while !cancelled.load(Ordering::SeqCst) {
                             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -291,6 +352,15 @@ pub async fn main() -> Result<()> {
                     }
                     Ok(())
                 })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: agent_client_protocol::UntypedMessage, responder: Responder<Value>, _connection: ConnectionTo<Client>| {
+                match crate::steering::answer(&request.method, &request.params) {
+                    Ok(answer) => responder.respond(answer),
+                    Err(error) => responder.respond_with_error(error),
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )

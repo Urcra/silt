@@ -5,6 +5,8 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 silt="${SILT:-$root/target/debug/silt}"
 work=$(mktemp -d /tmp/silt-web-XXXXXX)
+# A failure partway leaves nothing running or on disk.
+trap 'status=$?; [ "$status" -eq 0 ] || "$root/web/e2e/abandon.sh" "$work" "$silt"; exit "$status"' EXIT
 export SILT_HOME="$work/silt"
 export SILT_VOICE_BIN="${SILT_VOICE_BIN:-/nonexistent}"
 export CLAUDE_CONFIG_DIR="$work/claude"

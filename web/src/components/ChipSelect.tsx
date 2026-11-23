@@ -17,6 +17,7 @@ export function ChipSelect({
   options,
   mono = false,
   ghost = false,
+  chevron = true,
 }: {
   label: string
   prefix?: string
@@ -27,9 +28,11 @@ export function ChipSelect({
   options: { id: string; name: string; description?: string | null; refused?: string }[]
   mono?: boolean
   ghost?: boolean
+  /** Off in the composer's row, whose chips show they open on hover (ADR 0114). */
+  chevron?: boolean
 }) {
   return (
-    <label className={cx(ghost ? GHOST_CHIP : CHIP, 'relative min-w-0 cursor-pointer pr-1')}>
+    <label className={cx(ghost ? GHOST_CHIP : CHIP, 'relative min-w-0 cursor-pointer', chevron && 'pr-1')}>
       {icon && <Icon name={icon} className="h-3.5 w-3.5 text-fg-2" />}
       {prefix && <span className="text-fg-2">{prefix}</span>}
       <select
@@ -37,7 +40,8 @@ export function ChipSelect({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className={cx(
-          'field-sizing-content max-w-56 min-w-0 cursor-pointer appearance-none truncate bg-transparent pr-4 text-xs text-fg-1 focus:outline-none',
+          'field-sizing-content max-w-56 min-w-0 cursor-pointer appearance-none truncate bg-transparent text-xs text-fg-1 focus:outline-none',
+          chevron && 'pr-4',
           mono && 'font-mono',
         )}
       >
@@ -52,7 +56,7 @@ export function ChipSelect({
           </option>
         ))}
       </select>
-      <Icon name="chevronDown" className="pointer-events-none absolute right-1 h-3 w-3 text-fg-2" />
+      {chevron && <Icon name="chevronDown" className="pointer-events-none absolute right-1 h-3 w-3 text-fg-2" />}
     </label>
   )
 }

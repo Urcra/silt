@@ -101,19 +101,11 @@ async fn page(State(server): State<Server>, headers: HeaderMap, uri: Uri) -> Res
 /// before signing in. `name` is the file's name without the hash the build
 /// gives it, as `ibm-plex-sans-latin-400-normal.woff2`.
 pub(crate) async fn font(UrlPath(name): UrlPath<String>) -> Response {
-    let Some(stem) = name.strip_suffix(".woff2").filter(|stem| stem.starts_with("ibm-plex-")) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let prefix = format!("assets/{stem}-");
-    let found = silt_web::Assets::iter()
-        .find(|path| path.strip_prefix(&prefix).is_some_and(|hash| hash.ends_with(".woff2")))
-        .and_then(|path| silt_web::Assets::get(&path));
-    match found {
-        Some(file) => (
-            [(header::CONTENT_TYPE, "font/woff2"), (header::CACHE_CONTROL, "public, max-age=86400")],
-            Body::from(file.data.into_owned()),
-        )
-            .into_response(),
+    match silt_web::font(&name) {
+        Some(data) => {
+            ([(header::CONTENT_TYPE, "font/woff2"), (header::CACHE_CONTROL, "public, max-age=86400")], Body::from(data))
+                .into_response()
+        }
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
