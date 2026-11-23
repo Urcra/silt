@@ -1038,6 +1038,40 @@ pub enum Request {
     },
     /// A one-time code that signs a phone in to the server's web app.
     PairPhone,
+    /// How phones on the local network reach this machine (ADR 0112).
+    LanStatus,
+    /// Lets phones on the local network reach this machine, or stops.
+    LanTurn {
+        on: bool,
+    },
+    /// A one-time code a phone on the network pairs with, and what it may do.
+    LanPair {
+        capabilities: silt_proto::Capabilities,
+    },
+    /// The person's answer to a phone asking to pair.
+    LanAnswer {
+        ask: String,
+        allow: bool,
+    },
+    /// Renames a phone paired over the network or changes what it may do.
+    LanPhoneChange {
+        phone: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        capabilities: Option<silt_proto::Capabilities>,
+    },
+    LanPhoneRevoke {
+        phone: String,
+    },
+    /// Signs every phone out and makes a new certificate authority.
+    LanForget,
+    /// Where `phone`'s pushes go; `None` stops them.
+    LanPush {
+        phone: String,
+        #[serde(default)]
+        subscription: Option<crate::lan::Subscription>,
+    },
     /// The thread's read-only links (ADR 0027), on the server.
     ThreadLinks {
         thread: String,
@@ -1892,6 +1926,8 @@ pub struct Subfolder {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct FoundSessions {
     pub agent: String,
+    /// The agent's id, for its mark.
+    pub agent_id: String,
     pub count: u32,
 }
 
@@ -2449,6 +2485,9 @@ pub enum BusEvent {
     /// The themes or the pick changed: a file in `themes/` was saved, or
     /// another page picked (ADR 0098).
     Appearance,
+    /// How phones on the local network reach this machine changed, or one
+    /// asks to pair (ADR 0112).
+    Lan,
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
 }
@@ -2478,7 +2517,7 @@ impl BusEvent {
             Self::Sample { ask, .. } | Self::SampleTool { ask, .. } => Some(format!("sample:{ask}")),
             Self::Room { .. } => Some("rooms".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
-            Self::Agents | Self::Approvals | Self::Appearance | Self::Lagged => None,
+            Self::Agents | Self::Approvals | Self::Appearance | Self::Lan | Self::Lagged => None,
         }
     }
 }
@@ -2521,6 +2560,13 @@ mod tests {
             silt_proto::AgentActivity::decl(&config),
             silt_proto::AgentState::decl(&config),
             silt_proto::Capabilities::decl(&config),
+            crate::lan::LanView::decl(&config),
+            crate::lan::LanState::decl(&config),
+            crate::lan::LanAsk::decl(&config),
+            crate::lan::LanPhone::decl(&config),
+            crate::lan::LanPairing::decl(&config),
+            crate::lan::Subscription::decl(&config),
+            crate::lan::SubscriptionKeys::decl(&config),
             silt_proto::InboxAction::decl(&config),
             silt_proto::KindSetting::decl(&config),
             silt_proto::Startable::decl(&config),

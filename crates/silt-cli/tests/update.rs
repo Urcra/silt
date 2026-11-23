@@ -290,7 +290,9 @@ fn an_update_waiting_on_an_agent(setup: &Setup) -> (u32, String, std::process::C
     let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
     fs::write(setup.home.join("silt/agents.json"), agents.to_string()).expect("agents.json");
     let installed = setup.install();
-    let started = setup.silt_at(&installed, &["daemon", "start"], &[]).output().expect("silt runs");
+    // The daemon's own check at start fetches in the clone too, and two
+    // fetches at once fail on the ref's lock.
+    let started = setup.silt_at(&installed, &["daemon", "start"], &[("SILT_UPDATE_CHECK", "never")]).output().expect("silt runs");
     assert!(started.status.success(), "{}", text(&started));
     let (status, started) = setup.web_with(
         "POST",

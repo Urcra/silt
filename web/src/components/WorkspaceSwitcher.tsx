@@ -1,8 +1,10 @@
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { api, type OrgInfo } from '../api'
-import { KNOWN_AGENTS, serverLine } from '../rules'
+import { KNOWN_AGENTS, PRESET_LABELS, serverLine } from '../rules'
+import { presetOf } from '../agentState'
+import { AgentMark } from './AgentMark'
 import { useNow } from '../now'
 import { keys } from '../query'
 import { sections } from '../sections'
@@ -19,8 +21,8 @@ interface Choice {
   long: string
   workspace: Workspace
   offline?: boolean
-  /** Its rules, as short chips under its name (ADR 0065). */
-  chips?: string[]
+  /** Its rules, as short chips under its name (ADR 0065); the agents allowed by their marks (ADR 0114). */
+  chips?: { key: string; node: ReactNode }[]
 }
 
 interface Group {
@@ -130,13 +132,24 @@ function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => numb
       label: 'Workspaces',
       choices: workspaces.data.workspaces.map((view) => {
         const policy = view.effective
+        const words = (text: string) => ({ key: text, node: text })
         const chips = [
-          ...(view.org_policy ? [`${view.org_policy.org}'s rules`] : []),
-          ...(policy.agents
-            ? [policy.agents.map((key) => KNOWN_AGENTS.find((agent) => agent.key === key)?.name ?? key).join(', ') + ' only']
+          ...(view.org_policy ? [words(`${view.org_policy.org}'s rules`)] : []),
+          ...(policy.agents ? [{ key: 'agents', node: <AllowedMarks agents={policy.agents} /> }] : []),
+          ...(policy.max_preset && policy.max_preset !== 'full_access'
+            ? [
+                {
+                  key: 'cap',
+                  node: (
+                    <span className="inline-flex items-center gap-1" title={`At most ${PRESET_LABELS[policy.max_preset]}`}>
+                      <Icon name="lock" className="h-2.5 w-2.5 text-fg-3" />
+                      up to {presetOf(policy.max_preset).short}
+                    </span>
+                  ),
+                },
+              ]
             : []),
-          ...(policy.max_preset && policy.max_preset !== 'full_access' ? ['asks first'] : []),
-          ...(policy.isolated ? ['others hidden'] : policy.sandbox ? ['sandboxed'] : []),
+          ...(policy.isolated ? [words('others hidden')] : policy.sandbox ? [words('sandboxed')] : []),
         ]
         const isDefault = view.workspace.id === workspaces.data.default
         return {
@@ -242,8 +255,11 @@ export function WorkspaceSwitcher() {
                         {choice.chips && choice.chips.length > 0 && (
                           <span className="mt-1 flex flex-wrap gap-1">
                             {choice.chips.map((chip) => (
-                              <span key={chip} className="rounded-sm border border-line px-1.5 text-2xs text-fg-1">
-                                {chip}
+                              <span
+                                key={chip.key}
+                                className="inline-flex items-center rounded-sm border border-line px-1.5 text-2xs text-fg-1"
+                              >
+                                {chip.node}
                               </span>
                             ))}
                           </span>
@@ -321,5 +337,20 @@ export function WorkspaceSwitcher() {
         </p>
       </Dialog>
     </>
+  )
+}
+
+/** The agents a workspace allows, as their marks: five at most, else four and how many more. */
+function AllowedMarks({ agents }: { agents: string[] }) {
+  const names = agents.map((key) => KNOWN_AGENTS.find((agent) => agent.key === key)?.name ?? key)
+  const shown = agents.length > 5 ? agents.slice(0, 4) : agents
+  const said = agents.length === 0 ? 'no agent' : `${names.join(', ')} only`
+  return (
+    <span role="img" aria-label={said} title={said} className="inline-flex h-4 items-center gap-[3px]">
+      {agents.length === 0 ? 'no agent' : shown.map((key) => <AgentMark key={key} agent={key} className="h-3 w-3" />)}
+      {agents.length > shown.length && (
+        <span className="pl-px font-mono text-2xs text-fg-2">+{agents.length - shown.length}</span>
+      )}
+    </span>
   )
 }

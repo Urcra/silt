@@ -62,34 +62,64 @@ function roomUrl(): string {
   return `${scheme}://${window.location.host}${path}`
 }
 
+/** How long a dropped socket waits before it opens again, doubling up to [`REJOIN_MAX_MS`]. */
+export const REJOIN_MS = 500
+export const REJOIN_MAX_MS = 10_000
+/** What is kept to send while the socket opens again: presence and moments are worth little once stale. */
+const QUEUED = 256
+
 export class RoomSocket {
-  private socket: WebSocket
+  private socket!: WebSocket
   private queue: string[] = []
   private listeners = new Set<(heard: Heard) => void>()
   private book = new PeerBook()
   private lapse: ReturnType<typeof setInterval>
+  private rejoin: ReturnType<typeof setTimeout> | undefined
+  private wait = REJOIN_MS
+  /** Closed by this view, or refused for good: no socket opens again. */
+  private done = false
+  private join: string
   /** This view's own peer id, once joined. */
   me: string | null = null
 
   constructor(thread: string, artifact: string, name = '') {
-    this.socket = new WebSocket(roomUrl())
-    this.socket.onopen = () => {
-      this.socket.send(JSON.stringify({ op: 'join', thread, artifact, name }))
-      for (const message of this.queue.splice(0)) this.socket.send(message)
-    }
-    this.socket.onmessage = (message: MessageEvent<string>) => {
-      const heard = JSON.parse(message.data) as Heard
-      if (heard.event === 'joined') this.me = heard.peer
-      // Listeners hear everyone whenever anyone changes, as the room sends only what changed.
-      if (this.book.heard(heard, Date.now())) this.tell({ event: 'peers', peers: this.book.list(Date.now()) })
-      else if (heard.event !== 'presence') this.tell(heard)
-    }
+    this.join = JSON.stringify({ op: 'join', thread, artifact, name })
+    this.open()
     let checked = Date.now()
     this.lapse = setInterval(() => {
       const now = Date.now()
       if (this.book.lapsed(checked, now)) this.tell({ event: 'peers', peers: this.book.list(now) })
       checked = now
     }, 5000)
+  }
+
+  /**
+   * Opens the socket and joins. One that drops, as when the daemon loses the server it relays the room to, opens
+   * again: otherwise this view would neither hear the others nor be heard until the page is opened again.
+   */
+  private open() {
+    const socket = new WebSocket(roomUrl())
+    this.socket = socket
+    socket.onopen = () => {
+      this.wait = REJOIN_MS
+      socket.send(this.join)
+      for (const message of this.queue.splice(0)) socket.send(message)
+    }
+    socket.onmessage = (message: MessageEvent<string>) => {
+      const heard = JSON.parse(message.data) as Heard
+      if (heard.event === 'joined') this.me = heard.peer
+      // Refused for a reason other than the server being out of reach, joining again would be refused again.
+      if (heard.event === 'refused' && !heard.reason.startsWith('unavailable')) this.done = true
+      // Listeners hear everyone whenever anyone changes, as the room sends only what changed.
+      if (this.book.heard(heard, Date.now())) this.tell({ event: 'peers', peers: this.book.list(Date.now()) })
+      else if (heard.event !== 'presence') this.tell(heard)
+    }
+    socket.onclose = () => {
+      if (this.done || this.socket !== socket) return
+      this.me = null
+      this.rejoin = setTimeout(() => this.open(), this.wait)
+      this.wait = Math.min(this.wait * 2, REJOIN_MAX_MS)
+    }
   }
 
   private tell(heard: Heard) {
@@ -99,7 +129,7 @@ export class RoomSocket {
   private send(message: unknown) {
     const text = JSON.stringify(message)
     if (this.socket.readyState === WebSocket.OPEN) this.socket.send(text)
-    else if (this.socket.readyState === WebSocket.CONNECTING) this.queue.push(text)
+    else if (!this.done) this.queue = [...this.queue, text].slice(-QUEUED)
   }
 
   emit(topic: string, data: unknown) {
@@ -116,7 +146,9 @@ export class RoomSocket {
   }
 
   close() {
+    this.done = true
     clearInterval(this.lapse)
+    clearTimeout(this.rejoin)
     this.listeners.clear()
     this.socket.close()
   }

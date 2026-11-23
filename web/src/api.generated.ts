@@ -19,6 +19,81 @@ sample: boolean,
  */
 page_tools: boolean, };
 
+export type LanView = { state: LanState, 
+/**
+ * What went wrong, when it failed.
+ */
+error: string | null, 
+/**
+ * This machine, as people name it.
+ */
+machine: string, 
+/**
+ * Whose Silt this is on it, as the OS names them.
+ */
+person: string | null, 
+/**
+ * Its name on the network: `silt-workstation.local`.
+ */
+host: string, port: number, addresses: Array<string>, 
+/**
+ * The authority's SHA-256, as a phone shows it.
+ */
+fingerprint: string | null, 
+/**
+ * When the listener's certificate is next made again.
+ */
+renews_ms: number | null, 
+/**
+ * The page a phone gets the authority from, and its QR code.
+ */
+trust_url: string | null, trust_qr_svg: string | null, 
+/**
+ * What lets port `port` through this machine's firewall, when it may
+ * be in the way.
+ */
+firewall: string | null, asks: Array<LanAsk>, phones: Array<LanPhone>, pairing: LanPairing | null, };
+
+export type LanState = "off" | "on" | "no_network" | "port_taken" | "failed";
+
+export type LanAsk = { id: string, 
+/**
+ * What its browser says it is: `iPhone · Safari 19`.
+ */
+phone: string, 
+/**
+ * The address it asked from.
+ */
+from: string, 
+/**
+ * The code it opened, as shown.
+ */
+code: string, capabilities: Capabilities, made_ms: number, };
+
+export type LanPhone = { id: string, name: string, capabilities: Capabilities, created_ms: number, last_seen_ms: number, online: boolean, 
+/**
+ * Whether it gets pushes.
+ */
+notifies: boolean, };
+
+export type LanPairing = { 
+/**
+ * As shown: `K7QM-2XPA`.
+ */
+code: string, 
+/**
+ * The page that pairs, by this machine's `.local` name.
+ */
+url: string, qr_svg: string, 
+/**
+ * The same by address, for a network that doesn't pass `.local` names.
+ */
+address_url: string | null, address_qr_svg: string | null, capabilities: Capabilities, expires_ms: number, };
+
+export type Subscription = { endpoint: string, keys: SubscriptionKeys, };
+
+export type SubscriptionKeys = { p256dh: string, auth: string, };
+
 export type InboxAction = { "do": "permission", id: number, title: string, options: Array<[string, string]>, } | { "do": "plan" };
 
 export type KindSetting = { kind: string, notify: boolean, };
@@ -243,7 +318,7 @@ export type ChoiceAsked = {
  */
 value: string, label: string, description: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "approvals" } | { "event": "appearance" } | { "event": "lagged" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "approvals" } | { "event": "appearance" } | { "event": "lan" } | { "event": "lagged" };
 
 export type DataClass = "location";
 
@@ -754,7 +829,11 @@ export type SignIn = { url: string, user: string, device: string,
  */
 name: string, sync_error: string | null, };
 
-export type DeviceAgent = { thread: string, title: string | null, agent: string, state: AgentState, };
+export type DeviceAgent = { thread: string, title: string | null, agent: string, 
+/**
+ * The agent's registry id, for its mark; empty where its daemon didn't say.
+ */
+agent_id: string, state: AgentState, };
 
 export type DeviceChange = { name: string | null, capabilities: Capabilities | null, };
 
@@ -1503,7 +1582,7 @@ plan: string | null,
  */
 tool_call: string | null, };
 
-export type Preset = "ask_before_commands" | "ask_for_everything" | "full_access" | "plan";
+export type Preset = "ask_before_commands" | "ask_for_everything" | "auto" | "full_access" | "plan";
 
 export type Project = { 
 /**
@@ -2056,7 +2135,11 @@ added: boolean,
  */
 sessions: Array<FoundSessions>, last_ms: number | null, };
 
-export type FoundSessions = { agent: string, count: number, };
+export type FoundSessions = { agent: string, 
+/**
+ * The agent's id, for its mark.
+ */
+agent_id: string, count: number, };
 
 export type Subfolder = { name: string, 
 /**

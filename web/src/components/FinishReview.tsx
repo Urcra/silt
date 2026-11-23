@@ -44,18 +44,23 @@ export function FinishReview(props: FinishProps & { opener?: (open: (() => void)
   const { review, unsent, agent, working = false, opener, reviewedTurn } = props
   const { count, sending, error, finish } = useFinishReview(props)
   const { drafts, note } = review.review
-  const [picked, setPicked] = useState<Finish>(agent ? 'send' : 'copy')
+  // Unpicked, it follows the agent: its status arrives after the first render, and a default fixed then copied the
+  // review for a terminal while the agent ran here.
+  const [chosen, setPicked] = useState<Finish>()
+  const picked = chosen ?? (agent ? 'send' : 'copy')
   // With nothing pending there's only the review to record.
   const how: Finish =
     count === 0
       ? 'reviewed'
       : !agent && (picked === 'send' || picked === 'steer')
         ? 'copy'
-        : !working && picked === 'steer'
+        : agent && picked === 'copy'
           ? 'send'
-          : picked === 'reviewed' && reviewedTurn === undefined
-            ? 'save'
-            : picked
+          : !working && picked === 'steer'
+            ? 'send'
+            : picked === 'reviewed' && reviewedTurn === undefined
+              ? 'save'
+              : picked
   const who = agent ?? 'the agent'
   if (count === 0 && reviewedTurn === undefined) return null
   const comments = `${count} ${count === 1 ? 'comment' : 'comments'}`

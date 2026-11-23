@@ -30,6 +30,7 @@ mod gateway;
 mod history;
 mod homes;
 mod import;
+pub mod lan;
 mod lifecycle;
 mod live;
 mod load;

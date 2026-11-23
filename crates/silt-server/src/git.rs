@@ -41,7 +41,7 @@ pub(crate) async fn serve(
     let root = server.git_root();
     let dir = root.join(&repo);
     if !dir.exists() {
-        init_bare(&dir).await.map_err(|error| internal(&error))?;
+        init_bare(&root, &dir).await.map_err(|error| internal(&error))?;
     }
     let hooks = install_hooks(&root).await.map_err(|error| internal(&error))?;
     let rights = thread_rights(&server, family, caller.user).await?;
@@ -143,7 +143,9 @@ async fn install_hooks(root: &Path) -> std::io::Result<PathBuf> {
     let hook = hooks.join("pre-receive");
     if tokio::fs::read_to_string(&hook).await.ok().as_deref() != Some(PRE_RECEIVE) {
         tokio::fs::create_dir_all(&hooks).await?;
-        let staged = hooks.join(".pre-receive.new");
+        // A name of its own: requests installing it at once would otherwise
+        // write into each other's file, and all but one rename would fail.
+        let staged = hooks.join(unique_name(".pre-receive"));
         tokio::fs::write(&staged, PRE_RECEIVE).await?;
         silt_os::make_executable(&staged)?;
         tokio::fs::rename(&staged, &hook).await?;
@@ -156,9 +158,27 @@ fn internal(error: &std::io::Error) -> ApiError {
     crate::ServerError::Io(std::io::Error::new(error.kind(), error.to_string())).into()
 }
 
-async fn init_bare(dir: &Path) -> std::io::Result<()> {
-    let status = Command::new("git").args(["init", "-q", "--bare"]).arg(dir).status().await?;
-    if status.success() { Ok(()) } else { Err(std::io::Error::other("git init --bare failed")) }
+/// Makes the bare repository `dir` under a name of its own, then moves it
+/// into place, so a request arriving meanwhile, or making it too, never
+/// meets a half-made one.
+async fn init_bare(root: &Path, dir: &Path) -> std::io::Result<()> {
+    let staged = root.join(unique_name(".init"));
+    let status = Command::new("git").args(["init", "-q", "--bare"]).arg(&staged).status().await?;
+    if !status.success() {
+        return Err(std::io::Error::other("git init --bare failed"));
+    }
+    match tokio::fs::rename(&staged, dir).await {
+        Ok(()) => Ok(()),
+        Err(_) if dir.exists() => tokio::fs::remove_dir_all(&staged).await,
+        Err(error) => Err(error),
+    }
+}
+
+/// A file name no other request in this process uses at the same time.
+fn unique_name(prefix: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{prefix}-{}-{next}", std::process::id())
 }
 
 /// The most CGI header `http-backend` may send before its body.

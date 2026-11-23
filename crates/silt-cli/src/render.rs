@@ -85,6 +85,52 @@ pub fn show(lines: &[ShowLine]) -> String {
     out
 }
 
+/// Phones on the local network, as `silt lan status` shows them.
+pub fn lan(view: &silt_daemon::lan::LanView) -> String {
+    use silt_daemon::lan::LanState;
+    let mut out = String::new();
+    let state = match view.state {
+        LanState::Off => "off: phones on this network can't reach this machine (`silt lan on`)".to_owned(),
+        LanState::On => format!("on, at https://{}:{}", view.host, view.port),
+        LanState::NoNetwork => format!("on, at https://{}:{}, but this machine isn't on a local network", view.host, view.port),
+        LanState::PortTaken => format!("off: another program is using port {} (set SILT_LAN_PORT to a free one)", view.port),
+        LanState::Failed => format!("off: {}", view.error.as_deref().unwrap_or("it failed to start")),
+    };
+    out.push_str(&format!("phones on this network: {state}\n"));
+    if view.state != LanState::Off {
+        if !view.addresses.is_empty() {
+            out.push_str(&format!("also at:     {}\n", view.addresses.join(", ")));
+        }
+        if let Some(fingerprint) = &view.fingerprint {
+            out.push_str(&format!("certificate: {fingerprint}\n"));
+        }
+        if let Some(trust) = &view.trust_url {
+            out.push_str(&format!("trust it at: {trust}\n"));
+        }
+    }
+    if view.phones.is_empty() {
+        out.push_str("no phones paired (`silt lan pair`)\n");
+    }
+    for phone in &view.phones {
+        let online = if phone.online { "online" } else { "offline" };
+        let notifies = if phone.notifies { ", notified" } else { "" };
+        out.push_str(&format!("{}  {} ({online}{notifies})\n", phone.id, phone.name));
+    }
+    out
+}
+
+/// A QR code for `text`, drawn with half blocks for a terminal.
+pub fn qr(text: &str) -> String {
+    match qrcode::QrCode::new(text.as_bytes()) {
+        Ok(code) => code
+            .render::<qrcode::render::unicode::Dense1x2>()
+            .dark_color(qrcode::render::unicode::Dense1x2::Light)
+            .light_color(qrcode::render::unicode::Dense1x2::Dark)
+            .build(),
+        Err(_) => String::new(),
+    }
+}
+
 pub fn inbox(notifications: &[silt_daemon::protocol::InboxEntry]) -> String {
     if notifications.is_empty() {
         return "nothing new\n".into();

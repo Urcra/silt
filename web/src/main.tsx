@@ -5,7 +5,8 @@ import App from './App.tsx'
 import { linkToken } from './links'
 import { takeTokenFromUrl } from './api'
 import { legacyPath } from './legacy'
-import { hosted } from './served'
+import { workerRefused } from './notifier'
+import { hosted, onLan } from './served'
 import { startTheme } from './theme'
 
 startTheme()
@@ -32,6 +33,7 @@ if (linked) {
       </StrictMode>,
     )
   })
-  // Installed to a phone's home screen, the hosted app runs with its worker (ADR 0028).
-  if (hosted() && 'serviceWorker' in navigator) void navigator.serviceWorker.register('sw.js').catch(() => undefined)
+  // Installed to a phone's home screen, the hosted app runs with its worker (ADR 0028), as does a machine's app on a
+  // phone paired over its network (ADR 0112).
+  if (hosted() || onLan()) void workerRefused()
 }

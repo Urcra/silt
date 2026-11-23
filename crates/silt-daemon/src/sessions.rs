@@ -23,15 +23,22 @@ use crate::protocol::{Response, SessionStarted};
 /// When a transcript was last written, which its marks read now were
 /// written by: a busy machine reads them well after.
 fn written_by(metadata: &fs::Metadata) -> Instant {
+    metadata.modified().map_or_else(|_| Instant::now(), instant_of)
+}
+
+/// `at` on this process's clock, never later than now.
+fn instant_of(at: SystemTime) -> Instant {
     let now = Instant::now();
-    let ago = metadata.modified().ok().and_then(|modified| SystemTime::now().duration_since(modified).ok());
-    ago.and_then(|ago| now.checked_sub(ago)).unwrap_or(now)
+    SystemTime::now().duration_since(at).ok().and_then(|ago| now.checked_sub(ago)).unwrap_or(now)
 }
 
 /// How long edits wait for the transcript of an agent without Silt's
 /// hooks: agents flush their transcripts late, and some only write a tool
 /// call once it finished.
 const TRANSCRIPT_LAG: Duration = Duration::from_millis(400);
+/// How long a step holds a checkout's changes back for its agent's tool
+/// marks at most, however often its files keep changing.
+const MARKS_AWAITED_AT_MOST: Duration = Duration::from_secs(5);
 /// How often a session kept in a store rather than a file is read again.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(3);
 const DISCOVER_INTERVAL: Duration = Duration::from_secs(1);
@@ -866,14 +873,31 @@ impl Core {
 
     /// Whether a step, which has no watcher to say when files changed,
     /// holds the checkout's changes back for its agent's tool marks: for
-    /// the settling window from the first step that held them.
+    /// the settling window from the first step that held them, or from the
+    /// newest change if later. An edit made after this step read the
+    /// transcript, with its tool's marks written just after it, is newer
+    /// than that first step, which may be a second old.
     fn holds_for_marks(&mut self, checkout: CheckoutId) -> bool {
         let since = *self.marks_awaited.entry(checkout).or_insert_with(Instant::now);
-        let held = self.awaits_tool_marks(checkout, since);
+        let noticed = if since.elapsed() < attribution::MARK_SETTLE {
+            since
+        } else {
+            self.newest_change(checkout).map_or(since, |newest| newest.max(since))
+        };
+        let held = since.elapsed() < MARKS_AWAITED_AT_MOST && self.awaits_tool_marks(checkout, noticed);
         if !held {
             self.marks_awaited.remove(&checkout);
         }
         held
+    }
+
+    /// When the checkout's newest file was last modified, as the worktree's
+    /// listing finds it.
+    fn newest_change(&self, checkout: CheckoutId) -> Option<Instant> {
+        let listing = self.checkouts.get(&checkout)?.repo.worktree_listing_under("").ok()?;
+        let newest = listing.iter().filter_map(|file| file.stat).map(|(_, mtime_ns)| mtime_ns).max()?;
+        let newest = SystemTime::UNIX_EPOCH + Duration::from_nanos(u64::try_from(newest).ok()?);
+        Some(instant_of(newest))
     }
 
     /// Whether the thread's agent needs `record_step`: its session is still

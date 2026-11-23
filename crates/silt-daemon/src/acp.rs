@@ -67,6 +67,11 @@ pub(crate) struct AcpRun {
     tool_output: HashMap<String, String>,
     /// What to tell the agent once the turn being cancelled for it ends.
     steering: Option<String>,
+    /// The agent adds a steer to the turn it runs (`_session/steering`), so
+    /// a steer needn't cancel it (ADR 0111).
+    steers: bool,
+    /// Steers that found no turn running, each to send as a prompt in turn.
+    steered: Vec<String>,
     /// Each tool call's kind as the agent announced it, for permission
     /// requests that don't repeat it.
     tool_kinds: HashMap<String, String>,
@@ -349,6 +354,16 @@ fn optional_text(field: &silt_acp::QuestionField) -> bool {
 }
 
 /// An answer in the person's own words, as Claude Code words a result.
+/// Cancels the agent's turn to say `said` once it ends, after what earlier
+/// steers left to say.
+fn cancel_to_say(run: &mut AcpRun, said: String) {
+    run.steering = Some(match run.steering.take() {
+        Some(before) => format!("{before}\n\n{said}"),
+        None => said,
+    });
+    send(run, Command::Cancel);
+}
+
 fn own_answer(question: &Question, text: &str) -> String {
     format!(
         "User has answered your questions: \"{}\"=\"{}\". You can now continue with the user's answers in mind.",
@@ -473,6 +488,7 @@ impl Core {
         let installed = agents_here(&self.data_dir);
         // What each offers as last seen here, else as Silt knows it; one not asked lately is asked again, behind the answer.
         let asking = std::env::var_os("SILT_ASK_AGENTS").is_none_or(|value| value != "0");
+        while self.probes.try_join_next().is_some() {}
         // One that didn't answer isn't asked again before then either, rather than on every look.
         for agent in installed.iter().filter(|agent| agent.id != registry::LOCAL_AGENT) {
             if asking
@@ -480,7 +496,9 @@ impl Core {
                 && self.asked.get(&agent.id).is_none_or(|asked| now - asked > ASK_AGAIN_MS)
             {
                 self.asked.insert(agent.id.clone(), now);
-                probe_agent(self.events.clone(), agent.clone(), self.data_dir.clone());
+                let (events, info, data_dir, ending) =
+                    (self.events.clone(), agent.clone(), self.data_dir.clone(), self.ending.subscribe());
+                self.probes.spawn(probe_agent(events, info, data_dir, ending));
             }
         }
         AgentChoices {
@@ -741,6 +759,8 @@ impl Core {
                 error: None,
                 tool_output: HashMap::new(),
                 steering: None,
+                steers: false,
+                steered: Vec::new(),
                 tool_kinds: HashMap::new(),
                 tool_said: HashMap::new(),
                 within: None,
@@ -910,9 +930,11 @@ impl Core {
         Ok(())
     }
 
-    /// Interrupts the agent's turn to tell it `text`: ACP can't add to a
-    /// running turn, so the turn is cancelled and `text` goes first once it
-    /// ends. An agent that isn't working hears it as its next prompt.
+    /// Tells the agent `text` while it works. An agent that takes steers
+    /// hears it in the turn it runs, which goes on, a command it runs
+    /// included (ADR 0111); for any other, the turn is cancelled and `text`
+    /// goes first once it ends. An agent that isn't working hears it as its
+    /// next prompt.
     pub(crate) async fn acp_steer(&mut self, thread: ThreadId, text: &str) -> Result<&'static str, CoreError> {
         let run = self.running(thread)?;
         if !matches!(run.state, AgentState::Working) {
@@ -921,17 +943,53 @@ impl Core {
         let run = self.acp.get_mut(&thread).expect("checked above");
         // Steering while the agent asks answers its question in your own words.
         let asked = std::mem::take(&mut run.questions);
-        run.steering = Some(match asked.first() {
+        let said = match asked.first() {
             Some(question) => format!("to your question \"{}\": {text}", question.message),
             None => text.to_owned(),
-        });
-        send(run, Command::Cancel);
+        };
+        if run.steers {
+            // Sent while the question is open, so an agent that holds a steer
+            // until its question is answered has it as it goes on.
+            send(run, Command::Steer(said));
+            for question in &asked {
+                send(run, Command::AnswerQuestion { id: question.id, answers: None });
+            }
+        } else {
+            cancel_to_say(run, said);
+        }
         for question in asked {
             let said = own_answer(&question, text);
             self.record_acp(thread, &acp::tool_result(&question_call(question.id), "completed", Some(&said))).await?;
         }
         self.agent_changed(thread).await;
         Ok("steering")
+    }
+
+    /// How the agent took a steer: in its turn, it's the person's message
+    /// there; with no turn running, it's a prompt of its own; refused, the
+    /// turn is cancelled for it, as for an agent that takes no steers.
+    async fn steered(&mut self, thread: ThreadId, text: String, outcome: silt_acp::Steered) -> Result<(), CoreError> {
+        use silt_acp::Steered;
+        match outcome {
+            Steered::Injected | Steered::StartedNewTurn => {
+                self.flush_acp(thread).await?;
+                let me = self.own_user(thread);
+                self.record_acp(thread, &acp::prompt(&text, &me, &[], &[])).await?;
+                return Ok(());
+            }
+            Steered::PromptRequired => {}
+            Steered::Failed | Steered::Error(_) => {
+                warn!(%thread, ?outcome, "the agent didn't take a steer; cancelling its turn instead");
+                let run = self.acp.get_mut(&thread).expect("caller checked");
+                if run.state == AgentState::Working {
+                    cancel_to_say(run, text);
+                    return Ok(());
+                }
+            }
+        }
+        let run = self.acp.get_mut(&thread).expect("caller checked");
+        run.steered.push(text);
+        self.next_prompt(thread).await
     }
 
     /// Sends the next prompt once a turn ended: a steer first, then the
@@ -948,6 +1006,11 @@ impl Core {
             let me = self.own_user(thread);
             let said = format!("I interrupted your last turn to say: {steer}");
             return self.send_prompt(thread, &me, &said, Vec::new()).await;
+        }
+        if !run.steered.is_empty() {
+            let steer = run.steered.remove(0);
+            let me = self.own_user(thread);
+            return self.send_prompt(thread, &me, &steer, Vec::new()).await;
         }
         let Some(next) = self.store.take_next(thread).await? else {
             return Ok(());
@@ -1337,6 +1400,10 @@ impl Core {
     /// Ends every agent running here, with what they left running, as the
     /// daemon exits: nothing would be left to hear them end.
     pub(crate) async fn end_agents(&mut self) {
+        self.ending.send_replace(true);
+        if tokio::time::timeout(PROBES_ENDING, async { while self.probes.join_next().await.is_some() {} }).await.is_err() {
+            warn!("an agent asked what it offers didn't stop in time");
+        }
         let threads: Vec<ThreadId> = self.acp.iter().filter(|(_, run)| run.handle.is_some()).map(|(thread, _)| *thread).collect();
         for thread in threads {
             let run = &self.acp[&thread];
@@ -1461,14 +1528,24 @@ impl Core {
                 run.state = AgentState::Error;
             }
             AcpEvent::Login { .. } => unreachable!("handled by acp_event"),
-            AcpEvent::Agent(silt_acp::Event::Ready { session, loaded, modes, settings, accepts, reports_work, .. }) => {
+            AcpEvent::Agent(silt_acp::Event::Ready {
+                session, loaded, modes, settings, accepts, reports_work, steers, ..
+            }) => {
                 run.reports_work = reports_work;
+                run.steers = steers;
                 let preset = self.preset(thread);
                 // A thread whose mode was never chosen starts in the one its preset says; Plan's is
-                // entered by its first prompt, which knows to come back from it.
-                let kept = self.agent_runs.get(&thread).and_then(|record| record.mode.clone()).or_else(|| {
-                    modes.as_ref().filter(|_| preset != Preset::Plan).and_then(|modes| mode_for_preset(preset, modes))
-                });
+                // entered by its first prompt, which knows to come back from it. A kept mode that is a
+                // permission goes only while the preset still says it, as the preset is the one control
+                // (ADR 0114); one that says how the agent works, such as OpenCode's Build, stays.
+                let kept = self
+                    .agent_runs
+                    .get(&thread)
+                    .and_then(|record| record.mode.clone())
+                    .filter(|mode| preset_for_mode(mode).is_none_or(|meant| meant == preset))
+                    .or_else(|| {
+                        modes.as_ref().filter(|_| preset != Preset::Plan).and_then(|modes| mode_for_preset(preset, modes))
+                    });
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.modes = modes;
                 run.settings = settings;
@@ -1547,6 +1624,7 @@ impl Core {
                 run.suggestion = suggestion.filter(|_| matches!(run.state, AgentState::Idle));
             }
             AcpEvent::Agent(silt_acp::Event::Refused(why)) => run.error = Some(why),
+            AcpEvent::Agent(silt_acp::Event::Steered { text, outcome }) => self.steered(thread, text, outcome).await?,
             AcpEvent::Agent(silt_acp::Event::Working) => {
                 run.suggestion = None;
                 // Working on a prompt of Silt's, it is already; else it took
@@ -2357,6 +2435,8 @@ const ASK_AGAIN_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// How long an agent asked what it offers may take to open its session.
 const PROBE_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
+/// How long a daemon ending waits for the agents it was asking to stop.
+const PROBES_ENDING: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Where in a checkout a chat's files may be copied: a relative path of
 /// plain names, as it may come from another person's browser.
@@ -2425,16 +2505,23 @@ fn ended(kind: Option<&str>, label: Option<&str>, status: &str) -> String {
 }
 
 /// Asks `info`'s agent what it offers: opens a session in a folder of the daemon's own, which nothing is
-/// prompted in, takes the modes and settings it lists, and stops it.
-fn probe_agent(events: mpsc::UnboundedSender<Event>, info: AgentInfo, data_dir: PathBuf) {
-    tokio::spawn(async move {
-        let offered = ask_agent(&info, &data_dir).await;
-        let _ = events.send(Event::AgentProbed { agent: info.id, offered });
-    });
+/// prompted in, takes the modes and settings it lists, and stops it; it gives up once `ending` turns true.
+async fn probe_agent(
+    events: mpsc::UnboundedSender<Event>,
+    info: AgentInfo,
+    data_dir: PathBuf,
+    ending: tokio::sync::watch::Receiver<bool>,
+) {
+    let offered = ask_agent(&info, &data_dir, ending).await;
+    let _ = events.send(Event::AgentProbed { agent: info.id, offered });
 }
 
-async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<Offered> {
-    let registry::AgentCommand { program, args, env } = registry::command(info, data_dir).await.ok()?;
+async fn ask_agent(info: &AgentInfo, data_dir: &Path, mut ending: tokio::sync::watch::Receiver<bool>) -> Option<Offered> {
+    let command = tokio::select! {
+        command = registry::command(info, data_dir) => command.ok()?,
+        _ = ending.wait_for(|ending| *ending) => return None,
+    };
+    let registry::AgentCommand { program, args, env } = command;
     let cwd = data_dir.join("asking-agents");
     std::fs::create_dir_all(&cwd).ok()?;
     let start = Start {
@@ -2448,7 +2535,7 @@ async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<Offered> {
     };
     let (sender, mut receiver) = mpsc::unbounded_channel();
     let handle = silt_acp::start(start, sender);
-    let offered = tokio::time::timeout(PROBE_WAIT, async {
+    let ready = tokio::time::timeout(PROBE_WAIT, async {
         while let Some(event) = receiver.recv().await {
             match event {
                 silt_acp::Event::Ready { modes, settings, accepts, .. } => return Some(Offered { modes, settings, accepts }),
@@ -2457,11 +2544,22 @@ async fn ask_agent(info: &AgentInfo, data_dir: &Path) -> Option<Offered> {
             }
         }
         None
-    })
-    .await
-    .ok()
-    .flatten();
+    });
+    let offered = tokio::select! {
+        offered = ready => offered.ok().flatten(),
+        _ = ending.wait_for(|ending| *ending) => None,
+    };
     handle.send(Command::Stop);
+    // Its processes are ended before it says it exited: `npx`'s `npm exec`
+    // outlives the daemon otherwise, still writing to `HOME`.
+    let exited = async {
+        while let Some(event) = receiver.recv().await {
+            if matches!(event, silt_acp::Event::Exited) {
+                break;
+            }
+        }
+    };
+    let _ = tokio::time::timeout(PROBES_ENDING, exited).await;
     offered
 }
 
@@ -2503,7 +2601,8 @@ fn preset_for_mode(mode: &str) -> Option<Preset> {
     match mode_key(mode) {
         "default" | "read-only" | silt_local::CHAT => Some(Preset::AskForEverything),
         "acceptEdits" => Some(Preset::AskBeforeCommands),
-        "bypassPermissions" | "auto" | "dontAsk" | "full-access" | "autopilot" => Some(Preset::FullAccess),
+        "auto" => Some(Preset::Auto),
+        "bypassPermissions" | "dontAsk" | "full-access" | "autopilot" => Some(Preset::FullAccess),
         _ => None,
     }
 }
@@ -2527,6 +2626,8 @@ fn mode_for_preset(preset: Preset, modes: &silt_acp::Modes) -> Option<String> {
         Preset::Plan => return silt_acp::plan_mode(modes).map(|mode| mode.id.clone()),
         Preset::AskForEverything => &["default", "read-only", "agent"],
         Preset::AskBeforeCommands => &["acceptEdits", "agent"],
+        // An agent without an auto mode asks as for Ask before commands.
+        Preset::Auto => &["auto", "acceptEdits", "agent"],
         Preset::FullAccess => &["bypassPermissions", "full-access", "dontAsk"],
     };
     wanted.iter().find_map(|id| modes.available.iter().find(|mode| mode_key(&mode.id) == *id)).map(|mode| mode.id.clone())
@@ -2760,6 +2861,7 @@ mod tests {
         assert_eq!(preset_following("acceptEdits", false, Preset::Plan), Preset::AskBeforeCommands);
         assert_eq!(preset_following("default", false, Preset::Plan), Preset::AskForEverything);
         assert_eq!(preset_following("bypassPermissions", false, Preset::AskForEverything), Preset::FullAccess);
+        assert_eq!(preset_following("auto", false, Preset::FullAccess), Preset::Auto);
         assert_eq!(
             preset_following("code", false, Preset::AskForEverything),
             Preset::AskForEverything,

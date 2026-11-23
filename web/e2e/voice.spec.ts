@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type Page, expect, test } from '@playwright/test'
-import { type Fixture, SILT } from './fixture'
+import { type Fixture, runFixture, SILT } from './fixture'
 
 test.use({
   launchOptions: {
@@ -19,11 +19,10 @@ const HELPER = join(import.meta.dirname, '..', '..', 'target', 'debug', 'silt-fa
 let started: Fixture | undefined
 
 function start(env: Record<string, string> = {}, helper = HELPER): Fixture {
-  const output = execFileSync(join(import.meta.dirname, 'fixture.sh'), {
-    encoding: 'utf8',
-    env: { ...process.env, SILT_VOICE_BIN: helper, ...env },
-  })
-  started = JSON.parse(output.trim().split('\n').pop() ?? '') as Fixture
+  // Asking the agents what they offer would fetch them through `npx` into the fixture's home, which no test here needs.
+  started = JSON.parse(
+    runFixture('fixture.sh', { ...process.env, SILT_VOICE_BIN: helper, SILT_ASK_AGENTS: '0', ...env }),
+  ) as Fixture
   return started
 }
 

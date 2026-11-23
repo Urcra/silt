@@ -17,6 +17,8 @@ const LISTED: usize = 50;
 
 const GIT_WAIT: Duration = Duration::from_secs(20);
 const FETCH_WAIT: Duration = Duration::from_secs(90);
+const FETCH_RETRIES: usize = 3;
+const FETCH_RETRY_AFTER: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -221,6 +223,12 @@ fn text(source: &Source, args: &[&str]) -> Result<String, CheckError> {
     Ok(ran.stdout.trim().to_owned())
 }
 
+/// Whether a fetch failed only because another fetch in the clone, such as
+/// the daemon's own check beside `silt update`, held the remote's ref.
+fn another_fetch_ran(stderr: &str) -> bool {
+    stderr.contains("cannot lock ref")
+}
+
 fn failed(args: &[&str], ran: &Ran) -> CheckError {
     let reason = ran.stderr.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("it failed").to_owned();
     CheckError::Git { args: args.join(" "), reason }
@@ -262,7 +270,14 @@ pub fn facts(source: &Source, built: &Commit, fetch: bool) -> Result<Facts, Chec
     }
     if fetch {
         let args = ["fetch", "--quiet", "--no-tags", "--", remote.as_str(), MAIN];
-        let fetched = ran(source, &args, FETCH_WAIT)?;
+        let mut fetched = ran(source, &args, FETCH_WAIT)?;
+        for _ in 0..FETCH_RETRIES {
+            if fetched.status.success() || !another_fetch_ran(&fetched.stderr) {
+                break;
+            }
+            std::thread::sleep(FETCH_RETRY_AFTER);
+            fetched = ran(source, &args, FETCH_WAIT)?;
+        }
         if !fetched.status.success() {
             return Err(failed(&args, &fetched));
         }
@@ -329,6 +344,14 @@ mod tests {
 
     fn commit(text: &str) -> Commit {
         Commit::parse(text).expect("hex")
+    }
+
+    #[test]
+    fn only_a_fetch_beside_another_is_tried_again() {
+        let beside = "error: cannot lock ref 'refs/remotes/origin/main': is at af60b6ca but expected b736ddb7\n";
+        assert!(another_fetch_ran(beside));
+        assert!(!another_fetch_ran("fatal: unable to access 'https://example.com/': Could not resolve host\n"));
+        assert!(!another_fetch_ran("fatal: couldn't find remote ref main\n"));
     }
 
     fn on_main() -> Facts {

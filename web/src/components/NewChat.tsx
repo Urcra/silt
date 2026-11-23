@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
-import { PRESETS, modeForPreset, permissionModes, startSettings, startingValue } from '../agentState'
+import { nextPreset, presetUnavailable, startSettings, startingValue } from '../agentState'
 import { type AgentSetting, api, type Preset } from '../api'
 import { agentRefused, presetRefused, within } from '../rules'
 import { useWorkspace } from '../workspace'
@@ -15,7 +15,7 @@ import { hosted } from '../served'
 import { Skeleton, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
 import { AttachedFiles } from './Attachments'
-import { ChipSelect } from './ChipSelect'
+import { AgentChip, PermissionChip } from './AgentPickers'
 import { UsageRing } from './UsageRing'
 import { ComposerBox } from './Composer'
 import { WorkspaceLine } from './NewThread'
@@ -34,7 +34,6 @@ export function NewChat() {
   const [chosenAgent, setAgent] = useState<string>()
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
   const [chosenPreset, setPreset] = useState<Preset>()
-  const [mode, setMode] = useState<string>()
   const [prompt, setPrompt] = useDraft(NEW_CHAT_DRAFT)
   const [error, setError] = useState<string>()
   const [starting, setStarting] = useState(false)
@@ -51,11 +50,11 @@ export function NewChat() {
   const seen = agents.find((candidate) => candidate.id === agent)
   const agentName = seen?.name ?? ''
   const wanted: Preset = chosenPreset ?? workspace?.workspace.defaults.chats_preset ?? chatSettings.data?.preset ?? 'full_access'
-  const preset: Preset = within(wanted, workspace?.effective.max_preset) ? wanted : workspace!.effective.max_preset!
+  const capped: Preset = within(wanted, workspace?.effective.max_preset) ? wanted : workspace!.effective.max_preset!
   const modes = seen?.modes?.available
-  // Claude's modes are its permissions (ADR 0048): the chat's preset picks one until the person does.
-  const modesArePermissions = permissionModes(modes)
-  const chosenMode = mode ?? (modesArePermissions ? modeForPreset(preset, modes) : undefined) ?? seen?.modes?.current
+  // The preset is the one control for every agent; the agent starts in the mode that does what it says (ADR 0114).
+  const refusedPreset = (id: Preset) => presetRefused(workspace, id) ?? presetUnavailable(id, modes, agentName)
+  const preset: Preset = refusedPreset(capped) && capped === 'auto' ? 'ask_before_commands' : capped
   const settings = startSettings(seen?.settings ?? [], modes)
   const settingValue = (setting: AgentSetting) =>
     startingValue(setting, chosenSettings[setting.id], workspace?.workspace.defaults.agents?.[agent]?.settings?.[setting.id])
@@ -79,7 +78,7 @@ export function NewChat() {
         {
           chat: true,
           workspace: workspaceId ?? null,
-          mode: modesArePermissions ? (mode ?? null) : null,
+          mode: null,
           settings: settings.map((setting) => [setting.id, settingValue(setting)]),
           preset,
           prompt: prompt.trim() ? prompt : null,
@@ -132,9 +131,8 @@ export function NewChat() {
             onChange={setPrompt}
             onSend={send}
             onCycle={() => {
-              if (modesArePermissions && modes)
-                setMode(modes[(modes.findIndex((choice) => choice.id === chosenMode) + 1) % modes.length]!.id)
-              else setPreset(PRESETS[(PRESETS.findIndex((choice) => choice.id === preset) + 1) % PRESETS.length]!.id)
+              const next = nextPreset(preset, refusedPreset)
+              if (next) setPreset(next)
             }}
             placeholder="Ask anything: which part to buy, how something works, a quick script. It works in a folder of its own."
             onFiles={attach}
@@ -142,22 +140,16 @@ export function NewChat() {
             below={<AttachedFiles files={attached} onRemove={remove} />}
             tools={
               <>
+                <PermissionChip value={preset} onChange={setPreset} refused={refusedPreset} />
                 {agents.length > 0 ? (
-                  <ChipSelect
-                    ghost
-                    label="agent to start"
+                  <AgentChip
                     value={agent}
+                    agents={agents}
                     onChange={(chosen) => {
                       setAgent(chosen)
-                      setMode(undefined)
                       setChosenSettings({})
                     }}
-                    options={agents.map((choice) => ({
-                      id: choice.id,
-                      name: choice.name,
-                      description: choice.description,
-                      refused: agentRefused(workspace, choice.id),
-                    }))}
+                    refused={(id) => agentRefused(workspace, id)}
                   />
                 ) : choices.isPending ? (
                   <Skeleton className="h-6 w-20" />
@@ -165,29 +157,11 @@ export function NewChat() {
                   <span className="px-2 text-xs text-fg-2">No agent found</span>
                 )}
                 <AgentSettings
-                  modes={modesArePermissions ? modes : undefined}
-                  mode={chosenMode}
-                  onMode={setMode}
                   settings={settings}
                   value={settingValue}
                   onSetting={(id, value) => setChosenSettings({ ...chosenSettings, [id]: value })}
                   narrow={narrow}
                 />
-                {!modesArePermissions && (
-                  <ChipSelect
-                    ghost
-                    label="permissions"
-                    icon="lock"
-                    value={preset}
-                    onChange={(chosen) => setPreset(chosen as Preset)}
-                    options={PRESETS.map((choice) => ({
-                      id: choice.id,
-                      name: choice.label,
-                      description: choice.says,
-                      refused: presetRefused(workspace, choice.id),
-                    }))}
-                  />
-                )}
                 {agent && <UsageRing agent={agent} />}
               </>
             }

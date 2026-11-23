@@ -51,6 +51,12 @@ if ! grep -qs 'silt cloud-setup' "$config"; then
     step "line tables only for debug builds, in $config"
     printf '\n# silt cloud-setup: smaller debug builds, to fit the disk\n[profile.dev]\ndebug = "line-tables-only"\n' >>"$config"
 fi
+# Incremental builds keep several gigabytes beside each build, which a full
+# gate ran out of disk on; nobody edits and rebuilds in a loop here.
+if ! grep -qs 'silt cloud-setup: no incremental' "$config"; then
+    step "no incremental builds, in $config"
+    printf '\n# silt cloud-setup: no incremental builds, to fit the disk\n[build]\nincremental = false\n' >>"$config"
+fi
 
 # Only needed to add migrations or change `query!`s; slow to build, so opt in.
 if [ "${SILT_SETUP_SQLX:-0}" = 1 ] && ! command -v sqlx >/dev/null; then
@@ -66,13 +72,22 @@ pnpm -C web install --frozen-lockfile
 step "Playwright's Chromium"
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD= pnpm -C web exec playwright install chromium
 
-# Tauri's system libraries, for the desktop app (ADR 0041).
-if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
-    step "WebKitGTK for the desktop app"
+# System packages, in one apt run: Tauri's libraries, for the desktop app
+# (ADR 0041), and bubblewrap and pasta, which Silt's sandbox runs agents and
+# builds third parties' plugins in (ADR 0093, ADR 0104); the tests that
+# build a plugin from git fail without them.
+packages=
+pkg-config --exists webkit2gtk-4.1 2>/dev/null ||
+    packages="pkg-config libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev"
+command -v bwrap >/dev/null || packages="$packages bubblewrap"
+command -v pasta >/dev/null || packages="$packages passt"
+if [ -n "$packages" ]; then
+    step "system packages:$packages"
     sudo=
     [ "$(id -u)" = 0 ] || sudo=sudo
     $sudo apt-get update -q
-    DEBIAN_FRONTEND=noninteractive $sudo apt-get install -y -q pkg-config libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+    # shellcheck disable=SC2086 # a list of package names
+    DEBIAN_FRONTEND=noninteractive $sudo apt-get install -y -q $packages
 fi
 
 step "crates"
