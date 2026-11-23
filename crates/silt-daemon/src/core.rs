@@ -283,6 +283,9 @@ pub struct Core {
     pub(crate) head_stamps: HashMap<CheckoutId, silt_git::HeadStamp>,
     /// How much of each family's log its stored snapshot covers.
     pub(crate) snapshotted: HashMap<FamilyId, usize>,
+    /// Families whose stored snapshot is in an older format, to take again.
+    pub(crate) outdated_snapshots: HashSet<FamilyId>,
+    pub(crate) kept: crate::memory::Kept,
     /// The position of each family's last stored delta this daemon holds.
     pub(crate) positions: HashMap<FamilyId, i64>,
     pub(crate) web: Option<crate::web::WebInfo>,
@@ -601,6 +604,8 @@ impl Core {
             heads: HashMap::new(),
             head_stamps: HashMap::new(),
             snapshotted: HashMap::new(),
+            outdated_snapshots: HashSet::new(),
+            kept: crate::memory::Kept::default(),
             positions: HashMap::new(),
             web: None,
             recoveries: Vec::new(),
@@ -1563,6 +1568,7 @@ impl Core {
                 warn!(%error, session = id, "could not read the session transcript");
             }
         }
+        self.keep_memory().await;
     }
 
     /// Whether nothing needs the tick soon: no agent running or awaited, no
@@ -2382,7 +2388,7 @@ impl Core {
         Ok(())
     }
 
-    async fn reload_family(&mut self, family_id: FamilyId) -> Result<(), CoreError> {
+    pub(crate) async fn reload_family(&mut self, family_id: FamilyId) -> Result<(), CoreError> {
         let repo = if self.families.contains_key(&family_id) { Some(self.family_repo(family_id)?) } else { None };
         let loaded = load::family(&self.store, family_id, repo.as_ref()).await?;
         self.take_loaded(family_id, loaded);
@@ -2398,10 +2404,15 @@ impl Core {
 
     pub(crate) fn take_loaded(&mut self, family_id: FamilyId, loaded: Loaded) {
         match loaded {
-            Loaded::Projected { family, covered } => {
+            Loaded::Projected { family, covered, outdated } => {
                 self.raw.remove(&family_id);
                 self.families.insert(family_id, *family);
                 self.snapshotted.insert(family_id, covered);
+                if outdated {
+                    self.outdated_snapshots.insert(family_id);
+                } else {
+                    self.outdated_snapshots.remove(&family_id);
+                }
             }
             Loaded::Raw(deltas) => {
                 self.families.remove(&family_id);
@@ -2444,12 +2455,13 @@ impl Core {
             return;
         };
         let covered = self.snapshotted.get(&family_id).copied().unwrap_or_default();
-        if family.log_len() < covered + load::SNAPSHOT_EVERY {
+        if !self.outdated_snapshots.contains(&family_id) && family.log_len() < covered + load::SNAPSHOT_EVERY {
             return;
         }
         match load::save_snapshot(&self.store, family_id, family).await {
             Ok(covers) => {
                 self.snapshotted.insert(family_id, covers);
+                self.outdated_snapshots.remove(&family_id);
             }
             Err(error) => warn!(%error, family = %family_id, "could not save a snapshot of the family"),
         }

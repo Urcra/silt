@@ -64,6 +64,22 @@ impl BlobStore {
         }
     }
 
+    /// [`Self::get`] for a caller that can't wait on the runtime, such as a
+    /// family reading a file's state when first used (ADR 0115).
+    pub fn read(&self, hash: BlobHash) -> io::Result<Vec<u8>> {
+        let bytes = std::fs::read(self.path(hash))?;
+        if Self::hash(&bytes) == hash {
+            Ok(bytes)
+        } else {
+            let _ = std::fs::remove_file(self.path(hash));
+            Err(io::Error::new(io::ErrorKind::NotFound, format!("blob {hash} was damaged")))
+        }
+    }
+
+    pub fn contains(&self, hash: BlobHash) -> bool {
+        self.path(hash).is_file()
+    }
+
     /// Every stored blob and when it was written.
     pub async fn list(&self) -> io::Result<Vec<(BlobHash, SystemTime)>> {
         let mut found = Vec::new();

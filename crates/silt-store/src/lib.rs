@@ -384,6 +384,8 @@ pub struct RunToken {
 pub struct Store {
     pool: SqlitePool,
     blobs: BlobStore,
+    /// Families' files' states, kept apart from their snapshots (ADR 0115).
+    files: BlobStore,
     watch: Arc<tokio::sync::Mutex<Watch>>,
 }
 
@@ -437,7 +439,12 @@ impl Store {
             checkpoint_in_background(pool.clone());
         }
         let watch = Watch { connection: sqlx::ConnectOptions::connect(&options).await?, seen: None };
-        Ok(Self { pool, blobs: BlobStore::new(dir.join("blobs")), watch: Arc::new(tokio::sync::Mutex::new(watch)) })
+        Ok(Self {
+            pool,
+            blobs: BlobStore::new(dir.join("blobs")),
+            files: BlobStore::new(dir.join("files")),
+            watch: Arc::new(tokio::sync::Mutex::new(watch)),
+        })
     }
 
     /// What compacting the store would give back: the space deleted rows
@@ -611,6 +618,10 @@ impl Store {
 
     pub fn blobs(&self) -> &BlobStore {
         &self.blobs
+    }
+
+    pub fn files(&self) -> &BlobStore {
+        &self.files
     }
 
     pub async fn create_thread(&self, thread: &ThreadRecord) -> Result<(), StoreError> {

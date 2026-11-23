@@ -11,13 +11,16 @@ use silt_types::{ActorId, BlobHash, CloudSessionId, DeltaId, DeltaSpan, DeviceId
 
 use crate::delta::{Author, CommentOp, CommentTarget, Content, Delta, MrOp, Op, SessionRef, TurnMark};
 
+mod files;
 mod log;
 mod snapshot;
 mod turns;
 
+use files::Files;
+pub use files::{MemoryFiles, NewFile, ReadFile, file_hash};
 use log::Log;
 pub use log::ReadCovered;
-pub use snapshot::{SNAPSHOT_FORMAT, SnapshotError};
+pub use snapshot::{SNAPSHOT_FORMAT, SnapshotError, TakenSnapshot, is_readable_format, snapshot_files};
 use turns::Turns;
 
 /// Supplies the text of git blobs, which the projection needs the first
@@ -346,7 +349,7 @@ impl Shapes {
 pub struct Family {
     graph: CausalGraph,
     tree: FileTree,
-    files: HashMap<InodeId, FileState>,
+    files: Files,
     threads: BTreeMap<ThreadId, ThreadState>,
     turns: HashMap<SessionRef, Turns>,
     /// Where each session last started.
@@ -1249,11 +1252,7 @@ impl Family {
     }
 }
 
-fn materialize<'a>(
-    files: &'a mut HashMap<InodeId, FileState>,
-    inode: InodeId,
-    bases: &mut dyn BaseText,
-) -> Result<&'a mut TextDoc, LogError> {
+fn materialize<'a>(files: &'a mut Files, inode: InodeId, bases: &mut dyn BaseText) -> Result<&'a mut TextDoc, LogError> {
     let state = files.get_mut(&inode).ok_or(LogError::NotAFile(inode))?;
     if let FileContent::GitText(oid) = state.content {
         let text = bases.text(oid).ok_or(LogError::MissingBase(oid))?;

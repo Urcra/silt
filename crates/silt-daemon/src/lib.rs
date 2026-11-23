@@ -34,6 +34,7 @@ pub mod lan;
 mod lifecycle;
 mod live;
 mod load;
+mod memory;
 pub mod models;
 mod notes;
 mod page;

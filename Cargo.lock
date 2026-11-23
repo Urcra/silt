@@ -6297,6 +6297,7 @@ dependencies = [
 name = "silt-log"
 version = "0.0.1"
 dependencies = [
+ "blake3",
  "postcard",
  "proptest",
  "serde",

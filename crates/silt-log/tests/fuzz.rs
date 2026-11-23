@@ -211,10 +211,18 @@ proptest! {
         let cut = cut.index(stored.len() + 1);
         let mut partway = Family::new();
         replay(&stored[..cut], &mut partway);
+        let files = silt_log::MemoryFiles::default();
         let snapshot = partway.snapshot().expect("encodes");
+        files.store(&snapshot);
         let mut rest = stored.clone();
-        let mut restored = Family::from_snapshot(&snapshot, &mut rest).expect("matches");
-        replay(&rest, &mut restored);
+        let mut restored =
+            Family::from_snapshot(&snapshot.data, silt_log::SNAPSHOT_FORMAT, &mut rest, Some(files.reader())).expect("matches");
+        let (before, after) = rest.split_at(rest.len() / 2);
+        replay(before, &mut restored);
+        // What was read and let go of reads back the same.
+        restored.release_files();
+        restored.release_files();
+        replay(after, &mut restored);
         let mut whole = Family::new();
         replay(&stored, &mut whole);
 
