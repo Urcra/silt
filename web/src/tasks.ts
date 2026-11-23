@@ -2,7 +2,7 @@
 // left in the background, as everything a thread's history said of it.
 
 import { createContext } from 'react'
-import type { HistoryEntry } from './api'
+import type { HistoryEntry, TaskView } from './api'
 
 export interface TaskState {
   /** The tool call that started it, when the history says. */
@@ -15,8 +15,11 @@ export interface TaskState {
   /** A subagent's transcript, by the name its entries' `side` gives. */
   side: string | null
   summary: string | null
+  /** When its call was made, else its first news. */
   started_ms: number
   ended_ms: number | null
+  /** For a subagent set running again, as Claude's `SendMessage` does a finished one: the call that first started it. */
+  resumes: HistoryEntry | null
 }
 
 export interface Tasks {
@@ -35,7 +38,12 @@ export function tasksOf(entries: HistoryEntry[]): Tasks {
   const tasks: Tasks = { byCall: new Map(), loose: new Map(), sides: new Map() }
   const callOfId = new Map<string, string>()
   const callOfSide = new Map<string, string>()
+  const calls = new Map<string, HistoryEntry>()
   for (const entry of entries) {
+    if (entry.kind === 'tool_call' && entry.tool && !entry.side) {
+      if (!calls.has(entry.tool.id)) calls.set(entry.tool.id, entry)
+      continue
+    }
     if (entry.side) {
       const side = tasks.sides.get(entry.side) ?? []
       side.push(entry)
@@ -52,9 +60,11 @@ export function tasksOf(entries: HistoryEntry[]): Tasks {
       status: 'running',
       side: null,
       summary: null,
-      started_ms: entry.time_ms,
+      started_ms: (call ? calls.get(call)?.time_ms : undefined) ?? entry.time_ms,
       ended_ms: null,
+      resumes: null,
     }
+    if (!known && call) resumed(state, news, tasks.byCall.get(callOfId.get(news.id) ?? ''), calls)
     if (!state.ids.includes(news.id)) state.ids.push(news.id)
     state.kind ??= news.kind === 'subagent' || news.kind === 'background' ? news.kind : null
     state.side ??= news.side
@@ -77,6 +87,27 @@ export function tasksOf(entries: HistoryEntry[]): Tasks {
     } else tasks.loose.set(news.id, state)
   }
   return tasks
+}
+
+/**
+ * A run of a subagent its own call didn't start takes after the run that did: its kind and labels, and its transcript
+ * unless the news names one of its own, as over ACP, where each call keeps its own.
+ */
+function resumed(state: TaskState, news: TaskView, earlier: TaskState | undefined, calls: Map<string, HistoryEntry>) {
+  if (!earlier || earlier.call === state.call || earlier.kind !== 'subagent') return
+  state.kind = earlier.kind
+  state.side = news.side ?? earlier.side
+  state.resumes = earlier.resumes ?? (earlier.call ? (calls.get(earlier.call) ?? null) : null)
+}
+
+/** The part of a subagent's transcript a run of it wrote: from its call until the next run's. */
+export function runOf(tasks: Tasks, task: TaskState): { from_ms: number | null; until_ms: number | null } {
+  let until_ms: number | null = null
+  for (const other of tasks.byCall.values()) {
+    if (other === task || other.side !== task.side || other.resumes === null || other.started_ms <= task.started_ms) continue
+    until_ms = until_ms === null ? other.started_ms : Math.min(until_ms, other.started_ms)
+  }
+  return { from_ms: task.resumes ? task.started_ms : null, until_ms }
 }
 
 /** The tasks still running, oldest first. */

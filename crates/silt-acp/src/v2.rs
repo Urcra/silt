@@ -478,10 +478,12 @@ impl Reading {
         };
         if sender == main {
             let child = self.children.entry(recipient.to_string()).or_default();
-            // A later message to a subagent already started goes on its work.
-            if child.call.is_some() {
+            // A later message to a subagent at work goes on its work; one to
+            // a subagent gone idle sets it running again, as its own call.
+            if child.call.is_some() && !child.ended {
                 return Vec::new();
             }
+            child.ended = false;
             let call = message.message_id.to_string();
             child.call = Some(call.clone());
             let input = serde_json::json!({"title": child.title, "role": child.role, "prompt": text});
@@ -1001,6 +1003,43 @@ mod tests {
         assert!(
             matches!(&reported[..], [Event::Update(Update::ToolUpdate { id, status: Some(status), output: Some(output), .. })] if id == "toolu_A" && status == "completed" && output == "SUB_OK")
         );
+    }
+
+    #[test]
+    fn a_message_to_a_subagent_gone_idle_runs_it_again_as_a_call_of_its_own() {
+        let (mut reading, s) = reading();
+        let child = SessionId::new("a260308e0ffbde619");
+        let message = |reading: &mut Reading, id: &str, text: &str| {
+            read(
+                reading,
+                &s,
+                serde_json::json!({"sessionUpdate": "session_message", "messageId": id, "senderSessionId": "s1", "recipientSessionId": "a260308e0ffbde619", "content": [{"type": "text", "text": text}]}),
+            )
+        };
+        let idle = |reading: &mut Reading| {
+            read(
+                reading,
+                &s,
+                serde_json::json!({"sessionUpdate": "subagent_update", "sessionId": "a260308e0ffbde619", "state": {"state": "idle", "stopReason": "end_turn"}}),
+            )
+        };
+        message(&mut reading, "toolu_A", "Build the hearth.");
+        assert!(message(&mut reading, "toolu_B", "Mind the chimney.").is_empty(), "it is still at work");
+        idle(&mut reading);
+        let resumed = message(&mut reading, "toolu_C", "Make the fire bigger.");
+        let Event::Update(Update::ToolCall { id, input: Some(input), .. }) = &resumed[0] else {
+            panic!("the call that set it running again: {resumed:?}");
+        };
+        assert_eq!((id.as_str(), input["prompt"].as_str()), ("toolu_C", Some("Make the fire bigger.")));
+        assert_eq!(task_of(&resumed[1]), Some(("toolu_C", Some("a260308e0ffbde619"), Some("subagent"), "running")));
+        assert_eq!(reading.running_children(), std::slice::from_ref(&child));
+        let said = read(
+            &mut reading,
+            &child,
+            serde_json::json!({"sessionUpdate": "agent_message_chunk", "messageId": "m2", "content": {"type": "text", "text": "Bigger."}}),
+        );
+        assert!(matches!(&said[..], [Event::Update(Update::Within { parent, .. })] if parent == "toolu_C"));
+        assert_eq!(task_of(&idle(&mut reading)[0]), Some(("toolu_C", Some("a260308e0ffbde619"), Some("subagent"), "completed")));
     }
 
     /// Claude's Bash with `run_in_background`, as recorded: it completes at

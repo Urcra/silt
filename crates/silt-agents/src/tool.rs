@@ -76,11 +76,19 @@ pub fn describe(name: &str, kind: Option<&str>, input: &Value) -> ToolUse {
             text(&["description", "title", "prompt", "task", "message", "query", "Role", "Prompt"]),
             text(&["subagent_type", "agent_type", "role", "agent", "agent_name", "TypeName"]),
         ),
+        // A message to a subagent, which may set a finished one running again: Claude Code's and Codex's.
+        ToolKind::Other if RESUMES.contains(&name) => (text(&["summary", "message", "Message"]), None),
         ToolKind::Other => (None, None),
     };
     let subagent = if kind == ToolKind::Subagent { text(&["name"]) } else { None };
     ToolUse { kind, subject, detail, subagent }
 }
+
+/// The tools that message a subagent already started: Claude Code's
+/// `SendMessage`, Codex's `followup_task`, `send_message` and `send_input`,
+/// Copilot's `write_agent` and Antigravity's `send_message`. The web UI's
+/// `RESUMES` names the same.
+const RESUMES: [&str; 5] = ["SendMessage", "followup_task", "send_message", "send_input", "write_agent"];
 
 /// The kinds ACP names (`ToolKind` in its schema).
 fn acp_kind(kind: &str) -> Option<ToolKind> {
@@ -411,6 +419,9 @@ mod tests {
         let unnamed = describe("Agent", None, &json!({"description": "Map the lexer", "subagent_type": "Explore"}));
         assert_eq!(unnamed.subagent, None);
         assert_eq!(describe("Bash", None, &json!({"command": "ls", "name": "list"})).subagent, None);
+        let message =
+            describe("SendMessage", None, &json!({"to": "ad7", "summary": "Bigger fire", "message": "Make the fire bigger"}));
+        assert_eq!((message.kind, message.subject.as_deref()), (ToolKind::Other, Some("Bigger fire")));
     }
 
     #[test]

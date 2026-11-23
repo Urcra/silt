@@ -67,3 +67,28 @@ test('the running strip names a named subagent', () => {
   expect(within(strip).getByText('lexer-scout')).toBeTruthy()
   expect(within(strip).getByText('Map the lexer')).toBeTruthy()
 })
+
+test("a resumed subagent's card names it as its first call did, and doesn't take the message's result for its report", () => {
+  const first = agentCall('c1', { subject: 'Build the hearth', detail: 'general-purpose', subagent: 'hearth' })
+  const message = {
+    ...agentCall('s1', { name: 'SendMessage', kind: 'other', subject: 'Bigger fire' }),
+    index: 3,
+    time_ms: 3000,
+  }
+  const resumed = { ...news('s1'), index: 4, time_ms: 4000, task: { ...news('s1').task!, id: 'task-c1' } }
+  const result = {
+    ...news('s1'),
+    index: 5,
+    kind: 'tool_result',
+    text: '{"success":true,"message":"Resuming agent"}',
+    task: null,
+    outcome: { call: 's1', failed: false, exit_code: null, answers: [] },
+  }
+  const done = { ...resumed, index: 6, task: { ...resumed.task!, status: 'completed', summary: 'Fire is bigger' } }
+  shown([first, news('c1'), message, resumed, done], <TaskCard step={{ call: message, result, images: [] }} />)
+  const card = screen.getByTestId('task')
+  expect(within(card).getByTestId('task-name').textContent).toBe('hearth')
+  expect(within(card).getByText('general-purpose, resumed')).toBeTruthy()
+  within(card).getByRole('button', { expanded: false }).click()
+  expect(screen.queryByText('Reported back')).toBeNull()
+})
