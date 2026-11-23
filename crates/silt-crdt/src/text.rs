@@ -7,6 +7,7 @@ use silt_types::{DeltaId, DeltaSpan, Frontier};
 use smallvec::SmallVec;
 
 use crate::causal::{CausalGraph, VersionVector};
+use crate::chars::Chars;
 use crate::locator::Locator;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,7 +111,7 @@ const VISIBLE: u32 = 1;
 /// fragments they are currently split into.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Insertion {
-    chars: Vec<char>,
+    chars: Chars,
     origin_left: Option<CharId>,
     origin_right: Option<CharId>,
     /// Offset within the insertion where each fragment starts.
@@ -340,9 +341,9 @@ impl TextDoc {
     pub fn from_base(source: DeltaId, content: &str) -> Self {
         let mut doc = Self::new();
         let key = CharId::Base { source, offset: 0 };
-        let chars: Vec<char> = content.chars().collect();
+        let chars = Chars::from(content);
         let mut splits = BTreeMap::new();
-        if !chars.is_empty() {
+        if chars.len() > 0 {
             let locator = Locator::between(&Locator::min(), &Locator::max());
             splits.insert(0, locator.clone());
             doc.fragments.push(
@@ -358,7 +359,7 @@ impl TextDoc {
             );
         }
         doc.insertions.insert(key, Insertion { chars, origin_left: None, origin_right: None, splits });
-        let len = run_len(content.chars().count());
+        let len = run_len(doc.insertions[&key].chars.len());
         if len > 0 {
             doc.record_applied(Applied { id: source, kind: AppliedKind::Insert { start: key, len } });
             doc.heads = Some(vec![source]);
@@ -370,7 +371,7 @@ impl TextDoc {
     pub fn text(&self) -> String {
         let mut text = String::with_capacity(self.len());
         for fragment in self.fragments.iter().filter(|fragment| !fragment.is_deleted()) {
-            text.extend(self.chars_of(fragment));
+            text.push_str(self.chars_of(fragment));
         }
         text
     }
@@ -397,7 +398,7 @@ impl TextDoc {
     pub fn text_at_vv(&self, vv: &VersionVector) -> String {
         let mut text = String::with_capacity(self.len());
         for fragment in self.fragments.iter() {
-            text.extend(&self.chars_of(fragment)[..fragment.visible_len_at(vv)]);
+            text.push_str(self.visible_chars_of(fragment, fragment.visible_len_at(vv)));
         }
         text
     }
@@ -409,7 +410,7 @@ impl TextDoc {
         let mut text = String::with_capacity(self.len());
         for fragment in self.fragments.iter() {
             let chars = self.chars_of(fragment);
-            text.extend(chars.iter().zip(visible_where(fragment, &contains)).filter(|(_, shown)| *shown).map(|(ch, _)| *ch));
+            text.extend(chars.chars().zip(visible_where(fragment, &contains)).filter(|(_, shown)| *shown).map(|(ch, _)| ch));
         }
         text
     }
@@ -566,7 +567,7 @@ impl TextDoc {
         let mut attribution = Vec::with_capacity(self.len());
         for fragment in self.fragments.iter().filter(|fragment| !fragment.is_deleted()) {
             let first = fragment.first_char();
-            attribution.extend(self.chars_of(fragment).iter().zip(0..).map(|(ch, offset)| (*ch, first.offset(offset))));
+            attribution.extend(self.chars_of(fragment).chars().zip(0..).map(|(ch, offset)| (ch, first.offset(offset))));
         }
         attribution
     }
@@ -576,8 +577,8 @@ impl TextDoc {
         let mut attribution = Vec::new();
         for fragment in self.fragments.iter() {
             let first = fragment.first_char();
-            let visible = &self.chars_of(fragment)[..fragment.visible_len_at(vv)];
-            attribution.extend(visible.iter().zip(0..).map(|(ch, offset)| (*ch, first.offset(offset))));
+            let visible = self.visible_chars_of(fragment, fragment.visible_len_at(vv));
+            attribution.extend(visible.chars().zip(0..).map(|(ch, offset)| (ch, first.offset(offset))));
         }
         attribution
     }
@@ -591,11 +592,11 @@ impl TextDoc {
             let shown = visible_where(fragment, &contains);
             attribution.extend(
                 self.chars_of(fragment)
-                    .iter()
+                    .chars()
                     .zip(shown)
                     .zip(0..)
                     .filter(|((_, shown), _)| *shown)
-                    .map(|((ch, _), offset)| (*ch, first.offset(offset))),
+                    .map(|((ch, _), offset)| (ch, first.offset(offset))),
             );
         }
         attribution
@@ -659,9 +660,14 @@ impl TextDoc {
         }
     }
 
-    fn chars_of(&self, fragment: &Fragment) -> &[char] {
+    fn chars_of(&self, fragment: &Fragment) -> &str {
+        self.visible_chars_of(fragment, fragment.len())
+    }
+
+    /// The fragment's first `len` characters.
+    fn visible_chars_of(&self, fragment: &Fragment, len: usize) -> &str {
         let start = fragment.offset as usize;
-        &self.insertions[&fragment.insertion].chars[start..start + fragment.len()]
+        self.insertions[&fragment.insertion].chars.slice(start..start + len)
     }
 
     fn visible_char(&self, index: usize) -> CharId {
@@ -764,7 +770,7 @@ impl TextDoc {
         if let Some((locator, key)) = self.typing_target(pos, my_id) {
             let added = run_len(event.op.units());
             self.fragments.update_item(|summary| summary.max_locator >= locator, |fragment| fragment.len += added, ());
-            self.insertions.get_mut(&key).expect("fragment's insertion exists").chars.extend(content.chars());
+            self.insertions.get_mut(&key).expect("fragment's insertion exists").chars.push_str(content);
             return;
         }
         if self.insert_in_place(event, pos, content) {
@@ -808,14 +814,14 @@ impl TextDoc {
         };
         let origin_right = right_fragment.as_ref().map(Fragment::first_char);
 
-        let chars: Vec<char> = content.chars().collect();
+        let chars = Chars::from(content);
         if region.is_empty()
             && !left_was_split
             && let Some(fragment) = left.as_mut()
             && self.continues_insertion(fragment, my_id, origin_right)
         {
             fragment.len += run_len(chars.len());
-            self.insertions.get_mut(&fragment.insertion).expect("fragment's insertion exists").chars.extend(chars);
+            self.insertions.get_mut(&fragment.insertion).expect("fragment's insertion exists").chars.push_str(content);
             fragments.extend(left, ());
             fragments.extend(right_fragment, ());
             fragments.append(cursor.suffix(), ());
@@ -925,7 +931,7 @@ impl TextDoc {
         };
 
         let my_id = CharId::Delta(event.span.first());
-        let chars: Vec<char> = content.chars().collect();
+        let chars = Chars::from(content);
         let origin_left = fragment.first_char().offset(keep - 1);
         let target = fragment.locator.clone();
         let insertions = &mut self.insertions;
