@@ -2103,7 +2103,12 @@ workspace: string | null,
  * The Claude Code cloud session it records, as claude.ai names it
  * (ADR 0040). A fork doesn't inherit it.
  */
-cloud: string | null, };
+cloud: string | null, 
+/**
+ * Which of the person's own machines holds it, by name, when it isn't
+ * the one answering: the device of its lease.
+ */
+machine: string | null, };
 
 export type TurnInfo = { 
 /**

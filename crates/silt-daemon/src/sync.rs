@@ -469,6 +469,7 @@ impl Core {
             self.announce(crate::protocol::BusEvent::Threads);
         }
         self.take_running_elsewhere(server, listing.running);
+        self.take_machines(listing.devices, listing.made_on);
         for info in listing.threads {
             self.collaborators.insert(info.id, info.collaborators.clone());
             if let Some(known) = self.threads.get(&info.id) {

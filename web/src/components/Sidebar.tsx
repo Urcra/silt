@@ -11,12 +11,12 @@ import { openPalette } from '../palette'
 import { projectName, projects } from '../projects'
 import { keys } from '../query'
 import { type Section, inListOrder, old, section, sections, unread } from '../sections'
-import { hosted } from '../served'
+import { hosted, serverName } from '../served'
 import { formatKeys } from '../shortcuts'
 import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
-import { Avatar, Dot, Icon, type IconName, Kbd, Menu, SectionLabel, Skeleton, Spinner, Tag, cx } from '../ui'
+import { Button, Dot, type DotTone, Icon, type IconName, Kbd, Menu, Popover, SectionLabel, Skeleton, Spinner, cx } from '../ui'
 import { pillOf, useUpdate } from '../updates'
 import { useInWorkspace } from '../workspaceFilter'
 import { ThreadMark } from './ThreadMark'
@@ -287,162 +287,236 @@ function NavItem({
   )
 }
 
-const PILL_TONE = {
-  update: 'bg-accent-tint text-accent-fg',
-  running: 'bg-surface-2 text-fg-2',
-  waiting: 'bg-accent-tint text-accent-fg',
-  relaunch: 'bg-accent-tint text-accent-fg',
-  failed: 'bg-danger-tint text-danger',
+/** What the update strip says, and how it looks, by the update's state (ADR 0100). */
+const STRIP = {
+  update: { said: 'A new Silt is out', tone: 'bg-accent-tint text-accent-fg' },
+  running: { said: 'Updating Silt', tone: 'bg-accent-tint text-accent-fg' },
+  waiting: { said: 'Restart pending', tone: 'bg-accent-tint text-accent-fg' },
+  relaunch: { said: 'Silt is updated', tone: 'bg-accent-tint text-accent-fg' },
+  failed: { said: 'Update failed', tone: 'bg-danger-tint text-danger' },
 }
 
-/** The sidebar's word on an update (ADR 0100): out, under way, waiting, done but for a relaunch, or failed. */
-function UpdatePill() {
+/** The sidebar's word on an update (ADR 0100), above the machine: out, under way, waiting, done but for a relaunch, or failed. */
+function UpdateStrip() {
   const update = useUpdate()
   const pill = pillOf(update.data)
   if (!pill) return null
-  const look = cx(
-    'inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-px text-label font-medium max-md:min-h-11',
-    PILL_TONE[pill.kind],
-  )
+  const { said, tone } = STRIP[pill.kind]
+  const percent = update.data?.run?.percent ?? 0
   const icon =
     pill.kind === 'running' ? (
-      <Spinner className="h-2.5 w-2.5" />
+      <Spinner />
     ) : pill.kind === 'update' ? (
-      <Icon name="arrowUp" className="h-3 w-3" />
-    ) : pill.kind === 'relaunch' ? (
-      <Icon name="reload" className="h-3 w-3" />
-    ) : null
-  if (pill.kind === 'relaunch' && inDesktop()) {
-    return (
-      <button
-        type="button"
-        className={cx(look, 'hover:brightness-95')}
-        onClick={relaunchDesktop}
-        title="Relaunch the desktop app on the new build"
-      >
+      <Icon name="arrowUp" className="h-3.5 w-3.5 shrink-0" />
+    ) : pill.kind === 'failed' ? (
+      <Icon name="alert" className="h-3.5 w-3.5 shrink-0" />
+    ) : (
+      <Icon name="reload" className="h-3.5 w-3.5 shrink-0" />
+    )
+  const relaunch = pill.kind === 'relaunch' && inDesktop()
+  const body = (
+    <>
+      <span className="flex items-center gap-2">
         {icon}
-        {pill.text}
+        <span className="flex-1 truncate">{said}</span>
+        {pill.kind === 'running' && <span className="font-mono text-2xs">{percent}%</span>}
+        {relaunch && <span className="rounded-sm bg-accent px-2 py-px font-medium text-on-accent">Relaunch</span>}
+      </span>
+      {pill.kind === 'running' && (
+        <span className="block h-[3px] overflow-hidden rounded-sm bg-surface-3">
+          <span className="block h-full bg-accent" style={{ width: `${percent}%` }} />
+        </span>
+      )}
+    </>
+  )
+  const look = cx('flex flex-col gap-1.5 rounded-md px-2 py-1.5 text-left text-xs hover:brightness-95 max-md:min-h-11', tone)
+  if (relaunch) {
+    return (
+      <button type="button" className={look} onClick={relaunchDesktop} title="Relaunch the desktop app on the new build">
+        {body}
       </button>
     )
   }
   return (
-    <Link
-      to="/settings/$section"
-      params={{ section: 'update' }}
-      className={cx(look, 'hover:brightness-95')}
-      data-testid="update-pill"
-    >
-      {icon}
-      {pill.text}
+    <Link to="/settings/$section" params={{ section: 'update' }} className={look} data-testid="update-strip">
+      {body}
     </Link>
   )
 }
 
-/** How a backend looks in Runs on: This computer and WSL by an icon, a machine by whether it's connected. */
-function backendMark(backend: Backend): ReactNode {
-  if (backend.kind !== 'ssh') return <Icon name="laptop" className="h-3.5 w-3.5 shrink-0 text-fg-2" />
-  if (backend.state === 'connecting') return <Spinner label="connecting" />
-  const tone = backend.state === 'connected' ? 'ok' : backend.state === 'failed' ? 'danger' : 'idle'
-  const said = { ok: 'connected', danger: 'couldn’t connect', idle: 'not connected' }[tone]
-  return <Dot tone={tone} label={said} />
+/** A machine's tile: its kind's icon, and how it's connected. */
+function MachineTile({ ssh, tone, size = 26 }: { ssh: boolean; tone: DotTone | null; size?: number }) {
+  return (
+    <span
+      className="relative inline-flex shrink-0 items-center justify-center rounded-md bg-surface-2 text-fg-1"
+      style={{ width: size, height: size }}
+    >
+      <Icon name={ssh ? 'terminal' : 'laptop'} className="h-3.5 w-3.5" />
+      {tone && <Dot tone={tone} className="absolute -right-0.5 -bottom-0.5 h-2 w-2 shadow-[0_0_0_2px_var(--bg-elevated)]" />}
+    </span>
+  )
 }
 
-/** Which machine the desktop app's window shows Silt from, and the others it could (ADRs 0045, 0108). */
-function RunsOn({ backends, current }: { backends: Backend[]; current: string | undefined }) {
+/** How a backend stands, under its name in the machine menu. */
+function backendLine(backend: Backend): { said: string; tone: DotTone } {
+  if (backend.kind === 'ssh') {
+    if (backend.state === 'connected') return { said: 'over SSH · connected', tone: 'ok' }
+    if (backend.state === 'connecting') return { said: `over SSH · ${backend.step ?? 'connecting'}…`, tone: 'idle' }
+    if (backend.state === 'failed')
+      return { said: `couldn’t connect${backend.reason ? `: ${backend.reason}` : ''}`, tone: 'danger' }
+    return { said: 'over SSH · not connected', tone: 'idle' }
+  }
+  return { said: backend.kind === 'wsl' ? 'WSL' : 'this computer', tone: 'ok' }
+}
+
+/**
+ * The machine this window shows Silt from (ADRs 0045, 0108, 0115): its name and how it stands, opening
+ * the others the desktop app knows, adding one, and Devices and sync.
+ */
+function MachineMenu({ said, failing, running }: { said: string; failing: string | null; running: number }) {
   const navigate = useNavigate()
+  const status = useQuery({ queryKey: keys.status, queryFn: api.status })
+  const { backends, current } = useBackends()
   const shown = backends.find((backend) => backend.id === current)
-  const switching = backends.find((backend) => backend.switching)
-  return (
-    <>
-      <div className="flex items-center gap-2 px-2 pt-2 text-xs text-fg-2">
-        <Icon name="laptop" className="h-3.5 w-3.5 shrink-0" />
-        <span className="shrink-0">Runs on</span>
-        <Menu
-          label="where Silt runs"
-          above
-          align="left"
-          trigger={
-            <span className="inline-flex min-w-0 items-center gap-1.5 text-fg-1">
-              {shown?.kind === 'ssh' && <Dot tone="ok" />}
-              <span className="truncate">{shown?.label ?? 'This computer'}</span>
-              <Icon name="chevronDown" className="h-3 w-3 shrink-0" />
-            </span>
+  const name = shown?.label ?? 'This computer'
+  const device = status.data?.servers?.[0]?.name
+  const server = status.data?.servers?.[0]
+  const here = [device, running > 0 ? `${running} running` : 'nothing running'].filter(Boolean).join(' · ')
+  const rows =
+    backends.length > 0
+      ? backends.map((backend) => {
+          const line = backendLine(backend)
+          const chosen = backend.id === current
+          return {
+            id: backend.id,
+            label: backend.label,
+            ssh: backend.kind === 'ssh',
+            chosen,
+            ...line,
+            said: chosen ? here : line.said,
           }
-          items={[
-            ...backends.map((backend) => ({
-              label: backend.label,
-              lead: backendMark(backend),
-              onSelect: () => switchBackend(backend.id),
-              disabled: backend.id === current,
-              checked: backend.id === current,
-            })),
-            {
-              label: 'Add a machine…',
-              icon: 'plus' as const,
-              divided: true,
-              onSelect: () => void navigate({ to: '/settings/$section', params: { section: 'machines' } }),
-            },
-          ]}
-        />
+        })
+      : [{ id: 'here', label: 'This computer', ssh: false, chosen: true, said: here, tone: 'ok' as DotTone }]
+  const go = (section: string, close: () => void) => {
+    close()
+    void navigate({ to: '/settings/$section', params: { section } })
+  }
+  return (
+    <Popover
+      label="Switch machine"
+      className="relative block min-w-0 flex-1"
+      triggerLabel={`machine: ${name}`}
+      triggerTitle={failing ?? undefined}
+      triggerClassName="flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-fg-1 hover:bg-surface-2 aria-expanded:bg-surface-2 max-md:min-h-12"
+      panelClassName="w-[316px] max-w-[calc(100vw-20px)] p-1.5"
+      trigger={
+        <>
+          <MachineTile ssh={shown?.kind === 'ssh'} tone={failing ? 'danger' : server ? 'ok' : 'idle'} />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate font-medium">{name}</span>
+            <span className={cx('truncate text-2xs', failing ? 'text-danger' : 'text-fg-2')}>{said}</span>
+          </span>
+          <Icon name="selector" className="h-3 w-3 shrink-0 text-fg-2" />
+        </>
+      }
+    >
+      {(close) => (
+        <div className="flex flex-col gap-0.5">
+          {rows.map((row) => (
+            <button
+              key={row.id}
+              type="button"
+              aria-current={row.chosen || undefined}
+              onClick={() => {
+                close()
+                if (!row.chosen && row.id !== 'here') switchBackend(row.id)
+              }}
+              className={cx(
+                'grid w-full grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-left text-fg-1 hover:bg-surface-2',
+                row.chosen && 'bg-accent-tint',
+              )}
+            >
+              <MachineTile ssh={row.ssh} tone={row.tone} size={28} />
+              <span className="flex min-w-0 flex-col">
+                <b className="truncate font-medium">{row.label}</b>
+                <span className={cx('truncate font-mono text-2xs', row.tone === 'danger' ? 'text-danger' : 'text-fg-2')}>
+                  {row.said}
+                </span>
+              </span>
+              {row.chosen ? <Icon name="check" label="shown here" className="text-accent-fg" /> : <span />}
+            </button>
+          ))}
+          {inDesktop() && (
+            <Button variant="ghost" icon="plus" className="justify-start px-2.5 py-1.5" onClick={() => go('machines', close)}>
+              Add a machine
+            </Button>
+          )}
+          <div className="mt-1 flex flex-col border-t border-line-subtle pt-1">
+            <button
+              type="button"
+              onClick={() => go('devices', close)}
+              className="flex items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-fg-1 hover:bg-surface-2 max-md:min-h-11"
+            >
+              <Icon name="cloud" className="h-4 w-4 shrink-0 text-fg-2" />
+              <span className="flex-1">Devices and sync</span>
+              {server && (
+                <span className="inline-flex min-w-0 items-center gap-1.5 text-2xs text-fg-2">
+                  <Dot tone={failing ? 'danger' : 'ok'} />
+                  <span className="truncate">{serverName(server.url)}</span>
+                </span>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+    </Popover>
+  )
+}
+
+/** The bottom of the sidebar: an update, the machine this window shows, and Settings. */
+function MachineFooter({ threads }: { threads: ThreadSummary[] }) {
+  const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
+  const running = threads.filter(inProgress).length
+  const signIn = status.data?.servers?.[0]
+  const sync = status.data?.sync_error
+  const { backends } = useBackends()
+  const switching = backends.find((backend) => backend.switching)
+  const said = [
+    sync ? 'Sync failing' : signIn ? 'Synced' : 'Not synced',
+    running > 0 ? `${running} running` : 'nothing running',
+  ].join(' · ')
+  return (
+    <div className="flex flex-col gap-1 border-t border-line pt-1.5">
+      {!hosted() && <UpdateStrip />}
+      <div className="flex items-center gap-1">
+        {hosted() ? (
+          <span className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1">
+            <span className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md bg-surface-2">
+              <Icon name="cloud" className="h-3.5 w-3.5" />
+            </span>
+            <span className="truncate font-medium">On the server</span>
+          </span>
+        ) : (
+          <MachineMenu said={said} failing={sync ?? null} running={running} />
+        )}
+        <Link
+          to="/settings"
+          aria-label="Settings"
+          title={`Settings (${formatKeys('mod+,')})`}
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11"
+          activeProps={{ className: 'bg-accent-tint text-accent-fg' }}
+        >
+          <Icon name="settings" className="h-[15px] w-[15px]" />
+        </Link>
       </div>
       {switching && (
-        <div role="status" className="flex items-center gap-2 px-2 pt-1 text-xs text-fg-2">
+        <div role="status" className="flex items-center gap-2 px-2 text-xs text-fg-2">
           <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
             <Spinner />
           </span>
           <span className="truncate">Connecting to {switching.label}…</span>
         </div>
       )}
-    </>
-  )
-}
-
-/** This machine at the bottom: its name, how many agents run on it, and Settings. */
-function DeviceFooter({ threads }: { threads: ThreadSummary[] }) {
-  const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
-  const running = threads.filter(inProgress).length
-  const waiting = threads.filter((thread) => ['awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '')).length
-  const signIn = status.data?.servers?.[0]
-  const name = signIn?.name ?? 'this machine'
-  const sync = status.data?.sync_error
-  const { backends, current } = useBackends()
-  return (
-    <div className="flex flex-col border-t border-line">
-      {backends.length > 0 && <RunsOn backends={backends} current={current} />}
-      <div className="flex items-center gap-2 px-2 pt-2.5 pb-1 text-xs text-fg-2">
-        {hosted() ? (
-          <span className="flex-1 truncate">On the server</span>
-        ) : (
-          <Link
-            to="/settings/devices"
-            className="flex min-w-0 flex-1 items-center gap-2 hover:text-fg-1"
-            title={sync ?? undefined}
-          >
-            <Dot tone={sync ? 'danger' : signIn ? 'ok' : 'idle'} />
-            <span className="truncate">{sync ? `${name} · sync failing` : name}</span>
-          </Link>
-        )}
-        {waiting > 0 && (
-          <Tag tone="accent" className="shrink-0 font-sans">
-            {waiting} waiting
-          </Tag>
-        )}
-        {running > 0 && (
-          <Tag tone="ok" className="shrink-0 font-sans">
-            {running} running
-          </Tag>
-        )}
-        {!hosted() && <UpdatePill />}
-        <Link
-          to="/settings"
-          aria-label="Settings"
-          className="inline-flex h-7 w-7 items-center justify-center rounded-sm hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11"
-          activeProps={{ className: 'bg-accent-tint text-accent-fg' }}
-        >
-          <Icon name="settings" className="h-[15px] w-[15px]" />
-        </Link>
-        {signIn && <Avatar name={signIn.user} size={22} />}
-      </div>
     </div>
   )
 }
@@ -480,20 +554,15 @@ export function Sidebar() {
         aria-label="projects"
         className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pt-2.5 pb-2 text-ui [&>*]:shrink-0"
       >
-        <div className="flex items-center gap-2 px-1.5 pb-2.5">
-          <Link to="/" className="text-heading font-medium tracking-[-0.04em] text-fg-1">
-            silt
-          </Link>
-          {!hosted() && <WorkspaceSwitcher />}
-          <button
-            type="button"
-            aria-label="command palette"
-            title={`Search and commands (${formatKeys('mod+k')})`}
-            onClick={openPalette}
-            className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-sm text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11"
-          >
-            <Icon name="search" className="h-[15px] w-[15px]" />
-          </button>
+        {/* The workspace is the sidebar's title: everything under it is in it (ADR 0115). */}
+        <div className="flex items-center pb-2">
+          {hosted() ? (
+            <Link to="/" className="px-1.5 py-1 text-heading font-medium tracking-[-0.04em] text-fg-1">
+              silt
+            </Link>
+          ) : (
+            <WorkspaceSwitcher />
+          )}
         </div>
         {!hosted() && (
           <Link to="/new" className={cx(ROW, 'h-(--row)', (path === '/' || path === '/new') && ACTIVE)}>
@@ -509,6 +578,11 @@ export function Sidebar() {
             <Kbd>{formatKeys('c')}</Kbd>
           </Link>
         )}
+        <button type="button" title="Search and commands" onClick={openPalette} className={cx(ROW, 'h-(--row) w-full text-left')}>
+          <Icon name="search" className="h-[15px] w-[15px] shrink-0" />
+          <span className="flex-1">Search</span>
+          <Kbd>{formatKeys('mod+k')}</Kbd>
+        </button>
         <NavItem to="/threads" icon="list">
           All threads
         </NavItem>
@@ -606,7 +680,7 @@ export function Sidebar() {
       </nav>
       {/* Outside the list, so a long one never scrolls Settings and this machine out of reach. */}
       <div className="shrink-0 px-2 pb-2">
-        <DeviceFooter threads={mine} />
+        <MachineFooter threads={mine} />
       </div>
     </>
   )

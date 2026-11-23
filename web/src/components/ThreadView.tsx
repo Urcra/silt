@@ -1759,8 +1759,9 @@ export function ThreadHeader({
 
 /** Where the thread's work is, for its header: this machine by name, the server, or another device. */
 function whereSaid(summary: ThreadSummary, device: string | null): { label: string; icon: IconName } {
-  if (summary.location === 'moved') return { label: 'moved to another device', icon: 'handoff' }
-  if (summary.location === 'remote') return { label: 'on the server', icon: 'cloud' }
+  if (summary.location === 'moved') return { label: `moved to ${summary.machine ?? 'another device'}`, icon: 'handoff' }
+  if (summary.location === 'remote')
+    return summary.machine ? { label: `on ${summary.machine}`, icon: 'monitor' } : { label: 'on the server', icon: 'cloud' }
   return { label: device ?? 'this machine', icon: 'monitor' }
 }
 

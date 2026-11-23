@@ -85,6 +85,8 @@ struct Row {
     created_ms: i64,
     owner: String,
     visibility: Option<Visibility>,
+    /// The device that holds its lease, else the one that made it.
+    holder: Option<DeviceId>,
 }
 
 /// What the person may read: their threads, and each family's readable deltas.
@@ -192,8 +194,10 @@ impl Readable {
     /// what the index answers.
     async fn rows(server: &Server, user: UserId, viewer: &Viewer) -> Result<Self, ApiError> {
         let rows = sqlx::query!(
-            r#"SELECT t.id, t.family_id, t.repo, t.created_ms, t.visibility, u.name AS owner
+            r#"SELECT t.id, t.family_id, t.repo, t.created_ms, t.visibility, u.name AS owner,
+               COALESCE(l.device_id, t.made_on) AS "holder?: Vec<u8>"
              FROM threads t JOIN users u ON u.id = t.owner_id
+             LEFT JOIN leases l ON l.thread_id = t.id
              WHERE t.deleted_ms IS NULL ORDER BY t.created_ms"#
         )
         .fetch_all(server.db())
@@ -207,6 +211,7 @@ impl Readable {
                 created_ms: row.created_ms,
                 owner: row.owner,
                 visibility: row.visibility.and_then(|visibility| visibility.parse().ok()),
+                holder: row.holder.map(|device| DeviceId(id_from(&device))),
             })
             .filter(|row| viewer.sees_thread(row.id))
             .collect();
@@ -357,6 +362,7 @@ fn summary(
     requests: &[(FamilyId, MergeRequest)],
     states: &HashMap<ThreadId, ThreadState>,
     running: &HashMap<ThreadId, (DeviceId, AgentReport)>,
+    machines: &HashMap<DeviceId, String>,
 ) -> ThreadSummary {
     let log = readable.of(row);
     let own: Vec<&Delta> = log.iter().filter(|delta| delta.thread == row.id).collect();
@@ -390,6 +396,7 @@ fn summary(
         local_only: false,
         workspace: None,
         cloud: silt_proto::view::cloud_session(own.iter().copied()),
+        machine: row.holder.and_then(|holder| machines.get(&holder).cloned()),
     }
 }
 
@@ -407,8 +414,17 @@ async fn threads(
     let states = states(&server, browser).await?;
     let running = server.shared.control.running().await;
     let conversations = conversations(&server, &readable).await;
+    let machines: HashMap<DeviceId, String> = crate::accounts::devices_of(server.db(), browser.user)
+        .await?
+        .into_iter()
+        .map(|device| (device.id, device.name))
+        .collect();
     Ok(Json(
-        readable.rows.iter().map(|row| summary(&readable, row, &conversations[&row.id], &requests, &states, &running)).collect(),
+        readable
+            .rows
+            .iter()
+            .map(|row| summary(&readable, row, &conversations[&row.id], &requests, &states, &running, &machines))
+            .collect(),
     ))
 }
 

@@ -10,7 +10,7 @@ use silt_proto::{
     AgentReport, AgentState, AgentsReport, AskedPermission, CommandAnswer, ControlCommand, ErrorReply, RelayRequest,
     RemoteCommand, RunningElsewhere, Startable,
 };
-use silt_types::ThreadId;
+use silt_types::{DeviceId, ThreadId};
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
@@ -38,6 +38,10 @@ pub(crate) struct Control {
     /// Agents running on the person's other online devices, by thread, as
     /// the last listing of the server named with each said.
     elsewhere: HashMap<ThreadId, (String, RunningElsewhere)>,
+    /// The person's devices by name, as each server's last listing said.
+    machines: HashMap<DeviceId, String>,
+    /// The device each thread was made on, as its server's listing said.
+    made_on: HashMap<ThreadId, DeviceId>,
 }
 
 #[derive(Default)]
@@ -384,6 +388,31 @@ impl Core {
         if !changed.is_empty() {
             self.announce(BusEvent::Threads);
         }
+    }
+
+    /// Takes in the person's devices by name, and where each thread was
+    /// made, from a server's listing.
+    pub(crate) fn take_machines(&mut self, machines: Vec<(DeviceId, String)>, made_on: Vec<(ThreadId, DeviceId)>) {
+        let mut changed = false;
+        for (device, name) in machines {
+            changed |= self.control.machines.insert(device, name.clone()).as_ref() != Some(&name);
+        }
+        for (thread, device) in made_on {
+            changed |= self.control.made_on.insert(thread, device) != Some(device);
+        }
+        if changed {
+            self.announce(BusEvent::Threads);
+        }
+    }
+
+    /// The name of one of the person's devices, as a server knows it.
+    pub(crate) fn machine_name(&self, device: DeviceId) -> Option<&str> {
+        self.control.machines.get(&device).map(String::as_str)
+    }
+
+    /// The device a thread was made on, as its server knows it.
+    pub(crate) fn made_on(&self, thread: ThreadId) -> Option<DeviceId> {
+        self.control.made_on.get(&thread).copied()
     }
 
     fn running_here(&self, thread: ThreadId) -> bool {
