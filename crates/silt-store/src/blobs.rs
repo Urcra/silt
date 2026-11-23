@@ -9,11 +9,20 @@ use tokio::fs;
 #[derive(Debug, Clone)]
 pub struct BlobStore {
     root: PathBuf,
+    /// Whether a blob is synced before it's renamed into place.
+    durable: bool,
 }
 
 impl BlobStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self { root: root.into(), durable: true }
+    }
+
+    /// Blobs whose loss a reader recovers from, kept without syncing each:
+    /// a family's files' states, whose family is replayed when one is
+    /// missing or damaged (ADR 0115). A snapshot writes thousands at once.
+    pub fn recoverable(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into(), durable: false }
     }
 
     pub fn hash(bytes: &[u8]) -> BlobHash {
@@ -44,11 +53,15 @@ impl BlobStore {
         let temporary = dir.join(format!(".{hash}.{}-{unique}.tmp", std::process::id()));
         let mut file = fs::File::create(&temporary).await?;
         tokio::io::AsyncWriteExt::write_all(&mut file, bytes).await?;
-        file.sync_all().await?;
+        if self.durable {
+            file.sync_all().await?;
+        }
         drop(file);
         fs::rename(&temporary, &path).await?;
-        let dir = dir.to_owned();
-        tokio::task::spawn_blocking(move || silt_os::sync_dir(&dir)).await.map_err(io::Error::other)??;
+        if self.durable {
+            let dir = dir.to_owned();
+            tokio::task::spawn_blocking(move || silt_os::sync_dir(&dir)).await.map_err(io::Error::other)??;
+        }
         Ok(hash)
     }
 

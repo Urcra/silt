@@ -107,6 +107,15 @@ pub struct Snapshot {
     pub data: Vec<u8>,
 }
 
+/// What the views across families read of a family, as of the store's
+/// position `position` in it (ADR 0115).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredDigest {
+    pub format: i64,
+    pub position: i64,
+    pub data: Vec<u8>,
+}
+
 /// A checkout's row in this machine's store: one thread's view of a
 /// directory. A clone several agents work in has a row for each of their
 /// threads.
@@ -442,7 +451,7 @@ impl Store {
         Ok(Self {
             pool,
             blobs: BlobStore::new(dir.join("blobs")),
-            files: BlobStore::new(dir.join("files")),
+            files: BlobStore::recoverable(dir.join("files")),
             watch: Arc::new(tokio::sync::Mutex::new(watch)),
         })
     }
@@ -1475,6 +1484,47 @@ impl Store {
         Ok(())
     }
 
+    /// About how many bytes the store holds of the family: its deltas as
+    /// stored, and its snapshot.
+    pub async fn family_size(&self, family: FamilyId) -> Result<u64, StoreError> {
+        let family = id_bytes(family.0);
+        let size = sqlx::query_scalar!(
+            r#"SELECT (SELECT COALESCE(SUM(LENGTH(data)), 0) FROM deltas WHERE family_id = ?1)
+                    + (SELECT COALESCE(SUM(LENGTH(data)), 0) FROM delta_chunks WHERE family_id = ?1)
+                    + (SELECT COALESCE(SUM(LENGTH(data)), 0) FROM family_snapshots WHERE family_id = ?1) AS "size!: i64""#,
+            family
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(u64::try_from(size).unwrap_or_default())
+    }
+
+    /// Every family's stored digest.
+    pub async fn digests(&self) -> Result<HashMap<FamilyId, StoredDigest>, StoreError> {
+        let rows = sqlx::query!("SELECT family_id, format, position, data FROM family_digests").fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                let digest = StoredDigest { format: row.format, position: row.position, data: row.data };
+                Ok((FamilyId(id_from(&row.family_id)?), digest))
+            })
+            .collect()
+    }
+
+    pub async fn put_digest(&self, family: FamilyId, digest: &StoredDigest) -> Result<(), StoreError> {
+        let family = id_bytes(family.0);
+        sqlx::query!(
+            "INSERT INTO family_digests (family_id, format, position, data) VALUES (?, ?, ?, ?)
+             ON CONFLICT (family_id) DO UPDATE SET format = excluded.format, position = excluded.position, data = excluded.data",
+            family,
+            digest.format,
+            digest.position,
+            digest.data,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Every delta of the family, in the order they were appended.
     pub async fn deltas(&self, family: FamilyId) -> Result<Vec<Delta>, StoreError> {
         self.deltas_after(family, -1).await
@@ -1986,6 +2036,7 @@ async fn clear_deltas_in(tx: &mut sqlx::SqliteConnection, family: FamilyId) -> R
     sqlx::query!("DELETE FROM deltas WHERE family_id = ?1", family).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM delta_chunks WHERE family_id = ?1", family).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM family_snapshots WHERE family_id = ?1", family).execute(&mut *tx).await?;
+    sqlx::query!("DELETE FROM family_digests WHERE family_id = ?1", family).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM sync_state WHERE family_id = ?1", family).execute(&mut *tx).await?;
     sqlx::query!("DELETE FROM search_pending WHERE family_id = ?1", family).execute(&mut *tx).await?;
     Ok(())

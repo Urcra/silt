@@ -224,6 +224,23 @@ impl Family {
         self.files.stored_hashes()
     }
 
+    /// Whether the log is read whole, rather than left to read when read.
+    pub fn log_decoded(&self) -> bool {
+        self.log.is_read()
+    }
+
+    /// Whether the log is read whole and nothing read it since the last
+    /// time this asked, so it can be let go of.
+    pub fn log_idle(&mut self) -> bool {
+        self.log.idle()
+    }
+
+    /// Lets go of the log, to read with `read` when next read. `read` must
+    /// give back every delta the log holds now, in order.
+    pub fn release_log(&mut self, read: ReadCovered) {
+        self.log.release(read);
+    }
+
     /// How many files are decoded.
     pub fn decoded_files(&self) -> usize {
         self.files.decoded_len()

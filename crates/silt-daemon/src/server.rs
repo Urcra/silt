@@ -128,10 +128,14 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         if let Err(error) = core.capture_spooled().await {
             warn!(%error, "could not record a hook left for later");
         }
+        let Some(event) = core.unless_loading(event) else {
+            continue;
+        };
         match event {
             Event::Request(Request::Shutdown, reply) => {
                 core.end_agents().await;
                 core.tick().await;
+                core.keep_digests().await;
                 if let Err(error) = core.store.checkpoint().await {
                     warn!(%error, "could not copy the WAL into the database");
                 }
@@ -143,6 +147,8 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             }
             Event::Request(request, reply) => core.request(request, reply).await,
             Event::Changed { checkout, paths, noticed, settled } => core.changed(checkout, paths, noticed, settled).await,
+            Event::Loaded { family, result } => core.loaded(family, *result),
+            Event::Digests => core.take_stale_digest().await,
             Event::Tick => {
                 core.tick().await;
                 core.restart_if_idle();

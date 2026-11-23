@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM family_digests WHERE family_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "ddd312553cee2cde33e24cd71d22991d4cbac3ebdfd95ab19e1aba9f76736846"
+}

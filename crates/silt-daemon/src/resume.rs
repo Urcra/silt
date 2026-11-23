@@ -347,7 +347,7 @@ impl Core {
     /// lacks a git blob can try again later. A delta that can't apply is
     /// skipped, as at startup.
     pub(crate) fn project_family(&mut self, family_id: FamilyId, repo: &Repo) -> Result<(), CoreError> {
-        let Some(deltas) = self.raw.get(&family_id) else {
+        let Some(deltas) = self.families.raw(&family_id) else {
             return Ok(());
         };
         let mut family = Family::new();
@@ -358,8 +358,11 @@ impl Core {
                 Err(error) => warn!(%error, id = %delta.span.first(), "skipping a delta that can't apply here"),
             }
         }
-        self.raw.remove(&family_id);
-        self.families.insert(family_id, family);
+        self.families.hold(
+            family_id,
+            crate::load::Loaded::Projected { family: Box::new(family), covered: 0, outdated: false },
+            Some(repo.root().to_owned()),
+        );
         Ok(())
     }
 

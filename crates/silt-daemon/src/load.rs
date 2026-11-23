@@ -15,6 +15,7 @@ use crate::core::{CoreError, RepoBases};
 pub(crate) const SNAPSHOT_EVERY: usize = 1000;
 
 /// A family as the store holds it.
+#[derive(Debug)]
 pub(crate) enum Loaded {
     /// With how much of its log its stored snapshot covers, and whether
     /// that snapshot is in an older format, to take again.

@@ -212,7 +212,7 @@ pub struct Reply {
     pub time_ms: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MergeRequest {
     pub id: DeltaId,
     pub fork: ThreadId,
@@ -229,13 +229,13 @@ pub struct MergeRequest {
     pub guide: Option<(String, String)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangesRequested {
     pub reason: String,
     pub at_ms: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MrStatus {
     Open,
     Approved,

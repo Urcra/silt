@@ -11,7 +11,7 @@ use silt_agents::{Entry, Transcripts};
 use silt_crdt::InodeId;
 use silt_log::{Author, ConvOp, Delta, Family, GraphEvent, HistorySource, Op, TurnMark};
 use silt_proto::view::{GraphQuery, GraphRow, opens_turn};
-use silt_types::{DeltaId, ThreadId};
+use silt_types::{DeltaId, FamilyId, ThreadId};
 
 use crate::core::{CanonicalCwd, Core, CoreError, touched_inode};
 use crate::protocol::{CommitView, FileTouch, HistoryEntry, HistoryHit, HistoryPage, InFlight, TurnInfo};
@@ -298,25 +298,40 @@ impl Core {
     /// thread's own deltas changed, and when it last changed one.
     pub(crate) fn changed_under(&self, thread: ThreadId, path: &str) -> (Vec<String>, i64) {
         let path = path.trim_start_matches("./").trim_end_matches('/');
-        let Some(family) = self.threads.get(&thread).and_then(|record| self.families.get(&record.family)) else {
-            return (Vec::new(), 0);
-        };
-        let paths = family.thread_view(thread).paths();
-        let under: HashSet<InodeId> = paths
-            .iter()
-            .filter(|(candidate, _)| path.is_empty() || *candidate == path || candidate.starts_with(&format!("{path}/")))
-            .map(|(_, inode)| *inode)
-            .collect();
-        let names: BTreeMap<InodeId, &String> = paths.iter().map(|(name, inode)| (*inode, name)).collect();
-        let mut files = BTreeMap::new();
+        let prefix = format!("{path}/");
+        let mut files = Vec::new();
         let mut last_ms = 0;
-        for delta in family.log().iter().filter(|delta| delta.thread == thread) {
-            if let Some(inode) = touched_inode(delta).filter(|inode| under.contains(inode)) {
-                files.insert(names[&inode].clone(), ());
-                last_ms = last_ms.max(delta.time_ms);
+        for (file, changed_ms) in self.files_changed_by(thread) {
+            if path.is_empty() || file == path || file.starts_with(&prefix) {
+                files.push(file);
+                last_ms = last_ms.max(changed_ms);
             }
         }
-        (files.into_keys().collect(), last_ms)
+        (files, last_ms)
+    }
+
+    /// Each file the thread's own deltas changed, by its path now, and when
+    /// they last did, in path order.
+    pub(crate) fn files_changed_by(&self, thread: ThreadId) -> Vec<(String, i64)> {
+        let Some(record) = self.threads.get(&thread) else {
+            return Vec::new();
+        };
+        if let Some(digested) = self.digested(record.family).and_then(|digest| digest.threads.get(&thread)) {
+            return digested.touched.clone();
+        }
+        let Some(family) = self.viewed(record.family) else {
+            return Vec::new();
+        };
+        let paths = family.thread_view(thread).paths();
+        let names: HashMap<InodeId, &String> = paths.iter().map(|(name, inode)| (*inode, name)).collect();
+        let mut files: BTreeMap<String, i64> = BTreeMap::new();
+        for delta in family.log().iter().filter(|delta| delta.thread == thread) {
+            if let Some(name) = touched_inode(delta).and_then(|inode| names.get(&inode)) {
+                let changed = files.entry((*name).clone()).or_default();
+                *changed = (*changed).max(delta.time_ms);
+            }
+        }
+        files.into_iter().collect()
     }
 }
 
@@ -325,7 +340,10 @@ impl Core {
     /// The thread's commits with the turns they came in (ADR 0030), and
     /// their subjects as this machine's clone of it has them.
     pub(crate) fn commits(&self, thread: ThreadId) -> Vec<CommitView> {
-        let Some(family) = self.families.get(&self.threads[&thread].family) else {
+        if let Some(digested) = self.digested(self.threads[&thread].family).and_then(|digest| digest.threads.get(&thread)) {
+            return digested.commits.clone();
+        }
+        let Some(family) = self.viewed(self.threads[&thread].family) else {
             return Vec::new();
         };
         let repo = self.code_of(thread).and_then(|path| silt_git::Repo::discover(&path).ok());
@@ -363,74 +381,96 @@ impl Core {
     pub(crate) fn graph(&self, query: &GraphQuery) -> Vec<GraphRow> {
         let summaries: HashMap<String, crate::protocol::ThreadSummary> =
             self.thread_summaries().into_iter().map(|summary| (summary.id.clone(), summary)).collect();
-        let mut turns: HashMap<ThreadId, Vec<TurnInfo>> = HashMap::new();
-        let mut commits: HashMap<ThreadId, Vec<CommitView>> = HashMap::new();
         let mut rows = Vec::new();
-        for (family_id, family) in &self.families {
+        let families: Vec<FamilyId> = self.families.keys().copied().collect();
+        for family_id in families {
             if query.family.as_ref().is_some_and(|wanted| *wanted != family_id.to_string()) {
                 continue;
             }
-            let requests = family.merge_requests();
-            for item in silt_log::graph_of(family.log()) {
-                let thread = graph_thread(&item.event);
-                let Some(summary) = summaries.get(&thread.to_string()) else {
+            for mut row in self.graph_in(family_id) {
+                let Some(summary) = summaries.get(&row.thread) else {
                     continue;
                 };
+                let mine = || row.thread.parse::<ThreadId>().is_ok_and(|thread| summary.owner == self.own_user(thread));
                 if query.project.as_ref().is_some_and(|project| *project != summary.repo)
-                    || (query.mine && !summary.owner.is_empty() && summary.owner != self.own_user(thread))
+                    || (query.mine && !summary.owner.is_empty() && !mine())
+                    || !query.shows(&row.kind)
                 {
                     continue;
                 }
-                let (kind, turn, text, other, status) = match &item.event {
-                    GraphEvent::Turn { number, .. } => {
-                        let turns = turns.entry(thread).or_insert_with(|| self.turns(thread));
-                        let prompt = turns.get(number - 1).map(|turn| first_line(&turn.prompt)).unwrap_or_default();
-                        ("turn", Some(*number), prompt, None, None)
-                    }
-                    GraphEvent::Commit { commit, turn, .. } => {
-                        let commits = commits.entry(thread).or_insert_with(|| self.commits(thread));
-                        let id = commit.to_string();
-                        let subject = commits.iter().find(|known| known.commit == id).and_then(|known| known.subject.clone());
-                        ("commit", *turn, subject.unwrap_or_else(|| id[..8].to_owned()), None, None)
-                    }
-                    GraphEvent::Fork { from, .. } => {
-                        ("fork", None, format!("forked from {}", from.short()), Some(from.to_string()), None)
-                    }
-                    GraphEvent::Request { target, mr, title, .. } => {
-                        let status = requests.iter().find(|request| request.id == *mr).map(|request| match request.status {
-                            silt_log::MrStatus::Open => "open",
-                            silt_log::MrStatus::Approved => "approved",
-                            silt_log::MrStatus::Declined { .. } => "declined",
-                        });
-                        ("request", None, title.clone(), Some(target.to_string()), status.map(str::to_owned))
-                    }
-                    GraphEvent::Merged { from, title, .. } => ("merge", None, title.clone(), Some(from.to_string()), None),
-                };
-                if !query.shows(kind) {
-                    continue;
-                }
-                let commit = match &item.event {
-                    GraphEvent::Commit { commit, .. } => Some(commit.to_string()),
-                    _ => None,
-                };
-                rows.push(GraphRow {
-                    commit,
-                    id: item.delta.to_string(),
-                    kind: kind.to_owned(),
-                    thread: thread.to_string(),
-                    family: family_id.to_string(),
-                    time_ms: item.time_ms,
-                    turn,
-                    text,
-                    other,
-                    status,
-                    owner: summary.owner.clone(),
-                    agent: summary.agent.clone(),
-                    settled: summary.mine.settled,
-                });
+                row.owner.clone_from(&summary.owner);
+                row.agent.clone_from(&summary.agent);
+                row.settled = summary.mine.settled;
+                rows.push(row);
             }
         }
         query.page(rows)
+    }
+
+    /// The family's rows of the history graph, without what the threads'
+    /// summaries add: from the family if held, else from its digest.
+    pub(crate) fn graph_in(&self, family_id: FamilyId) -> Vec<GraphRow> {
+        if let Some(digest) = self.digested(family_id) {
+            return digest.graph.clone();
+        }
+        let Some(family) = self.viewed(family_id) else {
+            return Vec::new();
+        };
+        let mut turns: HashMap<ThreadId, Vec<TurnInfo>> = HashMap::new();
+        let mut commits: HashMap<ThreadId, Vec<CommitView>> = HashMap::new();
+        let requests = family.merge_requests();
+        let mut rows = Vec::new();
+        for item in silt_log::graph_of(family.log()) {
+            let thread = graph_thread(&item.event);
+            if !self.threads.contains_key(&thread) {
+                continue;
+            }
+            let (kind, turn, text, other, status) = match &item.event {
+                GraphEvent::Turn { number, .. } => {
+                    let turns = turns.entry(thread).or_insert_with(|| self.turns(thread));
+                    let prompt = turns.get(number - 1).map(|turn| first_line(&turn.prompt)).unwrap_or_default();
+                    ("turn", Some(*number), prompt, None, None)
+                }
+                GraphEvent::Commit { commit, turn, .. } => {
+                    let commits = commits.entry(thread).or_insert_with(|| self.commits(thread));
+                    let id = commit.to_string();
+                    let subject = commits.iter().find(|known| known.commit == id).and_then(|known| known.subject.clone());
+                    ("commit", *turn, subject.unwrap_or_else(|| id[..8].to_owned()), None, None)
+                }
+                GraphEvent::Fork { from, .. } => {
+                    ("fork", None, format!("forked from {}", from.short()), Some(from.to_string()), None)
+                }
+                GraphEvent::Request { target, mr, title, .. } => {
+                    let status = requests.iter().find(|request| request.id == *mr).map(|request| match request.status {
+                        silt_log::MrStatus::Open => "open",
+                        silt_log::MrStatus::Approved => "approved",
+                        silt_log::MrStatus::Declined { .. } => "declined",
+                    });
+                    ("request", None, title.clone(), Some(target.to_string()), status.map(str::to_owned))
+                }
+                GraphEvent::Merged { from, title, .. } => ("merge", None, title.clone(), Some(from.to_string()), None),
+            };
+            let commit = match &item.event {
+                GraphEvent::Commit { commit, .. } => Some(commit.to_string()),
+                _ => None,
+            };
+            rows.push(GraphRow {
+                commit,
+                id: item.delta.to_string(),
+                kind: kind.to_owned(),
+                thread: thread.to_string(),
+                family: family_id.to_string(),
+                time_ms: item.time_ms,
+                turn,
+                text,
+                other,
+                status,
+                owner: String::new(),
+                agent: None,
+                settled: false,
+            });
+        }
+        rows
     }
 
     /// Each thread here that made a commit whose id starts with `prefix`,

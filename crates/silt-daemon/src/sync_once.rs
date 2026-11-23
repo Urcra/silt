@@ -109,7 +109,7 @@ impl Core {
     pub(crate) async fn hold_family(&mut self, family_id: FamilyId) -> Result<(), CoreError> {
         let repo = self.family_repo(family_id).ok();
         let loaded = load::family(&self.store, family_id, repo.as_ref()).await?;
-        self.take_loaded(family_id, loaded);
+        self.take_loaded(family_id, loaded, repo.as_ref());
         for record in self.store.checkouts().await? {
             let ours = self.threads.get(&record.thread).is_some_and(|thread| thread.family == family_id);
             if ours && record.path.exists() {
