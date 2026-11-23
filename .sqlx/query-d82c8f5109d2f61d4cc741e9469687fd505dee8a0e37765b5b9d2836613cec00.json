@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id AS \"device_id?\", l.epoch AS \"epoch?\", u.name AS owner,\n             t.visibility\n         FROM threads t\n         JOIN users u ON u.id = t.owner_id\n         LEFT JOIN leases l ON l.thread_id = t.id\n         ORDER BY t.created_ms",
+  "query": "SELECT t.id, t.family_id, t.repo, t.created_ms, t.visibility, u.name AS owner,\n               COALESCE(l.device_id, t.made_on) AS \"holder?: Vec<u8>\"\n             FROM threads t JOIN users u ON u.id = t.owner_id\n             LEFT JOIN leases l ON l.thread_id = t.id\n             WHERE t.deleted_ms IS NULL ORDER BY t.created_ms",
   "describe": {
     "columns": [
       {
@@ -48,30 +48,19 @@
         }
       },
       {
-        "name": "device_id?",
+        "name": "visibility",
         "ordinal": 4,
-        "type_info": "Blob",
+        "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "leases",
-            "name": "device_id"
-          }
-        }
-      },
-      {
-        "name": "epoch?",
-        "ordinal": 5,
-        "type_info": "Integer",
-        "origin": {
-          "Table": {
-            "table": "leases",
-            "name": "epoch"
+            "table": "threads",
+            "name": "visibility"
           }
         }
       },
       {
         "name": "owner",
-        "ordinal": 6,
+        "ordinal": 5,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -81,15 +70,10 @@
         }
       },
       {
-        "name": "visibility",
-        "ordinal": 7,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "threads",
-            "name": "visibility"
-          }
-        }
+        "name": "holder?: Vec<u8>",
+        "ordinal": 6,
+        "type_info": "Blob",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -101,10 +85,9 @@
       false,
       false,
       true,
-      true,
       false,
       true
     ]
   },
-  "hash": "5d21f301012b6c91c1fb5a78563ae59d5a47f519e052cb974f24c510d145a4dc"
+  "hash": "d82c8f5109d2f61d4cc741e9469687fd505dee8a0e37765b5b9d2836613cec00"
 }

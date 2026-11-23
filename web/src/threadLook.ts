@@ -36,8 +36,8 @@ export function threadDoing(thread: ThreadSummary): string | null {
   }
   if (inBackground(thread)) return 'running in the background'
   if (thread.review) return 'review requested'
-  if (thread.location === 'moved') return 'moved to another device'
-  if (thread.location === 'remote') return 'not on this machine'
+  if (thread.location === 'moved') return `moved to ${thread.machine ?? 'another device'}`
+  if (thread.location === 'remote') return thread.machine ? `on ${thread.machine}` : 'not on this machine'
   return null
 }
 
@@ -45,8 +45,8 @@ export function threadDoing(thread: ThreadSummary): string | null {
 export function threadWhere(thread: ThreadSummary): { label: string; tone: DotTone } {
   const live =
     ['working', 'starting', 'awaiting_permission', 'awaiting_input'].includes(thread.agent_state ?? '') || inBackground(thread)
-  if (thread.location === 'moved') return { label: 'Moved to another device', tone: 'idle' }
-  if (thread.location === 'remote') return { label: 'On the server', tone: 'info' }
+  if (thread.location === 'moved') return { label: `Moved to ${thread.machine ?? 'another device'}`, tone: 'idle' }
+  if (thread.location === 'remote') return { label: thread.machine ? `On ${thread.machine}` : 'On the server', tone: 'info' }
   return { label: live ? 'Here, live' : 'Here', tone: 'ok' }
 }
 
