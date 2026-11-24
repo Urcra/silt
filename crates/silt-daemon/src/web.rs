@@ -752,6 +752,8 @@ struct HistoryQuery {
     /// Entries as they were recorded, with images and long outputs whole.
     #[serde(default)]
     whole: bool,
+    tail: Option<usize>,
+    before: Option<usize>,
 }
 
 async fn history(State(web): State<Web>, Path(thread): Path<String>, Query(page): Query<HistoryQuery>) -> HttpResponse {
@@ -761,6 +763,8 @@ async fn history(State(web): State<Web>, Path(thread): Path<String>, Query(page)
         limit: page.limit.unwrap_or(usize::MAX),
         known: page.known,
         cut: !page.whole,
+        tail: page.tail,
+        before: page.before,
     };
     ask(&web, request).await
 }

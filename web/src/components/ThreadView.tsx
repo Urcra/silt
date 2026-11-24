@@ -13,6 +13,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -2080,9 +2081,10 @@ const NO_PEOPLE: Presence[] = []
 const NO_TURNS: TurnInfo[] = []
 const NO_COMMENTS: CommentView[] = []
 
-/** The thread's tasks, the same object until the entries they're read from change. */
-function useStableTasks(entries: HistoryEntry[]): Tasks {
-  const from = useMemo(() => taskEntries(entries), [entries])
+/** The thread's tasks, the same object until the entries they're read from change: those held, after the news of tasks
+ * from before them, so a task started before what's held shows as it is (ADR 0117). */
+function useStableTasks(entries: HistoryEntry[], before: HistoryEntry[]): Tasks {
+  const from = useMemo(() => taskEntries(before.concat(entries)), [entries, before])
   // What they were last read from, for the next render to compare with.
   const [kept, setKept] = useState<{ from: HistoryEntry[]; tasks: Tasks }>()
   if (kept && sameList(kept.from, from)) return kept.tasks
@@ -2104,6 +2106,10 @@ const HistoryList = memo(function HistoryList({
   thread,
   rows,
   complete,
+  atEnd,
+  start,
+  loadingEarlier,
+  onEarlier,
   running,
   entryProps,
   scroll,
@@ -2117,6 +2123,12 @@ const HistoryList = memo(function HistoryList({
   rows: Row[]
   /** Every page of the history has loaded. */
   complete: boolean
+  /** What's held reaches the history's end. */
+  atEnd: boolean
+  /** The index of the first entry held; those before it load as the person scrolls up to them (ADR 0117). */
+  start: number
+  loadingEarlier: boolean
+  onEarlier: () => void
   /** The last turn is still under way. */
   running: boolean
   entryProps: EntryProps
@@ -2169,37 +2181,95 @@ const HistoryList = memo(function HistoryList({
     toEnd()
   }, [rows.length, toEnd])
   useFollowAnchor(rows, complete, hash, anchor, scrollTo, scroll)
-  // A thread opens where it is now, its latest turn, unless a link names a place in it.
+  // A link to an entry before what's held reads earlier pages until it's in.
+  useEffect(() => {
+    if (anchor?.entry !== undefined && anchor.entry < start && !loadingEarlier) onEarlier()
+  }, [anchor, start, loadingEarlier, onEarlier])
+  useEarlierOnScroll(scroll, start, loadingEarlier, onEarlier)
+  useKeptInPlace(rows, virtual, scroll)
+  // A thread opens where it is now, its latest turn, unless a link names a place in it: as soon as its last page is in.
   const landed = useRef<string | null>(null)
   const linked = anchor !== undefined && (anchor.entry !== undefined || anchor.comment !== undefined)
   useEffect(() => {
-    if (landed.current === thread || !complete || rows.length === 0) return
+    if (landed.current === thread || !atEnd || rows.length === 0) return
     landed.current = thread
     // Linked, the page stays where the link put it until the person scrolls to its end.
     if (linked) follow.landed.current = true
     else toEnd()
-  }, [thread, complete, rows.length, linked, toEnd, follow])
+  }, [thread, atEnd, rows.length, linked, toEnd, follow])
   return (
-    <div ref={list} className="relative" style={{ height: virtual.getTotalSize() }} data-testid="history">
-      {virtual.getVirtualItems().map((item) => {
-        const row = rows[item.index]
-        const last = item.index === rows.length - 1
-        return (
-          <div
-            key={row.key}
-            data-index={item.index}
-            ref={virtual.measureElement}
-            // What a fork inherited, once shown, reads as the source's rather than its own.
-            className={cx('absolute left-0 w-full', row.kind !== 'origin' && originOf(row) === 'inherited' && 'opacity-60')}
-            style={{ transform: `translateY(${item.start - virtual.options.scrollMargin}px)` }}
-          >
-            <TranscriptRow row={row} running={running && last} last={last} onUnfold={onUnfold} {...entryProps} />
-          </div>
-        )
-      })}
-    </div>
+    <>
+      {start > 0 && (
+        <div className="flex flex-col gap-2 py-3" data-testid="earlier" aria-busy={loadingEarlier}>
+          {loadingEarlier ? (
+            <>
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="h-16" />
+            </>
+          ) : (
+            <Skeleton className="h-4 w-1/3 opacity-50" />
+          )}
+        </div>
+      )}
+      <div ref={list} className="relative" style={{ height: virtual.getTotalSize() }} data-testid="history">
+        {virtual.getVirtualItems().map((item) => {
+          const row = rows[item.index]
+          const last = item.index === rows.length - 1
+          return (
+            <div
+              key={row.key}
+              data-index={item.index}
+              ref={virtual.measureElement}
+              // What a fork inherited, once shown, reads as the source's rather than its own.
+              className={cx('absolute left-0 w-full', row.kind !== 'origin' && originOf(row) === 'inherited' && 'opacity-60')}
+              style={{ transform: `translateY(${item.start - virtual.options.scrollMargin}px)` }}
+            >
+              <TranscriptRow row={row} running={running && last} last={last} onUnfold={onUnfold} {...entryProps} />
+            </div>
+          )
+        })}
+      </div>
+    </>
   )
 })
+
+/** How far above what's shown an earlier page starts to load, so it's there by the time the person reaches it. */
+const EARLIER_AHEAD = 1200
+
+/** Reads the page before what's held as the person scrolls near the top of what's held. */
+function useEarlierOnScroll(scroll: RefObject<HTMLElement | null>, start: number, loading: boolean, onEarlier: () => void) {
+  useEffect(() => {
+    const element = scroll.current
+    if (!element || start === 0 || loading) return
+    const check = () => {
+      if (element.scrollTop < EARLIER_AHEAD) onEarlier()
+    }
+    // Before the page lands at its end it's at its top: only what doesn't fill it asks for more by itself.
+    if (element.scrollHeight <= element.clientHeight) onEarlier()
+    element.addEventListener('scroll', check, { passive: true })
+    return () => element.removeEventListener('scroll', check)
+  }, [scroll, start, loading, onEarlier])
+}
+
+/**
+ * Keeps the rows the person looks at where they are as earlier ones are put before them: the page moves down by as
+ * much as the row that was first moved. The list then keeps them in place itself as the new rows are measured.
+ */
+function useKeptInPlace(rows: Row[], virtual: { measurementsCache: { start: number }[] }, scroll: RefObject<HTMLElement | null>) {
+  const before = useRef<{ key: string; start: number } | null>(null)
+  useLayoutEffect(() => {
+    const was = before.current
+    const first = rows[0]
+    const element = scroll.current
+    if (was && first && first.key !== was.key && element) {
+      const moved = rows.findIndex((row) => row.key === was.key)
+      const now = moved > 0 ? virtual.measurementsCache[moved]?.start : undefined
+      if (now !== undefined) element.scrollBy(0, now - was.start)
+    }
+    const start = virtual.measurementsCache[0]?.start
+    before.current = first && start !== undefined ? { key: first.key, start } : null
+  }, [rows, virtual, scroll])
+}
 
 /** The composer, with the draft it keeps: typing draws it alone, and tells the others here what's typed. */
 function ThreadComposer({
@@ -2224,12 +2294,22 @@ function ThreadBody({
   id,
   entries,
   total,
+  start,
+  tasksBefore,
+  onEarlier,
+  loadingEarlier,
 }: {
   thread: string
   /** The id in the address, maybe short. */
   id: string
+  /** The entries held, from the `start`th on (ADR 0117). */
   entries: HistoryEntry[]
   total: number
+  start: number
+  /** The news of tasks from the entries before `start`. */
+  tasksBefore: HistoryEntry[]
+  onEarlier: () => void
+  loadingEarlier: boolean
 }) {
   const queries = useQueryClient()
   const turns = useQuery({ queryKey: keys.turns(id), queryFn: () => api.turns(id) })
@@ -2369,7 +2449,7 @@ function ThreadBody({
   // A link to an artifact opens it; one made while the person watches opens by itself on a desktop, unless another is open.
   const seenArtifacts = useRef<number | null>(null)
   useEffect(() => {
-    if (entries.length < total) return
+    if (start + entries.length < total) return
     const newest = groups[0] && groups[0].versions[groups[0].versions.length - 1].entry.index
     const before = seenArtifacts.current
     seenArtifacts.current = newest ?? -1
@@ -2381,7 +2461,7 @@ function ThreadBody({
     if (newest === undefined || newest <= before || !desktop) return
     if (opened && opened.id !== groups[0].id) return
     openArtifact(groups[0].id)
-  }, [entries.length, total, groups, hash, desktop, opened, openArtifact])
+  }, [start, entries.length, total, groups, hash, desktop, opened, openArtifact])
 
   // Looking at the thread marks it seen, again whenever something new happens in it.
   const unseen = summary !== undefined && (summary.mine.seen_ms === null || summary.last_ms > summary.mine.seen_ms)
@@ -2398,7 +2478,7 @@ function ThreadBody({
   const [unfolded, setUnfolded] = useState<string | null>(null)
   const turnList = turns.data ?? NO_TURNS
   const history = useMemo(() => rowsOf(entries, turnList), [entries, turnList])
-  const tasks = useStableTasks(entries)
+  const tasks = useStableTasks(entries, tasksBefore)
   const now = useNow()
   const lastSaid = entries.length > 0 ? entries[entries.length - 1].time_ms : 0
   const live = mayRun(
@@ -2690,7 +2770,11 @@ function ThreadBody({
                             <HistoryList
                               thread={thread}
                               rows={rows}
-                              complete={entries.length >= total}
+                              complete={start === 0 && entries.length >= total}
+                              atEnd={start + entries.length >= total}
+                              start={start}
+                              loadingEarlier={loadingEarlier}
+                              onEarlier={onEarlier}
                               running={turnRunning}
                               entryProps={entryProps}
                               scroll={scroll}
@@ -2796,5 +2880,16 @@ export function ThreadView({ id }: { id: string }) {
         <Skeleton className="h-40" />
       </div>
     )
-  return <ThreadBody thread={history.data.thread} id={id} entries={history.data.entries} total={history.data.total} />
+  return (
+    <ThreadBody
+      thread={history.data.thread}
+      id={id}
+      entries={history.data.entries}
+      total={history.data.total}
+      start={history.data.start}
+      tasksBefore={history.data.tasks}
+      onEarlier={history.earlier}
+      loadingEarlier={history.loadingEarlier}
+    />
+  )
 }

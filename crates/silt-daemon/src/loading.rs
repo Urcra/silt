@@ -33,6 +33,12 @@ impl Core {
                 self.waiting.1.push(event);
                 return None;
             }
+            // A page of a history kept as it is now needs no family loaded.
+            Event::Request(Request::HistoryRead { thread, cut: true, .. }, _)
+                if self.find_thread(thread).is_ok_and(|thread| self.history_kept_now(thread)) =>
+            {
+                return Some(event);
+            }
             Event::Request(request, _) => self.families_named(request),
             Event::Changed { checkout, .. } => self.checkouts.get(checkout).map(|held| held.family).into_iter().collect(),
             _ => return Some(event),

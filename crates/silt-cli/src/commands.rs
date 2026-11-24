@@ -1467,7 +1467,8 @@ pub fn open_in_browser(url: &str) -> bool {
 
 pub fn history(thread: &str, offset: usize, limit: usize) -> Result<(), Exn<CliError>> {
     ensure_daemon()?;
-    let page: HistoryPage = call(&Request::HistoryRead { thread: thread.into(), offset, limit, known: None, cut: false })?;
+    let page: HistoryPage =
+        call(&Request::HistoryRead { thread: thread.into(), offset, limit, known: None, cut: false, tail: None, before: None })?;
     print!("{}", render::safe(&render::history(&page)));
     Ok(())
 }
