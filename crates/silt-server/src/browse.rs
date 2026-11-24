@@ -443,6 +443,13 @@ struct Page {
     /// Entries as they were recorded, with images and long outputs whole.
     #[serde(default)]
     whole: bool,
+    /// The last entries, from the start of the turn they begin in, in place
+    /// of `offset` and `limit` (ADR 0117).
+    #[serde(default)]
+    tail: Option<usize>,
+    /// With `tail`, the last entries before this one.
+    #[serde(default)]
+    before: Option<usize>,
 }
 
 async fn history(
@@ -454,10 +461,17 @@ async fn history(
     let viewer = server.viewer(browser.user).await?;
     let readable = Readable::rows(&server, browser.user, &viewer).await?;
     let row = readable.row(&id)?;
-    let total_and_entries = |all: &[(DeltaId, HistoryEntry)], rewound: Option<&HashSet<DeltaId>>| {
+    let thread = row.id.to_string();
+    let paged = |all: &[(DeltaId, HistoryEntry)], rewound: Option<&HashSet<DeltaId>>| {
         let total = all.len();
-        let offset = page.offset.unwrap_or(0).min(total);
-        let limit = page.limit.unwrap_or(total);
+        let (offset, limit) = match page.tail {
+            Some(tail) => {
+                let end = page.before.unwrap_or(total).min(total);
+                let from = silt_proto::view::tail_from(|at| &all[at].1, end, tail);
+                (from, end - from)
+            }
+            None => (page.offset.unwrap_or(0).min(total), page.limit.unwrap_or(total)),
+        };
         let entries = (offset..)
             .zip(all.iter().skip(offset).take(limit))
             .map(|(index, (delta, entry))| {
@@ -465,19 +479,17 @@ async fn history(
                 HistoryEntry { index, rewound: rewound.map_or(entry.rewound, |rewound| rewound.contains(delta)), ..entry }
             })
             .collect();
-        (total, entries)
+        let tasks = silt_proto::view::task_news(all[..offset].iter().map(|(_, entry)| entry));
+        HistoryPage { thread: thread.clone(), total, entries, from: Some(offset), version: None, tasks }
     };
-    let from = Some(page.offset.unwrap_or(0));
     if let Some(entries) = lineage_entries(&server, &viewer, row).await {
-        let (total, entries) = total_and_entries(&entries, None);
-        return Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries, from, version: None }));
+        return Ok(Json(paged(&entries, None)));
     }
     let index = server.shared.index.lock().await;
     let Some(history) = index.history(row.id) else {
-        return Ok(Json(HistoryPage { thread: row.id.to_string(), total: 0, entries: Vec::new(), from, version: None }));
+        return Ok(Json(paged(&[], None)));
     };
-    let (total, entries) = total_and_entries(&history.entries, Some(&history.rewound));
-    Ok(Json(HistoryPage { thread: row.id.to_string(), total, entries, from, version: None }))
+    Ok(Json(paged(&history.entries, Some(&history.rewound))))
 }
 
 /// A fork's or a thread that pulled's whole history, worked out from what

@@ -14,69 +14,70 @@ pub type ReadCovered = Box<dyn FnOnce() -> Vec<Delta> + Send>;
 pub(super) struct Log {
     /// The whole log, once it is known.
     whole: OnceLock<Vec<Delta>>,
-    /// Until then: how to read the deltas a snapshot covers, and those
-    /// applied after them.
-    unread: Mutex<Option<Unread>>,
+    /// Until then: how to read the deltas a snapshot covers.
+    unread: Mutex<Option<ReadCovered>>,
+    /// How many deltas `unread` reads.
+    covered: usize,
+    /// Those applied after them, until the log is read whole: what a reader
+    /// of what's new reads without reading the rest (ADR 0117).
+    after: Vec<Delta>,
     /// Whether something read the whole log since [`Log::idle`] last asked.
     read: AtomicBool,
-}
-
-struct Unread {
-    covered: usize,
-    read: ReadCovered,
-    after: Vec<Delta>,
 }
 
 impl Log {
     /// A log whose first `covered` deltas are read only when something
     /// reads the log.
     pub(super) fn unread(covered: usize, read: ReadCovered) -> Self {
-        Self {
-            whole: OnceLock::new(),
-            unread: Mutex::new(Some(Unread { covered, read, after: Vec::new() })),
-            read: AtomicBool::new(false),
-        }
+        Self { whole: OnceLock::new(), unread: Mutex::new(Some(read)), covered, after: Vec::new(), read: AtomicBool::new(false) }
     }
 
     pub(super) fn all(&self) -> &[Delta] {
         self.read.store(true, Ordering::Relaxed);
         self.whole.get_or_init(|| {
-            let Unread { covered, read, after } =
-                self.unread.lock().unwrap_or_else(PoisonError::into_inner).take().expect("unread until the log is known");
+            let read = self.unread.lock().unwrap_or_else(PoisonError::into_inner).take().expect("unread until the log is known");
             let mut deltas = read();
-            assert_eq!(deltas.len(), covered, "the deltas a snapshot covers read back as many as it covers");
-            deltas.extend(after);
+            assert_eq!(deltas.len(), self.covered, "the deltas a snapshot covers read back as many as it covers");
+            deltas.extend(self.after.iter().cloned());
             deltas
         })
     }
 
     pub(super) fn len(&self) -> usize {
-        if let Some(whole) = self.whole.get() {
-            return whole.len();
+        self.whole.get().map_or(self.covered + self.after.len(), Vec::len)
+    }
+
+    /// The deltas from `from` on, if they're known without reading the log
+    /// whole.
+    pub(super) fn since(&self, from: usize) -> Option<&[Delta]> {
+        match self.whole.get() {
+            Some(whole) => whole.get(from..),
+            None => self.after.get(from.checked_sub(self.covered)?..),
         }
-        let unread = self.unread.lock().unwrap_or_else(PoisonError::into_inner);
-        match unread.as_ref() {
-            Some(unread) => unread.covered + unread.after.len(),
-            // Being read on another thread.
-            None => {
-                drop(unread);
-                self.all().len()
-            }
+    }
+
+    /// The deltas known without reading the log whole, and the position of
+    /// the first of them.
+    pub(super) fn recent(&self) -> (usize, &[Delta]) {
+        match self.whole.get() {
+            Some(whole) => (0, whole),
+            None => (self.covered, &self.after),
         }
     }
 
     pub(super) fn push(&mut self, delta: Delta) {
         match self.whole.get_mut() {
-            Some(whole) => whole.push(delta),
-            None => {
-                let unread = self.unread.get_mut().unwrap_or_else(PoisonError::into_inner);
-                unread.as_mut().expect("unread until the log is known").after.push(delta);
+            Some(whole) => {
+                whole.push(delta);
+                // Copied into the whole log when it was read.
+                if !self.after.is_empty() {
+                    self.after = Vec::new();
+                }
             }
+            None => self.after.push(delta),
         }
     }
-}
 
-impl Log {
     pub(super) fn is_read(&self) -> bool {
         self.whole.get().is_some()
     }
@@ -98,7 +99,13 @@ impl Log {
 impl From<Vec<Delta>> for Log {
     fn from(deltas: Vec<Delta>) -> Self {
         // Just made, as good as just read.
-        Self { whole: OnceLock::from(deltas), unread: Mutex::new(None), read: AtomicBool::new(true) }
+        Self {
+            whole: OnceLock::from(deltas),
+            unread: Mutex::new(None),
+            covered: 0,
+            after: Vec::new(),
+            read: AtomicBool::new(true),
+        }
     }
 }
 
@@ -169,5 +176,21 @@ mod tests {
         assert!(!log.idle(), "let go of, so not read whole");
         assert_eq!(log.len(), 2);
         assert_eq!(log.all(), deltas);
+    }
+
+    #[test]
+    fn what_came_after_the_covered_deltas_is_known_without_reading_them() {
+        let family = Family::new();
+        let (covered, after) = (titled(&family, "covered"), titled(&family, "after"));
+        let read_back = covered.clone();
+        let mut log = Log::unread(1, Box::new(move || vec![read_back]));
+        log.push(after.clone());
+        assert_eq!(log.since(1), Some(std::slice::from_ref(&after)));
+        assert_eq!(log.since(2), Some(&[][..]));
+        assert_eq!(log.since(0), None, "the covered delta isn't known yet");
+        assert_eq!(log.recent(), (1, std::slice::from_ref(&after)));
+        assert!(!log.is_read());
+        assert_eq!(log.all(), [covered.clone(), after.clone()]);
+        assert_eq!(log.since(0), Some(&[covered, after][..]), "read whole, all of it is");
     }
 }

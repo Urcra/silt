@@ -213,7 +213,7 @@ impl Core {
             .into_iter()
             .find(|request| request.id == delta.span.first())
             .expect("just opened");
-        Ok(mr_summary(&self.families[&family_id], &request))
+        Ok(self.request_summary(family_id, &request))
     }
 
     /// Merge requests involving `selector`'s thread, or all of them.
@@ -235,17 +235,25 @@ impl Core {
         if let Some(digest) = self.digested(family_id) {
             return digest.requests.clone();
         }
-        let Some(family) = self.viewed(family_id) else {
+        if !self.families.contains_key(&family_id) {
             return Vec::new();
-        };
-        family
-            .merge_requests()
-            .into_iter()
-            .map(|request| {
-                let summary = mr_summary(family, &request);
-                (request, summary)
-            })
-            .collect()
+        }
+        self.folded(family_id, |folded| {
+            silt_log::merge_requests_in(&folded.requests)
+                .into_iter()
+                .map(|request| {
+                    let moved = folded.threads.get(&request.fork).and_then(|fork| fork.moved_ms);
+                    let summary = mr_summary(&request, moved);
+                    (request, summary)
+                })
+                .collect()
+        })
+    }
+
+    /// `request`, of the family, as listed.
+    fn request_summary(&self, family_id: FamilyId, request: &MergeRequest) -> MrSummary {
+        let moved = self.folded(family_id, |folded| folded.threads.get(&request.fork).and_then(|fork| fork.moved_ms));
+        mr_summary(request, moved)
     }
 
     pub(crate) fn find_mr(&self, selector: &str) -> Result<(FamilyId, MergeRequest), CoreError> {
@@ -293,7 +301,7 @@ impl Core {
                 .collect(),
         );
         Ok(MrDetails {
-            mr: mr_summary(family, &request),
+            mr: self.request_summary(family_id, &request),
             diff: crate::views::render_diff(&shown),
             conflicts,
             conversation,
@@ -384,9 +392,8 @@ impl Core {
     }
 
     fn summary_of(&self, family_id: FamilyId, mr: silt_types::DeltaId) -> MrSummary {
-        let family = &self.families[&family_id];
-        let request = family.merge_requests().into_iter().find(|found| found.id == mr).expect("still there");
-        mr_summary(family, &request)
+        let request = self.requests_in(family_id).into_iter().find(|(found, _)| found.id == mr).expect("still there");
+        request.1
     }
 
     /// An open merge request whose target this device may write to.
@@ -597,10 +604,10 @@ pub(crate) fn changes_requested_notice(title: &str, reason: &str) -> String {
     )
 }
 
-fn mr_summary(family: &Family, request: &MergeRequest) -> MrSummary {
+/// `request` as listed, its fork having last moved at `fork_moved_ms`.
+fn mr_summary(request: &MergeRequest, fork_moved_ms: Option<i64>) -> MrSummary {
     let open = request.status == MrStatus::Open;
     let asked = request.changes_requested.as_ref().filter(|_| open);
-    let fork_moved_ms = family.log().iter().filter(|delta| delta.thread == request.fork).map(|delta| delta.time_ms).max();
     MrSummary {
         id: short_mr(request.id),
         fork: request.fork.to_string(),

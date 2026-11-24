@@ -516,6 +516,8 @@ machine. Pass `design_system` to choose one, or `none` to keep the page's own st
                     limit: number_arg(arguments, "limit").unwrap_or(DEFAULT_LIMIT),
                     known: None,
                     cut: false,
+                    tail: None,
+                    before: None,
                 })?;
                 Ok(render_page(&page))
             }

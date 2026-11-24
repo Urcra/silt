@@ -115,7 +115,7 @@ function modePreset(mode: string): Preset | undefined {
   const key = mode.split('#').pop() ?? mode
   if (key === 'plan') return 'plan'
   if (key === 'default' || key === 'read-only') return 'ask_for_everything'
-  if (key === 'acceptEdits') return 'ask_before_commands'
+  if (key === 'acceptEdits' || key === 'accept-edits') return 'ask_before_commands'
   if (key === 'auto') return 'auto'
   if (['bypassPermissions', 'dontAsk', 'full-access', 'autopilot'].includes(key)) return 'full_access'
   return undefined
