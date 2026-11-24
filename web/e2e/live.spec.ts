@@ -1049,26 +1049,37 @@ test('a thread started in the background from a branch plans its first prompt an
   await expect(chip(page, 'permissions')).toHaveAttribute('data-value', 'plan')
 })
 
-test("the agent's modes and model are offered, and the Plan preset plans in its plan mode", async ({ page }) => {
+test("the agent's own modes are in the permissions menu, and the Plan preset plans in its plan mode", async ({ page }) => {
   // Wide enough for the agent's chips to stand in the row beside the right panel, rather than fold into one.
   await page.setViewportSize({ width: 1600, height: 900 })
   await startInNewThread(page, 'Fake agent')
-  const mode = page.getByLabel('mode', { exact: true })
-  await expect(mode).toHaveValue('code')
+  // Its default, Code, and its plan mode, which the Plan preset is, have no chip of their own (ADR 0115).
+  await expect(page.getByLabel('mode', { exact: true })).toHaveCount(0)
   await pickModel(page, 'Smart')
   await expect(page.getByRole('button', { name: /^model and effort: Smart/ })).toBeVisible()
+
+  const permissions = chip(page, 'permissions')
+  await permissions.click()
+  const own = page.getByRole('menu', { name: 'permissions', exact: true }).getByRole('menuitemradio', { name: /^Review/ })
+  await expect(page.getByText("Fake agent's own")).toBeVisible()
+  await expect(own).toContainText('Reviews without editing · Silt asks you about every request')
+  await own.click()
+  await expect(permissions).toHaveText('Review')
+  await expect(permissions).toHaveAttribute('data-value', 'mode:review')
+  await pick(page, 'permissions', 'ask_before_commands')
+  await expect(permissions).toHaveText('Edits')
 
   await page.getByLabel('draft').fill('add a parser')
   await pick(page, 'permissions', 'plan')
   await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Plan: add a parser')).toBeVisible()
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent wrote a plan for you to approve')
-  await expect(mode).toHaveValue('plan')
+  await expect(permissions).toHaveAttribute('data-value', 'plan')
   await expect(page.getByRole('region', { name: 'needs you' })).toBeVisible()
 
   await page.getByRole('group', { name: 'plan' }).getByRole('button', { name: 'Approve plan' }).click()
   await expect(page.getByText('Done: The plan is approved. Go ahead.')).toBeVisible()
-  await expect(mode).toHaveValue('code')
+  await expect(permissions).not.toHaveAttribute('data-value', 'plan')
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
 })
 

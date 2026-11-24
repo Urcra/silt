@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
-import { nextPreset, presetUnavailable, startSettings, startingValue } from '../agentState'
+import { nextPermission, ownModes, presetForOwnMode, presetUnavailable, startSettings, startingValue } from '../agentState'
 import { type AgentSetting, api, type Preset } from '../api'
-import { agentRefused, presetRefused, within } from '../rules'
+import { agentRefused, modeRefused, presetRefused, within } from '../rules'
 import { useWorkspace } from '../workspace'
 import { ATTACH, useAttachments } from '../attachments'
 import { NEW_CHAT_DRAFT, useDraft } from '../drafts'
@@ -33,7 +33,17 @@ export function NewChat() {
   const chatSettings = useQuery({ queryKey: keys.chatSettings, queryFn: api.chatSettings })
   const [chosenAgent, setAgent] = useState<string>()
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
-  const [chosenPreset, setPreset] = useState<Preset>()
+  const [chosenPreset, setChosenPreset] = useState<Preset>()
+  // One of the agent's own modes to start it in, such as Copilot's Autopilot, from the permissions menu (ADR 0115).
+  const [chosenMode, setChosenMode] = useState<string>()
+  const setPreset = (preset: Preset) => {
+    setChosenPreset(preset)
+    setChosenMode(undefined)
+  }
+  const chooseMode = (mode: string) => {
+    setChosenPreset(presetForOwnMode(mode))
+    setChosenMode(mode)
+  }
   const [prompt, setPrompt] = useDraft(NEW_CHAT_DRAFT)
   const [error, setError] = useState<string>()
   const [starting, setStarting] = useState(false)
@@ -55,6 +65,9 @@ export function NewChat() {
   // The preset is the one control for every agent; the agent starts in the mode that does what it says (ADR 0114).
   const refusedPreset = (id: Preset) => presetRefused(workspace, id) ?? presetUnavailable(id, modes, agentName)
   const preset: Preset = refusedPreset(capped) && capped === 'auto' ? 'ask_before_commands' : capped
+  const own = ownModes(seen?.modes)
+  const inOwn = own.find((mode) => mode.id === chosenMode)?.id
+  const refusedOwn = (mode: string) => modeRefused(workspace, agent, mode)
   const settings = startSettings(seen?.settings ?? [], modes)
   const settingValue = (setting: AgentSetting) =>
     startingValue(setting, chosenSettings[setting.id], workspace?.workspace.defaults.agents?.[agent]?.settings?.[setting.id])
@@ -78,7 +91,7 @@ export function NewChat() {
         {
           chat: true,
           workspace: workspaceId ?? null,
-          mode: null,
+          mode: inOwn ?? null,
           settings: settings.map((setting) => [setting.id, settingValue(setting)]),
           preset,
           prompt: prompt.trim() ? prompt : null,
@@ -131,8 +144,9 @@ export function NewChat() {
             onChange={setPrompt}
             onSend={send}
             onCycle={() => {
-              const next = nextPreset(preset, refusedPreset)
-              if (next) setPreset(next)
+              const next = nextPermission(preset, inOwn, own, refusedPreset, refusedOwn)
+              if (next?.mode !== undefined) chooseMode(next.mode)
+              else if (next) setPreset(next.preset)
             }}
             placeholder="Ask anything: which part to buy, how something works, a quick script. It works in a folder of its own."
             onFiles={attach}
@@ -140,7 +154,6 @@ export function NewChat() {
             below={<AttachedFiles files={attached} onRemove={remove} />}
             tools={
               <>
-                <PermissionChip value={preset} onChange={setPreset} refused={refusedPreset} />
                 {agents.length > 0 ? (
                   <AgentChip
                     value={agent}
@@ -148,6 +161,10 @@ export function NewChat() {
                     onChange={(chosen) => {
                       setAgent(chosen)
                       setChosenSettings({})
+                      if (chosenMode !== undefined) {
+                        setChosenMode(undefined)
+                        setChosenPreset(undefined)
+                      }
                     }}
                     refused={(id) => agentRefused(workspace, id)}
                   />
@@ -156,6 +173,16 @@ export function NewChat() {
                 ) : (
                   <span className="px-2 text-xs text-fg-2">No agent found</span>
                 )}
+                <PermissionChip
+                  value={preset}
+                  onChange={setPreset}
+                  refused={refusedPreset}
+                  own={
+                    own.length > 0
+                      ? { agent, name: agentName, modes: own, mode: inOwn, onMode: chooseMode, refused: refusedOwn }
+                      : undefined
+                  }
+                />
                 <AgentSettings
                   settings={settings}
                   value={settingValue}

@@ -1,12 +1,17 @@
-import type { Preset } from '../api'
-import { PRESETS } from '../agentState'
-import { Icon } from '../ui'
+import type { AgentChoiceItem, Preset } from '../api'
+import { PRESETS, ownModeSays } from '../agentState'
 import { AgentMark } from './AgentMark'
 import { ChipMenu } from './ChipMenu'
 
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
 
-/** The thread's permissions, the same five for every agent, first in the composer's row (ADR 0114). */
+/** Where the permissions menu lists the agent's own modes, its ids are kept apart from the presets'. */
+const MODE = 'mode:'
+
+/**
+ * The thread's permissions, the same five for every agent (ADR 0114), then the agent's own modes, such as Copilot's
+ * Autopilot, under its name (ADR 0115). The chip shows the label alone, after the agent's mark in the row.
+ */
 export function PermissionChip({
   value,
   onChange,
@@ -14,6 +19,7 @@ export function PermissionChip({
   presets = PRESETS,
   ghost = true,
   label = 'permissions',
+  own,
 }: {
   value: Preset
   onChange: (preset: Preset) => void
@@ -22,28 +28,52 @@ export function PermissionChip({
   presets?: typeof PRESETS
   ghost?: boolean
   label?: string
+  /** The agent's own modes, from `ownModes`, and the one it's in, if any. */
+  own?: {
+    agent: string
+    name: string
+    modes: AgentChoiceItem[]
+    mode?: string
+    onMode: (mode: string) => void
+    /** Why the workspace refuses a mode. */
+    refused?: (mode: string) => string | undefined
+  }
 }) {
   const chosen = PRESETS.find((preset) => preset.id === value)
+  const inMode = own?.modes.find((mode) => mode.id === own.mode)
+  const group = own && {
+    key: own.agent,
+    heading: (
+      <>
+        <AgentMark agent={own.agent} name={own.name} className="h-3 w-3" />
+        {own.name}&apos;s own
+      </>
+    ),
+  }
   return (
     <ChipMenu
       label={label}
-      value={value}
+      value={inMode ? MODE + inMode.id : value}
       ghost={ghost}
       heading="Permissions"
-      title={chosen ? `${chosen.label}: ${chosen.says}` : undefined}
-      trigger={
-        <>
-          <Icon name="lock" className="h-3.5 w-3.5 text-fg-3" />
-          {chosen?.short ?? value}
-        </>
-      }
-      options={presets.map((preset) => ({
-        id: preset.id,
-        name: preset.label,
-        description: sentence(preset.says),
-        refused: refused?.(preset.id),
-      }))}
-      onChange={(id) => onChange(id as Preset)}
+      title={inMode ? `${inMode.name}: ${ownModeSays(inMode)}` : chosen ? `${chosen.label}: ${chosen.says}` : undefined}
+      trigger={inMode?.name ?? chosen?.short ?? value}
+      options={[
+        ...presets.map((preset) => ({
+          id: preset.id,
+          name: preset.label,
+          description: sentence(preset.says),
+          refused: refused?.(preset.id),
+        })),
+        ...(own?.modes.map((mode) => ({
+          id: MODE + mode.id,
+          name: mode.name,
+          description: sentence(ownModeSays(mode)),
+          refused: own.refused?.(mode.id),
+          group,
+        })) ?? []),
+      ]}
+      onChange={(id) => (id.startsWith(MODE) ? own?.onMode(id.slice(MODE.length)) : onChange(id as Preset))}
       footer={ghost ? 'Shift+Tab steps through them' : undefined}
     />
   )
