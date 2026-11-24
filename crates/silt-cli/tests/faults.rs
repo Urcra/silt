@@ -377,6 +377,8 @@ fn a_replaced_daemon_restarts_once_no_agent_works_in_it() {
         Some(serde_json::json!({"id": permission, "option": "allow"})),
     );
     assert!(eventually(|| daemon_pid(laptop) != before), "a new daemon runs once the turn ended");
+    // Its process is there before it answers, which a busy machine shows.
+    assert!(eventually(|| laptop.stdout(&["daemon", "status"]).trim().starts_with("running")), "and answers");
     let again = silt_from(laptop, &installed, &["daemon", "restart", "--if-replaced"]);
     assert_eq!(String::from_utf8_lossy(&again.stdout).trim(), "the daemon runs the build installed");
     assert!(laptop.stdout(&["show", &thread]).contains("Done: add acp"), "the turn was recorded");

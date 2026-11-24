@@ -593,7 +593,7 @@ impl Core {
             rules.check_preset(preset).map_err(refused)?;
         }
         if let Some(mode) = mode {
-            rules.check_mode(mode, crate::acp::mode_meaning(&agent.id, mode, false)).map_err(refused)?;
+            rules.check_mode(mode, crate::acp::mode_meaning(&agent.id, mode, false, false)).map_err(refused)?;
         }
         Ok((preset, ours.then(|| silt_workspace::Reach::of(&policy))))
     }
