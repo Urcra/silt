@@ -399,6 +399,36 @@ pub enum Request {
         to: String,
         text: String,
     },
+    /// The agents `thread`'s agent may ask to do part of its work
+    /// (ADR 0117).
+    Askable {
+        thread: String,
+    },
+    /// `thread`'s agent asks another agent; answered with the ask once it
+    /// ends or the wait runs out.
+    Ask {
+        thread: String,
+        ask: AskInput,
+    },
+    /// Waits again on one of `thread`'s asks.
+    AskWait {
+        thread: String,
+        ask: String,
+    },
+    /// Stops an ask: `thread`'s agent stopping its own, or the person when
+    /// unset.
+    AskStop {
+        thread: Option<String>,
+        ask: String,
+    },
+    /// Takes the changes an ask made in its own checkout into the thread
+    /// that asked: its agent, or the person when unset.
+    AskTake {
+        thread: Option<String>,
+        ask: String,
+    },
+    /// Every ask on this machine, for the web UI.
+    Asks,
     /// Who wrote each line of `path`, as seen from `cwd` (ADR 0042).
     Blame {
         cwd: PathBuf,
@@ -2204,6 +2234,111 @@ pub struct StartOptions {
     pub workspace: Option<String>,
 }
 
+/// What an asked agent is to do (ADR 0117).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum AskMode {
+    /// Report, changing no files.
+    #[default]
+    Review,
+    /// It may edit.
+    Work,
+}
+
+/// Where an asked agent works.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum AskCheckout {
+    /// In its caller's working tree, beside it.
+    #[default]
+    Here,
+    /// In a checkout of its own, forked with its caller's uncommitted edits.
+    Own,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum AskState {
+    Running,
+    Done,
+    Failed,
+    Stopped,
+}
+
+/// An ask as the asking agent puts it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskInput {
+    /// The agent to ask, by id or name.
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// An earlier ask to follow up, in place of `agent`.
+    #[serde(default)]
+    pub to: Option<String>,
+    pub prompt: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub mode: AskMode,
+    #[serde(default)]
+    pub checkout: AskCheckout,
+    #[serde(default = "waits")]
+    pub wait: bool,
+}
+
+fn waits() -> bool {
+    true
+}
+
+/// One agent asking another, as this machine keeps it (ADR 0117).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct AskView {
+    pub id: String,
+    /// The thread that asked, and its agent's name and id.
+    pub caller: String,
+    pub caller_agent: String,
+    #[serde(default)]
+    pub caller_agent_id: String,
+    /// The thread the asked agent works in.
+    pub asked: String,
+    pub agent: String,
+    pub agent_name: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub mode: AskMode,
+    pub checkout: AskCheckout,
+    pub title: String,
+    pub prompt: String,
+    pub state: AskState,
+    /// Its last message, once it ended.
+    pub report: Option<String>,
+    /// Why it failed or was stopped.
+    pub why: Option<String>,
+    pub started_ms: i64,
+    pub ended_ms: Option<i64>,
+    /// Its own checkout's changes were taken into the caller.
+    #[serde(default)]
+    pub taken: bool,
+}
+
+/// An agent another may ask, with what it offers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Askable {
+    pub id: String,
+    pub name: String,
+    pub models: Vec<AgentChoiceItem>,
+    pub model: Option<String>,
+    pub efforts: Vec<AgentChoiceItem>,
+    pub effort: Option<String>,
+}
+
 /// The workspaces on this machine (ADR 0065).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -2460,6 +2595,8 @@ pub enum BusEvent {
     Mrs,
     /// What an agent offers, its modes and settings, is newly known.
     Agents,
+    /// An agent asked another, or an ask moved on (ADR 0117).
+    Asks,
     /// An import from the web UI has gone through `done` of its `total`
     /// sessions.
     Importing { done: usize, total: usize },
@@ -2517,7 +2654,7 @@ impl BusEvent {
             Self::Sample { ask, .. } | Self::SampleTool { ask, .. } => Some(format!("sample:{ask}")),
             Self::Room { .. } => Some("rooms".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
-            Self::Agents | Self::Approvals | Self::Appearance | Self::Lan | Self::Lagged => None,
+            Self::Agents | Self::Asks | Self::Approvals | Self::Appearance | Self::Lan | Self::Lagged => None,
         }
     }
 }
@@ -2582,6 +2719,10 @@ mod tests {
             silt_proto::Visibility::decl(&config),
             silt_proto::GitNotes::decl(&config),
             AgentChoice::decl(&config),
+            AskView::decl(&config),
+            AskMode::decl(&config),
+            AskCheckout::decl(&config),
+            AskState::decl(&config),
             AgentChoiceItem::decl(&config),
             AgentChoices::decl(&config),
             AgentModes::decl(&config),
@@ -2767,6 +2908,7 @@ mod tests {
             silt_workspace::Workspace::decl(&config),
             silt_workspace::FolderRule::decl(&config),
             silt_workspace::PluginPolicy::decl(&config),
+            silt_workspace::AskPolicy::decl(&config),
             silt_workspace::OrgPlugin::decl(&config),
             silt_workspace::OrgPluginRule::decl(&config),
             silt_workspace::FolderAnswer::decl(&config),

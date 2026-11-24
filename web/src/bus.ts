@@ -202,6 +202,9 @@ export function useBusInvalidation() {
       case 'agents':
         refetch(keys.agents)
         break
+      case 'asks':
+        refetch(keys.asks)
+        break
       case 'approvals':
         refetch(['approvals'])
         break

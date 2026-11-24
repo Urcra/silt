@@ -13,6 +13,7 @@ import {
   type WorkspaceView,
   type Workspaces as WorkspacesFile,
 } from '../api'
+import type { AskPolicy } from '../api.generated'
 import { keys, message } from '../query'
 import { PRESET_LABELS, rulesLine, serverLine, within } from '../rules'
 import { serverName } from '../served'
@@ -408,6 +409,13 @@ export function WorkspacesSettings() {
                 theirs={org?.policy.max_preset ? <CapText cap={org.policy.max_preset} /> : '—'}
                 effect={<CapText cap={effective.max_preset} />}
               />
+              <AskRules
+                mine={workspace.policy.asks ?? {}}
+                theirs={org?.policy.asks}
+                effect={effective.asks ?? {}}
+                onChange={(asks) => changePolicy({ asks })}
+                orgName={org?.org}
+              />
               <Rule
                 name="Agent's own sandbox"
                 mine={
@@ -640,6 +648,137 @@ function PresetSelect({
     </Select>
   )
 }
+
+/** Agents asking other agents (ADR 0117): whether they may, whom, how far an asked agent goes, how many at once, and how deep. */
+function AskRules({
+  mine,
+  theirs,
+  effect,
+  onChange,
+  orgName,
+}: {
+  mine: AskPolicy
+  theirs: AskPolicy | undefined
+  effect: AskPolicy
+  onChange: (asks: AskPolicy) => void
+  orgName: string | undefined
+}) {
+  const set = (next: Partial<AskPolicy>) => onChange({ ...mine, ...next })
+  const allowed = mine.allowed !== false
+  const said = (on: boolean | null | undefined, yes: string, no: string) =>
+    on === undefined || on === null ? '—' : on ? yes : no
+  return (
+    <>
+      <Rule
+        name="Agents asking other agents"
+        mine={
+          <span
+            role="radiogroup"
+            aria-label="agents asking other agents"
+            className="inline-flex self-start overflow-hidden rounded-sm border border-line text-xs"
+          >
+            {[
+              { id: 'never', label: 'Never', on: !allowed, pick: () => set({ allowed: false }) },
+              { id: 'allowed', label: 'Allowed', on: allowed, pick: () => set({ allowed: null }) },
+            ].map((choice, index) => (
+              <button
+                key={choice.id}
+                type="button"
+                role="radio"
+                aria-checked={choice.on}
+                onClick={choice.pick}
+                className={cx(
+                  'px-2.5 py-1 max-md:min-h-11',
+                  index > 0 && 'border-l border-line',
+                  choice.on ? 'bg-accent-tint text-accent-fg' : 'text-fg-2 hover:bg-surface-2',
+                )}
+              >
+                {choice.label}
+              </button>
+            ))}
+          </span>
+        }
+        theirs={said(theirs?.allowed === false ? false : undefined, 'Allowed', 'Never')}
+        effect={effect.allowed === false ? 'Never' : 'Allowed, as a command'}
+      />
+      <Rule
+        name="Agents they may ask"
+        mine={
+          <AgentsInput
+            value={mine.agents ?? null}
+            onChange={(agents) => set({ agents })}
+            refused={(key) =>
+              theirs?.agents && !theirs.agents.includes(key) ? `${orgName ?? 'The org'} doesn't allow it` : undefined
+            }
+          />
+        }
+        theirs={theirs?.agents ? <AgentMarks agents={theirs.agents} /> : '—'}
+        effect={
+          effect.allowed === false ? '—' : effect.agents ? <AgentMarks agents={effect.agents} /> : 'Any the workspace allows'
+        }
+      />
+      <Rule
+        name="Most an asked agent may do"
+        mine={
+          <PresetSteps
+            label="most an asked agent may do"
+            value={mine.max_preset ?? null}
+            onChange={(max_preset) => set({ max_preset })}
+            refused={(preset) =>
+              theirs?.max_preset && !within(preset, theirs.max_preset)
+                ? `${orgName ?? 'The org'} caps it at ${PRESET_LABELS[theirs.max_preset]}`
+                : undefined
+            }
+          />
+        }
+        theirs={theirs?.max_preset ? <CapText cap={theirs.max_preset} /> : '—'}
+        effect={
+          effect.max_preset ? (
+            <span>
+              <CapText cap={effect.max_preset} />, and never more than its caller
+            </span>
+          ) : (
+            'What its caller may'
+          )
+        }
+      />
+      <Rule
+        name="Asks at once, per thread"
+        mine={
+          <input
+            type="number"
+            min={1}
+            max={8}
+            aria-label="asks at once, per thread"
+            value={mine.at_once ?? ASKS_AT_ONCE}
+            onChange={(event) => {
+              const at = Number(event.target.value)
+              if (Number.isInteger(at) && at >= 1 && at <= 8) set({ at_once: at === ASKS_AT_ONCE ? null : at })
+            }}
+            className="h-7 w-14 rounded-sm border border-line bg-bg px-2 font-mono text-xs max-md:min-h-11"
+          />
+        }
+        theirs={theirs?.at_once ?? '—'}
+        effect={effect.at_once ?? ASKS_AT_ONCE}
+      />
+      <Rule
+        name="Asked agents may ask further"
+        mine={
+          <Toggle
+            label="asked agents may ask further"
+            on={mine.further === true}
+            onChange={(further) => set({ further: further ? true : null })}
+          />
+        }
+        theirs={said(theirs?.further, 'Yes', 'No')}
+        effect={effect.further === true ? 'Yes' : 'No: one level'}
+      />
+    </>
+  )
+}
+
+/** Asks a thread may have running at once when no rule says, as `silt_workspace::ASKS_AT_ONCE`. */
+const ASKS_AT_ONCE = 2
 
 function Toggle({
   label,

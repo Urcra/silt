@@ -38,6 +38,7 @@ export const keys = {
   settledTurnDiff: (id: string, options: DiffSpec) => ['settled-turn', id, 'diff', options] as const,
   threadSeen: (id: string, spec: DiffSpec) => ['thread', id, 'seen', spec] as const,
   mrs: ['mrs'] as const,
+  asks: ['asks'] as const,
   approvals: (thread: string) => ['approvals', thread] as const,
   allApprovals: ['approvals'] as const,
   access: (thread: string) => ['approvals', 'access', thread] as const,

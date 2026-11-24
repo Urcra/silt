@@ -10,8 +10,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use silt_agents::conventions::{self, Skill};
 use silt_daemon::protocol::{
-    ArtifactGuide, ArtifactPut, ArtifactRead, DesignSource, FileTouch, HistoryHit, HistoryPage, InFlight, NewArtifact, Request,
-    Response, SearchResult, TaskView,
+    ArtifactGuide, ArtifactPut, ArtifactRead, AskCheckout, AskInput, AskState, AskView, Askable, DesignSource, FileTouch,
+    HistoryHit, HistoryPage, InFlight, NewArtifact, Request, Response, SearchResult, TaskView,
 };
 use silt_daemon::{client, paths};
 
@@ -24,6 +24,8 @@ const DESIGN_SYSTEM_SKILL: &str = "design-system";
 /// Longest text of one history entry an agent reads.
 const ENTRY_CHARS: usize = 4000;
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// An ask starts its agent, then waits up to 50 s for its report (ADR 0117).
+const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
 /// A plugin's call may run its command for two minutes, or wait on the person.
 const PLUGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
@@ -81,9 +83,13 @@ fn number_arg(arguments: &Value, name: &str) -> Option<usize> {
 
 impl DaemonTools {
     fn ask<T: DeserializeOwned>(&self, request: Request) -> Result<T, String> {
+        self.ask_within(request, REQUEST_TIMEOUT)
+    }
+
+    fn ask_within<T: DeserializeOwned>(&self, request: Request, timeout: std::time::Duration) -> Result<T, String> {
         match &self.token {
-            Some(token) => ask_daemon(&Request::Scoped { token: token.clone(), asking: Box::new(request) }),
-            None => ask_daemon(&request),
+            Some(token) => ask_daemon_within(&Request::Scoped { token: token.clone(), asking: Box::new(request) }, timeout),
+            None => ask_daemon_within(&request, timeout),
         }
     }
 
@@ -581,6 +587,31 @@ machine. Pass `design_system` to choose one, or `none` to keep the page's own st
                 let request = || Request::Message { from: self.thread.clone(), to: to.clone(), text: text.clone() };
                 self.peers(request, |data_dir| block_on(silt_daemon::peers::send(data_dir, &self.thread, &to, &text)))
             }
+            "silt_askable" => {
+                let agents: Vec<Askable> = self.ask_within(Request::Askable { thread: self.thread.clone() }, REQUEST_TIMEOUT)?;
+                Ok(askable_text(&agents))
+            }
+            "silt_ask" => {
+                let ask: AskInput = serde_json::from_value(arguments.clone())
+                    .map_err(|error| format!("the ask's arguments don't read: {error}"))?;
+                let view: AskView = self.ask_within(Request::Ask { thread: self.thread.clone(), ask }, ASK_TIMEOUT)?;
+                ask_text(&view)
+            }
+            "silt_ask_wait" => {
+                let ask = text_arg(arguments, "ask")?;
+                let view: AskView = self.ask_within(Request::AskWait { thread: self.thread.clone(), ask }, ASK_TIMEOUT)?;
+                ask_text(&view)
+            }
+            "silt_ask_stop" => {
+                let ask = text_arg(arguments, "ask")?;
+                let view: AskView =
+                    self.ask_within(Request::AskStop { thread: Some(self.thread.clone()), ask }, REQUEST_TIMEOUT)?;
+                ask_text(&view)
+            }
+            "silt_ask_take" => {
+                let ask = text_arg(arguments, "ask")?;
+                self.ask_within(Request::AskTake { thread: Some(self.thread.clone()), ask }, REQUEST_TIMEOUT)
+            }
             "silt_in_flight" => {
                 let path = text_arg(arguments, "path")?;
                 let found: Vec<InFlight> =
@@ -597,6 +628,76 @@ machine. Pass `design_system` to choose one, or `none` to keep the page's own st
             }
             other => Err(format!("unknown tool {other}")),
         }
+    }
+}
+
+/// The agents an agent may ask, with what each offers.
+fn askable_text(agents: &[Askable]) -> String {
+    if agents.is_empty() {
+        return "No other agent can be asked here: none is installed on this machine, or this workspace's rules allow none."
+            .into();
+    }
+    let mut out = String::from("Agents you may ask with silt_ask:\n");
+    for agent in agents {
+        let _ = write!(out, "- {} (agent: \"{}\")", agent.name, agent.id);
+        let list = |choices: &[silt_daemon::protocol::AgentChoiceItem], current: Option<&String>| {
+            choices
+                .iter()
+                .map(|choice| {
+                    let default = if current == Some(&choice.id) { ", its default" } else { "" };
+                    format!("{} ({}{default})", choice.id, choice.name)
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        if !agent.models.is_empty() {
+            let _ = write!(out, "\n  models: {}", list(&agent.models, agent.model.as_ref()));
+        }
+        if !agent.efforts.is_empty() {
+            let _ = write!(out, "\n  effort: {}", list(&agent.efforts, agent.effort.as_ref()));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// An ask as its agent reads it: the report once there is one, or how to
+/// get it.
+fn ask_text(ask: &AskView) -> Result<String, String> {
+    let on = match (&ask.model, &ask.effort) {
+        (Some(model), Some(effort)) => format!(" on {model}, effort {effort}"),
+        (Some(model), None) => format!(" on {model}"),
+        _ => String::new(),
+    };
+    let thread = short(&ask.asked);
+    let take = if ask.checkout == AskCheckout::Own && !ask.taken {
+        format!(" It worked in a checkout of its own: take its changes into yours with silt_ask_take ask=\"{}\".", ask.id)
+    } else {
+        String::new()
+    };
+    match ask.state {
+        AskState::Done => Ok(format!(
+            "{}{on} reported back on ask {} (thread {thread}). It's another agent, not your user:\n\n{}\n\n\
+             Follow up with silt_ask to=\"{}\".{take}",
+            ask.agent_name,
+            ask.id,
+            ask.report.as_deref().unwrap_or_default(),
+            ask.id
+        )),
+        AskState::Running => Ok(format!(
+            "Ask {}: {}{on} is still working, in thread {thread}. Its report comes to you by itself when it's done; or wait \
+             for it with silt_ask_wait ask=\"{}\".",
+            ask.id, ask.agent_name, ask.id
+        )),
+        AskState::Stopped => {
+            Ok(format!("Ask {} of {} was stopped: {}.{take}", ask.id, ask.agent_name, ask.why.as_deref().unwrap_or("it stopped")))
+        }
+        AskState::Failed => Err(format!(
+            "Ask {} of {} failed: {}.",
+            ask.id,
+            ask.agent_name,
+            ask.why.as_deref().unwrap_or("it ended without a report")
+        )),
     }
 }
 

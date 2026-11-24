@@ -3,6 +3,8 @@ import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useAgentStatus } from '../agentStatus'
 import { api, type ThreadSummary } from '../api'
+import type { AskView } from '../api.generated'
+import { askedIn, useAsks } from '../asks'
 import { isChat } from '../chats'
 import { useTopic } from '../bus'
 import { type Backend, inDesktop, relaunchDesktop, switchBackend, useBackends } from '../desktop'
@@ -19,6 +21,7 @@ import { ago } from '../time'
 import { Button, Dot, type DotTone, Icon, type IconName, Kbd, Menu, Popover, SectionLabel, Skeleton, Spinner, cx } from '../ui'
 import { pillOf, useUpdate } from '../updates'
 import { useInWorkspace } from '../workspaceFilter'
+import { AgentMark } from './AgentMark'
 import { ThreadMark } from './ThreadMark'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 
@@ -45,8 +48,33 @@ function StateLine({ said, when }: { said: string | null; when: string | null })
   )
 }
 
+/** The threads in order, each one another agent asked for right after the thread that asked, while that one shows. */
+function underCallers(threads: ThreadSummary[], asks: AskView[]): ThreadSummary[] {
+  const ids = new Set(threads.map((thread) => thread.id))
+  const callerOf = (thread: ThreadSummary) => {
+    const caller = askedIn(asks, thread.id)?.caller
+    return caller && ids.has(caller) ? caller : undefined
+  }
+  const out: ThreadSummary[] = []
+  for (const thread of threads.filter((thread) => !callerOf(thread))) {
+    out.push(thread, ...threads.filter((asked) => callerOf(asked) === thread.id))
+  }
+  return out
+}
+
 /** One thread in the sidebar (ADR 0044): its state's mark and its title, then what it's at in words, so the title keeps the row's width. */
-function ThreadItem({ thread, nested = false, current = true }: { thread: ThreadSummary; nested?: boolean; current?: boolean }) {
+function ThreadItem({
+  thread,
+  nested = false,
+  current = true,
+  asked,
+}: {
+  thread: ThreadSummary
+  nested?: boolean
+  current?: boolean
+  /** The ask this thread answers, which nests it under the thread that asked (ADR 0117). */
+  asked?: AskView
+}) {
   const now = useNow()
   const title = thread.title ?? 'Untitled thread'
   const actions = useThreadState(thread)
@@ -62,14 +90,31 @@ function ThreadItem({ thread, nested = false, current = true }: { thread: Thread
         to="/t/$id"
         params={{ id: thread.id }}
         title={[title, threadDoing(thread)].filter(Boolean).join(' · ')}
-        className={cx(ROW, 'flex-1 items-start py-[calc((var(--row)-20px)/2)] pr-7', nested ? 'pl-[22px]' : 'pl-2')}
+        className={cx(
+          ROW,
+          'flex-1 items-start py-[calc((var(--row)-20px)/2)] pr-7',
+          asked ? 'pl-[34px]' : nested ? 'pl-[22px]' : 'pl-2',
+        )}
         activeProps={current ? { className: ACTIVE } : undefined}
       >
         <span className="flex h-[18px] items-center">
           <ThreadMark thread={thread} />
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className={cx('truncate', unread(thread) && 'font-semibold')}>{title}</span>
+          {asked ? (
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span
+                data-testid="asked-mark"
+                className="shrink-0 text-fg-3"
+                title={`${asked.agent_name}, asked by ${asked.caller_agent}`}
+              >
+                <AgentMark agent={asked.agent} name={asked.agent_name} className="h-3 w-3" />
+              </span>
+              <span className={cx('truncate', unread(thread) && 'font-semibold')}>{title}</span>
+            </span>
+          ) : (
+            <span className={cx('truncate', unread(thread) && 'font-semibold')}>{title}</span>
+          )}
           <StateLine {...stateLine(thread, now)} />
         </span>
         {thread.mine.pinned && <span className="sr-only"> pinned</span>}
@@ -163,7 +208,11 @@ function ProjectGroup({
   const [showRest, setShowRest] = useState(false)
   const ordered = [...threads].sort(inListOrder(now))
   const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
-  const shown = ordered.filter((thread) => !held(thread))
+  const asks = useAsks()
+  const shown = underCallers(
+    ordered.filter((thread) => !held(thread)),
+    asks,
+  )
   const rest = ordered.filter(held)
   const restKinds = new Set(rest.map((thread) => (old(thread, now) ? 'older' : section(thread, now))))
   const restSaid = restKinds.size > 1 ? 'more' : [...restKinds][0]
@@ -199,7 +248,7 @@ function ProjectGroup({
         <>
           <ul>
             {(showRest || older ? [...shown, ...rest] : shown).map((thread) => (
-              <ThreadItem key={thread.id} thread={thread} nested />
+              <ThreadItem key={thread.id} thread={thread} nested asked={askedIn(asks, thread.id)} />
             ))}
           </ul>
           {rest.length > 0 && !older && (

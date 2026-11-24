@@ -176,6 +176,27 @@ impl Core {
         Ok(pulled)
     }
 
+    /// Merges `from`'s code and conversation into `into`, as a pull the
+    /// other way: an ask's own checkout taken into the thread that asked
+    /// (ADR 0117). Returns the files it changed.
+    pub(crate) async fn take_changes(&mut self, into: ThreadId, from: ThreadId) -> Result<Vec<String>, CoreError> {
+        self.ensure_writer(into)?;
+        let (family_id, family) = self.loaded_family(into)?;
+        let head = family.thread_head(into);
+        let from_head = family.thread_head(from);
+        if from_head.ids().iter().all(|id| family.graph().is_ancestor(*id, &head)) {
+            return Ok(Vec::new());
+        }
+        let before = family.graph().version_vector(&head);
+        let parents: Frontier = head.ids().iter().chain(from_head.ids()).copied().collect();
+        self.append_op(family_id, into, parents, Op::Merge { from, mr: None }).await?;
+        let family = &self.families[&family_id];
+        let after = family.graph().version_vector(&family.thread_head(into));
+        let files: Vec<String> = self.changes(family_id, &before, &after).iter().map(|change| change.path().to_owned()).collect();
+        self.bring_checkouts_to(family_id, &before, &after).await?;
+        Ok(files)
+    }
+
     /// Offers a fork's work back to its source.
     pub(crate) async fn mr_create(
         &mut self,

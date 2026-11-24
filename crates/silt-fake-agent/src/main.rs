@@ -10,9 +10,9 @@
 //! `Ask me` asks a multiple-choice question instead and answers with the
 //! choice; `Ask two` asks two as Claude's adapter does, each followed by an
 //! optional box for an answer of one's own, and none required. A prompt saying `Ponder` makes it think for a while between its
-//! edit and a read. A prompt saying `Later` makes it say more once the prompt was
+//! edit and a read, `Ponder long` for half a minute. A prompt saying `Later` makes it say more once the prompt was
 //! answered, as an agent going on by itself, without saying it works or
-//! stops, as v1 can't. `Show me`, `Guide` and `Artifact` call Silt's own tools (see `show`); `Folder <path>` asks for a folder with Folders' tool, and `Look in <path>` says what it sees there. `Detached` makes it leave a shell running and read
+//! stops, as v1 can't. `Show me`, `Guide` and `Artifact` call Silt's own tools (see `show`); `Folder <path>` asks for a folder with Folders' tool, and `Look in <path>` says what it sees there. `Ask agent <id>: <prompt>` asks another agent with `silt_ask`, working in its own checkout when the prompt says `own checkout`, and not waiting when it says `no wait`. `Detached` makes it leave a shell running and read
 //! it once the turn is over, as Copilot does; `Forgotten` leaves a real process,
 //! `silt-fake-agent keep-running <cwd>`, in one it never reads. With `FAKE_ACP_CRASH` set it dies on a prompt; with
 //! `FAKE_ACP_HANG` it never answers at all, as an agent stuck starting.
@@ -448,16 +448,18 @@ async fn agent() -> Result<()> {
                         &session,
                         SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("call-1", ToolCallUpdateFields::new().status(status))),
                     )?;
-                    if prompt.contains("Ponder") {
+                    // A prompt asking another agent carries that agent's prompt, whose words aren't for this one.
+                    if prompt.contains("Ponder") && !newest(&prompt).contains("Ask agent ") {
                         // Thinks between two steps, long enough to be seen before the next step records it.
                         notify(&worker, &session, SessionUpdate::AgentThoughtChunk(text("Checking what the edit left.")))?;
-                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        let seconds = if prompt.contains("Ponder long") { 30 } else { 3 };
+                        tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
                         let read = ToolCall::new("read-2", "Read src/main.rs").kind(ToolKind::Read).raw_input(serde_json::json!({"path": "src/main.rs"}));
                         notify(&worker, &session, SessionUpdate::ToolCall(read))?;
                         let read = ToolCallUpdateFields::new().status(ToolCallStatus::Completed).raw_output(serde_json::json!("fn acp() {}"));
                         notify(&worker, &session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("read-2", read)))?;
                     }
-                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") || prompt.contains("Read asset") || prompt.contains("Room say") || prompt.contains("Doc edit") || prompt.contains("Sheet set") || prompt.contains("Sheet grow") || newest(&prompt).contains("Folder ") {
+                    if prompt.contains("Show me") || prompt.contains("Artifact") || prompt.contains("Guide") || prompt.contains("Read back") || prompt.contains("Read asset") || prompt.contains("Room say") || prompt.contains("Doc edit") || prompt.contains("Sheet set") || prompt.contains("Sheet grow") || newest(&prompt).contains("Folder ") || newest(&prompt).contains("Ask agent ") {
                         show(&worker, &session, &state, &cwd, &prompt).await?;
                     }
                     let mut reply = if allowed { format!("Done: {prompt}") } else { "I was not allowed to edit.".to_owned() };
@@ -590,9 +592,19 @@ async fn show(
         let state = state.lock().expect("lock");
         (state.mcp.get(&id).cloned().unwrap_or_default(), state.artifact.get(&id).cloned())
     };
-    let (tool, arguments) = if let Some(path) =
-        newest(prompt).split_once("Folder ").and_then(|(_, rest)| rest.split_whitespace().next())
-    {
+    let (tool, arguments) = if let Some((_, rest)) = newest(prompt).split_once("Ask agent ") {
+        // Asks another agent (ADR 0117): `Ask agent <id>: <prompt>`, in an own checkout to work when it says so.
+        let (agent, asked) = rest.split_once(": ").unwrap_or((rest, "Review the change."));
+        let mut arguments = serde_json::json!({"agent": agent.trim(), "prompt": asked.trim(), "title": "Review the change"});
+        if prompt.contains("own checkout") {
+            arguments["checkout"] = serde_json::json!("own");
+            arguments["mode"] = serde_json::json!("work");
+        }
+        if prompt.contains("no wait") {
+            arguments["wait"] = serde_json::json!(false);
+        }
+        ("silt_ask", arguments)
+    } else if let Some(path) = newest(prompt).split_once("Folder ").and_then(|(_, rest)| rest.split_whitespace().next()) {
         ("folders_request", serde_json::json!({"path": path, "reason": "the app uses it"}))
     } else if prompt.contains("Show me") {
         let path = cwd.join("pixel.png");

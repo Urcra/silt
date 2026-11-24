@@ -323,6 +323,9 @@ fn api_routes() -> Router<Web> {
         .route("/api/plugins/{id}/activity", get(plugin_activity))
         .route("/api/plugins/add", post(plugin_add))
         .route("/api/mrs", get(merge_requests))
+        .route("/api/asks", get(asks))
+        .route("/api/asks/{ask}/stop", post(ask_stop))
+        .route("/api/asks/{ask}/take", post(ask_take))
         .route("/api/mrs/{id}", get(merge_request))
         .route("/api/mrs/{id}/approve", post(approve))
         .route("/api/mrs/{id}/decline", post(decline))
@@ -452,6 +455,19 @@ async fn themed(web: &Web, html: &str) -> String {
 }
 
 /// Sends a request through the daemon's event loop.
+/// Every agent's asks of other agents on this machine (ADR 0117).
+async fn asks(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::Asks).await
+}
+
+async fn ask_stop(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
+    ask(&web, Request::AskStop { thread: None, ask: id }).await
+}
+
+async fn ask_take(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
+    ask(&web, Request::AskTake { thread: None, ask: id }).await
+}
+
 async fn ask(web: &Web, request: Request) -> HttpResponse {
     match answer(web, request).await {
         Ok(data) => Json(data).into_response(),

@@ -182,6 +182,8 @@ pub enum AgentMessageKind {
     Message,
     /// It started in the project.
     Arrival,
+    /// What an agent it asked reported back, or how the ask ended (ADR 0117).
+    Report,
 }
 
 impl AgentMessageKind {
@@ -189,11 +191,16 @@ impl AgentMessageKind {
         match self {
             Self::Message => "message",
             Self::Arrival => "arrival",
+            Self::Report => "report",
         }
     }
 
     fn parse(kind: &str) -> Self {
-        if kind == "arrival" { Self::Arrival } else { Self::Message }
+        match kind {
+            "arrival" => Self::Arrival,
+            "report" => Self::Report,
+            _ => Self::Message,
+        }
     }
 }
 
