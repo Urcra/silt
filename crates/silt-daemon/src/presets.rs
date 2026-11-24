@@ -10,10 +10,42 @@ const QUIET_TOOLS: [&str; 3] = ["edit", "read", "search"];
 /// Tools that change nothing at all, which a plan needs to look around.
 const LOOKING_TOOLS: [&str; 2] = ["read", "search"];
 
+/// The Silt tool a call is, by its title as agents give it: `silt_ask`,
+/// `mcp__silt__silt_ask` or `silt_ask (silt MCP Server)`.
+pub(crate) fn silt_tool(title: &str) -> Option<&str> {
+    let name = title.split_whitespace().next()?;
+    let name = name.rsplit("__").next()?;
+    name.starts_with("silt_").then_some(name)
+}
+
+/// What kind of tool one of Silt's own counts as: asking another agent is
+/// a command (ADR 0120), and taking its changes an edit.
+pub(crate) fn silt_tool_kind(name: &str) -> Option<&'static str> {
+    match name {
+        "silt_ask" => Some("execute"),
+        "silt_ask_take" => Some("edit"),
+        "silt_ask_stop" | "silt_ask_wait" | "silt_askable" => Some("read"),
+        _ => None,
+    }
+}
+
 /// The option to answer a request with, when `preset` answers it: the
 /// agent's "allow once", else its "allow always".
+#[cfg(test)]
 pub(crate) fn decide<'a>(preset: Preset, tool_kind: Option<&str>, option_kinds: &'a [(String, String)]) -> Option<&'a str> {
+    decide_with(preset, tool_kind, false, option_kinds)
+}
+
+/// As [`decide`], where `asks` says the call asks another agent: a command
+/// Auto lets through, as it does what the agent's own check finds safe.
+pub(crate) fn decide_with<'a>(
+    preset: Preset,
+    tool_kind: Option<&str>,
+    asks: bool,
+    option_kinds: &'a [(String, String)],
+) -> Option<&'a str> {
     let allows = match preset {
+        Preset::Auto if asks => true,
         Preset::AskForEverything => false,
         Preset::Plan => tool_kind.is_some_and(|kind| LOOKING_TOOLS.contains(&kind)),
         Preset::FullAccess => true,
@@ -46,6 +78,20 @@ mod tests {
         assert_eq!(decide(Preset::AskBeforeCommands, Some("read"), &options), Some("yes"));
         assert_eq!(decide(Preset::AskBeforeCommands, Some("execute"), &options), None);
         assert_eq!(decide(Preset::AskBeforeCommands, None, &options), None, "an unnamed tool asks");
+    }
+
+    #[test]
+    fn asking_another_agent_is_a_command_that_auto_lets_through() {
+        let options = options();
+        assert_eq!(silt_tool("mcp__silt__silt_ask"), Some("silt_ask"));
+        assert_eq!(silt_tool("silt_ask_take (silt MCP Server)"), Some("silt_ask_take"));
+        assert_eq!(silt_tool("Bash"), None);
+        assert_eq!(silt_tool_kind("silt_ask"), Some("execute"));
+        assert_eq!(decide_with(Preset::AskBeforeCommands, Some("execute"), true, &options), None, "Edits asks the person");
+        assert_eq!(decide_with(Preset::Plan, Some("execute"), true, &options), None);
+        assert_eq!(decide_with(Preset::Auto, Some("execute"), true, &options), Some("yes"));
+        assert_eq!(decide_with(Preset::FullAccess, Some("execute"), true, &options), Some("yes"));
+        assert_eq!(decide_with(Preset::Auto, Some("execute"), false, &options), None, "any other command Auto still asks about");
     }
 
     #[test]

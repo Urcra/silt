@@ -1,3 +1,4 @@
+import { siltTool } from '../askCall'
 import { useQuery } from '@tanstack/react-query'
 import { type Dispatch, type ReactNode, type SetStateAction, useEffect, useRef, useState } from 'react'
 import {
@@ -136,7 +137,11 @@ export function PermissionCard({
     >
       <span className="flex min-w-0 items-center gap-2 text-xs text-fg-2">
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" />
-        {asked.plan ? `${agent}'s plan, to approve before it changes anything` : `${agent} asks to run`}
+        {asked.plan
+          ? `${agent}'s plan, to approve before it changes anything`
+          : siltTool(asked.title) === 'silt_ask'
+            ? `${agent} asks to ask another agent; its card above says whom and what. Asking counts as a command`
+            : `${agent} asks to run`}
       </span>
       {/* Whole, with its own line breaks: what's approved must be readable to its end. */}
       {!asked.plan && (

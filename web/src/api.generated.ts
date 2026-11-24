@@ -167,6 +167,34 @@ takes_files: boolean | null,
  */
 commands: Array<AgentCommand>, };
 
+export type AskView = { id: string, 
+/**
+ * The thread that asked, and its agent's name and id.
+ */
+caller: string, caller_agent: string, caller_agent_id: string, 
+/**
+ * The thread the asked agent works in.
+ */
+asked: string, agent: string, agent_name: string, model: string | null, effort: string | null, mode: AskMode, checkout: AskCheckout, title: string, prompt: string, state: AskState, 
+/**
+ * Its last message, once it ended.
+ */
+report: string | null, 
+/**
+ * Why it failed or was stopped.
+ */
+why: string | null, started_ms: number, ended_ms: number | null, 
+/**
+ * Its own checkout's changes were taken into the caller.
+ */
+taken: boolean, };
+
+export type AskMode = "review" | "work";
+
+export type AskCheckout = "here" | "own";
+
+export type AskState = "running" | "done" | "failed" | "stopped";
+
 export type AgentChoiceItem = { id: string, name: string, description: string | null, };
 
 export type AgentChoices = { agents: Array<AgentChoice>, clones: Array<CloneInfo>, };
@@ -318,7 +346,7 @@ export type ChoiceAsked = {
  */
 value: string, label: string, description: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "approvals" } | { "event": "appearance" } | { "event": "lan" } | { "event": "lagged" } | { "event": "beat" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "asks" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "approvals" } | { "event": "appearance" } | { "event": "lan" } | { "event": "lagged" } | { "event": "beat" };
 
 export type DataClass = "location";
 
@@ -1842,6 +1870,28 @@ refuse_opaque?: boolean,
  */
 refuse_reach?: boolean, rules?: Array<OrgPluginRule>, };
 
+export type AskPolicy = { 
+/**
+ * Agents may ask other agents; they may when unset.
+ */
+allowed?: boolean | null, 
+/**
+ * The agents that may be asked; any the workspace allows when unset.
+ */
+agents?: Array<AgentKey> | null, 
+/**
+ * The most an asked agent may do without asking, below its caller's.
+ */
+max_preset?: Preset | null, 
+/**
+ * Asks running at once per thread; [`ASKS_AT_ONCE`] when unset.
+ */
+at_once?: number | null, 
+/**
+ * An asked agent may ask further; it may not when unset.
+ */
+further?: boolean | null, };
+
 export type OrgPlugin = { id: string, git: string, 
 /**
  * The commit it's built from, and no other.
@@ -1987,7 +2037,11 @@ folder_layers?: Array<Array<FolderRule>>,
 /**
  * What plugins may be on, and how their calls are held (ADR 0104).
  */
-plugins?: PluginPolicy, };
+plugins?: PluginPolicy, 
+/**
+ * What agents may ask of other agents (ADR 0120).
+ */
+asks?: AskPolicy, };
 
 export type Network = "none" | "gateway" | "full" | "host";
 
