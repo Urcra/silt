@@ -1578,6 +1578,18 @@ impl Core {
                 warn!(%error, session = id, "could not read the session transcript");
             }
         }
+        for checkout in self.checkouts.values().filter(|checkout| {
+            checkout._watched.as_ref().is_some_and(Watched::needs_rescan)
+                && !self.left_alone(&checkout.record)
+                && !self.recorded_elsewhere(checkout.record.thread)
+        }) {
+            let _ = self.events.send(Event::Changed {
+                checkout: checkout.record.id,
+                paths: vec![checkout.record.path.clone()],
+                noticed: Instant::now(),
+                settled: false,
+            });
+        }
         self.keep_memory().await;
     }
 

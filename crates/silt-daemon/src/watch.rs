@@ -25,7 +25,15 @@ type Routes = Arc<Mutex<Vec<Route>>>;
 struct Route {
     id: u64,
     root: PathBuf,
+    mode: WatchMode,
     on_change: OnChange,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WatchMode {
+    Native,
+    Polled,
+    Rescan,
 }
 
 /// One watch for all of the daemon's checkouts. A debouncer each kept a
@@ -43,7 +51,13 @@ pub struct Watched {
     watchers: Arc<Watchers>,
     id: u64,
     root: PathBuf,
-    polled: bool,
+    mode: WatchMode,
+}
+
+impl Watched {
+    pub(crate) fn needs_rescan(&self) -> bool {
+        self.mode == WatchMode::Rescan
+    }
 }
 
 impl Watchers {
@@ -56,19 +70,19 @@ impl Watchers {
     /// rescanned.
     pub fn watch(self: &Arc<Self>, root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> notify::Result<Watched> {
         let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let already = {
+        let (already, mode) = {
             let mut routes = lock(&self.routes);
-            let already = routes.iter().any(|route| route.root == root);
-            routes.push(Route { id, root: root.to_owned(), on_change: Box::new(on_change) });
-            already
+            let already = routes.iter().find(|route| route.root == root).map(|route| route.mode);
+            let mode = already.unwrap_or_else(|| if needs_polling(root) { WatchMode::Polled } else { WatchMode::Native });
+            routes.push(Route { id, root: root.to_owned(), mode, on_change: Box::new(on_change) });
+            (already.is_some(), mode)
         };
-        let polled = needs_polling(root);
-        let watched = Watched { watchers: Arc::clone(self), id, root: root.to_owned(), polled };
+        let mut watched = Watched { watchers: Arc::clone(self), id, root: root.to_owned(), mode };
         if already {
             return Ok(watched);
         }
         let config = notify::Config::default().with_follow_symlinks(false);
-        let result = if polled {
+        let result = if mode == WatchMode::Polled {
             let config = config.with_poll_interval(POLL_INTERVAL).with_compare_contents(true);
             started(&mut lock(&self.polled), || new_debouncer_opt(DEBOUNCE, TICK, handler(&self.routes), NoCache, config))
                 .and_then(|debouncer| debouncer.watch(root, RecursiveMode::Recursive))
@@ -78,8 +92,25 @@ impl Watchers {
             started(&mut lock(&self.native), || new_debouncer_opt(DEBOUNCE, TICK, handler(&self.routes), NoCache, config))
                 .and_then(|debouncer| debouncer.watch(root, RecursiveMode::Recursive))
         };
+        if result.as_ref().is_err_and(|error| matches!(error.kind, notify::ErrorKind::MaxFilesWatch)) {
+            self.rescan_instead(&mut watched);
+            tracing::warn!("file watch limit reached for {}; checking its tracked files periodically", root.display());
+            return Ok(watched);
+        }
         // Dropped on failure, which takes the route back out.
         result.map(|()| watched)
+    }
+
+    fn rescan_instead(&self, watched: &mut Watched) {
+        // A recursive watch may have installed thousands of watches before
+        // failing. Release them before the next checkout starts its watch.
+        if let Some(native) = lock(&self.native).as_mut() {
+            let _ = native.unwatch(&watched.root);
+        }
+        watched.mode = WatchMode::Rescan;
+        for route in lock(&self.routes).iter_mut().filter(|route| route.root == watched.root) {
+            route.mode = WatchMode::Rescan;
+        }
     }
 }
 
@@ -93,11 +124,15 @@ impl Drop for Watched {
         if shared {
             return;
         }
-        let _ = if self.polled {
-            lock(&self.watchers.polled).as_mut().map(|debouncer| debouncer.unwatch(&self.root))
-        } else {
-            lock(&self.watchers.native).as_mut().map(|debouncer| debouncer.unwatch(&self.root))
-        };
+        match self.mode {
+            WatchMode::Polled => {
+                let _ = lock(&self.watchers.polled).as_mut().map(|debouncer| debouncer.unwatch(&self.root));
+            }
+            WatchMode::Native => {
+                let _ = lock(&self.watchers.native).as_mut().map(|debouncer| debouncer.unwatch(&self.root));
+            }
+            WatchMode::Rescan => {}
+        }
     }
 }
 
@@ -193,6 +228,71 @@ mod tests {
 
     fn event(kind: EventKind, path: &str) -> DebouncedEvent {
         DebouncedEvent::new(Event::new(kind).add_path(PathBuf::from(path)), Instant::now())
+    }
+
+    #[test]
+    fn rescanning_releases_partial_watches_and_shared_checkouts_keep_the_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("src")).expect("mkdir");
+        let watchers = Watchers::new();
+        let mut watched = watchers.watch(dir.path(), |_| {}).expect("watches");
+        watchers.rescan_instead(&mut watched);
+        assert!(watched.needs_rescan());
+        assert!(lock(&watchers.native).as_ref().expect("started").watched_paths().expect("paths").is_empty());
+
+        let beside = watchers.watch(dir.path(), |_| {}).expect("shares the fallback");
+        assert!(beside.needs_rescan());
+        drop(watched);
+        assert!(beside.needs_rescan());
+        drop(beside);
+        let native = watchers.watch(dir.path(), |_| {}).expect("watches again after all routes leave");
+        assert!(!native.needs_rescan());
+    }
+
+    #[tokio::test]
+    async fn periodic_capture_records_edits_and_skips_ignored_output_and_inactive_clones() {
+        use crate::core::{Core, Event};
+        use silt_store::{BlobStore, Store};
+        use silt_types::ActorId;
+
+        let home = tempfile::tempdir().expect("home");
+        let dir = tempfile::tempdir().expect("checkout");
+        assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(dir.path()).status().expect("git").success());
+        let root = silt_os::canonicalize(dir.path()).expect("canonical");
+        std::fs::write(root.join(".gitignore"), "/out/\n").expect("ignore output");
+        std::fs::write(root.join("edited.txt"), "before").expect("write");
+        std::fs::write(root.join("removed.txt"), "before").expect("write");
+        let store = Store::open(home.path()).await.expect("store");
+        let mut core = Core::visiting(store, ActorId(1), home.path()).await.expect("core");
+        core.start_session(&root, "claude", None, false, false).await.expect("session");
+        core.pending.clear();
+        let id = *core.checkouts.keys().next().expect("checkout");
+        let watchers = Watchers::new();
+        let mut watched = watchers.watch(&root, |_| {}).expect("watches");
+        watchers.rescan_instead(&mut watched);
+        core.checkouts.get_mut(&id).expect("checkout")._watched = Some(watched);
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        core.events = sender;
+
+        core.tick().await;
+        assert!(receiver.try_recv().is_err(), "an inactive personal clone stays left alone");
+        core.checkouts.get_mut(&id).expect("checkout").record.managed = true;
+        std::fs::write(root.join("edited.txt"), "after editing").expect("edit");
+        std::fs::write(root.join("added.txt"), "added").expect("add");
+        std::fs::remove_file(root.join("removed.txt")).expect("remove");
+        std::fs::create_dir(root.join("out")).expect("output");
+        std::fs::write(root.join("out/ignored.txt"), "build output").expect("ignored output");
+
+        core.tick().await;
+        let Event::Changed { checkout, paths, noticed, settled } = receiver.try_recv().expect("periodic change") else {
+            panic!("expected a checkout rescan");
+        };
+        core.changed(checkout, paths, noticed, settled).await;
+        let entries = core.checkouts[&id].bridge.entries();
+        assert_eq!(entries["edited.txt"].hash, BlobStore::hash(b"after editing"));
+        assert_eq!(entries["added.txt"].hash, BlobStore::hash(b"added"));
+        assert!(!entries.contains_key("removed.txt"));
+        assert!(!entries.contains_key("out/ignored.txt"));
     }
 
     #[test]
