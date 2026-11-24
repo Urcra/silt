@@ -358,7 +358,7 @@ pub struct Core {
     pub(crate) draining: HashSet<String>,
     /// Threads' history entries, as of the length of the family's log they
     /// were read at, and where they changed between the readings before.
-    pub(crate) history_cache: Mutex<HashMap<ThreadId, crate::history::KeptHistory>>,
+    pub(crate) history_cache: Mutex<HashMap<ThreadId, crate::history::Kept>>,
     watchers: Arc<Watchers>,
     /// A listing of a checkout's whole worktree taken while the hook that
     /// will compare it loads, for that comparison to take.

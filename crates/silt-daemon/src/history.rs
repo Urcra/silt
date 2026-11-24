@@ -20,7 +20,8 @@ use crate::transcripts::{native_entries, shown_entries};
 /// Threads whose history entries are kept at once.
 const HISTORIES_KEPT: usize = 16;
 
-/// A thread's numbered history entries, each with the delta it came from.
+/// A thread's numbered history entries, each with the delta it came from,
+/// cut as a page carries them (ADR 0116).
 pub(crate) type HistoryEntries = Arc<Vec<(DeltaId, HistoryEntry)>>;
 
 /// Readings of a thread's history kept where it changed between.
@@ -31,8 +32,7 @@ const CHANGES_KEPT: usize = 64;
 pub(crate) struct KeptHistory {
     pub(crate) version: usize,
     pub(crate) entries: HistoryEntries,
-    /// Its turns, worked out the first time they're asked for.
-    turns: Arc<std::sync::OnceLock<Arc<Vec<TurnInfo>>>>,
+    turns: Arc<Vec<TurnInfo>>,
     /// The version read before the oldest change kept.
     oldest: usize,
     /// Each later version read, and the first entry that differed from the
@@ -41,24 +41,34 @@ pub(crate) struct KeptHistory {
 }
 
 impl KeptHistory {
-    fn new(version: usize, entries: HistoryEntries) -> Self {
-        Self { version, entries, turns: Arc::default(), oldest: version, changes: std::collections::VecDeque::new() }
+    fn new(version: usize, read: Read) -> Self {
+        Self {
+            version,
+            entries: Arc::new(read.entries),
+            turns: Arc::new(read.turns),
+            oldest: version,
+            changes: std::collections::VecDeque::new(),
+        }
     }
 
-    /// Read again at `version` as `entries`.
-    fn grown(mut self, version: usize, entries: HistoryEntries) -> Self {
+    /// Read again whole at `version`.
+    fn grown(mut self, version: usize, read: Read) -> Self {
         // A log only grows, but for a family erased and recorded again.
         if version < self.version {
-            return Self::new(version, entries);
+            return Self::new(version, read);
         }
-        let first = first_difference(&self.entries, &entries);
+        let first = first_difference(&self.entries, &read.entries);
+        self.note_change(version, first);
+        Self { version, entries: Arc::new(read.entries), turns: Arc::new(read.turns), ..self }
+    }
+
+    fn note_change(&mut self, version: usize, first: usize) {
         self.changes.push_back((version, first));
         while self.changes.len() > CHANGES_KEPT {
             if let Some((dropped, _)) = self.changes.pop_front() {
                 self.oldest = dropped;
             }
         }
-        Self { version, entries, turns: Arc::default(), ..self }
     }
 
     /// How many of the entries at version `known` are still the same: all
@@ -72,6 +82,71 @@ impl KeptHistory {
         }
         self.changes.iter().filter(|(version, _)| *version > known).map(|(_, first)| *first).min().unwrap_or(0)
     }
+}
+
+/// A thread's history kept, and what reading on from it needs: the agents'
+/// transcripts as read so far and the prompt the next turn starts with.
+pub(crate) struct Kept {
+    history: KeptHistory,
+    reading: Reading,
+}
+
+#[derive(Default)]
+struct Reading {
+    reader: HistoryReader,
+    last_prompt: Option<(usize, String)>,
+}
+
+/// A history read, entries and turns.
+#[derive(Default)]
+struct Read {
+    entries: Vec<(DeltaId, HistoryEntry)>,
+    turns: Vec<TurnInfo>,
+}
+
+impl Read {
+    /// Takes in the history's next item, a delta of `source`, reading its
+    /// entries cut as a page carries them.
+    fn push(&mut self, reading: &mut Reading, delta: &Delta, source: HistorySource, rewound: bool) {
+        let origin = match source {
+            HistorySource::Own => "own",
+            HistorySource::Inherited => "inherited",
+            HistorySource::Upstream => "upstream",
+        };
+        // As the agent stamped its line, else when it was recorded.
+        let time_ms = match &delta.op {
+            Op::Conv(ConvOp::Native { line, .. }) => silt_agents::time::line_time(line).unwrap_or(delta.time_ms),
+            _ => delta.time_ms,
+        };
+        for shown in entry_texts(&mut reading.reader, delta) {
+            let index = self.entries.len();
+            if opens_turn(&shown.kind) && shown.side.is_none() {
+                reading.last_prompt = Some((index, shown.text.clone()));
+            }
+            let entry = shown.into_entry(index, delta.thread.to_string(), origin, time_ms, rewound);
+            self.entries.push((delta.span.first(), silt_proto::view::cut_for_page(&entry)));
+        }
+        if source == HistorySource::Own
+            && let Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. }) = delta.op
+        {
+            let (entry, prompt) = reading.last_prompt.take().map_or((None, String::new()), |(index, text)| (Some(index), text));
+            self.turns.push(TurnInfo { number: self.turns.len() + 1, entry, prompt });
+        }
+    }
+}
+
+/// The deltas of `thread` among `added`, if each only adds entries at the
+/// history's end: a rewind, a merge or a fork changes what came before.
+fn only_appended(added: &[Delta], thread: ThreadId) -> Option<Vec<&Delta>> {
+    let mut appended = Vec::new();
+    for delta in added.iter().filter(|delta| delta.thread == thread) {
+        match &delta.op {
+            Op::Conv(ConvOp::Rewound { .. } | ConvOp::Merged { .. }) | Op::Merge { .. } | Op::Fork { .. } => return None,
+            Op::Conv(_) => appended.push(delta),
+            _ => {}
+        }
+    }
+    Some(appended)
 }
 
 /// The first entry where `after` differs from `before`.
@@ -99,36 +174,70 @@ impl Core {
         self.kept_history(thread).entries
     }
 
-    /// The thread's history as kept: read again only once its family's log
-    /// grew, noting where it first changed, so a viewer holding an earlier
-    /// version reads only from there.
+    /// The thread's history as kept (ADR 0116): what its family's log
+    /// added since is read on from where it was, unless it changed what came
+    /// before, which reads it again whole, noting where it first changed, so
+    /// a viewer holding an earlier version reads only from there.
     fn kept_history(&self, thread: ThreadId) -> KeptHistory {
-        let length = self.local_log_len(self.threads[&thread].family);
+        let family = self.threads[&thread].family;
+        let length = self.local_log_len(family);
         let mut cache = self.history_cache.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(kept) = cache.get(&thread)
-            && kept.version == length
-        {
-            return kept.clone();
+        if let Some(kept) = cache.get_mut(&thread) {
+            if kept.history.version == length {
+                return kept.history.clone();
+            }
+            if length > kept.history.version
+                && let Some(added) = self.log_since(family, kept.history.version)
+                && let Some(appended) = only_appended(added, thread)
+            {
+                let history = &mut kept.history;
+                let before = history.entries.len();
+                let mut read = Read {
+                    entries: std::mem::take(Arc::make_mut(&mut history.entries)),
+                    turns: std::mem::take(Arc::make_mut(&mut history.turns)),
+                };
+                for delta in appended {
+                    read.push(&mut kept.reading, delta, HistorySource::Own, false);
+                }
+                history.entries = Arc::new(read.entries);
+                history.turns = Arc::new(read.turns);
+                if history.entries.len() != before {
+                    history.note_change(length, before);
+                }
+                history.version = length;
+                return history.clone();
+            }
         }
-        let entries = Arc::new(self.read_history_entries(thread));
-        let kept = match cache.remove(&thread) {
-            Some(before) => before.grown(length, entries),
-            None => KeptHistory::new(length, entries),
+        let (read, reading) = self.read_history(thread);
+        let history = match cache.remove(&thread) {
+            Some(before) => before.history.grown(length, read),
+            None => KeptHistory::new(length, read),
         };
         if cache.len() >= HISTORIES_KEPT {
             cache.clear();
         }
-        cache.insert(thread, kept.clone());
-        kept
+        cache.insert(thread, Kept { history: history.clone(), reading });
+        history
     }
 
-    /// The thread's turns, read again only when its history was.
+    /// The thread's turns, read with its history.
     pub(crate) fn kept_turns(&self, thread: ThreadId) -> Arc<Vec<TurnInfo>> {
-        let kept = self.kept_history(thread);
-        Arc::clone(kept.turns.get_or_init(|| Arc::new(self.turns(thread))))
+        Arc::clone(&self.kept_history(thread).turns)
     }
 
-    fn read_history_entries(&self, thread: ThreadId) -> Vec<(DeltaId, HistoryEntry)> {
+    /// The family's deltas from `from` on, in local order.
+    pub(crate) fn log_since(&self, family: FamilyId, from: usize) -> Option<&[Delta]> {
+        self.local_log(family).get(from..)
+    }
+
+    /// The thread's family's delta `id`.
+    fn delta_of(&self, thread: ThreadId, id: DeltaId) -> Option<Delta> {
+        let family = self.threads.get(&thread)?.family;
+        self.local_log(family).iter().find(|delta| delta.span.first() == id).cloned()
+    }
+
+    /// The thread's history read whole, and what reading on from it needs.
+    fn read_history(&self, thread: ThreadId) -> (Read, Reading) {
         let family_id = self.threads[&thread].family;
         let items: Vec<(&Delta, HistorySource, bool)> = match self.families.get(&family_id) {
             Some(family) => family.history(thread).into_iter().map(|item| (item.delta, item.source, item.rewound)).collect(),
@@ -141,25 +250,69 @@ impl Core {
                     .collect()
             }
         };
-        let mut entries = Vec::new();
-        let mut reader = HistoryReader::default();
+        let mut read = Read::default();
+        let mut reading = Reading::default();
         for (delta, source, rewound) in items {
-            let origin = match source {
-                HistorySource::Own => "own",
-                HistorySource::Inherited => "inherited",
-                HistorySource::Upstream => "upstream",
-            };
-            // As the agent stamped its line, else when it was recorded.
-            let time_ms = match &delta.op {
-                Op::Conv(ConvOp::Native { line, .. }) => silt_agents::time::line_time(line).unwrap_or(delta.time_ms),
-                _ => delta.time_ms,
-            };
-            for shown in entry_texts(&mut reader, delta) {
-                let index = entries.len();
-                entries.push((delta.span.first(), shown.into_entry(index, delta.thread.to_string(), origin, time_ms, rewound)));
+            read.push(&mut reading, delta, source, rewound);
+        }
+        (read, reading)
+    }
+
+    /// `entries` whole, as they were recorded, rather than cut: each read
+    /// again from its delta alone. One that reads otherwise alone, as a
+    /// transcript whose earlier lines change how a line reads may, comes
+    /// from the history read again whole.
+    fn whole_entries(&self, thread: ThreadId, entries: &[(DeltaId, HistoryEntry)]) -> Vec<HistoryEntry> {
+        let mut whole = Vec::with_capacity(entries.len());
+        let mut at = 0;
+        while at < entries.len() {
+            let delta = entries[at].0;
+            let same = entries[at..].iter().take_while(|(id, _)| *id == delta).count();
+            let first = entries[at].1.index;
+            match self.delta_of(thread, delta).map(|delta| entry_texts(&mut HistoryReader::default(), &delta)) {
+                Some(shown)
+                    if shown.len() >= same
+                        && entries[at..at + same].iter().zip(&shown).all(|((_, cut), shown)| cut.kind == shown.kind) =>
+                {
+                    for ((_, cut), shown) in entries[at..at + same].iter().zip(shown) {
+                        let read = shown.into_entry(cut.index, cut.thread.clone(), &cut.origin, cut.time_ms, cut.rewound);
+                        whole.push(HistoryEntry { text: read.text, image: read.image, cut: None, ..cut.clone() });
+                    }
+                }
+                _ => {
+                    whole.extend(self.whole_read_again(thread, first, entries.len() - at));
+                    return whole;
+                }
+            }
+            at += same;
+        }
+        whole
+    }
+
+    /// `count` entries from `first` of the thread's history read again whole.
+    fn whole_read_again(&self, thread: ThreadId, first: usize, count: usize) -> Vec<HistoryEntry> {
+        let family_id = self.threads[&thread].family;
+        let Some(family) = self.families.get(&family_id) else {
+            return Vec::new();
+        };
+        let mut reader = HistoryReader::default();
+        let mut whole = Vec::new();
+        for item in family.history(thread) {
+            for shown in entry_texts(&mut reader, item.delta) {
+                let index = whole.len();
+                let origin = match item.source {
+                    HistorySource::Own => "own",
+                    HistorySource::Inherited => "inherited",
+                    HistorySource::Upstream => "upstream",
+                };
+                let time_ms = match &item.delta.op {
+                    Op::Conv(ConvOp::Native { line, .. }) => silt_agents::time::line_time(line).unwrap_or(item.delta.time_ms),
+                    _ => item.delta.time_ms,
+                };
+                whole.push(shown.into_entry(index, item.delta.thread.to_string(), origin, time_ms, item.rewound));
             }
         }
-        entries
+        whole.into_iter().skip(first).take(count).collect()
     }
 
     /// A page of `thread`'s history (ADR 0116): from entry `offset`, or from
@@ -178,18 +331,22 @@ impl Core {
             None => (asked.offset, asked.limit),
         };
         let from = asked.known.map_or(offset, |known| offset.min(kept.same_before(known))).min(total);
-        let entries = kept.entries.iter().skip(from).take(limit);
+        let held = &kept.entries[from..(from + limit.min(total - from))];
         HistoryPage {
             thread: thread.to_string(),
             total,
             entries: if asked.cut {
-                entries.map(|(_, entry)| silt_proto::view::cut_for_page(entry)).collect()
+                held.iter().map(|(_, entry)| entry.clone()).collect()
             } else {
-                entries.map(|(_, entry)| entry.clone()).collect()
+                self.whole_entries(thread, held)
             },
             from: Some(from),
             version: Some(kept.version),
-            tasks: silt_proto::view::task_news(kept.entries[..from].iter().map(|(_, entry)| entry)),
+            tasks: kept.entries[..from]
+                .iter()
+                .filter(|(_, entry)| entry.task.is_some())
+                .map(|(_, entry)| entry.clone())
+                .collect(),
         }
     }
 
@@ -697,26 +854,25 @@ fn file_touches(family: &Family, inode: InodeId, include: impl Fn(&Delta) -> boo
 mod tests {
     use super::*;
 
-    fn entries(texts: &[&str]) -> HistoryEntries {
+    fn entries(texts: &[&str]) -> Read {
         let delta = DeltaId::new(silt_types::ActorId(1), silt_types::Lamport(0));
-        Arc::new(
-            texts
-                .iter()
-                .enumerate()
-                .map(|(index, text)| {
-                    (
-                        delta,
-                        silt_agents::tool::Shown::plain("assistant", (*text).to_owned()).into_entry(
-                            index,
-                            "t".into(),
-                            "own",
-                            0,
-                            false,
-                        ),
-                    )
-                })
-                .collect(),
-        )
+        let entries = texts
+            .iter()
+            .enumerate()
+            .map(|(index, text)| {
+                (
+                    delta,
+                    silt_agents::tool::Shown::plain("assistant", (*text).to_owned()).into_entry(
+                        index,
+                        "t".into(),
+                        "own",
+                        0,
+                        false,
+                    ),
+                )
+            })
+            .collect();
+        Read { entries, turns: Vec::new() }
     }
 
     #[test]
@@ -743,5 +899,128 @@ mod tests {
         assert_eq!(kept.same_before(CHANGES_KEPT + 4), 1);
         assert_eq!(kept.same_before(1), 0, "too old to say");
         assert_eq!(kept.same_before(5), 1, "the version before the oldest change kept");
+    }
+
+    mod read_on {
+        use std::process::Command;
+
+        use silt_log::{Author, SessionFile, SessionRef};
+        use silt_store::{Store, ThreadRecord};
+        use silt_types::ActorId;
+
+        use super::*;
+
+        const THREAD: ThreadId = ThreadId(7);
+        const FAMILY: FamilyId = FamilyId(9);
+
+        fn session() -> SessionRef {
+            SessionRef { agent: "claude-code".into(), id: "s".into() }
+        }
+
+        fn said(line: &str) -> Op {
+            Op::Conv(ConvOp::Native { session: session(), file: SessionFile::Main, line: line.into() })
+        }
+
+        fn prompt(text: &str) -> Op {
+            said(&serde_json::json!({"type": "user", "message": {"role": "user", "content": text}}).to_string())
+        }
+
+        fn reply(text: &str) -> Op {
+            let content = serde_json::json!([{"type": "text", "text": text}]);
+            said(&serde_json::json!({"type": "assistant", "message": {"role": "assistant", "content": content}}).to_string())
+        }
+
+        fn submitted() -> Op {
+            Op::Conv(ConvOp::Turn { session: session(), mark: TurnMark::PromptSubmitted })
+        }
+
+        async fn core() -> (tempfile::TempDir, tempfile::TempDir, Core) {
+            let (data, repo) = (tempfile::tempdir().expect("temp dir"), tempfile::tempdir().expect("temp dir"));
+            assert!(Command::new("git").args(["init", "-q"]).current_dir(repo.path()).status().expect("git").success());
+            let store = Store::open(data.path()).await.expect("opens");
+            let thread = ThreadRecord {
+                id: THREAD,
+                family: FAMILY,
+                repo_root: repo.path().to_owned(),
+                repo: "example.com/repo".into(),
+                created_ms: 1,
+                owner: String::new(),
+            };
+            store.create_thread(&thread).await.expect("thread");
+            let (events, _) = tokio::sync::mpsc::unbounded_channel();
+            let core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
+            (data, repo, core)
+        }
+
+        fn write(core: &mut Core, op: Op) -> Delta {
+            let family = core.families.get_mut(&FAMILY).expect("projected");
+            let delta = family.delta(ActorId(2), THREAD, Author::User, 1, family.thread_head(THREAD), op);
+            family.apply(delta.clone(), &mut std::collections::HashMap::new()).expect("applies");
+            delta
+        }
+
+        fn read_again(core: &Core) -> Read {
+            core.read_history(THREAD).0
+        }
+
+        #[tokio::test]
+        async fn what_the_log_adds_is_read_on_and_reads_as_the_history_read_whole() {
+            let (_data, _repo, mut core) = core().await;
+            core.families.hold(
+                FAMILY,
+                crate::load::Loaded::Projected { family: Box::new(silt_log::Family::new()), covered: 0, outdated: false },
+                None,
+            );
+            for op in [prompt("draw a tree"), submitted(), reply("Drawing it.")] {
+                write(&mut core, op);
+            }
+            let first = core.kept_history(THREAD);
+            assert_eq!(first.entries.len(), 2);
+            for op in [prompt("now a bush"), submitted(), reply("A bush."), reply("Done.")] {
+                write(&mut core, op);
+            }
+            let kept = core.kept_history(THREAD);
+            let whole = read_again(&core);
+            assert_eq!(kept.entries.as_slice(), whole.entries.as_slice(), "read on, as read whole");
+            assert_eq!(*kept.turns, whole.turns);
+            assert_eq!(kept.turns.len(), 2);
+            assert_eq!(kept.same_before(first.version), 2, "a viewer at the first reading reads on from its end");
+        }
+
+        #[tokio::test]
+        async fn a_rewind_reads_the_history_again_whole() {
+            let (_data, _repo, mut core) = core().await;
+            core.families.hold(
+                FAMILY,
+                crate::load::Loaded::Projected { family: Box::new(silt_log::Family::new()), covered: 0, outdated: false },
+                None,
+            );
+            let asked = write(&mut core, prompt("draw a tree"));
+            write(&mut core, submitted());
+            write(&mut core, reply("Drawing it."));
+            assert!(!core.kept_history(THREAD).entries.iter().any(|(_, entry)| entry.rewound));
+            write(&mut core, Op::Conv(ConvOp::Rewound { to: asked.span.first() }));
+            let kept = core.kept_history(THREAD);
+            assert_eq!(kept.entries.as_slice(), read_again(&core).entries.as_slice());
+        }
+
+        #[tokio::test]
+        async fn a_page_reads_entries_whole_from_their_deltas() {
+            let (_data, _repo, mut core) = core().await;
+            core.families.hold(
+                FAMILY,
+                crate::load::Loaded::Projected { family: Box::new(silt_log::Family::new()), covered: 0, outdated: false },
+                None,
+            );
+            let long = "line\n".repeat(20_000);
+            write(&mut core, prompt("draw a tree"));
+            write(&mut core, submitted());
+            write(&mut core, reply(&long));
+            let asked = |cut, tail| PageAsked { offset: 0, limit: usize::MAX, known: None, cut, tail, before: None };
+            let whole = core.history_page(THREAD, asked(false, None));
+            assert_eq!(whole.entries[1].text, long);
+            let tail = core.history_page(THREAD, asked(true, Some(1)));
+            assert_eq!(tail.from, Some(0), "from the prompt of its turn");
+        }
     }
 }
