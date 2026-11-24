@@ -60,7 +60,7 @@ pub async fn capture_here(data_dir: &Path, event: &str, input: serde_json::Value
     let reply = core.capture(event, &parsed).await?;
     // A long family takes a while to free, and the agent is waiting on the
     // hook: the hook's process exits without waiting for it.
-    let families = std::mem::take(&mut core.families);
+    let families = std::mem::replace(&mut core.families, crate::families::Families::new(None));
     std::thread::spawn(move || drop(families));
     let store = core.store.clone();
     drop(core);

@@ -424,6 +424,9 @@ impl Custom {
 /// Silt's own agent's id (ADR 0092).
 pub const LOCAL_AGENT: &str = "local";
 
+/// Claude's adapter's id.
+pub const CLAUDE_AGENT: &str = "claude-acp";
+
 /// Silt's own agent on a local model, run as `silt agent local` by the
 /// `silt` program at `silt`.
 pub fn local_agent(silt: &Path) -> AgentInfo {

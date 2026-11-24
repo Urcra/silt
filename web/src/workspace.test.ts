@@ -45,6 +45,7 @@ function thread(
     local_only,
     workspace,
     cloud: null,
+    machine: null,
   }
 }
 

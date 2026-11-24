@@ -1,4 +1,5 @@
 pub mod causal;
+mod chars;
 mod locator;
 pub mod replica;
 pub mod text;

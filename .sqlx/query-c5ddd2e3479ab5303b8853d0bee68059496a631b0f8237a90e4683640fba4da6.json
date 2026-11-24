@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT family_id, format, position, data FROM family_digests",
+  "describe": {
+    "columns": [
+      {
+        "name": "family_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "family_digests",
+            "name": "family_id"
+          }
+        }
+      },
+      {
+        "name": "format",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "family_digests",
+            "name": "format"
+          }
+        }
+      },
+      {
+        "name": "position",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "family_digests",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "name": "data",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "family_digests",
+            "name": "data"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c5ddd2e3479ab5303b8853d0bee68059496a631b0f8237a90e4683640fba4da6"
+}

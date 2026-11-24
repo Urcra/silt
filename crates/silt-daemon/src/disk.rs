@@ -2,11 +2,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use silt_checkout::TEXT_LIMIT;
 use silt_store::BlobStore;
 use silt_types::BlobHash;
-
-/// Files larger than this are stored whole instead of as text.
-const TEXT_LIMIT: usize = 4 * 1024 * 1024;
 
 /// A file's bytes and metadata as found on disk.
 #[derive(Debug, Clone)]

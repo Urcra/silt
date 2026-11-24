@@ -11,7 +11,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use silt_acp::registry::{self, AgentInfo};
 use silt_acp::{Accepts, AgentHandle, Attachment, Command, Permission, Question, Start, Update};
-use silt_agents::acp;
+use silt_agents::{TaskStatus, acp};
 use silt_log::{Author, ConvOp, Op, SessionFile};
 use silt_proto::AgentState;
 use silt_store::CheckoutId;
@@ -27,6 +27,7 @@ use crate::protocol::{
 use crate::sessions::NewSession;
 
 mod sign_in;
+mod transcript;
 
 pub(crate) struct AcpRun {
     run: u64,
@@ -139,6 +140,12 @@ pub(crate) struct AcpRun {
     /// Background commands the person stopped, by the call that started
     /// each: the agent's later news of their end is no news.
     stopped_tasks: HashSet<String>,
+    /// Claude Code's transcript of the session, where Claude's adapter runs
+    /// it, for the ends of background commands it doesn't report.
+    transcript: Option<transcript::Transcript>,
+    /// Background commands whose end the transcript told, by the call that
+    /// started each: the agent's later news of it is no news.
+    read_ended: HashSet<String>,
     /// A command the person stopped has ended since the agent last went on,
     /// by what it ran: the agent going on now goes on about that, which
     /// they've seen to.
@@ -781,6 +788,8 @@ impl Core {
                 background_listed: 0,
                 background_checked: Instant::now(),
                 stopped_tasks: HashSet::new(),
+                transcript: None,
+                read_ended: HashSet::new(),
                 hush: None,
                 stopped: false,
                 sign_in: None,
@@ -1719,6 +1728,9 @@ impl Core {
     async fn acp_ready(&mut self, thread: ThreadId, native: &str, loaded: bool) -> Result<(), CoreError> {
         let run = self.acp.get_mut(&thread).expect("caller checked");
         run.state = AgentState::Idle;
+        if run.info.id == registry::CLAUDE_AGENT {
+            run.transcript = Some(transcript::Transcript::of(&run.checkout, native));
+        }
         // The registry's name, as the picker shows it; the agent's own is often its package's.
         let (checkout_id, checkout, agent_id, name) =
             (run.checkout_id, run.checkout.clone(), run.info.id.clone(), run.info.name.clone());
@@ -1832,6 +1844,9 @@ impl Core {
                         if news.status != "running" {
                             run.hush = Some(run.labels.get(&id).cloned().unwrap_or_default());
                         }
+                        return Ok(());
+                    }
+                    if news.status != "running" && run.read_ended.contains(&id) {
                         return Ok(());
                     }
                     if let (Some("background"), Some(task)) = (news.kind.as_deref(), &news.id) {
@@ -1951,6 +1966,7 @@ impl Core {
     /// more: Copilot hears of a detached shell's end and may never read it,
     /// which is all Silt would hear.
     pub(crate) async fn notice_ended_background(&mut self) {
+        self.read_ended_background().await;
         let mut due = Vec::new();
         for (thread, run) in &mut self.acp {
             if run.reports_work || run.background.is_empty() || run.background_checked.elapsed() < BACKGROUND_CHECK {
@@ -1987,7 +2003,7 @@ impl Core {
                 continue;
             }
             for task in ended {
-                if let Err(error) = self.background_ended(thread, &task).await {
+                if let Err(error) = self.background_ended(thread, &task, None).await {
                     warn!(%error, %thread, "could not record that a background command ended");
                 }
             }
@@ -1995,17 +2011,64 @@ impl Core {
         }
     }
 
-    /// Records that the background command `task` ended, as Silt saw rather
-    /// than heard: done, until the agent says how it ended.
-    async fn background_ended(&mut self, thread: ThreadId, task: &str) -> Result<(), CoreError> {
+    /// Marks ended what Claude's adapter left running and its transcript
+    /// says ended, as the adapter doesn't say so of a PowerShell command.
+    async fn read_ended_background(&mut self) {
+        let mut due = Vec::new();
+        for (thread, run) in &mut self.acp {
+            let Some(transcript) = run.transcript.clone() else { continue };
+            if run.background.is_empty() || run.background_checked.elapsed() < BACKGROUND_CHECK {
+                continue;
+            }
+            run.background_checked = Instant::now();
+            due.push((*thread, run.checkout.clone(), transcript));
+        }
+        for (thread, checkout, mut transcript) in due {
+            let read = tokio::task::spawn_blocking(move || transcript.read_ended(&checkout).map(|ended| (transcript, ended)));
+            let (transcript, ended) = match read.await {
+                Ok(Ok(read)) => read,
+                Ok(Err(error)) => {
+                    warn!(%error, %thread, "could not read Claude Code's transcript");
+                    continue;
+                }
+                Err(error) => {
+                    warn!(%error, %thread, "could not read Claude Code's transcript");
+                    continue;
+                }
+            };
+            let Some(run) = self.acp.get_mut(&thread) else { continue };
+            run.transcript = Some(transcript);
+            let ended: Vec<_> = ended
+                .into_iter()
+                .filter_map(|(task, status)| Some((run.background.get(&task)?.call.clone(), task, status)))
+                .collect();
+            if ended.is_empty() {
+                continue;
+            }
+            run.read_ended.extend(ended.iter().map(|(call, _, _)| call.clone()));
+            for (_, task, status) in ended {
+                if let Err(error) = self.background_ended(thread, &task, Some(status)).await {
+                    warn!(%error, %thread, "could not record that a background command ended");
+                }
+            }
+            self.agent_changed(thread).await;
+        }
+    }
+
+    /// Records that the background command `task` ended: as `status` where
+    /// something said how, else as Silt saw it, done until the agent says
+    /// how it ended.
+    async fn background_ended(&mut self, thread: ThreadId, task: &str, status: Option<TaskStatus>) -> Result<(), CoreError> {
         let Some(run) = self.acp.get_mut(&thread) else { return Ok(()) };
         let Some(kept) = run.background.remove(task) else { return Ok(()) };
         if run.state == AgentState::Idle {
             let label = run.labels.get(&kept.call).cloned();
-            run.woke_by.push(ended(Some("background"), label.as_deref(), "ended"));
+            let how = status.map_or("ended", TaskStatus::as_str);
+            run.woke_by.push(ended(Some("background"), label.as_deref(), how));
         }
+        let status = status.unwrap_or(TaskStatus::Completed).as_str();
         self.flush_acp(thread).await?;
-        self.record_acp(thread, &acp::task(&kept.call, Some(task), Some("background"), "completed")).await
+        self.record_acp(thread, &acp::task(&kept.call, Some(task), Some("background"), status)).await
     }
 
     /// Records what a subagent did, inside the call `parent` that started

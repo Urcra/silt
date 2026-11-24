@@ -3,7 +3,7 @@
 //! `{timestamp, type, payload}` record per line (docs/research/agents.md).
 //! Codex picks the id itself, so a new session is found by its cwd.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -208,10 +208,17 @@ fn started_name(path: &Path) -> String {
 }
 
 /// Reads rollout lines, remembering which background session each
-/// `write_stdin` call wrote to, as its output doesn't say.
+/// `write_stdin` call wrote to, as its output doesn't say, and what it takes
+/// to tell a subagent set running again from a message to one still at work.
 #[derive(Default)]
 pub struct CodexReader {
     stdin: HashMap<String, String>,
+    /// Calls that may set a finished subagent running again: `followup_task`,
+    /// whose activity names the subagent, and `send_input`, by its `target`.
+    resuming: HashMap<String, Option<String>>,
+    /// `wait` calls, whose output says how each subagent stands.
+    waits: HashSet<String>,
+    ended: HashSet<String>,
 }
 
 impl Reader for CodexReader {
@@ -220,15 +227,28 @@ impl Reader for CodexReader {
         let mut news = Vec::new();
         for entry in &read.entries {
             match entry {
-                Entry::ToolCall { id, name, input, .. } if name == "write_stdin" => {
-                    let session = input.get("session_id").map(|session| match session {
-                        Value::String(text) => text.clone(),
-                        other => other.to_string(),
-                    });
-                    if let Some(session) = session {
-                        self.stdin.insert(id.clone(), session);
+                Entry::ToolCall { id, name, input, .. } => match name.as_str() {
+                    "write_stdin" => {
+                        let session = input.get("session_id").map(|session| match session {
+                            Value::String(text) => text.clone(),
+                            other => other.to_string(),
+                        });
+                        if let Some(session) = session {
+                            self.stdin.insert(id.clone(), session);
+                        }
                     }
-                }
+                    "followup_task" => {
+                        self.resuming.insert(id.clone(), None);
+                    }
+                    "send_input" => {
+                        let target = input.get("target").and_then(Value::as_str).map(str::to_owned);
+                        self.resuming.insert(id.clone(), target);
+                    }
+                    "wait" | "wait_agent" => {
+                        self.waits.insert(id.clone());
+                    }
+                    _ => {}
+                },
                 Entry::ToolResult { tool_use_id, text, .. } => {
                     if let Some(session) = running_session(text) {
                         news.push(Task {
@@ -248,14 +268,73 @@ impl Reader for CodexReader {
                             side: None,
                             summary: Some(format!("Exited with code {code}")),
                         });
+                    } else if let Some(Some(target)) = self.resuming.get(tool_use_id) {
+                        if text.contains("submission_id") {
+                            news.extend(self.resumed(target, tool_use_id));
+                        }
+                        self.resuming.remove(tool_use_id);
+                    } else if self.waits.remove(tool_use_id) {
+                        news.extend(waited(text));
                     }
                 }
                 _ => {}
             }
         }
+        if line.contains("\"interacted\"")
+            && let Ok(value) = serde_json::from_str::<Value>(line)
+            && let Some(activity) = value.get("payload").and_then(activity)
+            && activity.kind == "interacted"
+            && let Some(call) = activity.call
+            && self.resuming.remove(call).is_some()
+        {
+            news.extend(self.resumed(activity.agent, call));
+        }
         read.entries.extend(news.into_iter().map(Entry::Task));
+        for entry in &read.entries {
+            if let Entry::Task(Task { id, kind: Some(TaskKind::Subagent), status, .. }) = entry {
+                if *status == TaskStatus::Running {
+                    self.ended.remove(id);
+                } else {
+                    self.ended.insert(id.clone());
+                }
+            }
+        }
         read
     }
+}
+
+impl CodexReader {
+    /// News that `call` set `agent` running again, if it had ended: a
+    /// message to a subagent still at work only adds to what it does.
+    fn resumed(&self, agent: &str, call: &str) -> Option<Task> {
+        self.ended.contains(agent).then(|| subagent(agent, Some(call.to_owned()), TaskStatus::Running))
+    }
+}
+
+/// How each subagent a `wait` waited on ended, from its output's `status`:
+/// `{"status": {"<id>": {"completed": "<its last message>"}}}`. One still
+/// running gives none.
+fn waited(output: &str) -> Vec<Task> {
+    let Ok(output) = serde_json::from_str::<Value>(output) else {
+        return Vec::new();
+    };
+    let Some(statuses) = output.get("status").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    statuses
+        .iter()
+        .filter(|(agent, _)| crate::is_safe_id(agent))
+        .filter_map(|(agent, status)| {
+            let (status, said) = match status {
+                Value::String(status) if status == "shutdown" || status == "interrupted" => (TaskStatus::Stopped, None),
+                Value::Object(ended) if ended.contains_key("completed") => (TaskStatus::Completed, ended.get("completed")),
+                Value::Object(ended) if ended.contains_key("errored") => (TaskStatus::Failed, ended.get("errored")),
+                _ => return None,
+            };
+            let summary = said.and_then(Value::as_str).filter(|said| !said.is_empty()).map(str::to_owned);
+            Some(Task { summary, ..subagent(agent, None, status) })
+        })
+        .collect()
 }
 
 /// The session a unified-exec command still runs in, from its output:
@@ -279,14 +358,51 @@ fn exit_code(output: &str) -> Option<i32> {
 fn spawned(call: &str, output: &str) -> Option<Task> {
     let output: Value = serde_json::from_str(output).ok()?;
     let agent = output.get("agent_id")?.as_str().filter(|agent| crate::is_safe_id(agent))?;
-    Some(Task {
-        id: agent.to_owned(),
-        call: Some(call.to_owned()),
-        kind: Some(TaskKind::Subagent),
-        status: TaskStatus::Running,
-        side: Some(agent.to_owned()),
-        summary: None,
+    Some(subagent(agent, Some(call.to_owned()), TaskStatus::Running))
+}
+
+/// What a subagent did, as Codex tells its parent: `started` and
+/// `interacted` name the call that did it (`spawn_agent`, and `followup_task`
+/// or `send_message`), `completed` and `interrupted` don't. Rollouts keep it
+/// as a `sub_agent_activity` event, or, paginated or for `completed`, as an
+/// `item_completed` `SubAgentActivity` item.
+struct Activity<'a> {
+    kind: &'a str,
+    call: Option<&'a str>,
+    agent: &'a str,
+}
+
+fn activity(payload: &Value) -> Option<Activity<'_>> {
+    let (item, call) = match payload.get("type").and_then(Value::as_str)? {
+        "sub_agent_activity" => (payload, payload.get("event_id")),
+        "item_completed" => {
+            let item = payload.get("item").filter(|item| item.get("type").and_then(Value::as_str) == Some("SubAgentActivity"))?;
+            (item, item.get("id"))
+        }
+        _ => return None,
+    };
+    Some(Activity {
+        kind: item.get("kind").and_then(Value::as_str)?,
+        call: call.and_then(Value::as_str),
+        agent: item.get("agent_thread_id").and_then(Value::as_str).filter(|agent| crate::is_safe_id(agent))?,
     })
+}
+
+impl Activity<'_> {
+    /// News of the subagent: running from the call that started it, or ended.
+    fn news(self) -> Option<Task> {
+        let (call, status) = match self.kind {
+            "started" => (self.call.map(str::to_owned), TaskStatus::Running),
+            "interrupted" => (None, TaskStatus::Stopped),
+            "completed" => (None, TaskStatus::Completed),
+            _ => return None,
+        };
+        Some(subagent(self.agent, call, status))
+    }
+}
+
+fn subagent(agent: &str, call: Option<String>, status: TaskStatus) -> Task {
+    Task { id: agent.to_owned(), call, kind: Some(TaskKind::Subagent), status, side: Some(agent.to_owned()), summary: None }
 }
 
 /// The conversation steps and turn marks in one rollout line.
@@ -348,22 +464,10 @@ pub fn read_line(line: &str) -> Read {
             read.entries.push(Entry::ToolResult { tool_use_id: id, text, is_error: false });
             read.entries.extend(task.map(Entry::Task));
         }
-        ("event_msg", "item_completed") if payload.pointer("/item/type").and_then(Value::as_str) == Some("SubAgentActivity") => {
-            let item = &payload["item"];
-            let status = item.get("kind").and_then(Value::as_str).map_or(TaskStatus::Running, |kind| match kind {
-                "interrupted" => TaskStatus::Stopped,
-                other => TaskStatus::parse(other),
-            });
-            match item.get("agent_thread_id").and_then(Value::as_str).filter(|agent| crate::is_safe_id(agent)) {
-                Some(agent) if status != TaskStatus::Running => read.entries.push(Entry::Task(Task {
-                    id: agent.to_owned(),
-                    call: None,
-                    kind: Some(TaskKind::Subagent),
-                    status,
-                    side: Some(agent.to_owned()),
-                    summary: None,
-                })),
-                _ => read.entries.push(Entry::Other { kind: "event_msg:item_completed".into() }),
+        ("event_msg", "sub_agent_activity" | "item_completed") if activity(&payload).is_some() => {
+            match activity(&payload).and_then(Activity::news) {
+                Some(task) => read.entries.push(Entry::Task(task)),
+                None => read.entries.push(Entry::Other { kind: "event_msg:sub_agent_activity".into() }),
             }
         }
         ("compacted", _) => {
@@ -775,5 +879,72 @@ mod tests {
         let finished = tasks(json!({"timestamp": "t", "type": "event_msg", "payload": {"type": "item_completed",
             "item": {"type": "SubAgentActivity", "kind": "completed", "agent_thread_id": "kid-1"}}}));
         assert_eq!(finished[0].status, TaskStatus::Completed);
+    }
+
+    fn tasks_of(reader: &mut CodexReader, line: Value) -> Vec<Task> {
+        let read = reader.push(&line.to_string());
+        read.entries.into_iter().filter_map(|entry| if let Entry::Task(task) = entry { Some(task) } else { None }).collect()
+    }
+
+    fn item(payload: Value) -> Value {
+        json!({"timestamp": "t", "type": "response_item", "payload": payload})
+    }
+
+    fn activity_event(kind: &str, call: &str, agent: &str) -> Value {
+        json!({"timestamp": "t", "type": "event_msg", "payload": {"type": "sub_agent_activity", "event_id": call,
+            "occurred_at_ms": 1, "agent_thread_id": agent, "agent_path": "/root/kid", "kind": kind}})
+    }
+
+    fn completed(agent: &str) -> Value {
+        json!({"timestamp": "t", "type": "event_msg", "payload": {"type": "item_completed",
+            "item": {"type": "SubAgentActivity", "id": "subagent-completed-turn-2", "kind": "completed", "agent_thread_id": agent}}})
+    }
+
+    #[test]
+    fn a_follow_up_task_sets_a_finished_subagent_running_again_but_not_one_still_at_work() {
+        let mut reader = CodexReader::default();
+        let spawned = tasks_of(&mut reader, activity_event("started", "c1", "kid-1"));
+        assert_eq!(spawned, vec![subagent("kid-1", Some("c1".into()), TaskStatus::Running)]);
+        let follow_up = |reader: &mut CodexReader, call: &str| {
+            tasks_of(
+                reader,
+                item(json!({"type": "function_call", "name": "followup_task", "call_id": call,
+                    "arguments": "{\"target\":\"kid\",\"message\":\"and the tests\"}"})),
+            );
+            tasks_of(reader, activity_event("interacted", call, "kid-1"))
+        };
+        assert_eq!(follow_up(&mut reader, "c2"), vec![], "kid-1 is still at work");
+        assert_eq!(tasks_of(&mut reader, completed("kid-1"))[0].status, TaskStatus::Completed);
+        assert_eq!(follow_up(&mut reader, "c3"), vec![subagent("kid-1", Some("c3".into()), TaskStatus::Running)]);
+        assert_eq!(tasks_of(&mut reader, item(json!({"type": "function_call_output", "call_id": "c3", "output": ""}))), vec![]);
+        assert_eq!(tasks_of(&mut reader, completed("kid-1")), vec![subagent("kid-1", None, TaskStatus::Completed)]);
+        let interrupted = tasks_of(&mut reader, activity_event("interrupted", "c4", "kid-1"));
+        assert_eq!(interrupted, vec![subagent("kid-1", None, TaskStatus::Stopped)]);
+    }
+
+    #[test]
+    fn a_wait_says_how_v1_subagents_ended_and_input_to_a_finished_one_runs_it_again() {
+        let mut reader = CodexReader::default();
+        let call = |name: &str, id: &str, arguments: Value| {
+            item(json!({"type": "function_call", "name": name, "namespace": "multi_agent_v1", "call_id": id,
+                "arguments": arguments.to_string()}))
+        };
+        let output =
+            |id: &str, output: Value| item(json!({"type": "function_call_output", "call_id": id, "output": output.to_string()}));
+        tasks_of(&mut reader, output("c1", json!({"agent_id": "kid-1"})));
+        tasks_of(&mut reader, call("wait", "w1", json!({"targets": ["kid-1", "kid-2"]})));
+        let ended = tasks_of(
+            &mut reader,
+            output("w1", json!({"status": {"kid-1": {"completed": "Found it"}, "kid-2": "running"}, "timed_out": false})),
+        );
+        assert_eq!(ended, vec![Task { summary: Some("Found it".into()), ..subagent("kid-1", None, TaskStatus::Completed) }]);
+        tasks_of(&mut reader, call("send_input", "c2", json!({"target": "kid-1", "message": "now the docs"})));
+        let resumed = tasks_of(&mut reader, output("c2", json!({"submission_id": "s1"})));
+        assert_eq!(resumed, vec![subagent("kid-1", Some("c2".into()), TaskStatus::Running)]);
+        tasks_of(&mut reader, call("send_input", "c3", json!({"target": "kid-1", "message": "and the README"})));
+        assert_eq!(tasks_of(&mut reader, output("c3", json!({"submission_id": "s2"}))), vec![], "kid-1 is at work again");
+        tasks_of(&mut reader, call("wait_agent", "w2", json!({"targets": ["kid-1"]})));
+        let failed = tasks_of(&mut reader, output("w2", json!({"status": {"kid-1": {"errored": "boom"}}, "timed_out": false})));
+        assert_eq!(failed[0].status, TaskStatus::Failed);
     }
 }

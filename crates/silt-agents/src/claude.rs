@@ -99,6 +99,43 @@ pub fn session_paths(config_dir: &Path, cwd: &Path, session_id: &str) -> Session
     }
 }
 
+/// The transcript of Claude Code's session `session` started in `cwd`,
+/// once it has one.
+pub fn transcript_of(cwd: &Path, session: &str) -> Option<PathBuf> {
+    transcript_in(&config_dir_in(cwd)?, cwd, session)
+}
+
+fn transcript_in(config: &Path, cwd: &Path, session: &str) -> Option<PathBuf> {
+    if !crate::is_safe_id(session) {
+        return None;
+    }
+    let own = session_paths(config, cwd, session).transcript;
+    if own.exists() {
+        return Some(own);
+    }
+    // Claude Code may spell its working directory otherwise, as Windows'
+    // verbatim paths do, and so name its project's folder otherwise.
+    fs::read_dir(config.join("projects"))
+        .ok()?
+        .flatten()
+        .map(|project| project.path().join(format!("{session}.jsonl")))
+        .find(|path| path.exists())
+}
+
+/// The background tasks that `lines` of a Claude Code transcript report
+/// ended, by Claude's id for each, with how they ended.
+pub fn tasks_ended(lines: &str) -> Vec<(String, TaskStatus)> {
+    lines
+        .lines()
+        .filter(|line| line.contains("<task-notification>"))
+        .flat_map(normalize)
+        .filter_map(|entry| match entry {
+            Entry::Task(task) if task.status != TaskStatus::Running => Some((task.id, task.status)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Writes a session's files so `claude --resume <id>` run in `cwd` continues
 /// it, rewriting every former session directory, working directory and
 /// session id to the new ones (docs/research/probes.md).
@@ -416,7 +453,7 @@ struct Fields {
     subtype: Option<Value>,
     message: Option<Message>,
     /// What a tool's result says beside its text: the subagent or
-    /// background command it started.
+    /// background command it started, or the subagent it resumed.
     #[serde(rename = "toolUseResult", default, deserialize_with = "started")]
     started: Option<Started>,
     attachment: Option<Attachment>,
@@ -426,6 +463,8 @@ struct Fields {
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Started {
     agent: Option<String>,
+    /// A finished subagent that `SendMessage` set running again.
+    resumed: Option<String>,
     background: Option<String>,
     status: Option<String>,
 }
@@ -440,9 +479,9 @@ struct Attachment {
     prompt: Option<Value>,
 }
 
-/// Reads only `agentId`, `backgroundTaskId` and `status` of a structured
-/// result, skipping its output, which can be long; a result that isn't an
-/// object gives none.
+/// Reads only `agentId`, `resumedAgentId`, `backgroundTaskId` and `status`
+/// of a structured result, skipping its output, which can be long; a result
+/// that isn't an object gives none.
 fn started<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Started>, D::Error> {
     use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
 
@@ -459,6 +498,7 @@ fn started<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<S
             while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
                 let field = match key.as_ref() {
                     "agentId" => &mut started.agent,
+                    "resumedAgentId" => &mut started.resumed,
                     "backgroundTaskId" => &mut started.background,
                     "status" => &mut started.status,
                     _ => {
@@ -587,7 +627,7 @@ fn started_task(started: Started, entries: &[Entry]) -> Option<Task> {
         Entry::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
         _ => None,
     });
-    let (id, kind) = match (started.agent, started.background) {
+    let (id, kind) = match (started.agent.or(started.resumed), started.background) {
         (Some(agent), _) => (agent, TaskKind::Subagent),
         (None, Some(background)) => (background, TaskKind::Background),
         (None, None) => return None,
@@ -829,6 +869,20 @@ mod tests {
     }
 
     #[test]
+    fn a_message_that_resumes_a_finished_subagent_sets_it_running_under_the_message_s_call() {
+        let resumed = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"s1","type":"tool_result","content":[{"type":"text","text":"{\"success\":true,\"message\":\"Resuming agent ad7\"}"}]}]},"toolUseResult":{"success":true,"message":"Resuming agent ad7","resumedAgentId":"ad7","revivedAgentId":"ad7","pin":{"id":"ad7","name":"ad7","ref":"450a12"}}}"#;
+        assert_eq!(
+            normalize(resumed)[1],
+            Entry::Task(Task {
+                side: Some("agent-ad7".into()),
+                ..task("ad7", Some("s1"), Some(TaskKind::Subagent), TaskStatus::Running)
+            })
+        );
+        let queued = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"s2","type":"tool_result","content":"queued"}]},"toolUseResult":{"success":true,"message":"Message queued for delivery to ad7 at its next tool round.","pin":{"id":"ad7"}}}"#;
+        assert_eq!(normalize(queued).len(), 1, "a message to a subagent still running starts nothing");
+    }
+
+    #[test]
     fn a_task_report_says_how_it_ended_whether_it_came_idle_or_mid_turn() {
         let report = "<task-notification>\n<task-id>b3r</task-id>\n<tool-use-id>t1</tool-use-id>\n<status>completed</status>\n<summary>Background command \"probe\" completed (exit code 0)</summary>\n</task-notification>";
         let ended = Task {
@@ -845,6 +899,41 @@ mod tests {
             task_notification("<task-notification><task-id>x</task-id><status>killed</status>").map(|task| task.status),
             Some(TaskStatus::Stopped)
         );
+    }
+
+    #[test]
+    fn a_transcript_tells_which_background_tasks_ended_and_how() {
+        let report = |id: &str, status: &str| {
+            let text = format!("<task-notification>\n<task-id>{id}</task-id>\n<status>{status}</status>\n</task-notification>");
+            json!({"type": "user", "origin": {"kind": "task-notification"}, "message": {"role": "user", "content": text}})
+                .to_string()
+        };
+        let reminded = json!({"type": "user", "message": {"role": "user", "content": [{"type": "text",
+            "text": "<system-reminder>\n<task-notification>\n<task-id>quoted</task-id>\n<status>failed</status>\n</task-notification>"}]}});
+        let started = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t1","type":"tool_result","content":"Command running in background with ID: b3r"}]},"toolUseResult":{"backgroundTaskId":"b3r"}}"#;
+        let lines =
+            [started.to_owned(), report("b3r", "completed"), reminded.to_string(), report("k1", "killed"), report("r1", "")];
+        assert_eq!(
+            tasks_ended(&lines.join("\n")),
+            [("b3r".to_owned(), TaskStatus::Completed), ("k1".to_owned(), TaskStatus::Stopped)]
+        );
+    }
+
+    #[test]
+    fn a_transcript_is_found_by_its_session_alone() {
+        let config = tempfile::tempdir().unwrap();
+        let cwd = Path::new("/work/repo");
+        // Claude Code named its project's folder after a spelling of the directory other than this one.
+        let elsewhere = config.path().join("projects/-verbatim-work-repo");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(elsewhere.join("s1.jsonl"), "").unwrap();
+        assert_eq!(transcript_in(config.path(), cwd, "s1"), Some(elsewhere.join("s1.jsonl")));
+        let own = session_paths(config.path(), cwd, "s2").transcript;
+        fs::create_dir_all(own.parent().unwrap()).unwrap();
+        fs::write(&own, "").unwrap();
+        assert_eq!(transcript_in(config.path(), cwd, "s2"), Some(own), "its own project's first");
+        assert_eq!(transcript_in(config.path(), cwd, "s3"), None);
+        assert_eq!(transcript_in(config.path(), cwd, "../s1"), None);
     }
 
     #[test]

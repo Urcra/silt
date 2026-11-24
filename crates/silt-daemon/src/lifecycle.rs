@@ -145,11 +145,10 @@ impl Core {
             self.store.remove_thread(*thread).await?;
         }
         for family in families {
-            self.snapshotted.remove(&family);
+            self.digests.remove(&family);
             let remaining = self.threads.values().filter(|record| record.family == family).count();
             if remaining == 0 {
                 self.families.remove(&family);
-                self.raw.remove(&family);
                 self.syncs.remove(&family);
                 self.store.clear_deltas(family).await?;
                 continue;
@@ -166,15 +165,18 @@ impl Core {
                     .filter(|record| record.family == family && !record.repo_root.as_os_str().is_empty())
                     .find_map(|record| Repo::discover(&record.repo_root).ok());
                 let Some(repo) = repo else {
-                    self.families.remove(&family);
-                    self.raw.insert(family, kept);
+                    self.families.hold(family, crate::load::Loaded::Raw(kept), None);
                     continue;
                 };
                 let mut projected = Family::new();
                 crate::load::apply_stored(&mut projected, kept, &mut RepoBases(&repo));
-                self.families.insert(family, projected);
+                self.families.hold(
+                    family,
+                    crate::load::Loaded::Projected { family: Box::new(projected), covered: 0, outdated: false },
+                    Some(repo.root().to_owned()),
+                );
             } else {
-                self.raw.insert(family, kept);
+                self.families.hold(family, crate::load::Loaded::Raw(kept), None);
             }
         }
         Ok(())

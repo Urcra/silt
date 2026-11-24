@@ -80,7 +80,7 @@ test('lists threads and searches across compaction', async ({ page }) => {
 
   await page.keyboard.press('ControlOrMeta+Shift+F')
   await page.getByLabel('search', { exact: true }).fill('farewell')
-  await page.getByRole('button', { name: 'Search' }).click()
+  await page.getByRole('main').getByRole('button', { name: 'Search', exact: true }).click()
   const results = page.getByTestId('search-results')
   // The index brackets each match, which the page marks.
   await expect(results.locator('mark').first()).toHaveText('farewell')
