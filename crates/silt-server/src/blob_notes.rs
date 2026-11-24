@@ -1,4 +1,4 @@
-//! What the server knows of a blob besides its bytes (ADR 0120): the machine
+//! What the server knows of a blob besides its bytes (ADR 0121): the machine
 //! whose push first named it, why it won't keep it, and whether its last
 //! upload arrived damaged. Kept beside the blobs, one small file each, so
 //! every machine reading the thread hears of it.

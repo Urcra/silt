@@ -11,7 +11,7 @@ import { Icon, cx } from '../ui'
 import { KeptHereOnly, MediaViewer, Unavailable, VideoPlayer } from './Media'
 
 /**
- * An image or a video an agent showed in the conversation, with its caption (ADR 0120). An image shows its smallest
+ * An image or a video an agent showed in the conversation, with its caption (ADR 0121). An image shows its smallest
  * preview and opens in the viewer; a video plays where it is and opens in the viewer at the moment it's at.
  */
 export function ShownImage({ thread, entry, tile = false }: { thread: string; entry: HistoryEntry; tile?: boolean }) {

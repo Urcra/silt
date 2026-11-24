@@ -290,7 +290,7 @@ impl Server {
                 }
             }
         }
-        // Previews whose image is gone go with it (ADR 0120).
+        // Previews whose image is gone go with it (ADR 0121).
         if let Ok(previews) = std::fs::read_dir(self.previews_dir()) {
             for preview in previews.flatten() {
                 let name = preview.file_name().to_string_lossy().into_owned();

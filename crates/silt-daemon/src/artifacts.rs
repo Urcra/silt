@@ -43,7 +43,7 @@ fn new_id() -> String {
 
 /// The file `path` names for a run in `checkout`, if an agent may show it:
 /// a regular file outside every folder in `denied`. Its size is the
-/// caller's to check: an image or a video has no limit (ADR 0120).
+/// caller's to check: an image or a video has no limit (ADR 0121).
 pub(crate) fn readable_file(path: &str, checkout: &Path, denied: &[PathBuf]) -> Result<PathBuf, CoreError> {
     let given = Path::new(path);
     let joined = if given.is_absolute() { given.to_owned() } else { checkout.join(given) };
@@ -578,7 +578,7 @@ impl Core {
             }
         }
         // An image or a video from a file is kept as it is, however large,
-        // with an image's previews (ADR 0120); an SVG, being text, isn't.
+        // with an image's previews (ADR 0121); an SVG, being text, isn't.
         let media = match (&file, kind.as_str()) {
             (Some(file), "image" | "video") => self.keep_media(file, &kind, new.inline).await?,
             _ => None,
@@ -883,7 +883,7 @@ impl Core {
 }
 
 /// Refuses to read a video, or anything over [`ARTIFACT_BYTES`], whole into
-/// one answer: it's read by range from its blob (ADR 0120).
+/// one answer: it's read by range from its blob (ADR 0121).
 fn refuse_whole(media_type: &str, file: Option<&Path>) -> Result<(), CoreError> {
     let large = file.and_then(|file| std::fs::metadata(file).ok()).is_some_and(|meta| meta.len() > ARTIFACT_BYTES);
     if silt_media::is_video(media_type) || large {
@@ -922,7 +922,7 @@ pub(crate) fn extension(media_type: &str) -> &'static str {
     }
 }
 
-/// An image or a video an agent showed, kept as given (ADR 0120).
+/// An image or a video an agent showed, kept as given (ADR 0121).
 pub(crate) struct KeptMedia {
     pub(crate) kind: &'static str,
     pub(crate) media_type: &'static str,

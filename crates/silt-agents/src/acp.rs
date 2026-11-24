@@ -40,7 +40,7 @@ pub fn name_of(line: &str) -> Option<String> {
 /// is recorded beside the session under that name.
 /// A prompt with the names of the files attached to it, and the images and
 /// videos among them, kept so the history can show them: inline as base64,
-/// or since ADR 0120 named by their blobs.
+/// or since ADR 0121 named by their blobs.
 pub fn prompt(text: &str, by: &str, attached: &[String], media: &[silt_proto::view::ImageView]) -> String {
     let mut record = json!({"t": "prompt", "text": text, "by": by});
     if !attached.is_empty() {

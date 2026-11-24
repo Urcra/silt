@@ -3,9 +3,10 @@
 // arrives once in the URL fragment from `silt open`, or is traded for the
 // one-time code a browser opened by `silt open` carries, and is kept for the tab.
 
-import { apiUrl } from './served'
+import { apiUrl, hosted } from './served'
 import { askedServer } from './workspace'
 import type {
+  AskView,
   AppearanceMode,
   AppearanceSettings,
   TextSettings,
@@ -227,7 +228,7 @@ export interface SearchForm {
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
 
 /**
- * A blob of the thread's, raw, for an `<img>` or a `<video>` to read by range (ADR 0120); `preview` asks for an
+ * A blob of the thread's, raw, for an `<img>` or a `<video>` to read by range (ADR 0121); `preview` asks for an
  * image's preview of that many px, `download` saves it under that name. The daemon takes its token in the query, as
  * an element can't send a header; the server and a phone go by their cookie.
  */
@@ -253,7 +254,7 @@ export interface Uploaded {
 }
 
 /**
- * Sends a file a prompt will carry to the machine ahead of the prompt, streaming it with no size limit (ADR 0120),
+ * Sends a file a prompt will carry to the machine ahead of the prompt, streaming it with no size limit (ADR 0121),
  * telling `progress` how much has gone.
  */
 export function uploadFile(file: Blob, progress: (sent: number) => void, signal?: AbortSignal): Promise<Uploaded> {
@@ -359,7 +360,7 @@ export const api = {
   /** Erases a Local only thread and its forks (ADR 0092); unconfirmed, says what would go. */
   eraseThread: (id: string, confirm: boolean) => request<string>('POST', `${thread(id)}/erase`, { confirm }),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
-  /** How much of a blob of the thread's has arrived, while another machine uploads it (ADR 0120). */
+  /** How much of a blob of the thread's has arrived, while another machine uploads it (ADR 0121). */
   blobState: (id: string, blob: string) => request<BlobState>('GET', `${thread(id)}/blobs/${blob}/state`),
   /** An artifact's content, by the blob a version of it names (ADR 0068). */
   artifact: (id: string, blob: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${blob}`),
@@ -720,6 +721,10 @@ export const api = {
   share: (id: string, user: string, remove: boolean) => request<string>('POST', `${thread(id)}/share`, { user, remove }),
   offerMergeRequest: (id: string, title: string) => request<MrSummary>('POST', `${thread(id)}/mrs`, { title }),
   mergeRequests: () => request<MrSummary[]>('GET', '/api/mrs'),
+  /** Agents' asks of other agents on this machine (ADR 0120); the hosted app runs no agents, so none. */
+  asks: () => (hosted() ? Promise.resolve([]) : request<AskView[]>('GET', '/api/asks')),
+  askStop: (id: string) => request<AskView>('POST', `/api/asks/${encodeURIComponent(id)}/stop`),
+  askTake: (id: string) => request<string>('POST', `/api/asks/${encodeURIComponent(id)}/take`),
   /** A merge request; `brief` leaves out its diff and the fork's conversation. */
   mergeRequest: (id: string, hidden: Hidden = {}, brief = false) => {
     const params = hiddenParams(new URLSearchParams(), hidden)

@@ -1,4 +1,4 @@
-// The image viewer's zoom and pan (ADR 0120), as plain arithmetic: where an
+// The image viewer's zoom and pan (ADR 0121), as plain arithmetic: where an
 // image of `width` by `height` px sits in a stage at `scale`, its top-left
 // corner `x`, `y` px from the stage's.
 

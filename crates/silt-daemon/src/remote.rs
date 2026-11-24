@@ -34,7 +34,7 @@ pub enum RemoteError {
     ProtocolMismatch { supported: Vec<u32> },
     #[error("the server refused: {0}")]
     Refused(ErrorReply),
-    /// Over the server's `max_file_mib` (ADR 0120).
+    /// Over the server's `max_file_mib` (ADR 0121).
     #[error("{0}")]
     TooLarge(String),
     #[error("could not save the server settings")]
@@ -527,14 +527,14 @@ impl Remote {
         Ok(checked(response).await?.bytes().await?.to_vec())
     }
 
-    /// How much of a blob the server has (ADR 0120).
+    /// How much of a blob the server has (ADR 0121).
     pub async fn blob_state(&self, hash: BlobHash) -> Result<silt_proto::BlobState, RemoteError> {
         let response = self.request(reqwest::Method::GET, &format!("/v1/blobs/{hash}/state")).send().await?;
         Ok(checked(response).await?.json().await?)
     }
 
     /// Sends the stored blob at `path`: whole when small, else in chunks,
-    /// going on from what the server has (ADR 0120). Nothing holds it whole.
+    /// going on from what the server has (ADR 0121). Nothing holds it whole.
     pub async fn upload_blob(&self, hash: BlobHash, path: &Path) -> Result<(), RemoteError> {
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
         let size = tokio::fs::metadata(path).await?.len();
@@ -594,7 +594,7 @@ impl Remote {
     }
 
     /// The server's answer to a browser's request for a blob, by range,
-    /// passed on rather than fetched whole first (ADR 0120).
+    /// passed on rather than fetched whole first (ADR 0121).
     pub async fn blob_range(&self, hash: BlobHash, range: Option<&str>) -> Result<reqwest::Response, RemoteError> {
         let mut request = self.request(reqwest::Method::GET, &format!("/v1/blobs/{hash}")).timeout(BLOB_TIMEOUT);
         if let Some(range) = range {

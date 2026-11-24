@@ -1,13 +1,14 @@
 //! Claude Code's transcript of the session Claude's adapter runs, read for
 //! the ends of commands left in the background: the adapter reports only
 //! those of the Bash tool, not of PowerShell's, so one PowerShell left
-//! running would show running for good (claude-agent-acp 0.109).
+//! running would show running for good (claude-agent-acp 0.109). Nor does
+//! it always report a subagent's end (0.110).
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use silt_agents::TaskStatus;
+use silt_agents::Task;
 
 #[derive(Debug, Clone)]
 pub(super) struct Transcript {
@@ -27,9 +28,9 @@ impl Transcript {
         Self { session: session.to_owned(), path, read }
     }
 
-    /// The tasks it reported ended since last read, by Claude's id for each.
-    /// It reads files, so it blocks.
-    pub(super) fn read_ended(&mut self, cwd: &Path) -> io::Result<Vec<(String, TaskStatus)>> {
+    /// The tasks it reported ended since last read. It reads files, so it
+    /// blocks.
+    pub(super) fn read_ended(&mut self, cwd: &Path) -> io::Result<Vec<Task>> {
         if self.path.is_none() {
             self.path = silt_agents::claude::transcript_of(cwd, &self.session);
         }
@@ -52,7 +53,13 @@ impl Transcript {
 mod tests {
     use std::io::Write;
 
+    use silt_agents::TaskStatus;
+
     use super::*;
+
+    fn ended(transcript: &mut Transcript, cwd: &Path) -> Vec<(String, TaskStatus)> {
+        transcript.read_ended(cwd).unwrap().into_iter().map(|task| (task.id, task.status)).collect()
+    }
 
     #[test]
     fn only_what_was_added_since_is_read_and_a_line_being_written_waits() {
@@ -66,18 +73,18 @@ mod tests {
         let mut transcript = Transcript { session: "s".into(), path: Some(path.clone()), read: 0 };
         transcript.read = std::fs::metadata(&path).unwrap().len();
         let cwd = dir.path();
-        assert_eq!(transcript.read_ended(cwd).unwrap(), []);
+        assert_eq!(ended(&mut transcript, cwd), []);
 
         let line = report("b1");
         let (start, rest) = line.split_at(20);
         let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
         file.write_all(start.as_bytes()).unwrap();
-        assert_eq!(transcript.read_ended(cwd).unwrap(), [], "half a line");
+        assert_eq!(ended(&mut transcript, cwd), [], "half a line");
         writeln!(file, "{rest}").unwrap();
-        assert_eq!(transcript.read_ended(cwd).unwrap(), [("b1".to_owned(), TaskStatus::Completed)]);
-        assert_eq!(transcript.read_ended(cwd).unwrap(), [], "read once");
+        assert_eq!(ended(&mut transcript, cwd), [("b1".to_owned(), TaskStatus::Completed)]);
+        assert_eq!(ended(&mut transcript, cwd), [], "read once");
 
         std::fs::write(&path, format!("{}\n", report("b2"))).unwrap();
-        assert_eq!(transcript.read_ended(cwd).unwrap(), [("b2".to_owned(), TaskStatus::Completed)], "written anew");
+        assert_eq!(ended(&mut transcript, cwd), [("b2".to_owned(), TaskStatus::Completed)], "written anew");
     }
 }

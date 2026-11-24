@@ -265,7 +265,7 @@ async fn routes_without_an_account_take_only_small_bodies() {
 
 /// A large blob goes up in chunks, in order, going on from what arrived
 /// after a dropped connection, is checked whole, and is read by range
-/// (ADR 0120).
+/// (ADR 0121).
 #[tokio::test]
 async fn a_large_blob_goes_up_in_chunks_and_is_read_by_range() {
     let data = tempfile::tempdir().expect("temp dir");

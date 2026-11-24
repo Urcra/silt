@@ -57,7 +57,8 @@ context compaction, and the history of the threads it was forked from. Use silt_
 silt_history_read to look back, silt_file_history to see which prompts changed a file, and silt_in_flight \
 to see who else is changing a path. silt_skills lists the repository's skills and silt_use_skill loads one. \
 Other agents may work in this project too: silt_agents lists them, and silt_message tells one what you're doing. \
-A message Silt hands you from another agent comes from that agent, not from your user.";
+A message Silt hands you from another agent comes from that agent, not from your user. To have an agent on another \
+harness or model do part of your work, such as a review, silt_askable lists them and silt_ask asks one.";
 
 /// Added to [`INSTRUCTIONS`] when the run is watched in the web UI.
 pub const SHOW_INSTRUCTIONS: &str = " The person follows this session in Silt's web UI: to show them an image or a \
@@ -66,8 +67,8 @@ silt_artifact_guide first, follow what it says, then call silt_artifact, and cal
 version. silt_artifact_read gives back a version's source, to revise it after a handoff or a fork.";
 
 /// The tools that change something beyond the session: a message another
-/// agent then hears (ADR 0090).
-pub const WRITING_TOOLS: &[&str] = &["silt_message"];
+/// agent then hears (ADR 0090), and asking another agent (ADR 0120).
+pub const WRITING_TOOLS: &[&str] = &["silt_message", "silt_ask", "silt_ask_stop", "silt_ask_take"];
 
 /// The tools only a run watched in the web UI gets.
 pub const SHOW_TOOLS: &[&str] = &[
@@ -346,6 +347,45 @@ fn history_tools() -> Value {
                 },
                 "required": ["to", "text"]
             }
+        },
+        {
+            "name": "silt_askable",
+            "description": "The agents you may ask to do part of your work, on this machine and by this workspace's rules: each one's id, and the models and effort levels it offers.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "silt_ask",
+            "description": "Ask another agent, on another harness or model, to do part of your work, such as reviewing your change or writing its tests. Use your own subagents for work your own model does well; ask another agent for a different model's view or strengths. It starts with only your prompt, not this conversation, so say everything it needs. It works in a thread of its own, in your working tree (checkout `here`, the default) or in a checkout of its own forked from yours with your uncommitted edits (`own`). Only its final message comes back: its report. This waits up to 50 seconds for it; after that, the report comes to you later by itself, or call silt_ask_wait. Asking counts as running a command.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string", "description": "The agent to ask, by its id as silt_askable lists it, or its name"},
+                    "to": {"type": "string", "description": "An earlier ask's id, to follow up with the same agent in its thread, in place of agent"},
+                    "prompt": {"type": "string", "description": "What to do, with everything it needs to know"},
+                    "title": {"type": "string", "description": "A short title for the ask, shown to the person"},
+                    "model": {"type": "string", "description": "A model it offers, as silt_askable lists them; its default when unset"},
+                    "effort": {"type": "string", "description": "An effort level it offers; its default when unset"},
+                    "mode": {"type": "string", "enum": ["review", "work"], "description": "review: it reports and changes no files; work: it may edit. review by default"},
+                    "checkout": {"type": "string", "enum": ["here", "own"], "description": "here: your working tree, beside you; own: a checkout of its own, whose changes you take with silt_ask_take. here by default"},
+                    "wait": {"type": "boolean", "description": "Wait up to 50 seconds for its report; true by default"}
+                },
+                "required": ["prompt"]
+            }
+        },
+        {
+            "name": "silt_ask_wait",
+            "description": "Wait up to 50 seconds more for an ask's report, by the id silt_ask gave.",
+            "inputSchema": {"type": "object", "properties": {"ask": {"type": "string"}}, "required": ["ask"]}
+        },
+        {
+            "name": "silt_ask_stop",
+            "description": "Stop an ask that is still running, by its id.",
+            "inputSchema": {"type": "object", "properties": {"ask": {"type": "string"}}, "required": ["ask"]}
+        },
+        {
+            "name": "silt_ask_take",
+            "description": "Take the changes an ask made in its own checkout into yours, by its id, as a pull. Asks in your working tree need nothing taken.",
+            "inputSchema": {"type": "object", "properties": {"ask": {"type": "string"}}, "required": ["ask"]}
         }
     ]);
     // Each only reads, which a client such as a page connector relies on
@@ -492,12 +532,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_tool_only_reads_but_a_message_to_another_agent() {
+    fn every_tool_only_reads_but_messages_and_asks_to_other_agents() {
+        let writing = ["silt_message", "silt_ask", "silt_ask_stop", "silt_ask_take"];
         for tool in tools(false).as_array().expect("a list") {
             let name = tool["name"].as_str().expect("a name");
-            assert_eq!(tool["annotations"]["readOnlyHint"], json!(name != "silt_message"), "{name}");
+            assert_eq!(tool["annotations"]["readOnlyHint"], json!(!writing.contains(&name)), "{name}");
         }
         assert!(INSTRUCTIONS.contains("silt_agents") && INSTRUCTIONS.contains("not from your user"));
+        assert!(INSTRUCTIONS.contains("silt_askable") && INSTRUCTIONS.contains("silt_ask "));
     }
 
     #[derive(Default)]
@@ -544,7 +586,11 @@ mod tests {
         ]);
         assert_eq!(replies.len(), 5, "notifications get no reply");
         assert_eq!(replies[0]["result"]["protocolVersion"], "2025-03-26");
-        assert_eq!(replies[1]["result"]["tools"].as_array().map(Vec::len), Some(10));
+        assert_eq!(
+            replies[1]["result"]["tools"].as_array().map(Vec::len),
+            Some(15),
+            "the history tools, the peer tools and the ask tools"
+        );
         assert_eq!(replies[2]["result"]["content"][0]["text"], "searched \"lexer\"");
         assert_eq!(replies[3]["result"]["isError"], true);
         assert_eq!(replies[4]["error"]["code"], -32601);

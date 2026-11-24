@@ -102,7 +102,7 @@ fn ranged(machine: &Machine, path: &str, range: &str) -> (String, Vec<u8>) {
 
 /// A video attached to a prompt has no size limit: it's uploaded to the
 /// machine first, goes to the server in chunks after the deltas naming it,
-/// and another machine reads it by range from the server (ADR 0120).
+/// and another machine reads it by range from the server (ADR 0121).
 #[test]
 fn a_large_video_reaches_another_machine_in_chunks_and_is_read_by_range() {
     let world = world();
@@ -165,7 +165,7 @@ fn a_large_video_reaches_another_machine_in_chunks_and_is_read_by_range() {
 
 /// A server capped below a file keeps the conversation going without it:
 /// its machine says the file is only there, and the other machine says
-/// which machine has it and why (ADR 0120).
+/// which machine has it and why (ADR 0121).
 #[test]
 fn a_file_over_the_servers_cap_stays_on_its_machine_and_both_say_why() {
     let root = common::temp_root("silt-artifacts-cap");

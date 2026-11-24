@@ -1,4 +1,4 @@
-// What the viewer and the player show (ADR 0120): an image by its previews and its original, a video by its blob,
+// What the viewer and the player show (ADR 0121): an image by its previews and its original, a video by its blob,
 // and how each reads in a caption.
 
 import { blobUrl, type ArtifactView, type ImageView, type PreviewView } from './api'
@@ -67,7 +67,7 @@ export function formatOf(mediaType: string): string {
   return named[mediaType] ?? mediaType.replace(/^\w+\//, '').toUpperCase()
 }
 
-/** What a binary file is, by its name: an image or a video plays on its page (ADR 0120). */
+/** What a binary file is, by its name: an image or a video plays on its page (ADR 0121). */
 export function binaryKind(path: string): string {
   const extension = path.split('.').pop()?.toLowerCase() ?? ''
   if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(extension)) return 'image'

@@ -14,7 +14,7 @@ import { EditCard } from './EditCard'
 import { Markdown } from './Markdown'
 import { linesOf, useWhole } from '../wholeEntry'
 
-/** A picture or a video a prompt or a tool carried, small, opening in the viewer (ADR 0120). */
+/** A picture or a video a prompt or a tool carried, small, opening in the viewer (ADR 0121). */
 export function ImageThumb({ entry: given, from }: { entry: HistoryEntry; from: string }) {
   const [open, setOpen] = useState<{ at?: number } | null>(null)
   const thread = useContext(ArtifactActions)?.thread

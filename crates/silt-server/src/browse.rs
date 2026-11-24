@@ -525,7 +525,7 @@ async fn artifact_content(
     }
     .ok_or_else(not_found)?;
     let hash: silt_types::BlobHash = blob.parse().map_err(|_| bad_request("invalid blob hash"))?;
-    // A video or a large image is read by range from its blob (ADR 0120).
+    // A video or a large image is read by range from its blob (ADR 0121).
     let large = server
         .blobs()
         .file(hash)
@@ -547,7 +547,7 @@ struct BlobQuery {
 }
 
 /// A blob of the thread's, whole or by range, raw, for an image or a video
-/// the page shows (ADR 0120).
+/// the page shows (ADR 0121).
 async fn thread_blob(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,
@@ -569,7 +569,7 @@ async fn thread_blob(
 }
 
 /// How much of a blob of the thread's has arrived, while another machine
-/// uploads it (ADR 0120).
+/// uploads it (ADR 0121).
 async fn thread_blob_state(
     State(server): State<Server>,
     Extension(browser): Extension<Browser>,

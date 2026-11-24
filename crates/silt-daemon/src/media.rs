@@ -1,4 +1,4 @@
-//! Images and videos (ADR 0120): where a thread's blob is for the web UI to
+//! Images and videos (ADR 0121): where a thread's blob is for the web UI to
 //! read by range, and the files a prompt's sender uploaded first.
 
 use std::collections::HashSet;
@@ -76,7 +76,7 @@ pub(crate) struct Uploaded {
 
 /// The most of an uploaded file that isn't an image or a video that's
 /// read, redacted and kept with the conversation; a larger one goes only to
-/// the agent, as a file (ADR 0120).
+/// the agent, as a file (ADR 0121).
 const KEPT_FILE_BYTES: u64 = 32 << 20;
 
 /// An image larger than this goes to the agent as its preview.

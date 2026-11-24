@@ -83,7 +83,7 @@ const SMALL_BODY: usize = 1 << 20;
 const DELTAS_BODY: usize = 256 << 20;
 /// Largest blob or git pack one request may send.
 const LARGE_BODY: usize = 512 << 20;
-/// Largest chunk of a blob's upload, with room to spare (ADR 0120).
+/// Largest chunk of a blob's upload, with room to spare (ADR 0121).
 const CHUNK_BODY: usize = (silt_proto::BLOB_CHUNK as usize) + (1 << 20);
 /// How long an unfinished upload is kept for its device to go on with.
 pub(crate) const UPLOAD_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -1187,7 +1187,7 @@ fn too_large(message: String) -> ApiError {
 }
 
 /// One chunk of a large blob, in order; the blob is stored once it's whole
-/// and its hash checks out (ADR 0120). An upload is its account's own.
+/// and its hash checks out (ADR 0121). An upload is its account's own.
 async fn put_blob_chunk(
     State(server): State<Server>,
     Extension(caller): Extension<Caller>,
@@ -1283,7 +1283,7 @@ impl Server {
         Ok(false)
     }
 
-    /// The blobs a thread's page reads (ADR 0120).
+    /// The blobs a thread's page reads (ADR 0121).
     pub(crate) fn blobs(&self) -> &BlobStore {
         &self.shared.blobs
     }

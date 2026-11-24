@@ -366,7 +366,7 @@ impl Core {
         Ok(())
     }
 
-    async fn take_lease(&mut self, thread: ThreadId) -> Result<(), CoreError> {
+    pub(crate) async fn take_lease(&mut self, thread: ThreadId) -> Result<(), CoreError> {
         let Some(remote) = self.remote_for(thread).cloned() else {
             return Ok(());
         };

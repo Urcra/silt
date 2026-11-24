@@ -197,7 +197,7 @@ fn api_routes() -> Router<Web> {
         .route("/api/threads/{id}/artifacts/{blob}", get(artifact_content))
         .route("/api/threads/{id}/blobs/{blob}", get(thread_blob))
         .route("/api/threads/{id}/blobs/{blob}/state", get(thread_blob_state))
-        // A prompt's file, streamed to disk with no limit (ADR 0120).
+        // A prompt's file, streamed to disk with no limit (ADR 0121).
         .route("/api/uploads", post(upload).layer(DefaultBodyLimit::disable()))
         .route("/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
         .route("/api/threads/{id}/artifacts/{artifact}/grants", get(artifact_grants).put(set_artifact_grant))
@@ -327,6 +327,9 @@ fn api_routes() -> Router<Web> {
         .route("/api/plugins/{id}/activity", get(plugin_activity))
         .route("/api/plugins/add", post(plugin_add))
         .route("/api/mrs", get(merge_requests))
+        .route("/api/asks", get(asks))
+        .route("/api/asks/{ask}/stop", post(ask_stop))
+        .route("/api/asks/{ask}/take", post(ask_take))
         .route("/api/mrs/{id}", get(merge_request))
         .route("/api/mrs/{id}/approve", post(approve))
         .route("/api/mrs/{id}/decline", post(decline))
@@ -456,6 +459,19 @@ async fn themed(web: &Web, html: &str) -> String {
 }
 
 /// Sends a request through the daemon's event loop.
+/// Every agent's asks of other agents on this machine (ADR 0120).
+async fn asks(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::Asks).await
+}
+
+async fn ask_stop(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
+    ask(&web, Request::AskStop { thread: None, ask: id }).await
+}
+
+async fn ask_take(State(web): State<Web>, Path(id): Path<String>) -> HttpResponse {
+    ask(&web, Request::AskTake { thread: None, ask: id }).await
+}
+
 async fn ask(web: &Web, request: Request) -> HttpResponse {
     match answer(web, request).await {
         Ok(data) => Json(data).into_response(),
@@ -1001,7 +1017,7 @@ async fn blob_source(web: &Web, thread: String, blob: String) -> Result<crate::m
 
 /// A blob of the thread's, whole or by range, raw: this machine's copy, or
 /// the server's passed on as it comes, so a video plays before it's all
-/// here (ADR 0120).
+/// here (ADR 0121).
 async fn thread_blob(
     State(web): State<Web>,
     Path((thread, blob)): Path<(String, String)>,
@@ -1068,7 +1084,7 @@ fn passed_on(answer: reqwest::Response, blob: &str, download: Option<&str>) -> H
 }
 
 /// How much of a blob of the thread's has arrived: whole here, or how much
-/// its server has while another machine uploads it (ADR 0120).
+/// its server has while another machine uploads it (ADR 0121).
 async fn thread_blob_state(State(web): State<Web>, Path((thread, blob)): Path<(String, String)>) -> HttpResponse {
     let source = match blob_source(&web, thread, blob.clone()).await {
         Ok(source) => source,

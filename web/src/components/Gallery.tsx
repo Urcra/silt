@@ -134,7 +134,7 @@ export function Gallery() {
 
 /**
  * A version's thumbnail where one has been drawn, else its kind's icon; an image shows its smallest preview, and a
- * video its first frame (ADR 0120).
+ * video its first frame (ADR 0121).
  */
 function Thumbnail({ row }: { row: ArtifactListed }) {
   const { artifact } = row

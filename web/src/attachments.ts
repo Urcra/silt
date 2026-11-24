@@ -15,7 +15,7 @@ export function readAttachment(file: File, name = file.name): Promise<PromptAtta
   })
 }
 
-/** A file attached to a prompt: uploaded to the machine as soon as it's added (ADR 0120). */
+/** A file attached to a prompt: uploaded to the machine as soon as it's added (ADR 0121). */
 export interface Attached extends PromptAttachment {
   /** Stays the same as files come and go. */
   key: string
@@ -51,7 +51,7 @@ export function filesFrom(data: DataTransfer | null): File[] {
 
 /**
  * The largest file a prompt takes in itself, and all of them together, as the daemon's `acp::decode` has them; only
- * where files can't be uploaded first, as the server's app, which takes none (ADR 0120).
+ * where files can't be uploaded first, as the server's app, which takes none (ADR 0121).
  */
 export const FILE_BYTES = 10 << 20
 export const FILES_BYTES = 25 << 20
@@ -66,7 +66,7 @@ export function tooLarge(files: { name: string; size: number }[], attached: numb
 
 /**
  * The files a prompt carries. `add` names pasted ones apart and starts uploading each to the machine, with no size
- * limit (ADR 0120); a prompt sent while one is `busy` goes once it's there. Any file goes: one the agent can't read in the
+ * limit (ADR 0121); a prompt sent while one is `busy` goes once it's there. Any file goes: one the agent can't read in the
  * prompt itself, such as a spreadsheet or a video, the daemon saves where the agent can read it.
  */
 export function useAttachments() {

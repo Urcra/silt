@@ -140,7 +140,7 @@ impl BlobStore {
 
     /// Adds a chunk of blob `hash`, `size` bytes in all, to `owner`'s upload
     /// of it at `offset`, and once it's whole and its hash checks out,
-    /// stores it (ADR 0120). Chunks arrive in order: one at any other
+    /// stores it (ADR 0121). Chunks arrive in order: one at any other
     /// offset is refused with what has been received.
     pub async fn append(&self, owner: &str, hash: BlobHash, offset: u64, chunk: &[u8], size: u64) -> Result<Chunked, ChunkError> {
         if self.contains(hash) {
@@ -202,7 +202,7 @@ impl BlobStore {
     }
 
     /// Notes that blob `hash` waits to be uploaded for `family`, after the
-    /// deltas naming it (ADR 0120); kept on disk, so a restart goes on.
+    /// deltas naming it (ADR 0121); kept on disk, so a restart goes on.
     pub async fn defer_upload(&self, hash: BlobHash, family: &str) -> io::Result<()> {
         let dir = self.root.join(DEFERRED);
         fs::create_dir_all(&dir).await?;
@@ -232,7 +232,7 @@ impl BlobStore {
     }
 
     /// Notes that a server refused blob `hash`, and why, so this machine
-    /// says so rather than wait for it to arrive elsewhere (ADR 0120).
+    /// says so rather than wait for it to arrive elsewhere (ADR 0121).
     pub async fn note_refused(&self, hash: BlobHash, why: &str) -> io::Result<()> {
         let dir = self.root.join(REFUSED);
         fs::create_dir_all(&dir).await?;

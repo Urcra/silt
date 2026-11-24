@@ -101,7 +101,7 @@ export function FileRoute() {
   )
 }
 
-/** An image or a video in the repository, which plays or zooms where a binary file said only that (ADR 0120). */
+/** An image or a video in the repository, which plays or zooms where a binary file said only that (ADR 0121). */
 function FileMedia({ thread, path, media }: { thread: string; path: string; media: Shown }) {
   const name = path.split('/').pop() ?? path
   const original = blobUrl(thread, media.blob)

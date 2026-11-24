@@ -517,7 +517,7 @@ impl Core {
                     .ok_or_else(|| CoreError::Invalid(format!("this machine lacks the git blob {oid}")))?,
             ),
             FileView::Blob(hash) => {
-                // An image or a video plays on the page, by its blob (ADR 0120).
+                // An image or a video plays on the page, by its blob (ADR 0121).
                 media = self.file_media(hash, &query.path);
                 if media.is_some() {
                     self.shows_file(thread, hash);

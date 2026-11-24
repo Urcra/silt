@@ -1,5 +1,5 @@
 //! A blob as an HTTP response, whole or by range, for the daemon's and the
-//! server's routes (ADR 0120).
+//! server's routes (ADR 0121).
 
 use std::path::Path;
 

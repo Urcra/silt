@@ -4,7 +4,7 @@ import { Icon, cx } from '../ui'
 
 /**
  * The files a prompt carries, each with its upload's progress and, for an image or a video, a glimpse of it
- * (ADR 0120). A note says what the agent gets of a video, which no agent takes in a prompt.
+ * (ADR 0121). A note says what the agent gets of a video, which no agent takes in a prompt.
  */
 export function AttachedFiles({ files, onRemove }: { files: Attached[]; onRemove: (index: number) => void }) {
   if (files.length === 0) return null

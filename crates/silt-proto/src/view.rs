@@ -526,18 +526,18 @@ pub struct ArtifactView {
     /// fetches relative to itself (ADR 0074).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<std::collections::BTreeMap<String, crate::artifact::ArtifactFile>>,
-    /// An image's width and height, with its orientation applied (ADR 0120).
+    /// An image's width and height, with its orientation applied (ADR 0121).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
     /// An image's smaller copies, smallest first: the conversation shows
-    /// the first, the viewer opens on the last (ADR 0120).
+    /// the first, the viewer opens on the last (ADR 0121).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub previews: Vec<PreviewView>,
 }
 
-/// A smaller copy of an image, kept beside it (ADR 0120).
+/// A smaller copy of an image, kept beside it (ADR 0121).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PreviewView {
@@ -550,7 +550,7 @@ pub struct PreviewView {
 }
 
 /// An image or a video kept as a blob rather than in its line: a prompt's,
-/// with its previews (ADR 0120).
+/// with its previews (ADR 0121).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct StoredMedia {
@@ -667,11 +667,11 @@ pub struct ArtifactContent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ImageView {
-    /// An image's, or since ADR 0120 a video's.
+    /// An image's, or since ADR 0121 a video's.
     pub media_type: String,
     /// Base64; empty when it was too large to show, or kept as a blob.
     pub data: String,
-    /// Where a prompt's file is kept, when it isn't in `data` (ADR 0120).
+    /// Where a prompt's file is kept, when it isn't in `data` (ADR 0121).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stored: Option<StoredMedia>,
 }
@@ -1243,12 +1243,12 @@ pub struct FileAt {
     pub at: String,
     /// `None` for a binary file.
     pub text: Option<String>,
-    /// A binary file that's an image or a video, read by its blob (ADR 0120).
+    /// A binary file that's an image or a video, read by its blob (ADR 0121).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<FileMedia>,
 }
 
-/// A file page's image or video (ADR 0120).
+/// A file page's image or video (ADR 0121).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct FileMedia {

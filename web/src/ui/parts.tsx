@@ -156,7 +156,7 @@ export function Counts({
 }: {
   added: number
   removed: number
-  /** A binary file, or what kind of one, such as `image` (ADR 0120). */
+  /** A binary file, or what kind of one, such as `image` (ADR 0121). */
   binary?: boolean | string
   className?: string
 }) {

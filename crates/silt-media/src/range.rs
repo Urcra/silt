@@ -1,4 +1,4 @@
-//! A request's `Range` header, as a blob is read by it (ADR 0120).
+//! A request's `Range` header, as a blob is read by it (ADR 0121).
 
 /// What part of a resource a request asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

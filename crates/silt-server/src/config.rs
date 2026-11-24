@@ -39,7 +39,7 @@ pub struct Config {
     #[serde(default = "default_artifact_assets_mib")]
     pub artifact_assets_mib: u64,
     /// The largest file the server keeps, in MiB; none by default
-    /// (ADR 0120). A larger one stays on the machine that made it.
+    /// (ADR 0121). A larger one stays on the machine that made it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_file_mib: Option<u64>,
 }

@@ -38,7 +38,7 @@ pub mod view;
 /// name (ADR 0114). 23: the person's devices by name in the listing, and
 /// the machine holding each thread in its summary (ADR 0115). 24: blobs
 /// uploaded in chunks and read by range, videos, and images' previews
-/// (ADR 0120).
+/// (ADR 0121).
 pub const PROTOCOL: u32 = 24;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
@@ -532,7 +532,7 @@ pub struct PullReply {
 
 /// A blob larger than this goes to the server in chunks of this size, and
 /// one named only by a conversation's attachment goes after its deltas
-/// (ADR 0120).
+/// (ADR 0121).
 pub const BLOB_CHUNK: u64 = 8 << 20;
 
 /// Where one chunk of a blob's upload goes, of the whole's `size` bytes.
@@ -542,7 +542,7 @@ pub struct ChunkQuery {
     pub size: u64,
 }
 
-/// How much of a blob a server has (ADR 0120).
+/// How much of a blob a server has (ADR 0121).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct BlobState {

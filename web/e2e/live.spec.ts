@@ -885,7 +885,7 @@ test('an agent shows a video that plays in place and in the viewer, and an image
   await expect(page.getByText('Done: Show me the video')).toBeVisible()
   const video = page.getByTestId('shown-video')
   await expect(video).toContainText('Login flow after the redirect')
-  // Its length and pixels come from the video itself, read by range (ADR 0120).
+  // Its length and pixels come from the video itself, read by range (ADR 0121).
   await expect(video).toContainText(/WebM · 0:06 · 960×540/)
   const src = await video.locator('video').getAttribute('src')
   const part = await page.evaluate(async (url) => {

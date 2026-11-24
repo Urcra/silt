@@ -214,7 +214,7 @@ pub(crate) fn delivered(messages: &[AgentMessage], label: impl Fn(ThreadId) -> O
     let parts: Vec<String> = messages
         .iter()
         .map(|message| match message.kind {
-            AgentMessageKind::Arrival => format!("Silt: {}", message.body),
+            AgentMessageKind::Arrival | AgentMessageKind::Report => format!("Silt: {}", message.body),
             AgentMessageKind::Message => {
                 let from = label(message.from).unwrap_or_else(|| format!("thread {}", message.from.short()));
                 format!(

@@ -1,4 +1,4 @@
-// Images and videos as Silt shows them (ADR 0120): an image people zoom and pan, Silt's own video player, and the
+// Images and videos as Silt shows them (ADR 0121): an image people zoom and pan, Silt's own video player, and the
 // viewer that opens either over the whole window.
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
@@ -899,7 +899,7 @@ function KeysHelp({ onClose }: { onClose: () => void }) {
 
 // ---------- Not here yet ----------
 
-/** A file larger than this goes to the server after its messages, and may be refused there (ADR 0120). */
+/** A file larger than this goes to the server after its messages, and may be refused there (ADR 0121). */
 const CHUNK = 8 << 20
 
 /**
@@ -1016,7 +1016,7 @@ export function Unavailable({
 }
 
 /**
- * Under a large image or video this machine keeps: that the server refused it, so it's only here (ADR 0120). Asks
+ * Under a large image or video this machine keeps: that the server refused it, so it's only here (ADR 0121). Asks
  * only for a file large enough to have been refused.
  */
 export function KeptHereOnly({ state }: { state: Media['state'] }) {

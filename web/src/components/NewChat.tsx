@@ -72,7 +72,7 @@ export function NewChat() {
   const settingValue = (setting: AgentSetting) =>
     startingValue(setting, chosenSettings[setting.id], workspace?.workspace.defaults.agents?.[agent]?.settings?.[setting.id])
   const { attached, add, remove, clear, busy, failure } = useAttachments()
-  // A start asked for while files upload, which goes once they're there (ADR 0120).
+  // A start asked for while files upload, which goes once they're there (ADR 0121).
   const startOnceUploaded = useRef<boolean | null>(null)
   const attach = (files: File[], pasted = false) => {
     setError(undefined)

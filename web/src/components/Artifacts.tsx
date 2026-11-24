@@ -240,7 +240,7 @@ export function ArtifactViewer({
   const content = useQuery({
     queryKey: keys.artifact(thread, shown?.artifact.blob ?? ''),
     queryFn: () => api.artifact(thread, shown!.artifact.blob),
-    // An image or a video is read by range from its blob rather than whole (ADR 0120).
+    // An image or a video is read by range from its blob rather than whole (ADR 0121).
     enabled: Boolean(shown) && !readByBlob(shown!.artifact),
     staleTime: Infinity,
   })
@@ -493,7 +493,7 @@ export function ArtifactViewer({
         <span
           className={cx(
             'inline-flex shrink-0 items-center gap-0.5 @max-xl/artifact:hidden',
-            // A picture has its own zoom (ADR 0120).
+            // A picture has its own zoom (ADR 0121).
             PICTURES.has(artifact.kind) && 'hidden',
           )}
         >
@@ -923,7 +923,7 @@ function ArtifactPage({
 /** The kinds that are a picture, which zoom and pan rather than take the page's zoom. */
 const PICTURES = new Set(['image', 'video', 'svg', 'mermaid'])
 
-/** An image or a video, which the panel reads by range from its blob (ADR 0120); an SVG is read as text. */
+/** An image or a video, which the panel reads by range from its blob (ADR 0121); an SVG is read as text. */
 function readByBlob(artifact: ArtifactView): boolean {
   return artifact.kind === 'video' || (artifact.kind === 'image' && artifact.media_type !== 'image/svg+xml')
 }

@@ -777,7 +777,7 @@ export function NewThread() {
   const inOwn = own.find((mode) => mode.id === chosenMode)?.id
   const refusedOwn = (mode: string) => modeRefused(workspace, agent, mode)
   const { attached, add, remove, clear, busy, failure } = useAttachments()
-  // A start asked for while files upload, which goes once they're there (ADR 0120).
+  // A start asked for while files upload, which goes once they're there (ADR 0121).
   const startOnceUploaded = useRef<boolean | null>(null)
   const attach = (files: File[], pasted = false) => {
     setError(undefined)

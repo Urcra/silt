@@ -1135,6 +1135,36 @@ fn a_powershell_command_claude_left_running_ends_as_its_transcript_says() {
     assert_eq!(listed_background(&api, &thread), 0, "{live}");
 }
 
+/// On Windows, Claude's adapter tells neither the end of a PowerShell
+/// command a subagent left running nor, at times, the subagent's own: Claude
+/// Code queues both in the main transcript, where Silt reads them, rather
+/// than showing both running for good.
+#[test]
+fn a_subagent_and_its_powershell_command_end_as_the_main_transcript_queues_them() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "claude-acp", "name": "Fake Claude", "command": fake, "env": {"FAKE_ACP_V2": "1"}}]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let start = serde_json::json!({"clone": env.repo, "agent": "claude-acp", "prompt": "add acp Delegated"});
+    let started = api.ok("POST", "/api/agents/start", Some(start));
+    let thread =
+        started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("the thread").to_owned());
+    settled_history(&api, &thread, "The delegated work ended.");
+    assert!(
+        eventually(|| task_news(&api, &thread, "ps-2") == ["running", "completed"]),
+        "{:?}",
+        task_news(&api, &thread, "ps-2")
+    );
+    assert!(
+        eventually(|| task_news(&api, &thread, "deleg-1") == ["running", "completed"]),
+        "{:?}",
+        task_news(&api, &thread, "deleg-1")
+    );
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(listed_background(&api, &thread), 0, "{live}");
+}
+
 /// A shell Copilot detached and never reads ends without Silt hearing of
 /// it: Silt sees its process gone and marks it done, and leaves it running
 /// until then.

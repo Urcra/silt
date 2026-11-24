@@ -61,7 +61,7 @@ impl Core {
     }
 
     /// Starts sending the large files waiting since their deltas went, unless
-    /// that's under way or failed a short while ago (ADR 0120).
+    /// that's under way or failed a short while ago (ADR 0121).
     fn drive_deferred_uploads(&mut self) {
         use std::sync::atomic::Ordering;
         let failed_lately = self.deferred.failed.lock().expect("lock").is_some_and(|at| at.elapsed() < DEFERRED_RETRY);
@@ -672,7 +672,7 @@ pub(crate) fn origin_url(thread: &ThreadRecord) -> Option<String> {
 /// How long after a try at the large files waiting to upload the next starts.
 const DEFERRED_RETRY: Duration = Duration::from_secs(60);
 
-/// The large files uploaded after their deltas (ADR 0120).
+/// The large files uploaded after their deltas (ADR 0121).
 #[derive(Debug, Default)]
 pub(crate) struct DeferredUploads {
     running: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -686,7 +686,7 @@ pub(crate) struct PushBatch {
     deltas: Vec<Delta>,
     /// Uploaded before the deltas.
     blobs: Vec<BlobHash>,
-    /// Large files a conversation names, uploaded after them (ADR 0120).
+    /// Large files a conversation names, uploaded after them (ADR 0121).
     deferred: Vec<BlobHash>,
 }
 
@@ -761,7 +761,7 @@ fn referenced_blobs(deltas: &[Delta], blobs: &silt_store::BlobStore) -> (Vec<Blo
 }
 
 /// Sends the large files waiting since their deltas went, one at a time,
-/// each going on from what the server has (ADR 0120). One that fails stays
+/// each going on from what the server has (ADR 0121). One that fails stays
 /// noted for the next try.
 pub(crate) async fn upload_deferred(store: &Store, waiting: Vec<(BlobHash, Remote)>) -> Result<(), String> {
     for (hash, remote) in waiting {
@@ -804,7 +804,7 @@ async fn upload_blobs(
         };
         match remote.upload_blob(hash, &path).await {
             // Over the server's cap: it stays here, and the deltas go, rather
-            // than hold up everything after them (ADR 0120).
+            // than hold up everything after them (ADR 0121).
             Err(RemoteError::TooLarge(message)) => {
                 warn!(%hash, %message, "the server won't keep this file");
                 let _ = store.blobs().note_refused(hash, &message).await;
