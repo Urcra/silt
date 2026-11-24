@@ -721,7 +721,11 @@ at: string,
 /**
  * `None` for a binary file.
  */
-text: string | null, };
+text: string | null, 
+/**
+ * A binary file that's an image or a video, read by its blob (ADR 0120).
+ */
+media?: FileMedia | null, };
 
 export type GraphQuery = { 
 /**
@@ -1002,11 +1006,43 @@ call: string, failed: boolean, exit_code: number | null,
  */
 answers: Array<AnswerView>, };
 
-export type ImageView = { media_type: string, 
+export type ImageView = { 
 /**
- * Base64; empty when it was too large to show.
+ * An image's, or since ADR 0120 a video's.
  */
-data: string, };
+media_type: string, 
+/**
+ * Base64; empty when it was too large to show, or kept as a blob.
+ */
+data: string, 
+/**
+ * Where a prompt's file is kept, when it isn't in `data` (ADR 0120).
+ */
+stored?: StoredMedia | null, };
+
+export type StoredMedia = { blob: string, size: number, 
+/**
+ * The file's name as it was attached.
+ */
+name?: string | null, width?: number | null, height?: number | null, previews?: Array<PreviewView>, };
+
+export type PreviewView = { blob: string, media_type: string, width: number, height: number, size: number, };
+
+export type FileMedia = { blob: string, media_type: string, size: number, };
+
+export type BlobState = { 
+/**
+ * It's whole and stored.
+ */
+stored: boolean, 
+/**
+ * How much of it has arrived, while it's being uploaded.
+ */
+received: number, 
+/**
+ * Its size, once an upload has said.
+ */
+size?: number | null, };
 
 export type CutView = { 
 /**
@@ -1075,7 +1111,16 @@ contract?: string | null,
  * The files beside an HTML version's page, by path, which its frame
  * fetches relative to itself (ADR 0074).
  */
-files?: { [key in string]: ArtifactFile } | null, };
+files?: { [key in string]: ArtifactFile } | null, 
+/**
+ * An image's width and height, with its orientation applied (ADR 0120).
+ */
+width?: number | null, height?: number | null, 
+/**
+ * An image's smaller copies, smallest first: the conversation shows
+ * the first, the viewer opens on the last (ADR 0120).
+ */
+previews?: Array<PreviewView>, };
 
 export type ArtifactFile = { blob: string, size: number, media_type: string, };
 
@@ -1623,9 +1668,14 @@ workspace: string | null, workspace_why: string | null, };
 
 export type PromptAttachment = { name: string, mime: string, 
 /**
- * The content, in base64.
+ * The content, in base64; empty for a file uploaded first.
  */
-data: string, };
+data: string, 
+/**
+ * A file uploaded first to `/api/uploads`, as it answered, which has no
+ * size limit (ADR 0120).
+ */
+upload: string | null, };
 
 export type Queued = { id: number, author: string, text: string, created_ms: number, };
 

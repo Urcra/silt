@@ -273,6 +273,19 @@ impl Server {
                 self.shared.blobs.remove(blob).await?;
             }
         }
+        if let Some(before) = now.checked_sub(crate::UPLOAD_GRACE) {
+            self.shared.blobs.drop_stale_uploads(before).await?;
+        }
+        // Previews whose image is gone go with it (ADR 0120).
+        if let Ok(previews) = std::fs::read_dir(self.previews_dir()) {
+            for preview in previews.flatten() {
+                let name = preview.file_name().to_string_lossy().into_owned();
+                let original = name.split('-').next().and_then(|hash| hash.parse::<silt_types::BlobHash>().ok());
+                if original.is_none_or(|hash| !self.shared.blobs.contains(hash)) {
+                    let _ = std::fs::remove_file(preview.path());
+                }
+            }
+        }
         Ok(())
     }
 

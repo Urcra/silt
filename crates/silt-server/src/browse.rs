@@ -34,6 +34,8 @@ pub(crate) fn routes() -> Router<Server> {
         .route("/app/api/threads", get(threads))
         .route("/app/api/threads/{id}/history", get(history))
         .route("/app/api/threads/{id}/artifacts/{blob}", get(artifact_content))
+        .route("/app/api/threads/{id}/blobs/{blob}", get(thread_blob))
+        .route("/app/api/threads/{id}/blobs/{blob}/state", get(thread_blob_state))
         .route("/app/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
         .route("/app/api/threads/{id}/artifacts/{artifact}/grants", get(artifact_grants).put(set_artifact_grant))
         .route("/app/api/threads/{id}/artifacts/{artifact}/data", post(page_data))
@@ -523,8 +525,74 @@ async fn artifact_content(
     }
     .ok_or_else(not_found)?;
     let hash: silt_types::BlobHash = blob.parse().map_err(|_| bad_request("invalid blob hash"))?;
+    // A video or a large image is read by range from its blob (ADR 0120).
+    let large = server
+        .blobs()
+        .file(hash)
+        .and_then(|path| std::fs::metadata(path).ok())
+        .is_some_and(|meta| meta.len() > silt_proto::artifact::ARTIFACT_BYTES);
+    if large || silt_media::is_video(&media_type) {
+        return Err(bad_request("this file is read by range from its blob, not whole"));
+    }
     let bytes = server.shared.blobs.get(hash).await.map_err(|_| not_found())?;
     Ok(Json(ArtifactContent { media_type, data: base64::engine::general_purpose::STANDARD.encode(bytes) }))
+}
+
+#[derive(serde::Deserialize)]
+struct BlobQuery {
+    /// One of `silt_media::PREVIEW_EDGES`: the image's preview of that size.
+    preview: Option<u32>,
+    /// Saved as a file of this name rather than shown.
+    download: Option<String>,
+}
+
+/// A blob of the thread's, whole or by range, raw, for an image or a video
+/// the page shows (ADR 0120).
+async fn thread_blob(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, blob)): Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<BlobQuery>,
+    headers: axum::http::HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    let hash = readable_blob(&server, &browser, &id, &blob).await?;
+    let path = server.blobs().file(hash).ok_or_else(not_found)?;
+    let (path, etag) = match query.preview {
+        Some(edge) if silt_media::PREVIEW_EDGES.contains(&edge) => {
+            (silt_media::serve::preview(&path, &server.previews_dir(), &blob, edge).await, format!("{blob}-{edge}"))
+        }
+        Some(_) => return Err(bad_request("a preview is 960 or 2048 px")),
+        None => (path, blob),
+    };
+    let range = headers.get(axum::http::header::RANGE).and_then(|value| value.to_str().ok());
+    Ok(silt_media::serve::file(&path, &etag, range, query.download.as_deref()).await)
+}
+
+/// How much of a blob of the thread's has arrived, while another machine
+/// uploads it (ADR 0120).
+async fn thread_blob_state(
+    State(server): State<Server>,
+    Extension(browser): Extension<Browser>,
+    Path((id, blob)): Path<(String, String)>,
+) -> Result<Json<silt_proto::BlobState>, ApiError> {
+    let hash = readable_blob(&server, &browser, &id, &blob).await?;
+    if let Some(path) = server.blobs().file(hash) {
+        let size = tokio::fs::metadata(path).await.ok().map(|meta| meta.len());
+        return Ok(Json(silt_proto::BlobState { stored: true, received: size.unwrap_or_default(), size }));
+    }
+    let received = server.blobs().received_any(hash).await.map_err(|_| not_found())?;
+    Ok(Json(silt_proto::BlobState { stored: false, received, size: None }))
+}
+
+/// Blob `blob`, if the person may read thread `id` and a delta naming it.
+async fn readable_blob(server: &Server, browser: &Browser, id: &str, blob: &str) -> Result<silt_types::BlobHash, ApiError> {
+    let viewer = server.viewer(browser.user).await?;
+    Readable::rows(server, browser.user, &viewer).await?.row(id)?;
+    let hash: silt_types::BlobHash = blob.parse().map_err(|_| bad_request("invalid blob hash"))?;
+    if !server.readable_blob(browser.user, hash).await? {
+        return Err(not_found());
+    }
+    Ok(hash)
 }
 
 /// A read or write of an artifact's page data, as its page asks through the

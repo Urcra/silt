@@ -156,10 +156,16 @@ export function Counts({
 }: {
   added: number
   removed: number
-  binary?: boolean
+  /** A binary file, or what kind of one, such as `image` (ADR 0120). */
+  binary?: boolean | string
   className?: string
 }) {
-  if (binary) return <span className={cx('font-mono text-2xs whitespace-nowrap text-fg-2', className)}>binary</span>
+  if (binary)
+    return (
+      <span className={cx('font-mono text-2xs whitespace-nowrap text-fg-2', className)}>
+        {typeof binary === 'string' ? binary : 'binary'}
+      </span>
+    )
   return (
     <span className={cx('font-mono text-2xs whitespace-nowrap', className)}>
       <span className="text-ok">+{added}</span> <span className="text-danger">−{removed}</span>

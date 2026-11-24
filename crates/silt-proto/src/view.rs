@@ -424,7 +424,7 @@ pub fn cut_for_page(entry: &HistoryEntry) -> HistoryEntry {
     if let Some(image) = entry.image.as_ref().filter(|image| !image.data.is_empty()) {
         let bytes = image.data.len() / 4 * 3;
         return HistoryEntry {
-            image: Some(ImageView { media_type: image.media_type.clone(), data: String::new() }),
+            image: Some(ImageView { data: String::new(), ..image.clone() }),
             cut: Some(CutView { lines: 0, bytes }),
             ..entry.clone()
         };
@@ -526,14 +526,67 @@ pub struct ArtifactView {
     /// fetches relative to itself (ADR 0074).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<std::collections::BTreeMap<String, crate::artifact::ArtifactFile>>,
+    /// An image's width and height, with its orientation applied (ADR 0120).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// An image's smaller copies, smallest first: the conversation shows
+    /// the first, the viewer opens on the last (ADR 0120).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previews: Vec<PreviewView>,
+}
+
+/// A smaller copy of an image, kept beside it (ADR 0120).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct PreviewView {
+    pub blob: String,
+    pub media_type: String,
+    pub width: u32,
+    pub height: u32,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub size: u64,
+}
+
+/// An image or a video kept as a blob rather than in its line: a prompt's,
+/// with its previews (ADR 0120).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct StoredMedia {
+    pub blob: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub size: u64,
+    /// The file's name as it was attached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previews: Vec<PreviewView>,
+}
+
+impl StoredMedia {
+    /// What `blob` is served as, when it's this file or one of its previews.
+    pub fn media_type_of(&self, blob: &str, media_type: &str) -> Option<String> {
+        if self.blob == blob {
+            return Some(media_type.to_owned());
+        }
+        self.previews.iter().find(|preview| preview.blob == blob).map(|preview| preview.media_type.clone())
+    }
 }
 
 impl ArtifactView {
     /// What `blob` is served as, when this version names it: its page, the
-    /// CSS its design system compiled to, or one of its files.
+    /// CSS its design system compiled to, one of its files or previews.
     pub fn media_type_of(&self, blob: &str) -> Option<String> {
         if self.blob == blob {
             return Some(self.media_type.clone());
+        }
+        if let Some(preview) = self.previews.iter().find(|preview| preview.blob == blob) {
+            return Some(preview.media_type.clone());
         }
         if self.style.as_deref() == Some(blob) {
             return Some("text/css".to_owned());
@@ -614,9 +667,13 @@ pub struct ArtifactContent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ImageView {
+    /// An image's, or since ADR 0120 a video's.
     pub media_type: String,
-    /// Base64; empty when it was too large to show.
+    /// Base64; empty when it was too large to show, or kept as a blob.
     pub data: String,
+    /// Where a prompt's file is kept, when it isn't in `data` (ADR 0120).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored: Option<StoredMedia>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1186,6 +1243,19 @@ pub struct FileAt {
     pub at: String,
     /// `None` for a binary file.
     pub text: Option<String>,
+    /// A binary file that's an image or a video, read by its blob (ADR 0120).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<FileMedia>,
+}
+
+/// A file page's image or video (ADR 0120).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct FileMedia {
+    pub blob: String,
+    pub media_type: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub size: u64,
 }
 
 /// A read-only link to a thread (ADR 0027).
@@ -1378,7 +1448,7 @@ mod cut_tests {
     #[test]
     fn a_page_leaves_an_images_data_out() {
         let mut image = entry("image", String::new());
-        image.image = Some(ImageView { media_type: "image/png".into(), data: "AAAA".repeat(100) });
+        image.image = Some(ImageView { media_type: "image/png".into(), data: "AAAA".repeat(100), stored: None });
         let cut = cut_for_page(&image);
         assert_eq!(cut.image.as_ref().map(|image| image.data.as_str()), Some(""));
         assert_eq!(cut.cut, Some(CutView { lines: 0, bytes: 300 }));

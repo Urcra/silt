@@ -30,6 +30,8 @@ pub enum Entry {
     Image {
         media_type: String,
         data: String,
+        /// A prompt's file kept as a blob, with its previews (ADR 0120).
+        stored: Option<silt_proto::view::StoredMedia>,
     },
     /// What a message of the agent's cost, in tokens; an agent may record
     /// one message over several lines, each naming it.

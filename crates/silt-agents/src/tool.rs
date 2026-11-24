@@ -246,9 +246,9 @@ pub fn shown(entry: crate::Entry) -> Option<Shown> {
                 ToolOutcome { call: tool_use_id, failed: end.failed, exit_code: end.exit_code, answers: answers(&text) };
             Shown { outcome: Some(outcome), ..Shown::plain("tool_result", text) }
         }
-        Entry::Image { media_type, data } => {
+        Entry::Image { media_type, data, stored } => {
             let data = if data.len() > IMAGE_LIMIT { String::new() } else { data };
-            Shown { image: Some(ImageView { media_type, data }), ..Shown::plain("image", String::new()) }
+            Shown { image: Some(ImageView { media_type, data, stored }), ..Shown::plain("image", String::new()) }
         }
         Entry::Artifact(artifact) => {
             let text = artifact.title.clone();

@@ -32,29 +32,6 @@ fn text_media_type(kind: &str) -> Option<&'static str> {
     }
 }
 
-/// An image's type from its first bytes; SVG only as text that says so.
-fn image_media_type(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Some("image/png");
-    }
-    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
-        return Some("image/jpeg");
-    }
-    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        return Some("image/gif");
-    }
-    if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        return Some("image/webp");
-    }
-    let text = std::str::from_utf8(bytes).ok()?;
-    looks_like_svg(text).then_some("image/svg+xml")
-}
-
-fn looks_like_svg(text: &str) -> bool {
-    let start: String = text.trim_start_matches('\u{feff}').trim_start().chars().take(1024).collect();
-    start.contains("<svg")
-}
-
 /// An artifact id as an agent passes it back: 12 lowercase hex characters.
 pub(crate) fn valid_id(id: &str) -> bool {
     id.len() == 12 && id.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -65,8 +42,8 @@ fn new_id() -> String {
 }
 
 /// The file `path` names for a run in `checkout`, if an agent may show it:
-/// a regular file of at most [`ARTIFACT_BYTES`], outside every folder in
-/// `denied`.
+/// a regular file outside every folder in `denied`. Its size is the
+/// caller's to check: an image or a video has no limit (ADR 0120).
 pub(crate) fn readable_file(path: &str, checkout: &Path, denied: &[PathBuf]) -> Result<PathBuf, CoreError> {
     let given = Path::new(path);
     let joined = if given.is_absolute() { given.to_owned() } else { checkout.join(given) };
@@ -81,9 +58,6 @@ pub(crate) fn readable_file(path: &str, checkout: &Path, denied: &[PathBuf]) -> 
     if !meta.is_file() {
         return Err(CoreError::Invalid(format!("{path} isn't a file")));
     }
-    if meta.len() > ARTIFACT_BYTES {
-        return Err(CoreError::Invalid(format!("{path} is too large: an artifact is at most 10 MiB")));
-    }
     Ok(real)
 }
 
@@ -92,26 +66,38 @@ fn content_of(new: &NewArtifact, kind: &str, file: Option<&Path>) -> Result<(Vec
     let bytes = match (&new.content, file) {
         (Some(_), Some(_)) => return Err(CoreError::Invalid("give content or path, not both".into())),
         (Some(content), None) => content.clone().into_bytes(),
-        (None, Some(file)) => std::fs::read(file)?,
+        (None, Some(file)) => {
+            if std::fs::metadata(file)?.len() > ARTIFACT_BYTES {
+                return Err(CoreError::Invalid(format!(
+                    "the file is too large: a {kind} artifact is at most 10 MiB; an image or a video has no limit"
+                )));
+            }
+            std::fs::read(file)?
+        }
         (None, None) => return Err(CoreError::Invalid("give the content, or the path of a file holding it".into())),
     };
     if bytes.len() as u64 > ARTIFACT_BYTES {
         return Err(CoreError::Invalid("the content is too large: an artifact is at most 10 MiB".into()));
     }
     if kind == "image" {
-        let media_type =
-            image_media_type(&bytes).ok_or_else(|| CoreError::Invalid("an image must be PNG, JPEG, GIF, WebP or SVG".into()))?;
+        let media_type = silt_media::sniff(&bytes)
+            .filter(|(_, kind)| *kind == silt_media::Kind::Image)
+            .map(|(media_type, _)| media_type)
+            .ok_or_else(|| CoreError::Invalid("an image must be PNG, JPEG, GIF, WebP or SVG".into()))?;
         return Ok((bytes, media_type));
+    }
+    if kind == "video" {
+        return Err(CoreError::Invalid("a video is shown from a file: give its path".into()));
     }
     let media_type = text_media_type(kind).ok_or_else(|| {
         CoreError::Invalid(format!(
-            "an artifact's kind is html, svg, markdown, mermaid, image, slides, canvas or data, not {kind}"
+            "an artifact's kind is html, svg, markdown, mermaid, image, video, slides, canvas or data, not {kind}"
         ))
     })?;
     if std::str::from_utf8(&bytes).is_err() {
         return Err(CoreError::Invalid(format!("a {kind} artifact is text, and this isn't UTF-8")));
     }
-    if kind == "svg" && !looks_like_svg(std::str::from_utf8(&bytes).unwrap_or_default()) {
+    if kind == "svg" && !silt_media::looks_like_svg(std::str::from_utf8(&bytes).unwrap_or_default()) {
         return Err(CoreError::Invalid("this isn't SVG".into()));
     }
     silt_proto::artifact_types::validate(kind, std::str::from_utf8(&bytes).unwrap_or_default()).map_err(CoreError::Invalid)?;
@@ -296,6 +282,9 @@ impl Core {
                     let checkout =
                         checkout.ok_or_else(|| CoreError::Invalid(format!("{path}: no checkout to read {from} from")))?;
                     let real = readable_file(&from, checkout, &self.artifact_denies(workspace))?;
+                    if std::fs::metadata(&real).map_or(0, |meta| meta.len()) > FILE_BYTES {
+                        return Err(CoreError::Invalid(format!("{path} is over {} MiB", FILE_BYTES >> 20)));
+                    }
                     std::fs::read(&real).map_err(|_| CoreError::Invalid(format!("{path}: couldn't read {from}")))?
                 }
                 _ => return Err(CoreError::Invalid(format!("{path}: give content, base64 or a path"))),
@@ -464,6 +453,7 @@ impl Core {
             return Err(CoreError::Invalid(format!("a caption is at most {CAPTION_CHARS} characters")));
         }
         let kind = match (new.inline, new.kind.trim(), &earlier) {
+            // An image or a video, which keep_media tells apart.
             (true, _, _) => "image".to_owned(),
             (false, "", Some((_, kind))) => kind.clone(),
             (false, kind, _) => kind.to_owned(),
@@ -587,7 +577,17 @@ impl Core {
                 new.content = Some(self.edited_snapshot(thread, existing, &kind).await?);
             }
         }
-        let (bytes, media_type) = content_of(&new, &kind, file.as_deref())?;
+        // An image or a video from a file is kept as it is, however large,
+        // with an image's previews (ADR 0120); an SVG, being text, isn't.
+        let media = match (&file, kind.as_str()) {
+            (Some(file), "image" | "video") => self.keep_media(file, &kind, new.inline).await?,
+            _ => None,
+        };
+        let kind = media.as_ref().map_or(kind, |media| media.kind.to_owned());
+        let (bytes, media_type) = match &media {
+            Some(media) => (Vec::new(), media.media_type),
+            None => content_of(&new, &kind, file.as_deref())?,
+        };
         let (id, version) = match new.id.as_deref() {
             Some(id) if !valid_id(id) => return Err(CoreError::Invalid(format!("{id} isn't an artifact id"))),
             Some(id) => match latest_version(artifacts.iter().copied(), id) {
@@ -612,7 +612,7 @@ impl Core {
                 &kind,
                 checkout.as_deref(),
                 workspace,
-                bytes.len() as u64,
+                media.as_ref().map_or(bytes.len() as u64, |media| media.size),
             )
             .await?;
         // A doc or a sheet is edited by anyone who may comment unless it says
@@ -650,12 +650,23 @@ impl Core {
 
         // Not redacted: a data: URI or an SRI hash reads as a secret, and
         // redacting it breaks the page (ADR 0071).
-        let size = bytes.len() as u64;
-        let blob = self.store.blobs().put(&bytes).await?;
+        let (size, blob) = match &media {
+            Some(media) => (media.size, media.blob),
+            None => (bytes.len() as u64, self.store.blobs().put(&bytes).await?),
+        };
         let family = self.threads[&thread].family;
         let name = format!("artifact/{id}/v{version}/{}", file_name(&kind, media_type));
         let page_session = reference.clone();
         self.append_conv(family, thread, Author::User, ConvOp::Attachment { session: reference.clone(), name, blob }).await?;
+        for preview in media.iter().flat_map(|media| &media.previews) {
+            let name = format!(
+                "artifact/{id}/v{version}/preview-{}.{}",
+                preview.height.max(preview.width),
+                extension(&preview.media_type)
+            );
+            let blob = preview.blob.parse().map_err(|_| CoreError::Invalid("a preview isn't kept".into()))?;
+            self.append_conv(family, thread, Author::User, ConvOp::Attachment { session: reference.clone(), name, blob }).await?;
+        }
         for (path, file, added) in &files {
             if *added {
                 let blob = file.blob.parse().map_err(|_| CoreError::Invalid(format!("{path} isn't kept")))?;
@@ -699,6 +710,9 @@ impl Core {
             description,
             capabilities,
             files: (!files.is_empty()).then_some(files),
+            width: media.as_ref().and_then(|media| media.width),
+            height: media.as_ref().and_then(|media| media.height),
+            previews: media.map(|media| media.previews).unwrap_or_default(),
             by: match &recorded {
                 Recorded::ByRun => None,
                 Recorded::ByPage(by) => Some(by.clone()),
@@ -810,6 +824,7 @@ impl Core {
             .find(|artifact| artifact.version == wanted)
             .ok_or_else(|| CoreError::Invalid(format!("artifact {id} has versions 1 to {latest}, not {wanted}")))?;
         let blob: BlobHash = artifact.blob.parse().map_err(|_| CoreError::Invalid("the version's blob doesn't read".into()))?;
+        refuse_whole(&artifact.media_type, self.store.blobs().file(blob).as_deref())?;
         let family = self.threads[&thread].family;
         let bytes = self.blob(family, blob).await?;
         let style = match artifact.style.as_deref().and_then(|style| style.parse::<BlobHash>().ok()) {
@@ -854,6 +869,7 @@ impl Core {
             .artifact_media_type(thread, blob)
             .ok_or_else(|| CoreError::Invalid(format!("this thread has no artifact {blob}")))?;
         let hash: BlobHash = blob.parse().map_err(|_| CoreError::Invalid(format!("{blob} isn't a blob")))?;
+        refuse_whole(&media_type, self.store.blobs().file(hash).as_deref())?;
         let bytes = self.blob(self.threads[&thread].family, hash).await?;
         Ok(ArtifactContent { media_type, data: BASE64.encode(bytes) })
     }
@@ -864,6 +880,16 @@ impl Core {
             .filter_map(|(_, entry)| entry.artifact.as_ref())
             .find_map(|artifact| artifact.media_type_of(blob))
     }
+}
+
+/// Refuses to read a video, or anything over [`ARTIFACT_BYTES`], whole into
+/// one answer: it's read by range from its blob (ADR 0120).
+fn refuse_whole(media_type: &str, file: Option<&Path>) -> Result<(), CoreError> {
+    let large = file.and_then(|file| std::fs::metadata(file).ok()).is_some_and(|meta| meta.len() > ARTIFACT_BYTES);
+    if silt_media::is_video(media_type) || large {
+        return Err(CoreError::Invalid("this file is read by range from its blob, not whole".into()));
+    }
+    Ok(())
 }
 
 /// The name a version is kept under beside the session.
@@ -878,7 +904,102 @@ fn file_name(kind: &str, media_type: &str) -> &'static str {
         (_, "image/jpeg") => "image.jpg",
         (_, "image/gif") => "image.gif",
         (_, "image/webp") => "image.webp",
+        (_, "video/mp4") => "video.mp4",
+        (_, "video/webm") => "video.webm",
+        (_, "video/quicktime") => "video.mov",
+        (_, "video/x-matroska") => "video.mkv",
         _ => "content",
+    }
+}
+
+/// A preview's file extension, by its media type.
+pub(crate) fn extension(media_type: &str) -> &'static str {
+    match media_type {
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/png" => "png",
+        _ => "bin",
+    }
+}
+
+/// An image or a video an agent showed, kept as given (ADR 0120).
+pub(crate) struct KeptMedia {
+    pub(crate) kind: &'static str,
+    pub(crate) media_type: &'static str,
+    pub(crate) blob: BlobHash,
+    pub(crate) size: u64,
+    pub(crate) width: Option<u32>,
+    pub(crate) height: Option<u32>,
+    pub(crate) previews: Vec<silt_proto::view::PreviewView>,
+}
+
+/// The first bytes of the file, as [`silt_media::sniff`] reads them.
+pub(crate) fn head_of(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(silt_media::HEAD);
+    std::fs::File::open(path)?.take(silt_media::HEAD as u64).read_to_end(&mut head)?;
+    Ok(head)
+}
+
+impl Core {
+    /// Keeps the image or video at `file` without reading it whole, with an
+    /// image's previews; `None` for an SVG, which goes as text. `either`
+    /// takes whichever it is, as `silt_show` does.
+    pub(crate) async fn keep_media(&self, file: &Path, kind: &str, either: bool) -> Result<Option<KeptMedia>, CoreError> {
+        use silt_media::Kind;
+        let found = silt_media::sniff(&head_of(file)?);
+        let (media_type, found) = match found {
+            Some(("image/svg+xml", _)) => return Ok(None),
+            Some(found) => found,
+            None if kind == "video" => {
+                return Err(CoreError::Invalid("a video must be MP4, MOV, WebM or Matroska".into()));
+            }
+            None if either => {
+                return Err(CoreError::Invalid(
+                    "silt_show shows an image (PNG, JPEG, GIF, WebP or SVG) or a video (MP4, MOV, WebM or Matroska)".into(),
+                ));
+            }
+            None => return Ok(None),
+        };
+        let kind = match (found, kind, either) {
+            (Kind::Image, _, true) | (Kind::Image, "image", _) => "image",
+            (Kind::Video, _, true) | (Kind::Video, "video", _) => "video",
+            (Kind::Video, _, false) => return Err(CoreError::Invalid("this is a video: give kind video".into())),
+            (Kind::Image, _, false) => return Err(CoreError::Invalid("this is an image: give kind image".into())),
+        };
+        let (blob, size) = self.store.blobs().put_file(file, false).await?;
+        let (width, height, previews) = if kind == "image" { self.previews_of(file).await? } else { (None, None, Vec::new()) };
+        Ok(Some(KeptMedia { kind, media_type, blob, size, width, height, previews }))
+    }
+
+    /// An image's size and previews, each kept as a blob; an image that
+    /// can't be decoded gets none, and the viewer offers its original.
+    pub(crate) async fn previews_of(
+        &self,
+        file: &Path,
+    ) -> Result<(Option<u32>, Option<u32>, Vec<silt_proto::view::PreviewView>), CoreError> {
+        let path = file.to_owned();
+        let made = tokio::task::spawn_blocking(move || silt_media::previews(&path)).await.map_err(std::io::Error::other)?;
+        let made = match made {
+            Ok(made) => made,
+            Err(error) => {
+                tracing::warn!(%error, "an image got no previews");
+                let size = silt_media::dimensions(file);
+                return Ok((size.map(|size| size.0), size.map(|size| size.1), Vec::new()));
+            }
+        };
+        let mut previews = Vec::new();
+        for preview in made.previews {
+            let blob = self.store.blobs().put(&preview.bytes).await?;
+            previews.push(silt_proto::view::PreviewView {
+                blob: blob.to_string(),
+                media_type: preview.media_type.to_owned(),
+                width: preview.width,
+                height: preview.height,
+                size: preview.bytes.len() as u64,
+            });
+        }
+        Ok((Some(made.width), Some(made.height), previews))
     }
 }
 
@@ -924,19 +1045,11 @@ mod tests {
         assert!(content_of(&new("image", Some("not an image")), "image", None).is_err());
         assert_eq!(content_of(&new("image", Some("<svg/>")), "image", None).expect("svg image").1, "image/svg+xml");
         assert!(content_of(&new("html", None), "html", None).is_err(), "nothing to keep");
+        assert!(content_of(&new("video", Some("x")), "video", None).is_err(), "a video comes from a file");
     }
 
     #[test]
-    fn images_are_known_by_their_first_bytes() {
-        assert_eq!(image_media_type(b"\x89PNG\r\n\x1a\nrest"), Some("image/png"));
-        assert_eq!(image_media_type(&[0xff, 0xd8, 0xff, 0xe0]), Some("image/jpeg"));
-        assert_eq!(image_media_type(b"GIF89a.."), Some("image/gif"));
-        assert_eq!(image_media_type(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
-        assert_eq!(image_media_type(b"\0\0\0"), None);
-    }
-
-    #[test]
-    fn a_path_must_be_a_small_file_outside_denied_folders() {
+    fn a_path_must_be_a_file_outside_denied_folders() {
         let checkout = tempfile::tempdir().expect("temp dir");
         let denied = tempfile::tempdir().expect("temp dir");
         std::fs::write(checkout.path().join("chart.svg"), "<svg/>").expect("write");
@@ -975,6 +1088,9 @@ mod tests {
             capabilities: None,
             by: None,
             files: None,
+            width: None,
+            height: None,
+            previews: Vec::new(),
         };
         let all = [view("aaaaaaaaaaaa", 1), view("aaaaaaaaaaaa", 2), view("bbbbbbbbbbbb", 1)];
         assert_eq!(latest_version(&all, "aaaaaaaaaaaa"), 2);

@@ -82,6 +82,7 @@ impl Request {
             | Self::ProjectDesignSystems { .. }
             | Self::ArtifactRead { .. }
             | Self::ArtifactContent { .. }
+            | Self::BlobSource { .. }
             | Self::ArtifactVersion { .. }
             | Self::ArtifactFile { .. }
             | Self::ArtifactListing { .. }
@@ -131,6 +132,7 @@ impl Request {
             | Self::LanPush { .. } => Read,
             Self::AcpAnswer { .. } | Self::AcpReply { .. } | Self::ApprovalAnswer { .. } => AnswerPermissions,
             Self::AcpPrompt { .. }
+            | Self::MayUpload
             | Self::AcpSteer { .. }
             | Self::AcpCancel { .. }
             | Self::QueueAdd { .. }

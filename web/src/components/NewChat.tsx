@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { nextPermission, ownModes, presetForOwnMode, presetUnavailable, startSettings, startingValue } from '../agentState'
 import { type AgentSetting, api, type Preset } from '../api'
 import { agentRefused, modeRefused, presetRefused, within } from '../rules'
@@ -71,7 +71,9 @@ export function NewChat() {
   const settings = startSettings(seen?.settings ?? [], modes)
   const settingValue = (setting: AgentSetting) =>
     startingValue(setting, chosenSettings[setting.id], workspace?.workspace.defaults.agents?.[agent]?.settings?.[setting.id])
-  const { attached, add, remove, clear } = useAttachments()
+  const { attached, add, remove, clear, busy, failure } = useAttachments()
+  // A start asked for while files upload, which goes once they're there (ADR 0120).
+  const startOnceUploaded = useRef<boolean | null>(null)
   const attach = (files: File[], pasted = false) => {
     setError(undefined)
     add(files, pasted).catch((failure: unknown) => setError(message(failure)))
@@ -82,6 +84,14 @@ export function NewChat() {
 
   const start = (background: boolean) => {
     setError(undefined)
+    if (failure) {
+      setError(failure)
+      return
+    }
+    if (busy) {
+      startOnceUploaded.current = background
+      return
+    }
     if (!agent) return
     setStarting(true)
     api
@@ -121,6 +131,12 @@ export function NewChat() {
       )
       .finally(() => setStarting(false))
   }
+  useEffect(() => {
+    if (busy || startOnceUploaded.current === null) return
+    const background = startOnceUploaded.current
+    startOnceUploaded.current = null
+    start(background)
+  })
 
   const ready = !starting && Boolean(agent)
   const send = useHeldSend(choices.isPending, ready, () => start(false))

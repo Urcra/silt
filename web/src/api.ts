@@ -90,6 +90,7 @@ import type {
   WorkspacesView,
   Capabilities,
   LanView,
+  BlobState,
 } from './api.generated'
 
 /** Who views a thread's pages: their id in page data, their level, and the names of the people the thread knows. */
@@ -225,6 +226,61 @@ export interface SearchForm {
 
 const thread = (id: string) => `/api/threads/${encodeURIComponent(id)}`
 
+/**
+ * A blob of the thread's, raw, for an `<img>` or a `<video>` to read by range (ADR 0120); `preview` asks for an
+ * image's preview of that many px, `download` saves it under that name. The daemon takes its token in the query, as
+ * an element can't send a header; the server and a phone go by their cookie.
+ */
+export function blobUrl(id: string, blob: string, options: { preview?: number; download?: string } = {}): string {
+  const query = new URLSearchParams()
+  if (options.preview) query.set('preview', String(options.preview))
+  if (options.download) query.set('download', options.download)
+  const given = token()
+  if (given) query.set('token', given)
+  const search = query.toString()
+  return apiUrl(`${thread(id)}/blobs/${blob}`) + (search ? `?${search}` : '')
+}
+
+/** What the daemon reads of each file a prompt carries, and nothing the page keeps beside it. */
+function sentFiles(files: PromptAttachment[]): PromptAttachment[] {
+  return files.map(({ name, mime, data, upload }) => ({ name, mime, data, upload: upload ?? null }))
+}
+
+/** What an upload answered: the file, by the name a prompt then gives it. */
+export interface Uploaded {
+  upload: string
+  size: number
+}
+
+/**
+ * Sends a file a prompt will carry to the machine ahead of the prompt, streaming it with no size limit (ADR 0120),
+ * telling `progress` how much has gone.
+ */
+export function uploadFile(file: Blob, progress: (sent: number) => void, signal?: AbortSignal): Promise<Uploaded> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', apiUrl('/api/uploads'))
+    xhr.setRequestHeader('Authorization', `Bearer ${token()}`)
+    xhr.setRequestHeader('X-Silt-Request', '1')
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream')
+    xhr.upload.onprogress = (event) => progress(event.loaded)
+    xhr.onload = () => {
+      let answer: { upload?: string; size?: number; error?: string } = {}
+      try {
+        answer = JSON.parse(xhr.responseText) as typeof answer
+      } catch {
+        // Not JSON: the status says what went wrong.
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && answer.upload) resolve({ upload: answer.upload, size: answer.size ?? 0 })
+      else reject(new ApiError(answer.error ?? `upload failed (${xhr.status})`))
+    }
+    xhr.onerror = () => reject(new ApiError('the upload was cut off'))
+    xhr.onabort = () => reject(new DOMException('the upload was stopped', 'AbortError'))
+    signal?.addEventListener('abort', () => xhr.abort(), { once: true })
+    xhr.send(file)
+  })
+}
+
 /** Where a design system is: a project's clone, the person's own, or the folder of the thread making it. */
 export interface DesignWhere {
   source: 'project' | 'personal'
@@ -303,6 +359,8 @@ export const api = {
   /** Erases a Local only thread and its forks (ADR 0092); unconfirmed, says what would go. */
   eraseThread: (id: string, confirm: boolean) => request<string>('POST', `${thread(id)}/erase`, { confirm }),
   threads: () => request<ThreadSummary[]>('GET', '/api/threads'),
+  /** How much of a blob of the thread's has arrived, while another machine uploads it (ADR 0120). */
+  blobState: (id: string, blob: string) => request<BlobState>('GET', `${thread(id)}/blobs/${blob}/state`),
   /** An artifact's content, by the blob a version of it names (ADR 0068). */
   artifact: (id: string, blob: string) => request<ArtifactContent>('GET', `${thread(id)}/artifacts/${blob}`),
   /** A read or write of an artifact's page data (ADR 0072). */
@@ -503,7 +561,13 @@ export const api = {
     agent: string,
     where: { thread: string } | { clone: string } | Record<string, never>,
     options: Partial<StartOptions> = {},
-  ) => request<string>('POST', '/api/agents/start', { agent, ...where, ...options }),
+  ) =>
+    request<string>('POST', '/api/agents/start', {
+      agent,
+      ...where,
+      ...options,
+      ...(options.attachments ? { attachments: sentFiles(options.attachments) } : {}),
+    }),
   chatSettings: () => request<ChatSettings>('GET', '/api/chats/settings'),
   setChatSettings: (settings: ChatSettings) => request<string>('PUT', '/api/chats/settings', settings),
   /** Makes a chat's folder a project of its own; answers with the project. */
@@ -600,7 +664,7 @@ export const api = {
     request<string>('PUT', `/api/plugins/${encodeURIComponent(id)}/workspaces/${encodeURIComponent(workspace)}`, { on }),
   status: () => request<DaemonStatus>('GET', '/api/status'),
   prompt: (id: string, text: string, plan = false, attachments: PromptAttachment[] = []) =>
-    request<string>('POST', `${thread(id)}/agent/prompt`, { text, plan, attachments }),
+    request<string>('POST', `${thread(id)}/agent/prompt`, { text, plan, attachments: sentFiles(attachments) }),
   setMode: (id: string, mode: string) => request<string>('POST', `${thread(id)}/agent/mode`, { mode }),
   setSetting: (id: string, setting: string, value: string) =>
     request<string>('POST', `${thread(id)}/agent/setting`, { id: setting, value }),

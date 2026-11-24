@@ -71,6 +71,97 @@ fn an_artifact_made_on_one_machine_opens_on_another() {
     assert_eq!(content["media_type"], "text/html");
 }
 
+/// What a prompt's images and videos the machine's history names, kept as blobs.
+fn stored_media(machine: &Machine, thread: &str) -> Vec<serde_json::Value> {
+    let (status, history) = machine.web_answer("GET", &format!("/api/threads/{thread}/history"), None);
+    if status != "200" {
+        return Vec::new();
+    }
+    let history: serde_json::Value = serde_json::from_str(&history).unwrap_or_default();
+    history["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry["image"]["stored"].as_object().map(|stored| serde_json::Value::Object(stored.clone())))
+        .collect()
+}
+
+/// Part of what the machine's daemon serves at `path`, as a video asks for it.
+fn ranged(machine: &Machine, path: &str, range: &str) -> (String, Vec<u8>) {
+    let url = machine.stdout(&["open", "--no-browser"]);
+    let (base, token) = common::web_ui(&url);
+    let output = std::process::Command::new("curl")
+        .args(["-s", "-r", range, "-w", "%{http_code}", "-H"])
+        .arg(format!("Authorization: Bearer {token}"))
+        .arg(format!("{base}{path}"))
+        .output()
+        .expect("curl runs");
+    let (body, status) = output.stdout.split_at(output.stdout.len().saturating_sub(3));
+    (String::from_utf8_lossy(status).into_owned(), body.to_vec())
+}
+
+/// A video attached to a prompt has no size limit: it's uploaded to the
+/// machine first, goes to the server in chunks after the deltas naming it,
+/// and another machine reads it by range from the server (ADR 0120).
+#[test]
+fn a_large_video_reaches_another_machine_in_chunks_and_is_read_by_range() {
+    let world = world();
+    let (laptop, home) = (&world.laptop, &world.home);
+    // A WebM's header, then past one chunk, so it goes after its deltas.
+    let mut video = fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../silt-fake-agent/fixtures/login.webm")).expect("the clip");
+    video.resize((9 << 20) + 4321, 7);
+    let file = laptop.silt_home.join("checkout.webm");
+    fs::write(&file, &video).expect("write the video");
+    let url = laptop.stdout(&["open", "--no-browser"]);
+    let (base, token) = common::web_ui(&url);
+    let output = std::process::Command::new("curl")
+        .args(["-s", "-X", "POST", "-H", "X-Silt-Request: 1", "-H"])
+        .arg(format!("Authorization: Bearer {token}"))
+        .arg("--data-binary")
+        .arg(format!("@{}", file.display()))
+        .arg(format!("{base}/api/uploads"))
+        .output()
+        .expect("curl runs");
+    let upload: serde_json::Value = serde_json::from_slice(&output.stdout).expect("the upload answers");
+    assert_eq!(upload["size"], video.len(), "{upload}");
+    let attachment = serde_json::json!({"name": "checkout.webm", "mime": "video/webm", "data": "", "upload": upload["upload"]});
+    let started = laptop.web(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": laptop.repo, "agent": "v1", "prompt": "watch this", "attachments": [attachment]})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    let mut kept = Vec::new();
+    assert!(
+        eventually(|| {
+            kept = stored_media(laptop, &thread);
+            kept.len() == 1
+        }),
+        "the laptop keeps the video with the prompt"
+    );
+    let blob = kept[0]["blob"].as_str().expect("blob").to_owned();
+    assert_eq!(kept[0]["size"], video.len());
+    assert!(eventually(|| stored_media(home, &thread).len() == 1), "the other machine pulls the prompt");
+    let path = format!("/api/threads/{thread}/blobs/{blob}");
+    let mut seen = (String::new(), Vec::new());
+    assert!(
+        eventually(|| {
+            seen = ranged(home, &path, "0-15");
+            seen.0 == "206"
+        }),
+        "the other machine reads it by range once it has arrived: {}",
+        seen.0
+    );
+    assert_eq!(seen.1, video[..16]);
+    let (status, tail) = ranged(home, &path, &format!("{}-", video.len() - 10));
+    assert_eq!((status.as_str(), tail.as_slice()), ("206", &video[video.len() - 10..]));
+    let state = home.web("GET", &format!("{path}/state"), None);
+    assert_eq!(state["stored"], true, "{state}");
+    assert_eq!(laptop.web("GET", &format!("{path}/state"), None)["stored"], true);
+    let (refused, _) = home.web_answer("GET", &format!("/api/threads/{thread}/blobs/{}", "ab".repeat(32)), None);
+    assert_ne!(refused, "200", "only a blob the thread names is served");
+}
+
 /// What `url` answers: its status, the headers asked for, and its body.
 fn fetch(url: &str, headers: &[&str]) -> (String, Vec<String>, String) {
     let output = std::process::Command::new("curl").args(["-s", "-D", "-", url]).output().expect("curl runs");

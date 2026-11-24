@@ -1,10 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams, useRouterState } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
-import { api, short } from '../api'
+import { api, blobUrl, short, type FileMedia as Shown } from '../api'
+import { formatOf, isVideo, sizeOf, VIEWER_EDGE } from '../mediaInfo'
 import { filePath, type LineRange, linesHash, parseLines } from '../permalink'
 import { keys, message } from '../query'
 import { CopyLink } from './CopyLink'
+import { VideoPlayer, ZoomableImage } from './Media'
 import { Page } from './Page'
 
 /** A file of a thread at a version, with lines to link to (ADR 0031). */
@@ -55,7 +57,8 @@ export function FilePage() {
         )}
       </div>
       {file.error && <p className="text-danger">{message(file.error)}</p>}
-      {file.data?.text === null && <p className="text-sm text-fg-2">A binary file.</p>}
+      {file.data?.media && <FileMedia thread={id} path={path} media={file.data.media} />}
+      {file.data?.text === null && !file.data.media && <p className="text-sm text-fg-2">A binary file.</p>}
       {file.data?.text != null && (
         <pre data-testid="file" className="overflow-x-auto rounded-md border border-line font-mono text-xs leading-5">
           {file.data.text
@@ -95,5 +98,49 @@ export function FileRoute() {
     <Page width="wide">
       <FilePage />
     </Page>
+  )
+}
+
+/** An image or a video in the repository, which plays or zooms where a binary file said only that (ADR 0120). */
+function FileMedia({ thread, path, media }: { thread: string; path: string; media: Shown }) {
+  const name = path.split('/').pop() ?? path
+  const original = blobUrl(thread, media.blob)
+  // A large image opens on a preview made for it, with its original a click away.
+  const large = media.size > 4 << 20
+  return (
+    <div className="mt-3 overflow-hidden rounded-md border border-line" data-testid="file-media">
+      {isVideo(media.media_type) ? (
+        <VideoPlayer
+          media={{ kind: 'video', title: name, src: original, mediaType: media.media_type }}
+          variant="panel"
+          className="rounded-none border-0"
+        />
+      ) : (
+        <div className="relative h-[min(60vh,520px)]">
+          <ZoomableImage
+            layout="floating"
+            media={{
+              kind: 'image',
+              title: name,
+              src: large ? blobUrl(thread, media.blob, { preview: VIEWER_EDGE }) : original,
+              full: large ? { src: original, size: media.size } : undefined,
+            }}
+          />
+        </div>
+      )}
+      <div className="flex items-center gap-3 border-t border-line bg-elevated px-3 py-2 text-xs text-fg-2">
+        <span className="font-mono text-2xs">
+          {formatOf(media.media_type)}
+          {media.size > 0 ? ` · ${sizeOf(media.size)}` : ''}
+        </span>
+        <span className="flex-1" />
+        <a
+          href={blobUrl(thread, media.blob, { download: name })}
+          className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-line bg-bg px-2 text-fg-1 hover:border-line-strong"
+        >
+          Download
+        </a>
+      </div>
+    </div>
   )
 }

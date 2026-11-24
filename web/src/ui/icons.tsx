@@ -127,6 +127,31 @@ const PATHS = {
       <path d="m14 11-3.5-3.5L4 13" />
     </>
   ),
+  video: (
+    <>
+      <rect x="1.5" y="3.5" width="9.5" height="9" rx="1" />
+      <path d="m11 7 3.5-2v6L11 9" />
+    </>
+  ),
+  pause: <path d="M5.5 3.5v9M10.5 3.5v9" strokeWidth="2" />,
+  playSolid: <path d="M5 3.5v9l7-4.5z" fill="currentColor" />,
+  sound: <path d="M2.5 6h2.5l3.5-3v10L5 10H2.5zM11 5.5a3.5 3.5 0 0 1 0 5M12.8 3.8a6 6 0 0 1 0 8.4" />,
+  muted: <path d="M2.5 6h2.5l3.5-3v10L5 10H2.5zM11 6l3.5 4M14.5 6 11 10" />,
+  loop: <path d="M3 7V6a2 2 0 0 1 2-2h7.5M10.5 2 12.5 4l-2 2M13 9v1a2 2 0 0 1-2 2H3.5M5.5 14l-2-2 2-2" />,
+  pip: (
+    <>
+      <rect x="2" y="3" width="12" height="10" rx="1" />
+      <rect x="8" y="8" width="4.5" height="3.5" rx=".5" fill="currentColor" />
+    </>
+  ),
+  fullscreen: <path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10" />,
+  minus: <path d="M3.5 8h9" />,
+  keyboard: (
+    <>
+      <rect x="1.5" y="4" width="13" height="8" rx="1" />
+      <path d="M4 6.5h.01M6.5 6.5h.01M9 6.5h.01M11.5 6.5h.01M5 9.5h6" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>
 
 export type IconName = keyof typeof PATHS

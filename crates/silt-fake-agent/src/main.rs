@@ -572,8 +572,14 @@ async fn agent() -> Result<()> {
         .await
 }
 
+/// A six-second screen recording, and a 3200 by 1800 chart, for `Show me
+/// the video` and `Show me the chart` (ADR 0120).
+const LOGIN_WEBM: &[u8] = include_bytes!("../fixtures/login.webm");
+const CHART_PNG: &[u8] = include_bytes!("../fixtures/chart.png");
+
 /// Calls Silt's own tools as an agent the web UI runs would: `Show me`
-/// shows an image with `silt_show`, `Guide` reads `silt_artifact_guide`,
+/// shows an image with `silt_show` (`the video` a video, `the chart` a
+/// large image; `Artifact video` and `Artifact image` make them artifacts), `Guide` reads `silt_artifact_guide`,
 /// `Read back` reads the last artifact with `silt_artifact_read`,
 /// `Artifact` makes an artifact with `silt_artifact` (`FAKE_ACP_ARTIFACT`
 /// its HTML, `FAKE_ACP_DESIGN_SYSTEM` its design system), `Artifact
@@ -596,6 +602,12 @@ async fn show(
         newest(prompt).split_once("Folder ").and_then(|(_, rest)| rest.split_whitespace().next())
     {
         ("folders_request", serde_json::json!({"path": path, "reason": "the app uses it"}))
+    } else if prompt.contains("Show me the video") {
+        tokio::fs::write(cwd.join("login.webm"), LOGIN_WEBM).await.ok();
+        ("silt_show", serde_json::json!({"path": "login.webm", "caption": "Login flow after the redirect"}))
+    } else if prompt.contains("Show me the chart") {
+        tokio::fs::write(cwd.join("chart.png"), CHART_PNG).await.ok();
+        ("silt_show", serde_json::json!({"path": "chart.png", "caption": "p95 render time by route"}))
     } else if prompt.contains("Show me") {
         let path = cwd.join("pixel.png");
         tokio::fs::write(&path, mcp::PIXEL_PNG).await.ok();
@@ -634,6 +646,13 @@ async fn show(
         && let Some(last) = last.clone()
     {
         ("silt_artifact_read", serde_json::json!({"id": last}))
+    } else if prompt.contains("Artifact video") {
+        // A video, or a large image, as an artifact of its own beside the conversation (ADR 0120).
+        tokio::fs::write(cwd.join("login.webm"), LOGIN_WEBM).await.ok();
+        ("silt_artifact", serde_json::json!({"title": "Login recording", "kind": "video", "path": "login.webm"}))
+    } else if prompt.contains("Artifact image") {
+        tokio::fs::write(cwd.join("chart.png"), CHART_PNG).await.ok();
+        ("silt_artifact", serde_json::json!({"title": "Render times", "kind": "image", "path": "chart.png"}))
     } else if prompt.contains("Artifact deck more")
         && let Some(last) = last.clone()
     {

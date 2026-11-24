@@ -36,8 +36,10 @@ pub mod view;
 /// ask for, and the plugins it installs, allows and holds (ADR 0102,
 /// ADR 0104). 22: the Auto preset, which a workspace's or an org's cap may
 /// name (ADR 0114). 23: the person's devices by name in the listing, and
-/// the machine holding each thread in its summary (ADR 0115).
-pub const PROTOCOL: u32 = 23;
+/// the machine holding each thread in its summary (ADR 0115). 24: blobs
+/// uploaded in chunks and read by range, videos, and images' previews
+/// (ADR 0120).
+pub const PROTOCOL: u32 = 24;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -526,6 +528,33 @@ pub struct PushReply {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PullReply {
     pub deltas: Vec<(u64, Delta)>,
+}
+
+/// A blob larger than this goes to the server in chunks of this size, and
+/// one named only by a conversation's attachment goes after its deltas
+/// (ADR 0120).
+pub const BLOB_CHUNK: u64 = 8 << 20;
+
+/// Where one chunk of a blob's upload goes, of the whole's `size` bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChunkQuery {
+    pub offset: u64,
+    pub size: u64,
+}
+
+/// How much of a blob a server has (ADR 0120).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct BlobState {
+    /// It's whole and stored.
+    pub stored: bool,
+    /// How much of it has arrived, while it's being uploaded.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub received: u64,
+    /// Its size, once an upload has said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub size: Option<u64>,
 }
 
 /// Whether a project's commits get Silt's git notes (ADR 0042).

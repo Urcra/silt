@@ -38,6 +38,10 @@ pub struct Config {
     /// MiB (ADR 0074).
     #[serde(default = "default_artifact_assets_mib")]
     pub artifact_assets_mib: u64,
+    /// The largest file the server keeps, in MiB; none by default
+    /// (ADR 0120). A larger one stays on the machine that made it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_file_mib: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +70,19 @@ impl Default for Config {
             forges: Vec::new(),
             artifact_proxy: false,
             artifact_assets_mib: default_artifact_assets_mib(),
+            max_file_mib: None,
+        }
+    }
+}
+
+impl Config {
+    /// Refuses a file of `size` bytes larger than `max_file_mib`.
+    pub fn file_fits(&self, size: u64) -> Result<(), String> {
+        match self.max_file_mib {
+            Some(mib) if size > mib.saturating_mul(1 << 20) => {
+                Err(format!("this server keeps files of at most {mib} MiB, and this one is {} MiB", size.div_ceil(1 << 20)))
+            }
+            _ => Ok(()),
         }
     }
 }

@@ -807,6 +807,13 @@ pub enum Request {
         thread: String,
         blob: String,
     },
+    /// Where the web UI reads a blob the thread names, by range (ADR 0120).
+    BlobSource {
+        thread: String,
+        blob: String,
+    },
+    /// Whether this caller may upload a prompt's files, and where they go.
+    MayUpload,
     /// A version of one of the thread's artifacts, the latest when `version`
     /// is none, for its frame (ADR 0074).
     ArtifactVersion {
@@ -2169,8 +2176,12 @@ pub struct AgentStatus {
 pub struct PromptAttachment {
     pub name: String,
     pub mime: String,
-    /// The content, in base64.
+    /// The content, in base64; empty for a file uploaded first.
     pub data: String,
+    /// A file uploaded first to `/api/uploads`, as it answered, which has no
+    /// size limit (ADR 0120).
+    #[serde(default)]
+    pub upload: Option<String>,
 }
 
 /// How an agent starts, beyond which agent: for a new thread, where it
@@ -2686,6 +2697,10 @@ mod tests {
             ToolView::decl(&config),
             ToolOutcome::decl(&config),
             ImageView::decl(&config),
+            silt_proto::view::StoredMedia::decl(&config),
+            silt_proto::view::PreviewView::decl(&config),
+            silt_proto::view::FileMedia::decl(&config),
+            silt_proto::BlobState::decl(&config),
             CutView::decl(&config),
             silt_proto::view::ArtifactView::decl(&config),
             silt_proto::artifact::ArtifactFile::decl(&config),
