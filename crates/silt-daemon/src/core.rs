@@ -2698,6 +2698,7 @@ impl Core {
     async fn web(&mut self) -> Result<&crate::web::WebInfo, CoreError> {
         if self.web.is_none() {
             crate::media::drop_stale_uploads(&self.data_dir);
+            crate::media::prune_previews(&self.data_dir, self.store.blobs());
             self.web = Some(crate::web::start(self.events.clone(), self.bus.clone()).await?);
         }
         Ok(self.web.as_ref().expect("started above"))

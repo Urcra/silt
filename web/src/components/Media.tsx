@@ -3,7 +3,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { api } from '../api'
+import { api, type BlobState } from '../api'
 import { clock, fetchWithProgress, sizeOf, type ImageMedia, type Media, type VideoMedia } from '../mediaInfo'
 import { Icon, type IconName, Spinner, cx } from '../ui'
 import {
@@ -594,7 +594,8 @@ export function VideoPlayer({
     return (
       <div
         className={cx(
-          'grid aspect-video w-full place-items-center rounded-md border border-line bg-surface-1 p-4',
+          'grid w-full place-items-center bg-surface-1 p-4',
+          variant === 'fill' ? 'h-full' : 'aspect-video rounded-md border border-line',
           variant === 'inline' && 'max-w-[420px]',
           className,
         )}
@@ -898,9 +899,13 @@ function KeysHelp({ onClose }: { onClose: () => void }) {
 
 // ---------- Not here yet ----------
 
+/** A file larger than this goes to the server after its messages, and may be refused there (ADR 0120). */
+const CHUNK = 8 << 20
+
 /**
  * What an image or a video shows when it can't be read: arriving from the machine that made it, with how much has
- * come, not uploaded yet, or a format this browser can't play.
+ * come; not uploaded yet; refused by the server for its size; arrived damaged and coming again; or a format this
+ * browser can't play. Each names the machine it comes from when the server knows it.
  */
 export function Unavailable({
   state,
@@ -916,7 +921,12 @@ export function Unavailable({
   /** Tries reading it again once it has all arrived. */
   onBack?: () => void
 }) {
-  const [arrived, setArrived] = useState<{ stored: boolean; received: number } | null>(null)
+  const [arrived, setArrived] = useState<BlobState | null>(null)
+  // Its caller makes a new one each time it draws; the polling mustn't start over for that.
+  const back = useRef(onBack)
+  useLayoutEffect(() => {
+    back.current = onBack
+  })
   useEffect(() => {
     let gone = false
     let timer: number | undefined
@@ -925,8 +935,8 @@ export function Unavailable({
         (answer) => {
           if (gone) return
           setArrived(answer)
-          if (answer.stored) onBack?.()
-          else timer = window.setTimeout(ask, 3000)
+          if (answer.stored) back.current?.()
+          else if (!answer.refused) timer = window.setTimeout(ask, 3000)
         },
         () => !gone && setArrived({ stored: false, received: 0 }),
       )
@@ -935,7 +945,7 @@ export function Unavailable({
       gone = true
       window.clearTimeout(timer)
     }
-  }, [state.thread, state.blob, onBack])
+  }, [state.thread, state.blob])
   const box = 'flex max-w-xs flex-col items-center gap-2 text-center text-xs text-fg-2'
   if (!arrived)
     return (
@@ -943,6 +953,16 @@ export function Unavailable({
         <Spinner />
       </span>
     )
+  const machine = arrived.from ?? 'the machine that made it'
+  const Machine = arrived.from ?? 'The machine that made it'
+  const progress = (
+    <span className="h-1 w-44 overflow-hidden rounded-full bg-surface-3">
+      <span
+        className="block h-full bg-accent"
+        style={{ width: `${Math.min(100, (arrived.received / Math.max(1, state.size)) * 100)}%` }}
+      />
+    </span>
+  )
   if (arrived.stored && kind === 'video')
     return (
       <span className={box} data-testid="media-unplayable">
@@ -960,26 +980,65 @@ export function Unavailable({
         )}
       </span>
     )
+  if (arrived.refused)
+    return (
+      <span className={box} data-testid="media-refused">
+        <Icon name="laptop" className="h-4 w-4" />
+        <strong className="text-sm font-medium text-fg-1">Only on {machine}</strong>
+        The server won’t keep it: {arrived.refused}.
+      </span>
+    )
+  if (arrived.damaged)
+    return (
+      <span className={box} data-testid="media-damaged">
+        <Icon name="alert" className="h-4 w-4" />
+        <strong className="text-sm font-medium text-fg-1">The copy that arrived was damaged</strong>
+        Silt checks every file against its fingerprint. {Machine} is sending it again.
+        {arrived.received > 0 && progress}
+      </span>
+    )
   if (arrived.received > 0)
     return (
       <span className={box} data-testid="media-arriving">
         <Icon name="laptop" className="h-4 w-4" />
-        <strong className="text-sm font-medium text-fg-1">Coming from the machine that made it</strong>
+        <strong className="text-sm font-medium text-fg-1">Coming from {machine}</strong>
         {sizeOf(arrived.received)} of {sizeOf(state.size)}
-        <span className="h-1 w-44 overflow-hidden rounded-full bg-surface-3">
-          <span
-            className="block h-full bg-accent"
-            style={{ width: `${Math.min(100, (arrived.received / Math.max(1, state.size)) * 100)}%` }}
-          />
-        </span>
+        {progress}
       </span>
     )
   return (
     <span className={box} data-testid="media-waiting">
       <Icon name="laptop" className="h-4 w-4" />
       <strong className="text-sm font-medium text-fg-1">Not here yet</strong>
-      The machine that made this {kind} hasn’t uploaded it. It arrives once that machine is online.
+      {Machine} hasn’t uploaded this {kind}. It arrives once {machine} is online.
     </span>
+  )
+}
+
+/**
+ * Under a large image or video this machine keeps: that the server refused it, so it's only here (ADR 0120). Asks
+ * only for a file large enough to have been refused.
+ */
+export function KeptHereOnly({ state }: { state: Media['state'] }) {
+  const [refused, setRefused] = useState<string | null>(null)
+  const [thread, blob, size] = [state?.thread, state?.blob, state?.size ?? 0]
+  useEffect(() => {
+    if (!thread || !blob || size <= CHUNK) return
+    let gone = false
+    api.blobState(thread, blob).then(
+      (answer) => !gone && answer.stored && setRefused(answer.refused ?? null),
+      () => {},
+    )
+    return () => {
+      gone = true
+    }
+  }, [thread, blob, size])
+  if (!refused) return null
+  return (
+    <p className="flex items-center gap-1.5 text-2xs text-warn-fg" data-testid="media-kept-here">
+      <Icon name="laptop" className="h-3.5 w-3.5" />
+      Only on this machine: the server won’t keep it ({refused}).
+    </p>
   )
 }
 

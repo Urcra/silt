@@ -576,12 +576,13 @@ async fn thread_blob_state(
     Path((id, blob)): Path<(String, String)>,
 ) -> Result<Json<silt_proto::BlobState>, ApiError> {
     let hash = readable_blob(&server, &browser, &id, &blob).await?;
+    let note = server.blob_note(hash).await;
     if let Some(path) = server.blobs().file(hash) {
         let size = tokio::fs::metadata(path).await.ok().map(|meta| meta.len());
-        return Ok(Json(silt_proto::BlobState { stored: true, received: size.unwrap_or_default(), size }));
+        return Ok(Json(note.state(true, size.unwrap_or_default(), size)));
     }
     let received = server.blobs().received_any(hash).await.map_err(|_| not_found())?;
-    Ok(Json(silt_proto::BlobState { stored: false, received, size: None }))
+    Ok(Json(note.state(false, received, None)))
 }
 
 /// Blob `blob`, if the person may read thread `id` and a delta naming it.

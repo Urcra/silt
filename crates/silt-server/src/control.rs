@@ -414,7 +414,7 @@ pub(crate) async fn report(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn device_name(server: &Server, device: DeviceId) -> Result<String, sqlx::Error> {
+pub(crate) async fn device_name(server: &Server, device: DeviceId) -> Result<String, sqlx::Error> {
     let id = id_bytes(device.0);
     let name = sqlx::query_scalar!("SELECT name FROM devices WHERE id = ?", id).fetch_optional(server.db()).await?;
     Ok(name.unwrap_or_else(|| "a signed-out device".into()))

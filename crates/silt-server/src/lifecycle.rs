@@ -276,6 +276,20 @@ impl Server {
         if let Some(before) = now.checked_sub(crate::UPLOAD_GRACE) {
             self.shared.blobs.drop_stale_uploads(before).await?;
         }
+        // Notes of blobs no delta names any more go too.
+        if let Ok(notes) = std::fs::read_dir(self.blob_notes_dir()) {
+            for note in notes.flatten() {
+                let name = note.file_name().to_string_lossy().into_owned();
+                let blob = name.strip_suffix(".json").and_then(|hash| hash.parse::<silt_types::BlobHash>().ok());
+                let old = note
+                    .metadata()
+                    .and_then(|meta| meta.modified())
+                    .is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age > BLOB_GRACE));
+                if old && blob.is_none_or(|blob| !referenced.contains(&blob)) {
+                    let _ = std::fs::remove_file(note.path());
+                }
+            }
+        }
         // Previews whose image is gone go with it (ADR 0120).
         if let Ok(previews) = std::fs::read_dir(self.previews_dir()) {
             for preview in previews.flatten() {

@@ -286,7 +286,7 @@ async fn a_large_blob_goes_up_in_chunks_and_is_read_by_range() {
     };
     let first = chunk(0, 12_000, size).await.expect("sends");
     assert_eq!(first.status(), StatusCode::OK);
-    assert_eq!(state().await, silt_proto::BlobState { stored: false, received: 12_000, size: None });
+    assert_eq!(state().await, silt_proto::BlobState { stored: false, received: 12_000, size: None, ..Default::default() });
     assert_eq!(chunk(0, 12_000, size).await.expect("sends").status(), StatusCode::CONFLICT, "only where it left off");
     assert_eq!(chunk(12_000, 30_000, size - 1).await.expect("sends").status(), StatusCode::BAD_REQUEST, "past its size");
     let last: silt_proto::BlobState = chunk(12_000, 30_000, size).await.expect("sends").json().await.expect("state");
@@ -302,7 +302,10 @@ async fn a_large_blob_goes_up_in_chunks_and_is_read_by_range() {
         Op::Git(silt_log::GitOp::Bundle { commits: Vec::new(), blob: hash }),
     );
     assert_eq!(client.push(vec![bundle]).await.status(), StatusCode::OK);
-    assert_eq!(state().await, silt_proto::BlobState { stored: true, received: size as u64, size: Some(size as u64) });
+    assert_eq!(
+        state().await,
+        silt_proto::BlobState { stored: true, received: size as u64, size: Some(size as u64), ..Default::default() }
+    );
     let part = client
         .request(reqwest::Method::GET, &format!("/v1/blobs/{hash}"))
         .header(reqwest::header::RANGE, "bytes=29990-")
@@ -321,6 +324,28 @@ async fn a_large_blob_goes_up_in_chunks_and_is_read_by_range() {
         .await
         .expect("sends");
     assert_eq!(damaged.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // Whoever may read it hears that it arrived damaged and comes again.
+    let names = |blob| {
+        let family = Family::new();
+        family.delta(
+            ActorId(10),
+            THREAD,
+            Author::User,
+            0,
+            family.thread_head(THREAD),
+            Op::Git(silt_log::GitOp::Bundle { commits: Vec::new(), blob }),
+        )
+    };
+    assert_eq!(client.push(vec![names(other)]).await.status(), StatusCode::OK);
+    let told: silt_proto::BlobState = client
+        .request(reqwest::Method::GET, &format!("/v1/blobs/{other}/state"))
+        .send()
+        .await
+        .expect("sends")
+        .json()
+        .await
+        .expect("a state");
+    assert!(told.damaged && !told.stored, "{told:?}");
 }
 
 /// A server's owner can cap the files it keeps; it keeps any size by default.
@@ -346,6 +371,26 @@ async fn a_server_keeps_files_up_to_its_cap() {
         .expect("sends");
     assert_eq!(chunked.status(), StatusCode::PAYLOAD_TOO_LARGE);
     assert!(chunked.text().await.expect("body").contains("at most 1 MiB"));
+    // Whoever may read it hears why it won't arrive.
+    let family = Family::new();
+    let names = family.delta(
+        ActorId(9),
+        THREAD,
+        Author::User,
+        0,
+        family.thread_head(THREAD),
+        Op::Git(silt_log::GitOp::Bundle { commits: Vec::new(), blob: hash }),
+    );
+    assert_eq!(client.push(vec![names]).await.status(), StatusCode::OK);
+    let told: silt_proto::BlobState = client
+        .request(reqwest::Method::GET, &format!("/v1/blobs/{hash}/state"))
+        .send()
+        .await
+        .expect("sends")
+        .json()
+        .await
+        .expect("a state");
+    assert!(!told.stored && told.refused.as_deref().is_some_and(|why| why.contains("at most 1 MiB")), "{told:?}");
     let small = b"fits".to_vec();
     let fits = client
         .request(reqwest::Method::PUT, &format!("/v1/blobs/{}", BlobStore::hash(&small)))

@@ -543,7 +543,7 @@ pub struct ChunkQuery {
 }
 
 /// How much of a blob a server has (ADR 0120).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct BlobState {
     /// It's whole and stored.
@@ -555,6 +555,15 @@ pub struct BlobState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub size: Option<u64>,
+    /// Why the server won't keep it: over its `max_file_mib`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
+    /// Its last upload arrived damaged, so it's being sent again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub damaged: bool,
+    /// The machine whose message named it, by its name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 /// Whether a project's commits get Silt's git notes (ADR 0042).

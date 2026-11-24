@@ -778,6 +778,7 @@ pub(crate) async fn upload_deferred(store: &Store, waiting: Vec<(BlobHash, Remot
             // tried again until the daemon starts again.
             Err(RemoteError::TooLarge(message)) => {
                 tracing::warn!(%hash, %message, "the server won't keep this file");
+                let _ = store.blobs().note_refused(hash, &message).await;
                 let _ = store.blobs().uploaded(hash).await;
             }
             Err(error) => return Err(format!("could not upload file {hash}: {error}")),
@@ -801,7 +802,15 @@ async fn upload_blobs(
         let Some(path) = store.blobs().file(hash) else {
             continue;
         };
-        remote.upload_blob(hash, &path).await?;
+        match remote.upload_blob(hash, &path).await {
+            // Over the server's cap: it stays here, and the deltas go, rather
+            // than hold up everything after them (ADR 0120).
+            Err(RemoteError::TooLarge(message)) => {
+                warn!(%hash, %message, "the server won't keep this file");
+                let _ = store.blobs().note_refused(hash, &message).await;
+            }
+            outcome => outcome?,
+        }
         uploaded.lock().expect("lock").insert(hash);
     }
     Ok(())

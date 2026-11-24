@@ -1042,7 +1042,19 @@ received: number,
 /**
  * Its size, once an upload has said.
  */
-size?: number | null, };
+size?: number | null, 
+/**
+ * Why the server won't keep it: over its `max_file_mib`.
+ */
+refused?: string | null, 
+/**
+ * Its last upload arrived damaged, so it's being sent again.
+ */
+damaged?: boolean, 
+/**
+ * The machine whose message named it, by its name.
+ */
+from?: string | null, };
 
 export type CutView = { 
 /**

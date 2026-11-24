@@ -2,7 +2,7 @@ import { useContext, useEffect, useMemo, useState } from 'react'
 import { api, type HistoryEntry, type QuestionAsked, type QuestionView } from '../api'
 import { ArtifactActions } from '../artifactActions'
 import { entryMedia, formatOf, sizeOf, thumbSrc } from '../mediaInfo'
-import { MediaViewer } from './Media'
+import { KeptHereOnly, MediaViewer } from './Media'
 import { LiveQuestions } from '../liveQuestions'
 import { message } from '../query'
 import { duration, imageSize, kindOf, proposedPlan, shortCommand, tailOf, testsOf, toolOf, type ToolStep } from '../transcript'
@@ -55,6 +55,7 @@ export function ImageThumb({ entry: given, from }: { entry: HistoryEntry; from: 
         )}
       </button>
       <figcaption className="text-2xs text-fg-2">{facts}</figcaption>
+      <KeptHereOnly state={media.state} />
       {open && <MediaViewer media={media} onClose={() => setOpen(null)} />}
     </figure>
   )

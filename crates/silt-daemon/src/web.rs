@@ -1076,7 +1076,14 @@ async fn thread_blob_state(State(web): State<Web>, Path((thread, blob)): Path<(S
     };
     if let Some(path) = source.path {
         let size = tokio::fs::metadata(path).await.ok().map(|meta| meta.len());
-        return Json(silt_proto::BlobState { stored: true, received: size.unwrap_or_default(), size }).into_response();
+        let state = silt_proto::BlobState {
+            stored: true,
+            received: size.unwrap_or_default(),
+            size,
+            refused: source.refused,
+            ..Default::default()
+        };
+        return Json(state).into_response();
     }
     let (Some(remote), Ok(hash)) = (source.remote.map(crate::remote::Remote::new), blob.parse()) else {
         return Json(silt_proto::BlobState::default()).into_response();

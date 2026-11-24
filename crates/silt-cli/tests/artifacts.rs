@@ -157,9 +157,72 @@ fn a_large_video_reaches_another_machine_in_chunks_and_is_read_by_range() {
     assert_eq!((status.as_str(), tail.as_slice()), ("206", &video[video.len() - 10..]));
     let state = home.web("GET", &format!("{path}/state"), None);
     assert_eq!(state["stored"], true, "{state}");
+    assert!(state["from"].as_str().is_some_and(|from| !from.is_empty()), "it names the machine it came from: {state}");
     assert_eq!(laptop.web("GET", &format!("{path}/state"), None)["stored"], true);
     let (refused, _) = home.web_answer("GET", &format!("/api/threads/{thread}/blobs/{}", "ab".repeat(32)), None);
     assert_ne!(refused, "200", "only a blob the thread names is served");
+}
+
+/// A server capped below a file keeps the conversation going without it:
+/// its machine says the file is only there, and the other machine says
+/// which machine has it and why (ADR 0120).
+#[test]
+fn a_file_over_the_servers_cap_stays_on_its_machine_and_both_say_why() {
+    let root = common::temp_root("silt-artifacts-cap");
+    let origin = origin(root.path());
+    let data = root.path().join("server");
+    fs::create_dir_all(&data).expect("server data");
+    fs::write(data.join("server.toml"), "max_file_mib = 8\n").expect("server.toml");
+    let server = Server::start(&data);
+    let laptop = Machine::new(root.path(), "laptop", &origin, &server);
+    let home = Machine::new(root.path(), "home", &origin, &server);
+    let fake = laptop.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let agents = serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]);
+    fs::write(laptop.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+
+    let mut video = fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../silt-fake-agent/fixtures/login.webm")).expect("the clip");
+    video.resize((9 << 20) + 17, 3);
+    let file = laptop.silt_home.join("long.webm");
+    fs::write(&file, &video).expect("write the video");
+    let url = laptop.stdout(&["open", "--no-browser"]);
+    let (base, token) = common::web_ui(&url);
+    let output = std::process::Command::new("curl")
+        .args(["-s", "-X", "POST", "-H", "X-Silt-Request: 1", "-H"])
+        .arg(format!("Authorization: Bearer {token}"))
+        .arg("--data-binary")
+        .arg(format!("@{}", file.display()))
+        .arg(format!("{base}/api/uploads"))
+        .output()
+        .expect("curl runs");
+    let upload: serde_json::Value = serde_json::from_slice(&output.stdout).expect("the upload answers");
+    let attachment = serde_json::json!({"name": "long.webm", "mime": "video/webm", "data": "", "upload": upload["upload"]});
+    let started = laptop.web(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": laptop.repo, "agent": "v1", "prompt": "watch this", "attachments": [attachment]})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    assert!(eventually(|| stored_media(&home, &thread).len() == 1), "the conversation goes on without the file");
+    let blob = stored_media(&home, &thread)[0]["blob"].as_str().expect("blob").to_owned();
+    let path = format!("/api/threads/{thread}/blobs/{blob}/state");
+    let mut there = serde_json::Value::Null;
+    assert!(
+        eventually(|| {
+            there = home.web("GET", &path, None);
+            there["refused"].as_str().is_some_and(|why| why.contains("at most 8 MiB"))
+        }),
+        "the other machine hears why it won't arrive: {there}"
+    );
+    assert_eq!(there["stored"], false);
+    assert!(there["from"].as_str().is_some_and(|from| !from.is_empty()), "and which machine has it: {there}");
+    let mut here = serde_json::Value::Null;
+    assert!(
+        eventually(|| {
+            here = laptop.web("GET", &path, None);
+            here["stored"] == true && here["refused"].as_str().is_some()
+        }),
+        "its own machine plays it and says it's only there: {here}"
+    );
 }
 
 /// What `url` answers: its status, the headers asked for, and its body.

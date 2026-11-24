@@ -33,6 +33,7 @@ use tokio::sync::{Mutex, Notify, OwnedMutexGuard, RwLock};
 pub mod accounts;
 mod app;
 pub mod backup;
+mod blob_notes;
 mod bridge;
 mod browse;
 mod collab;
@@ -905,6 +906,7 @@ async fn push(
         if let Some(bridge) = server.shared.bridge.as_ref().filter(|_| bridge::touches(&stored)) {
             let _ = bridge.send(family);
         }
+        server.note_attachments(&stored, caller).await;
         if let Err(error) = server.notify(&stored, caller).await {
             tracing::warn!(%error, "could not write notifications");
         }
@@ -1171,10 +1173,11 @@ fn fts_query(text: &str) -> String {
 }
 
 async fn put_blob(State(server): State<Server>, UrlPath(hash_hex): UrlPath<String>, body: Bytes) -> Result<StatusCode, ApiError> {
-    if BlobStore::hash(&body).to_string() != hash_hex {
+    let hash = BlobStore::hash(&body);
+    if hash.to_string() != hash_hex {
         return Err(bad_request("blob content does not match its hash"));
     }
-    server.config().file_fits(body.len() as u64).map_err(too_large)?;
+    server.refuse_if_large(hash, body.len() as u64).await?;
     server.shared.blobs.put(&body).await.map_err(ServerError::from)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1193,24 +1196,28 @@ async fn put_blob_chunk(
     body: Bytes,
 ) -> Result<Json<silt_proto::BlobState>, ApiError> {
     let hash = BlobHash::from_str(&hash_hex).map_err(|_| bad_request("invalid blob hash"))?;
-    server.config().file_fits(at.size).map_err(too_large)?;
+    server.refuse_if_large(hash, at.size).await?;
     let owner = caller.user.to_string();
     match server.shared.blobs.append(&owner, hash, at.offset, &body, at.size).await {
         Ok(silt_store::Chunked::Received(received)) => {
-            Ok(Json(silt_proto::BlobState { stored: false, received, size: Some(at.size) }))
+            Ok(Json(server.blob_note(hash).await.state(false, received, Some(at.size))))
         }
         Ok(silt_store::Chunked::Stored) => {
-            Ok(Json(silt_proto::BlobState { stored: true, received: at.size, size: Some(at.size) }))
+            server.change_blob_note(hash, |note| note.damaged = false).await;
+            Ok(Json(server.blob_note(hash).await.state(true, at.size, Some(at.size))))
         }
         Err(silt_store::ChunkError::Offset { received }) => Err(ApiError(
             StatusCode::CONFLICT,
             ErrorReply::Invalid { message: format!("the upload has {received} bytes so far") },
         )),
         Err(silt_store::ChunkError::Exceeds) => Err(bad_request("the chunk runs past the blob's size")),
-        Err(silt_store::ChunkError::Damaged) => Err(ApiError(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            ErrorReply::Invalid { message: "the blob's content doesn't match its hash; send it again".into() },
-        )),
+        Err(silt_store::ChunkError::Damaged) => {
+            server.change_blob_note(hash, |note| note.damaged = true).await;
+            Err(ApiError(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                ErrorReply::Invalid { message: "the blob's content doesn't match its hash; send it again".into() },
+            ))
+        }
         Err(silt_store::ChunkError::Io(error)) => Err(ServerError::from(error).into()),
     }
 }
@@ -1224,11 +1231,14 @@ async fn blob_state(
 ) -> Result<Json<silt_proto::BlobState>, ApiError> {
     let hash = BlobHash::from_str(&hash_hex).map_err(|_| bad_request("invalid blob hash"))?;
     let received = server.shared.blobs.received(&caller.user.to_string(), hash).await.map_err(ServerError::from)?;
-    if server.shared.blobs.contains(hash) && server.readable_blob(caller.user, hash).await? {
+    let readable = server.readable_blob(caller.user, hash).await?;
+    if server.shared.blobs.contains(hash) && readable {
         let size = server.shared.blobs.file(hash).and_then(|path| std::fs::metadata(path).ok()).map(|meta| meta.len());
-        return Ok(Json(silt_proto::BlobState { stored: true, received: size.unwrap_or_default(), size }));
+        return Ok(Json(server.blob_note(hash).await.state(true, size.unwrap_or_default(), size)));
     }
-    Ok(Json(silt_proto::BlobState { stored: false, received, size: None }))
+    // What's known of it only for someone who may read it, or its uploader.
+    let note = if readable { server.blob_note(hash).await } else { blob_notes::BlobNote::default() };
+    Ok(Json(note.state(false, received, None)))
 }
 
 /// A blob, whole or by range, for someone who may read a delta that refers
@@ -1250,6 +1260,15 @@ async fn get_blob(
 }
 
 impl Server {
+    /// Refuses a blob over `max_file_mib`, noting why for whoever reads it.
+    async fn refuse_if_large(&self, hash: BlobHash, size: u64) -> Result<(), ApiError> {
+        if let Err(message) = self.config().file_fits(size) {
+            self.change_blob_note(hash, |note| note.refused = Some(message.clone())).await;
+            return Err(too_large(message));
+        }
+        Ok(())
+    }
+
     /// Whether `user` may read a delta that refers to blob `hash`.
     pub(crate) async fn readable_blob(&self, user: UserId, hash: BlobHash) -> Result<bool, ApiError> {
         let references = self.shared.index.lock().await.blob_references(hash);

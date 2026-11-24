@@ -231,6 +231,19 @@ impl BlobStore {
         }
     }
 
+    /// Notes that a server refused blob `hash`, and why, so this machine
+    /// says so rather than wait for it to arrive elsewhere (ADR 0120).
+    pub async fn note_refused(&self, hash: BlobHash, why: &str) -> io::Result<()> {
+        let dir = self.root.join(REFUSED);
+        fs::create_dir_all(&dir).await?;
+        fs::write(dir.join(hash.to_string()), why).await
+    }
+
+    /// Why a server refused blob `hash`, when one did.
+    pub fn refused(&self, hash: BlobHash) -> Option<String> {
+        std::fs::read_to_string(self.root.join(REFUSED).join(hash.to_string())).ok()
+    }
+
     fn partial(&self, owner: &str, hash: BlobHash) -> io::Result<PathBuf> {
         if owner.is_empty() || !owner.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_') {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "an upload's owner is letters, digits, - and _"));
@@ -262,6 +275,8 @@ impl BlobStore {
 const PARTIAL: &str = ".partial";
 /// Blobs waiting to be uploaded after their deltas.
 const DEFERRED: &str = ".deferred";
+/// Blobs a server refused, with why.
+const REFUSED: &str = ".refused";
 
 /// How a chunk of an upload went.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -412,5 +427,9 @@ mod tests {
         assert_eq!(blobs.list().await.expect("blobs").len(), 1);
         blobs.uploaded(hash).await.expect("done");
         assert!(blobs.deferred_uploads().expect("list").is_empty());
+        assert_eq!(blobs.refused(hash), None);
+        blobs.note_refused(hash, "at most 1 MiB").await.expect("note");
+        assert_eq!(blobs.refused(hash).as_deref(), Some("at most 1 MiB"));
+        assert_eq!(blobs.list().await.expect("blobs").len(), 1);
     }
 }

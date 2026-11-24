@@ -18,6 +18,9 @@ use crate::remote::RemoteConfig;
 pub(crate) struct BlobSource {
     pub(crate) path: Option<PathBuf>,
     pub(crate) remote: Option<RemoteConfig>,
+    /// Why the server won't keep it, when it refused it from here.
+    #[serde(default)]
+    pub(crate) refused: Option<String>,
 }
 
 /// Where the files a person sent before their prompt wait for it.
@@ -44,6 +47,20 @@ pub(crate) fn drop_stale_uploads(data_dir: &Path) {
     for entry in entries.flatten() {
         let old = entry.metadata().and_then(|meta| meta.modified()).is_ok_and(|at| at.elapsed().is_ok_and(|age| age > day));
         if old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Drops the previews made for file pages whose image isn't kept any more.
+pub(crate) fn prune_previews(data_dir: &Path, blobs: &silt_store::BlobStore) {
+    let Ok(entries) = std::fs::read_dir(data_dir.join("previews")) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let original = name.split('-').next().and_then(|hash| hash.parse::<BlobHash>().ok());
+        if original.is_none_or(|hash| !blobs.contains(hash)) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -93,6 +110,7 @@ impl Core {
         Ok(BlobSource {
             path: self.store.blobs().file(hash),
             remote: self.remote_for(thread).map(|remote| remote.config.clone()),
+            refused: self.store.blobs().refused(hash),
         })
     }
 
@@ -240,3 +258,28 @@ async fn copy_for_agent(from: &Path, to: &Path) -> std::io::Result<()> {
 
 /// The blobs a file page shows, by thread.
 pub(crate) type MediaFiles = std::sync::Mutex<HashSet<(ThreadId, BlobHash)>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn previews_of_images_no_longer_kept_are_dropped() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let blobs = silt_store::BlobStore::new(data.path().join("blobs"));
+        let kept = blobs.put(b"an image").await.expect("put");
+        let gone = silt_store::BlobStore::hash(b"an image erased since");
+        let previews = data.path().join("previews");
+        std::fs::create_dir_all(&previews).expect("dir");
+        for name in [format!("{kept}-960"), format!("{gone}-2048"), "stray".to_owned()] {
+            std::fs::write(previews.join(name), b"jpeg").expect("write");
+        }
+        prune_previews(data.path(), &blobs);
+        let left: Vec<String> = std::fs::read_dir(&previews)
+            .expect("dir")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, [format!("{kept}-960")]);
+    }
+}

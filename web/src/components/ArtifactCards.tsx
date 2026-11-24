@@ -8,7 +8,7 @@ import { ArtifactActions } from '../artifactActions'
 import { kindLabel } from '../artifacts'
 import { artifactMedia, clock, formatOf, sizeOf, thumbSrc } from '../mediaInfo'
 import { Icon, cx } from '../ui'
-import { MediaViewer, Unavailable, VideoPlayer } from './Media'
+import { KeptHereOnly, MediaViewer, Unavailable, VideoPlayer } from './Media'
 
 /**
  * An image or a video an agent showed in the conversation, with its caption (ADR 0120). An image shows its smallest
@@ -25,10 +25,13 @@ export function ShownImage({ thread, entry, tile = false }: { thread: string; en
     ? `${formatOf(artifact.media_type)} · ${clock(seen.duration)} · ${seen.width}×${seen.height} · ${sizeOf(artifact.size)}`
     : media.meta
   const caption = (
-    <figcaption className="text-2xs text-fg-3">
-      {artifact.caption && <span className="text-fg-2">{artifact.caption} · </span>}
-      {facts}
-    </figcaption>
+    <>
+      <figcaption className="text-2xs text-fg-3">
+        {artifact.caption && <span className="text-fg-2">{artifact.caption} · </span>}
+        {facts}
+      </figcaption>
+      <KeptHereOnly state={media.state} />
+    </>
   )
   // In a grid of them, each is a tile of one size; a video shows its first frame and plays in the viewer.
   if (tile)
