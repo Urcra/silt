@@ -103,7 +103,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 (cd plugins && cargo test --workspace --target-dir ../target/plugins --quiet)
 
 # Windows (ADR 0045), cross-checked when its target and MinGW are installed;
-# CI's Windows job runs the tests there.
+# nothing else checks it before a merge (ADR 0117).
 if rustup target list --installed 2>/dev/null | grep -qx x86_64-pc-windows-gnu && command -v x86_64-w64-mingw32-gcc >/dev/null; then
     step "clippy for Windows"
     cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu -- -D warnings
