@@ -93,26 +93,11 @@ impl BlobStore {
         self.path(hash).is_file()
     }
 
-    /// Every stored blob and when it was written.
+    /// Every stored blob and when it was written, listed on one blocking
+    /// thread rather than one for each blob.
     pub async fn list(&self) -> io::Result<Vec<(BlobHash, SystemTime)>> {
-        let mut found = Vec::new();
-        let Ok(mut dirs) = fs::read_dir(&self.root).await else {
-            return Ok(found);
-        };
-        while let Some(dir) = dirs.next_entry().await? {
-            let prefix = dir.file_name().to_string_lossy().into_owned();
-            if prefix.len() != 2 || !dir.file_type().await?.is_dir() {
-                continue;
-            }
-            let mut files = fs::read_dir(dir.path()).await?;
-            while let Some(file) = files.next_entry().await? {
-                let name = format!("{prefix}{}", file.file_name().to_string_lossy());
-                if let Ok(hash) = name.parse::<BlobHash>() {
-                    found.push((hash, file.metadata().await?.modified()?));
-                }
-            }
-        }
-        Ok(found)
+        let root = self.root.clone();
+        tokio::task::spawn_blocking(move || list_blobs(&root)).await.map_err(io::Error::other)?
     }
 
     pub async fn remove(&self, hash: BlobHash) -> io::Result<()> {
@@ -126,4 +111,26 @@ impl BlobStore {
         let hex = hash.to_string();
         Path::new(&self.root).join(&hex[..2]).join(&hex[2..])
     }
+}
+
+fn list_blobs(root: &Path) -> io::Result<Vec<(BlobHash, SystemTime)>> {
+    let mut found = Vec::new();
+    let Ok(dirs) = std::fs::read_dir(root) else {
+        return Ok(found);
+    };
+    for dir in dirs {
+        let dir = dir?;
+        let prefix = dir.file_name().to_string_lossy().into_owned();
+        if prefix.len() != 2 || !dir.file_type()?.is_dir() {
+            continue;
+        }
+        for file in std::fs::read_dir(dir.path())? {
+            let file = file?;
+            let name = format!("{prefix}{}", file.file_name().to_string_lossy());
+            if let Ok(hash) = name.parse::<BlobHash>() {
+                found.push((hash, file.metadata()?.modified()?));
+            }
+        }
+    }
+    Ok(found)
 }

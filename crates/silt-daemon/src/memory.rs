@@ -29,18 +29,33 @@ const SWEEP_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// still read it.
 const SWEEP_GRACE: Duration = Duration::from_secs(60 * 60);
 
-/// When the daemon last let go of what was unused, and last swept, and how
-/// much the families it holds may take.
+/// When the daemon last let go of what was unused, when it next sweeps, and
+/// how much the families it holds may take.
 #[derive(Debug)]
 pub(crate) struct Kept {
     released: Instant,
-    swept: Option<Instant>,
+    sweep_at: Instant,
     pub(crate) budget: u64,
 }
 
 impl Default for Kept {
+    /// The first sweep waits out the grace: it reads every snapshot and
+    /// lists every file's state, too much for each start, and the states a
+    /// start writes are kept that long anyway.
     fn default() -> Self {
-        Self { released: Instant::now(), swept: None, budget: budget() }
+        let now = Instant::now();
+        Self { released: now, sweep_at: now + SWEEP_GRACE, budget: budget() }
+    }
+}
+
+impl Kept {
+    /// Whether to sweep at `now`, setting when to sweep next if so.
+    fn sweep_due(&mut self, now: Instant) -> bool {
+        if now < self.sweep_at {
+            return false;
+        }
+        self.sweep_at = now + SWEEP_EVERY;
+        true
     }
 }
 
@@ -81,8 +96,7 @@ impl Core {
             }
             silt_os::return_freed_memory();
         }
-        if self.resident && self.kept.swept.is_none_or(|swept| swept.elapsed() >= SWEEP_EVERY) {
-            self.kept.swept = Some(Instant::now());
+        if self.resident && self.kept.sweep_due(Instant::now()) {
             self.sweep_file_states().await;
         }
     }
@@ -284,6 +298,17 @@ mod tests {
     use super::*;
     use crate::core::Event;
     use crate::protocol::Request;
+
+    #[test]
+    fn files_are_swept_once_the_grace_has_passed_since_start_then_now_and_then() {
+        let mut kept = Kept::default();
+        let start = Instant::now();
+        assert!(!kept.sweep_due(start), "not as the daemon starts");
+        assert!(!kept.sweep_due(start + SWEEP_GRACE / 2));
+        assert!(kept.sweep_due(start + SWEEP_GRACE + Duration::from_secs(1)));
+        assert!(!kept.sweep_due(start + SWEEP_GRACE + Duration::from_secs(2)), "not again at once");
+        assert!(kept.sweep_due(start + SWEEP_GRACE + SWEEP_EVERY + Duration::from_secs(1)));
+    }
 
     const THREAD: ThreadId = ThreadId(7);
     const FAMILY: FamilyId = FamilyId(9);
