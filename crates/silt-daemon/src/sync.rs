@@ -24,6 +24,15 @@ const PULL_WAIT: Duration = Duration::from_secs(20);
 const PULL_RETRY: Duration = Duration::from_secs(1);
 const PULL_RETRY_MAX: Duration = Duration::from_secs(30);
 
+/// The family's deltas from `from` on: what came since the log was read
+/// whole needn't read it again (ADR 0117).
+pub(crate) fn log_since_in(families: &Families, family: FamilyId, from: usize) -> &[Delta] {
+    if let Some(held) = families.get(&family) {
+        return held.log_since(from).unwrap_or_else(|| held.log().get(from..).unwrap_or_default());
+    }
+    families.raw(&family).and_then(|deltas| deltas.get(from..)).unwrap_or_default()
+}
+
 fn log_of(families: &Families, family: FamilyId) -> &[Delta] {
     match families.get(&family) {
         Some(family) => family.log(),
@@ -119,11 +128,13 @@ impl Core {
         if self.syncs.get(&family).is_some_and(|sync| sync.pushed() >= len) {
             return None;
         }
-        let log = log_of(&self.families, family);
+        let pushed = self.syncs.get(&family).map_or(0, ClientSync::pushed);
+        let pending = log_since_in(&self.families, family, usize::try_from(pushed).unwrap_or(usize::MAX));
+        let at = |position: u64| usize::try_from(position - pushed).unwrap_or(usize::MAX);
         let push =
-            self.syncs.entry(family).or_default().next_push(log.len() as u64, |at| silt_log::stored_len(&log[at as usize]))?;
+            self.syncs.entry(family).or_default().next_push(len, |position| silt_log::stored_len(&pending[at(position)]))?;
         let mut found = Vec::new();
-        let deltas: Vec<Delta> = self.local_log(family)[push.from as usize..push.to as usize]
+        let deltas: Vec<Delta> = pending[at(push.from)..at(push.to)]
             .iter()
             .map(|delta| {
                 let redacted = self.redactor.redact_delta(delta);

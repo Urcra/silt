@@ -2,7 +2,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AgentMark } from './AgentMark'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useEffect, useId, useRef, useState } from 'react'
-import { PRESETS, nextPreset, presetUnavailable, startSettings, startingValue } from '../agentState'
+import {
+  PRESETS,
+  nextPermission,
+  ownModes,
+  presetForOwnMode,
+  presetUnavailable,
+  startSettings,
+  startingValue,
+} from '../agentState'
 import {
   type AgentSetting,
   api,
@@ -13,7 +21,7 @@ import {
   type ThreadSummary,
   type WorkspaceView,
 } from '../api'
-import { agentName, agentRefused, presetRefused, rulesLine, serverLine, within, workspaceOf } from '../rules'
+import { agentName, agentRefused, modeRefused, presetRefused, rulesLine, serverLine, within, workspaceOf } from '../rules'
 import { threadDoing } from '../threadLook'
 import { useNow } from '../now'
 import { projectName, shortPath } from '../projects'
@@ -714,7 +722,17 @@ export function NewThread() {
   const [base, setBase] = useState('')
   const [chosenAgent, setAgent] = useState<string>()
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
-  const [chosenPreset, setPreset] = useState<Preset>()
+  const [chosenPreset, setChosenPreset] = useState<Preset>()
+  // One of the agent's own modes to start it in, such as Copilot's Autopilot, from the permissions menu (ADR 0118).
+  const [chosenMode, setChosenMode] = useState<string>()
+  const setPreset = (preset: Preset) => {
+    setChosenPreset(preset)
+    setChosenMode(undefined)
+  }
+  const chooseMode = (mode: string) => {
+    setChosenPreset(presetForOwnMode(mode))
+    setChosenMode(mode)
+  }
   const [prompt, setPrompt] = useDraft(NEW_THREAD_DRAFT)
   const [drafts, setDrafts] = useState(() => stored<Draft[]>(DRAFTS_KEY, []))
   const [error, setError] = useState<string>()
@@ -755,6 +773,9 @@ export function NewThread() {
   // One without an auto mode asks as for Ask before commands.
   const refusedPreset = (id: Preset) => presetRefused(workspace, id) ?? presetUnavailable(id, modes, agentName)
   const preset: Preset = refusedPreset(capped) && capped === 'auto' ? 'ask_before_commands' : capped
+  const own = ownModes(seen?.modes)
+  const inOwn = own.find((mode) => mode.id === chosenMode)?.id
+  const refusedOwn = (mode: string) => modeRefused(workspace, agent, mode)
   const { attached, add, remove, clear } = useAttachments()
   const attach = (files: File[], pasted = false) => {
     setError(undefined)
@@ -817,7 +838,7 @@ export function NewThread() {
           here: chosenWhere === 'local',
           base: chosenWhere === 'worktree' && base ? base : null,
           // In the mode its preset says; its model and the rest as shown.
-          mode: null,
+          mode: inOwn ?? null,
           settings: settings.map((setting) => [setting.id, settingValue(setting)]),
           preset,
           visibility: null,
@@ -896,8 +917,9 @@ export function NewThread() {
             onChange={setPrompt}
             onSend={send}
             onCycle={() => {
-              const next = nextPreset(preset, refusedPreset)
-              if (next) setPreset(next)
+              const next = nextPermission(preset, inOwn, own, refusedPreset, refusedOwn)
+              if (next?.mode !== undefined) chooseMode(next.mode)
+              else if (next) setPreset(next.preset)
             }}
             placeholder={
               chosenWhere === 'cloud'
@@ -911,7 +933,6 @@ export function NewThread() {
             tools={
               chosenWhere !== 'cloud' && (
                 <>
-                  <PermissionChip value={preset} onChange={setPreset} refused={refusedPreset} />
                   {agents.length > 0 && !agent && workspace ? (
                     <span className="px-2 text-xs text-warn-fg">
                       No agent installed here is allowed in {workspace.workspace.name}
@@ -923,12 +944,26 @@ export function NewThread() {
                       onChange={(chosen) => {
                         setAgent(chosen)
                         setChosenSettings({})
+                        if (chosenMode !== undefined) {
+                          setChosenMode(undefined)
+                          setChosenPreset(undefined)
+                        }
                       }}
                       refused={(id) => agentRefused(workspace, id)}
                     />
                   ) : (
                     choices.isSuccess && <span className="px-2 text-xs text-fg-2">No agent found</span>
                   )}
+                  <PermissionChip
+                    value={preset}
+                    onChange={setPreset}
+                    refused={refusedPreset}
+                    own={
+                      own.length > 0
+                        ? { agent, name: agentName, modes: own, mode: inOwn, onMode: chooseMode, refused: refusedOwn }
+                        : undefined
+                    }
+                  />
                   <AgentSettings
                     settings={settings}
                     value={settingValue}

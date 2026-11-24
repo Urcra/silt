@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode, useContext } from 'react'
 import { permissionModes, presetDriven } from '../agentState'
-import type { AgentChoiceItem, AgentSetting } from '../api'
+import type { AgentSetting } from '../api'
 import { effortLevel, isEffort, isModel } from '../agentSettings'
 import { Icon, Popover, cx } from '../ui'
 import { EffortBars } from './AgentPickers'
@@ -8,27 +8,20 @@ import { ChipSelect, GHOST_CHIP } from './ChipSelect'
 import { ComposerFolded } from './composerFolded'
 
 /**
- * An agent's settings as both composers show them, in one row (ADR 0114): a mode where its modes say how it works
- * rather than what it asks, then its model and how hard it thinks in one chip, everything else behind one menu. On a
- * phone, or where the row has no room for them, that menu, named by the model, holds them all. Modes that are
- * permissions don't show: the permissions chip moves the agent between them.
+ * An agent's settings as both composers show them, in one row (ADR 0114): its model and how hard it thinks in one
+ * chip, everything else behind one menu. On a phone, or where the row has no room for them, that menu, named by the
+ * model, holds them all. Its modes don't show: the permissions menu moves the agent between them (ADR 0118).
  */
 export function AgentSettings({
-  modes,
-  mode,
-  onMode,
+  modal = false,
   settings,
   value = (setting) => setting.current,
   onSetting,
   more,
   narrow,
-  refusedMode,
 }: {
-  /** Modes that aren't permissions, such as OpenCode's Build and Plan. */
-  modes?: AgentChoiceItem[] | null
-  /** The mode chosen, of `modes`. */
-  mode?: string
-  onMode?: (mode: string) => void
+  /** Whether the agent has modes, which the permissions menu sets, so its mode listed as a setting too doesn't show. */
+  modal?: boolean
   settings: AgentSetting[]
   /** What a setting shows as chosen, where the composer keeps its own choice. */
   value?: (setting: AgentSetting) => string
@@ -36,15 +29,13 @@ export function AgentSettings({
   /** Anything else of the agent's for the menu, such as stopping it. */
   more?: ReactNode
   narrow: boolean
-  /** Why the workspace's rules refuse a mode, which is then greyed out (ADR 0065). */
-  refusedMode?: (mode: string) => string | undefined
 }) {
   const roomless = useContext(ComposerFolded)
   const folded = narrow || roomless
-  // An agent may list its mode among its settings too, which the mode chip or the preset already sets, and the preset
-  // sets its own switch for asking nothing.
+  // An agent may list its mode among its settings too, which the permissions menu already sets, and the preset sets
+  // its own switch for asking nothing.
   const shown = settings.filter(
-    (setting) => !(setting.category === 'mode' && (modes?.length || permissionModes(setting.choices))) && !presetDriven(setting),
+    (setting) => !(setting.category === 'mode' && (modal || permissionModes(setting.choices))) && !presetDriven(setting),
   )
   const model = shown.find(isModel)
   const effort = shown.find(isEffort)
@@ -60,30 +51,14 @@ export function AgentSettings({
       options={setting.choices}
     />
   )
-  const modeChip = modes && modes.length > 0 && mode !== undefined && onMode && (
-    <ChipSelect
-      ghost
-      chevron={false}
-      label="mode"
-      value={mode}
-      onChange={onMode}
-      options={modes.map((choice) => ({
-        id: choice.id,
-        name: choice.name,
-        description: choice.description,
-        refused: refusedMode?.(choice.id),
-      }))}
-    />
-  )
   const modelName = model?.choices.find((choice) => choice.id === value(model))?.name
   const effortName = effort?.choices.find((choice) => choice.id === value(effort))?.name
   const level = effort && effortLevel(effort.choices, value(effort))
   const bars = level && level.at !== null && <EffortBars at={level.at} of={level.of} />
   const named = [modelName, effortName && `${effortName} effort`].filter(Boolean).join(' · ')
-  const inMenu = folded ? [modeChip, ...shown.map(chip), more] : [...rest.map(chip), more]
+  const inMenu = folded ? [...shown.map(chip), more] : [...rest.map(chip), more]
   return (
     <>
-      {!folded && modeChip}
       {!folded && (model || effort) && (
         <Popover
           label="model and effort"

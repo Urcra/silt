@@ -3,7 +3,8 @@
 //! `fn acp() {}`) when allowed, dropping its first line first when the
 //! prompt says `Rewrite`, or write `FAKE_ACP_CONTENT` over it, and answer. It can load the sessions it
 //! made in the same process, replaying what was said, and refuses others.
-//! It has a `code` and a `plan` mode, where it only answers with a plan,
+//! It has a `code`, a `plan` mode, where it only answers with a plan, and a
+//! `review` mode of its own,
 //! and a model setting, and takes images and files, which its answer
 //! names, and offers the commands `count` and `compact` once a session
 //! opens, as Copilot does; `FAKE_ACP_NO_MODES` leaves all that out. A prompt saying
@@ -81,6 +82,7 @@ fn modes(current: &str) -> Option<SessionModeState> {
             vec![
                 SessionMode::new("code", "Code").description("Edits files"),
                 SessionMode::new("plan", "Plan").description("Only writes a plan"),
+                SessionMode::new("review", "Review").description("Reviews without editing"),
             ],
         )
     })
@@ -233,7 +235,7 @@ async fn agent() -> Result<()> {
         .on_receive_request(
             async move |request: SetSessionModeRequest, responder, connection| {
                 let mode = request.mode_id.to_string();
-                if !has_modes() || !["code", "plan"].contains(&mode.as_str()) {
+                if !has_modes() || !["code", "plan", "review"].contains(&mode.as_str()) {
                     return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such mode"));
                 }
                 let moded = moded.clone();
