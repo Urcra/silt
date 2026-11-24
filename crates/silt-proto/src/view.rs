@@ -698,6 +698,30 @@ pub struct HistoryPage {
     /// pages name none, and are read whole again.
     #[serde(default)]
     pub version: Option<usize>,
+    /// The entries before `from` with news of a task, cut, so a page read
+    /// from the history's end knows what was started before it (ADR 0116).
+    #[serde(default)]
+    pub tasks: Vec<HistoryEntry>,
+}
+
+/// Where a page of the last `tail` entries before entry `end` starts: the
+/// start of the turn holding the first of them, so it opens on a prompt
+/// (ADR 0116).
+pub fn tail_from<'a>(entry: impl Fn(usize) -> &'a HistoryEntry, end: usize, tail: usize) -> usize {
+    let mut from = end.saturating_sub(tail);
+    while from > 0 {
+        let at = entry(from);
+        if opens_turn(&at.kind) && at.side.is_none() {
+            break;
+        }
+        from -= 1;
+    }
+    from
+}
+
+/// The entries among `before` with news of a task, cut for a page.
+pub fn task_news<'a>(before: impl Iterator<Item = &'a HistoryEntry>) -> Vec<HistoryEntry> {
+    before.filter(|entry| entry.task.is_some()).map(cut_for_page).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1281,6 +1305,36 @@ mod tests {
 #[cfg(test)]
 mod cut_tests {
     use super::*;
+
+    #[test]
+    fn a_tail_starts_at_the_prompt_of_the_turn_it_begins_in() {
+        let kinds = ["user", "assistant", "tool_call", "user", "assistant", "tool_call", "tool_result", "assistant"];
+        let mut entries: Vec<HistoryEntry> = kinds.iter().map(|kind| entry(kind, String::new())).collect();
+        assert_eq!(tail_from(|at| &entries[at], entries.len(), 2), 3, "back to the second prompt");
+        assert_eq!(tail_from(|at| &entries[at], entries.len(), 5), 3, "already on it");
+        assert_eq!(tail_from(|at| &entries[at], entries.len(), 6), 0, "back to the first");
+        assert_eq!(tail_from(|at| &entries[at], 3, 1), 0, "before entry 3");
+        assert_eq!(tail_from(|at| &entries[at], entries.len(), 100), 0);
+        entries[3].side = Some("agent-1".into());
+        assert_eq!(tail_from(|at| &entries[at], entries.len(), 2), 0, "a subagent's prompt opens no turn of the thread's");
+    }
+
+    #[test]
+    fn task_news_is_kept_cut_and_nothing_else() {
+        let mut started = entry("tool_result", "x".repeat(PAGE_OUTPUT * 3));
+        started.task = Some(TaskView {
+            id: "b1".into(),
+            call: Some("toolu_1".into()),
+            kind: Some("background".into()),
+            status: "running".into(),
+            side: None,
+            summary: None,
+        });
+        let entries = [entry("user", "go".into()), started, entry("assistant", "done".into())];
+        let news = task_news(entries.iter());
+        assert_eq!(news.len(), 1);
+        assert!(news[0].text.len() < PAGE_OUTPUT * 2, "cut as a page carries it");
+    }
 
     fn entry(kind: &str, text: String) -> HistoryEntry {
         HistoryEntry {

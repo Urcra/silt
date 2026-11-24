@@ -329,6 +329,14 @@ pub enum Request {
         /// carries them (`silt_proto::view::cut_for_page`).
         #[serde(default)]
         cut: bool,
+        /// The last entries, from the start of the turn they begin in, in
+        /// place of `offset` and `limit` (ADR 0116).
+        #[serde(default)]
+        tail: Option<usize>,
+        /// With `tail`, the last entries before this one rather than the
+        /// history's end, as a page scrolled up to reads them.
+        #[serde(default)]
+        before: Option<usize>,
     },
     /// Search within a thread's history and the threads it came from.
     HistorySearch {

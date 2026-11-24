@@ -1326,8 +1326,9 @@ impl Core {
                 }
                 to_response(self.open_web(once, project.as_deref()).await)
             }
-            Request::HistoryRead { thread, offset, limit, known, cut } => {
-                to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit, known, cut)))
+            Request::HistoryRead { thread, offset, limit, known, cut, tail, before } => {
+                let asked = crate::history::PageAsked { offset, limit, known, cut, tail, before };
+                to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, asked)))
             }
             Request::HistorySearch { thread, query, limit } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.history_search(thread, &query, limit).await),

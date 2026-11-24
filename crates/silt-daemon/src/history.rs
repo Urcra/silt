@@ -79,6 +79,17 @@ fn first_difference(before: &[(DeltaId, HistoryEntry)], after: &[(DeltaId, Histo
     before.iter().zip(after).position(|(old, new)| old.1 != new.1).unwrap_or_else(|| before.len().min(after.len()))
 }
 
+/// What a page of history asks for (`Request::HistoryRead`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PageAsked {
+    pub(crate) offset: usize,
+    pub(crate) limit: usize,
+    pub(crate) known: Option<usize>,
+    pub(crate) cut: bool,
+    pub(crate) tail: Option<usize>,
+    pub(crate) before: Option<usize>,
+}
+
 impl Core {
     /// The thread's history as numbered entries, with the delta each came
     /// from. Works for threads only known from the server too. Kept until
@@ -151,31 +162,34 @@ impl Core {
         entries
     }
 
-    /// A page of `thread`'s history, from entry `offset`, or from where it
-    /// changed since version `known` when that's earlier. `cut` leaves out
+    /// A page of `thread`'s history (ADR 0116): from entry `offset`, or from
+    /// where it changed since version `known` when that's earlier, or the
+    /// last `tail` entries from the start of their turn. `cut` leaves out
     /// long outputs and images, as the web UI asks for them.
-    pub(crate) fn history_page(
-        &self,
-        thread: ThreadId,
-        offset: usize,
-        limit: usize,
-        known: Option<usize>,
-        cut: bool,
-    ) -> HistoryPage {
+    pub(crate) fn history_page(&self, thread: ThreadId, asked: PageAsked) -> HistoryPage {
         let kept = self.kept_history(thread);
         let total = kept.entries.len();
-        let from = known.map_or(offset, |known| offset.min(kept.same_before(known))).min(total);
+        let (offset, limit) = match asked.tail {
+            Some(tail) => {
+                let end = asked.before.unwrap_or(total).min(total);
+                let from = silt_proto::view::tail_from(|at| &kept.entries[at].1, end, tail);
+                (from, end - from)
+            }
+            None => (asked.offset, asked.limit),
+        };
+        let from = asked.known.map_or(offset, |known| offset.min(kept.same_before(known))).min(total);
         let entries = kept.entries.iter().skip(from).take(limit);
         HistoryPage {
             thread: thread.to_string(),
             total,
-            entries: if cut {
+            entries: if asked.cut {
                 entries.map(|(_, entry)| silt_proto::view::cut_for_page(entry)).collect()
             } else {
                 entries.map(|(_, entry)| entry.clone()).collect()
             },
             from: Some(from),
             version: Some(kept.version),
+            tasks: silt_proto::view::task_news(kept.entries[..from].iter().map(|(_, entry)| entry)),
         }
     }
 

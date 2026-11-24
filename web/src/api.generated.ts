@@ -1477,7 +1477,12 @@ from: number | null,
  * The history as it is now, to name as `known` next time; a server's
  * pages name none, and are read whole again.
  */
-version: number | null, };
+version: number | null, 
+/**
+ * The entries before `from` with news of a task, cut, so a page read
+ * from the history's end knows what was started before it (ADR 0116).
+ */
+tasks: Array<HistoryEntry>, };
 
 export type InFlight = { thread: string, owner: string, files: Array<string>, last_ms: number, };
 
