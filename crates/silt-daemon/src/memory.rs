@@ -281,6 +281,8 @@ mod tests {
     use silt_types::ActorId;
     use tokio::sync::{mpsc, oneshot};
 
+    use std::collections::HashMap;
+
     use super::*;
     use crate::core::Event;
     use crate::protocol::Request;
@@ -394,6 +396,38 @@ mod tests {
         assert!(!held.log_decoded(), "let go of");
         assert_eq!(held.log(), log);
         assert_eq!(log, store.deltas(FAMILY).await.expect("reads"));
+    }
+
+    #[tokio::test]
+    async fn an_active_familys_views_read_what_it_added_without_reading_its_log_back() {
+        let (data, _repo, store) = store_with_thread().await;
+        let (mut core, _inbox) = loaded_core(store.clone(), data.path()).await;
+        let held = core.families.get_mut(&FAMILY).expect("loads");
+        held.log();
+        core.thread_summaries();
+        core.history_page(
+            THREAD,
+            crate::history::PageAsked { offset: 0, limit: usize::MAX, known: None, cut: true, tail: Some(50), before: None },
+            &HashMap::new(),
+        );
+        core.release_log(FAMILY).await;
+        let held = core.families.get_mut(&FAMILY).expect("held");
+        let renamed = Op::Conv(ConvOp::Title("renamed while held".into()));
+        let delta = held.delta(ActorId(1), THREAD, Author::User, 9, held.thread_head(THREAD), renamed);
+        held.apply(delta, &mut HashMap::new()).expect("applies");
+        let title = core
+            .thread_summaries()
+            .into_iter()
+            .find(|summary| summary.id == THREAD.to_string())
+            .and_then(|summary| summary.title);
+        assert_eq!(title.as_deref(), Some("renamed while held"));
+        core.mr_list(None).expect("lists");
+        core.history_page(
+            THREAD,
+            crate::history::PageAsked { offset: 0, limit: usize::MAX, known: None, cut: true, tail: Some(50), before: None },
+            &HashMap::new(),
+        );
+        assert!(!core.families.loaded(&FAMILY).expect("held").log_decoded(), "what it added was read alone");
     }
 
     #[tokio::test]

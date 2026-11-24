@@ -346,7 +346,7 @@ pub struct Core {
     pub(crate) agent_runs: HashMap<ThreadId, silt_store::AgentRunRecord>,
     /// What each thread's summary reads from its log, with the family's log
     /// length it was read at.
-    pub(crate) summary_cache: Mutex<HashMap<ThreadId, (usize, crate::views::LoggedSummary)>>,
+    pub(crate) summary_folds: Mutex<HashMap<FamilyId, crate::views::FamilyFold>>,
     /// This person's state of each thread (ADR 0024).
     pub(crate) personal: crate::personal::Personal,
     /// The control channel to the server (ADR 0026).
@@ -636,7 +636,7 @@ impl Core {
             rooms: silt_proto::rooms::Hub::default(),
             bus,
             agent_runs: HashMap::new(),
-            summary_cache: Mutex::new(HashMap::new()),
+            summary_folds: Mutex::new(HashMap::new()),
             personal: crate::personal::Personal::default(),
             control: crate::control::Control::default(),
             rename_waits: HashMap::new(),
@@ -1328,7 +1328,13 @@ impl Core {
             }
             Request::HistoryRead { thread, offset, limit, known, cut, tail, before } => {
                 let asked = crate::history::PageAsked { offset, limit, known, cut, tail, before };
-                to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, asked)))
+                match self.find_thread(&thread) {
+                    Ok(thread) => {
+                        let read = self.deltas_for_page(thread, asked).await;
+                        to_response::<_>(Ok(self.history_page(thread, asked, &read)))
+                    }
+                    Err(error) => Response::error(error),
+                }
             }
             Request::HistorySearch { thread, query, limit } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.history_search(thread, &query, limit).await),
@@ -2588,12 +2594,16 @@ impl Core {
         }
         let family = self.viewed(family_id)?;
         let seen = family.graph().version_vector(&family.thread_head(thread));
-        family.log().iter().rev().find_map(|delta| match &delta.op {
+        let commit = |delta: &Delta| match &delta.op {
             Op::Git(GitOp::Genesis { commit, .. } | GitOp::Committed { commit, .. }) if seen.contains(delta.span.first()) => {
                 Some(*commit)
             }
             _ => None,
-        })
+        };
+        // A thread's last commit is most often recent: the log is read whole
+        // only when it isn't among what came since it was.
+        let (start, recent) = family.recent_log();
+        recent.iter().rev().find_map(commit).or_else(|| (start > 0).then(|| family.log().iter().rev().find_map(commit)).flatten())
     }
 
     /// Threads whose lease moved to another device stop taking writes from

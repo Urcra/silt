@@ -135,6 +135,21 @@ impl Read {
     }
 }
 
+/// Which of a kept history's entries a page asks for.
+fn page_range(kept: &KeptHistory, asked: PageAsked) -> (usize, usize) {
+    let total = kept.entries.len();
+    let (offset, limit) = match asked.tail {
+        Some(tail) => {
+            let end = asked.before.unwrap_or(total).min(total);
+            let from = silt_proto::view::tail_from(|at| &kept.entries[at].1, end, tail);
+            (from, end - from)
+        }
+        None => (asked.offset, asked.limit),
+    };
+    let from = asked.known.map_or(offset, |known| offset.min(kept.same_before(known))).min(total);
+    (from, from + limit.min(total - from))
+}
+
 /// The deltas of `thread` among `added`, if each only adds entries at the
 /// history's end: a rewind, a merge or a fork changes what came before.
 fn only_appended(added: &[Delta], thread: ThreadId) -> Option<Vec<&Delta>> {
@@ -227,11 +242,35 @@ impl Core {
 
     /// The family's deltas from `from` on, in local order.
     pub(crate) fn log_since(&self, family: FamilyId, from: usize) -> Option<&[Delta]> {
-        self.local_log(family).get(from..)
+        Some(crate::sync::log_since_in(&self.families, family, from))
     }
 
-    /// The thread's family's delta `id`.
-    fn delta_of(&self, thread: ThreadId, id: DeltaId) -> Option<Delta> {
+    /// The deltas a page of `thread`'s history asked for whole is read from,
+    /// from the store, so an old entry read whole needn't read the log.
+    pub(crate) async fn deltas_for_page(&self, thread: ThreadId, asked: PageAsked) -> HashMap<DeltaId, Delta> {
+        if asked.cut {
+            return HashMap::new();
+        }
+        let kept = self.kept_history(thread);
+        let (from, to) = page_range(&kept, asked);
+        let mut ids: Vec<DeltaId> = kept.entries[from..to].iter().map(|(id, _)| *id).collect();
+        ids.dedup();
+        let family = self.threads[&thread].family;
+        match self.store.deltas_by_id(family, &ids).await {
+            Ok(deltas) => deltas.into_iter().map(|delta| (delta.span.first(), delta)).collect(),
+            Err(error) => {
+                tracing::warn!(%error, "could not read a page's deltas from the store; they're read from the log");
+                HashMap::new()
+            }
+        }
+    }
+
+    /// The thread's family's delta `id`: among those read for the page, else
+    /// from the log.
+    fn delta_of(&self, thread: ThreadId, id: DeltaId, read: &HashMap<DeltaId, Delta>) -> Option<Delta> {
+        if let Some(delta) = read.get(&id) {
+            return Some(delta.clone());
+        }
         let family = self.threads.get(&thread)?.family;
         self.local_log(family).iter().find(|delta| delta.span.first() == id).cloned()
     }
@@ -262,14 +301,19 @@ impl Core {
     /// again from its delta alone. One that reads otherwise alone, as a
     /// transcript whose earlier lines change how a line reads may, comes
     /// from the history read again whole.
-    fn whole_entries(&self, thread: ThreadId, entries: &[(DeltaId, HistoryEntry)]) -> Vec<HistoryEntry> {
+    fn whole_entries(
+        &self,
+        thread: ThreadId,
+        entries: &[(DeltaId, HistoryEntry)],
+        read: &HashMap<DeltaId, Delta>,
+    ) -> Vec<HistoryEntry> {
         let mut whole = Vec::with_capacity(entries.len());
         let mut at = 0;
         while at < entries.len() {
             let delta = entries[at].0;
             let same = entries[at..].iter().take_while(|(id, _)| *id == delta).count();
             let first = entries[at].1.index;
-            match self.delta_of(thread, delta).map(|delta| entry_texts(&mut HistoryReader::default(), &delta)) {
+            match self.delta_of(thread, delta, read).map(|delta| entry_texts(&mut HistoryReader::default(), &delta)) {
                 Some(shown)
                     if shown.len() >= same
                         && entries[at..at + same].iter().zip(&shown).all(|((_, cut), shown)| cut.kind == shown.kind) =>
@@ -319,26 +363,18 @@ impl Core {
     /// where it changed since version `known` when that's earlier, or the
     /// last `tail` entries from the start of their turn. `cut` leaves out
     /// long outputs and images, as the web UI asks for them.
-    pub(crate) fn history_page(&self, thread: ThreadId, asked: PageAsked) -> HistoryPage {
+    pub(crate) fn history_page(&self, thread: ThreadId, asked: PageAsked, read: &HashMap<DeltaId, Delta>) -> HistoryPage {
         let kept = self.kept_history(thread);
         let total = kept.entries.len();
-        let (offset, limit) = match asked.tail {
-            Some(tail) => {
-                let end = asked.before.unwrap_or(total).min(total);
-                let from = silt_proto::view::tail_from(|at| &kept.entries[at].1, end, tail);
-                (from, end - from)
-            }
-            None => (asked.offset, asked.limit),
-        };
-        let from = asked.known.map_or(offset, |known| offset.min(kept.same_before(known))).min(total);
-        let held = &kept.entries[from..(from + limit.min(total - from))];
+        let (from, to) = page_range(&kept, asked);
+        let held = &kept.entries[from..to];
         HistoryPage {
             thread: thread.to_string(),
             total,
             entries: if asked.cut {
                 held.iter().map(|(_, entry)| entry.clone()).collect()
             } else {
-                self.whole_entries(thread, held)
+                self.whole_entries(thread, held, read)
             },
             from: Some(from),
             version: Some(kept.version),
@@ -1017,9 +1053,10 @@ mod tests {
             write(&mut core, submitted());
             write(&mut core, reply(&long));
             let asked = |cut, tail| PageAsked { offset: 0, limit: usize::MAX, known: None, cut, tail, before: None };
-            let whole = core.history_page(THREAD, asked(false, None));
+            let read = core.deltas_for_page(THREAD, asked(false, None)).await;
+            let whole = core.history_page(THREAD, asked(false, None), &read);
             assert_eq!(whole.entries[1].text, long);
-            let tail = core.history_page(THREAD, asked(true, Some(1)));
+            let tail = core.history_page(THREAD, asked(true, Some(1)), &HashMap::new());
             assert_eq!(tail.from, Some(0), "from the prompt of its turn");
         }
     }

@@ -17,6 +17,101 @@ use crate::homes::Home;
 use crate::protocol::{FileEdit, FilePage, SearchFilters, SearchResult, ShowLine, ThreadSummary};
 use crate::transcripts::native_entries;
 
+/// A family's log as folded for the views across families: each thread's
+/// summary so far and the merge requests' deltas. A thread's summary read
+/// every line of its conversation again each time its log grew; now only
+/// the lines added are read (ADR 0116).
+#[derive(Default)]
+pub(crate) struct FamilyFold {
+    version: usize,
+    pub(crate) threads: HashMap<ThreadId, ThreadFold>,
+    pub(crate) requests: Vec<Delta>,
+}
+
+impl FamilyFold {
+    fn push(&mut self, delta: &Delta) {
+        if let Op::Mr(_) = delta.op {
+            self.requests.push(delta.clone());
+        }
+        self.threads.entry(delta.thread).or_default().push(delta);
+    }
+}
+
+/// What a thread's summary reads from its own deltas, folded in order.
+#[derive(Default, Clone)]
+pub(crate) struct ThreadFold {
+    transcripts: std::sync::Arc<std::sync::Mutex<Transcripts>>,
+    named: Option<String>,
+    first_prompt: Option<String>,
+    messages: usize,
+    /// The agent of the last line its sessions recorded.
+    agent: Option<String>,
+    /// The name an ACP session's latest `session` record gives its agent.
+    acp_name: Option<String>,
+    edits: usize,
+    shared: bool,
+    forked_from: Option<ThreadId>,
+    lease: Option<silt_types::DeviceId>,
+    last_ms: Option<i64>,
+    cloud: Option<String>,
+    /// When the thread last recorded anything.
+    pub(crate) moved_ms: Option<i64>,
+}
+
+impl ThreadFold {
+    fn push(&mut self, delta: &Delta) {
+        self.moved_ms = self.moved_ms.max(Some(delta.time_ms));
+        if delta.op.is_activity() {
+            self.last_ms = self.last_ms.max(Some(delta.time_ms));
+        }
+        self.shared |= matches!(delta.author, Author::Others { .. });
+        match &delta.op {
+            Op::Text { .. } => self.edits += 1,
+            Op::Fork { from } => {
+                self.forked_from.get_or_insert(*from);
+            }
+            Op::Lease { device, .. } => self.lease = Some(*device),
+            Op::Conv(conv) => self.push_conversation(delta, conv),
+            _ => {}
+        }
+    }
+
+    fn push_conversation(&mut self, delta: &Delta, conv: &ConvOp) {
+        match conv {
+            ConvOp::Title(title) => self.named = Some(title.clone()),
+            ConvOp::CloudSession { id, .. } => {
+                self.cloud.get_or_insert_with(|| id.to_string());
+            }
+            ConvOp::Native { session, line, .. } => {
+                self.agent = Some(session.agent.clone());
+                if session.agent == silt_agents::acp::AGENT
+                    && let Some(name) = silt_agents::acp::name_of(line)
+                {
+                    self.acp_name = Some(name);
+                }
+                if let Some(title) = ai_title(line) {
+                    self.named = Some(title);
+                }
+                let mut transcripts = self.transcripts.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                for entry in native_entries(&mut transcripts, delta) {
+                    match entry {
+                        Entry::User { text } => {
+                            self.messages += 1;
+                            if self.first_prompt.is_none() {
+                                self.first_prompt =
+                                    text.lines().find(|line| !line.trim().is_empty()).map(|line| clip_title(line.trim()));
+                            }
+                        }
+                        Entry::Assistant { .. } => self.messages += 1,
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// What a thread's summary reads from its log, kept until the family's log
 /// grows: parsing every line of every conversation is the listing's cost.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -103,59 +198,61 @@ impl Core {
         summaries
     }
 
-    /// What each of `records`' summaries reads from its log, from the cache
-    /// while its family's log hasn't grown.
+    /// What each of `records`' summaries reads from its log: from its
+    /// family's digest while it says what the family holds, else from what
+    /// was folded of its log, the deltas added since folded in first.
     fn logged_summaries(&self, records: &[&ThreadRecord]) -> HashMap<ThreadId, LoggedSummary> {
-        let mut cache = self.summary_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut logged = HashMap::new();
-        let mut stale: BTreeSet<FamilyId> = BTreeSet::new();
+        let mut folding: BTreeSet<FamilyId> = BTreeSet::new();
         for record in records {
-            if let Some(digested) = self.digested(record.family).and_then(|digest| digest.threads.get(&record.id)) {
-                logged.insert(record.id, digested.summary.clone());
-                continue;
-            }
-            match cache.get(&record.id) {
-                Some((length, summary)) if *length == self.local_log_len(record.family) => {
-                    logged.insert(record.id, summary.clone());
+            match self.digested(record.family).and_then(|digest| digest.threads.get(&record.id)) {
+                Some(digested) => {
+                    logged.insert(record.id, digested.summary.clone());
                 }
-                _ => {
-                    stale.insert(record.family);
+                None => {
+                    folding.insert(record.family);
                 }
             }
         }
-        for family in stale {
-            let length = self.local_log_len(family);
+        for family in folding {
             let records: Vec<&ThreadRecord> = records.iter().copied().filter(|record| record.family == family).collect();
-            for (thread, summary) in self.summaries_in(family, &records) {
-                cache.insert(thread, (length, summary.clone()));
-                logged.insert(thread, summary);
-            }
+            logged.extend(self.summaries_in(family, &records));
         }
         logged
     }
 
     /// The summaries of `records`, threads of `family`, read from its log.
     pub(crate) fn summaries_in(&self, family: FamilyId, records: &[&ThreadRecord]) -> HashMap<ThreadId, LoggedSummary> {
-        let mut by_thread: HashMap<ThreadId, Vec<&Delta>> = HashMap::new();
-        for delta in self.local_log(family) {
-            by_thread.entry(delta.thread).or_default().push(delta);
-        }
-        records
-            .iter()
-            .map(|record| {
-                let deltas = by_thread.get(&record.id).map_or(&[][..], Vec::as_slice);
-                (record.id, self.logged_summary(record, deltas))
+        let folds: Vec<(ThreadId, Option<ThreadFold>)> = self
+            .folded(family, |folded| records.iter().map(|record| (record.id, folded.threads.get(&record.id).cloned())).collect());
+        folds
+            .into_iter()
+            .map(|(thread, fold)| {
+                let record = &self.thread_records()[&thread];
+                (thread, self.summary_folded(record, &fold.unwrap_or_default()))
             })
             .collect()
     }
 
-    fn logged_summary(&self, record: &ThreadRecord, deltas: &[&Delta]) -> LoggedSummary {
-        let conversation: Vec<&Delta> = deltas.iter().copied().filter(|delta| matches!(delta.op, Op::Conv(_))).collect();
-        let (first_prompt, messages) = first_prompt_and_messages(&conversation);
-        let forked_from = deltas.iter().find_map(|delta| match delta.op {
-            Op::Fork { from } => Some(from),
-            _ => None,
-        });
+    /// `then` given the family's log folded: what was folded before, and
+    /// the deltas added since (ADR 0116).
+    pub(crate) fn folded<T>(&self, family: FamilyId, then: impl FnOnce(&FamilyFold) -> T) -> T {
+        let mut folds = self.summary_folds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let length = self.local_log_len(family);
+        let fold = folds.entry(family).or_default();
+        if fold.version > length {
+            *fold = FamilyFold::default();
+        }
+        if fold.version < length {
+            for delta in crate::sync::log_since_in(&self.families, family, fold.version) {
+                fold.push(delta);
+            }
+            fold.version = length;
+        }
+        then(fold)
+    }
+
+    fn summary_folded(&self, record: &ThreadRecord, fold: &ThreadFold) -> LoggedSummary {
         let inherited = || {
             let family = self.families.get(&record.family)?;
             let inherited: Vec<&Delta> = family.history(record.id).into_iter().map(|item| item.delta).collect();
@@ -163,29 +260,24 @@ impl Core {
         };
         LoggedSummary {
             // A fork says so until its own first prompt names it, so it isn't taken for its source.
-            title: named_title(&conversation).or(first_prompt).or_else(|| match forked_from {
+            title: fold.named.clone().or_else(|| fold.first_prompt.clone()).or_else(|| match fold.forked_from {
                 Some(from) => Some(format!("Fork of {}", inherited().unwrap_or_else(|| from.short()))),
                 None => inherited(),
             }),
-            agent: conversation.iter().rev().find_map(|delta| match &delta.op {
-                Op::Conv(ConvOp::Native { session, .. }) if session.agent == silt_agents::acp::AGENT => {
-                    Some(acp_agent_name(&conversation).unwrap_or_else(|| session.agent.clone()))
+            agent: fold.agent.as_ref().map(|agent| {
+                if agent == silt_agents::acp::AGENT {
+                    fold.acp_name.clone().unwrap_or_else(|| agent.clone())
+                } else {
+                    silt_agents::agent(agent).map_or_else(|| agent.clone(), |known| known.command().to_owned())
                 }
-                Op::Conv(ConvOp::Native { session, .. }) => Some(
-                    silt_agents::agent(&session.agent).map_or_else(|| session.agent.clone(), |agent| agent.command().to_owned()),
-                ),
-                _ => None,
             }),
-            messages,
-            edits: deltas.iter().filter(|delta| matches!(delta.op, Op::Text { .. })).count(),
-            shared: deltas.iter().any(|delta| matches!(delta.author, Author::Others { .. })),
-            forked_from: forked_from.map(|from| from.to_string()),
-            lease: deltas.iter().rev().find_map(|delta| match delta.op {
-                Op::Lease { device, .. } => Some(device),
-                _ => None,
-            }),
-            last_ms: deltas.iter().filter(|delta| delta.op.is_activity()).map(|delta| delta.time_ms).max(),
-            cloud: silt_proto::view::cloud_session(deltas.iter().copied()),
+            messages: fold.messages,
+            edits: fold.edits,
+            shared: fold.shared,
+            forked_from: fold.forked_from.map(|from| from.to_string()),
+            lease: fold.lease,
+            last_ms: fold.last_ms,
+            cloud: fold.cloud.clone(),
         }
     }
 
@@ -735,17 +827,6 @@ pub(crate) fn title(conversation: &[&Delta]) -> Option<String> {
 
 /// The conversation's first prompt as a title, and how many prompts and
 /// replies it has, read in one pass.
-/// The name an ACP session's latest `session` record gives its agent: every
-/// ACP agent records under the one adapter, whose own name says nothing.
-fn acp_agent_name(conversation: &[&Delta]) -> Option<String> {
-    conversation.iter().rev().find_map(|delta| match &delta.op {
-        Op::Conv(ConvOp::Native { session, line, .. }) if session.agent == silt_agents::acp::AGENT => {
-            silt_agents::acp::name_of(line)
-        }
-        _ => None,
-    })
-}
-
 fn first_prompt_and_messages(conversation: &[&Delta]) -> (Option<String>, usize) {
     let mut transcripts = Transcripts::default();
     let mut first_prompt = None;
@@ -767,15 +848,21 @@ fn first_prompt_and_messages(conversation: &[&Delta]) -> (Option<String>, usize)
 
 fn named_title(conversation: &[&Delta]) -> Option<String> {
     conversation.iter().rev().find_map(|delta| match &delta.op {
-        // Parsing every line of a long conversation to find none is the
-        // listing's main cost.
-        Op::Conv(ConvOp::Native { line, .. }) if line.contains("ai-title") => {
-            let value: serde_json::Value = serde_json::from_str(line).ok()?;
-            (value.get("type")?.as_str()? == "ai-title").then(|| value.get("aiTitle")?.as_str().map(str::to_owned)).flatten()
-        }
+        Op::Conv(ConvOp::Native { line, .. }) => ai_title(line),
         Op::Conv(ConvOp::Title(title)) => Some(title.clone()),
         _ => None,
     })
+}
+
+/// The title an agent gave its conversation on `line`, if it did there.
+fn ai_title(line: &str) -> Option<String> {
+    // Parsing every line of a long conversation to find none is the
+    // listing's main cost.
+    if !line.contains("ai-title") {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    (value.get("type")?.as_str()? == "ai-title").then(|| value.get("aiTitle")?.as_str().map(str::to_owned)).flatten()
 }
 
 fn clip_title(text: &str) -> String {
