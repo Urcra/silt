@@ -33,6 +33,7 @@ pub enum Event {
     Loaded {
         family: FamilyId,
         result: Box<Result<crate::load::Loaded, CoreError>>,
+        size: Option<u64>,
     },
     /// Paths in a checkout may have changed, as the watcher noticed at
     /// `noticed`; `settled` once the agents' transcripts have had time to

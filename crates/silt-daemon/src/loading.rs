@@ -8,6 +8,7 @@ use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::core::{Core, CoreError, Event};
+use crate::families::Fetched;
 use crate::load::Loaded;
 use crate::protocol::Request;
 
@@ -63,22 +64,26 @@ impl Core {
         let Some(loader) = self.families.loader() else {
             return;
         };
-        let answer: oneshot::Receiver<Result<Loaded, CoreError>> =
-            loader.load_later(family, self.families.root(&family).map(ToOwned::to_owned));
+        let answer: oneshot::Receiver<Fetched> = loader.load_later(family, self.families.root(&family).map(ToOwned::to_owned));
         let events = self.events.clone();
         tokio::spawn(async move {
-            let result = answer.await.unwrap_or_else(|_| Err(CoreError::Invalid("the loader stopped".into())));
-            let _ = events.send(Event::Loaded { family, result: Box::new(result) });
+            let loaded = answer
+                .await
+                .unwrap_or_else(|_| Fetched { result: Err(CoreError::Invalid("the loader stopped".into())), size: None });
+            let _ = events.send(Event::Loaded { family, result: Box::new(loaded.result), size: loaded.size });
         });
     }
 
     /// Holds what the loader loaded of the family, unless something loaded
     /// it meanwhile, and lets what waited for it go on.
-    pub(crate) fn loaded(&mut self, family: FamilyId, result: Result<Loaded, CoreError>) {
+    pub(crate) fn loaded(&mut self, family: FamilyId, result: Result<Loaded, CoreError>, size: Option<u64>) {
         match result {
             Ok(loaded) if !self.families.is_loaded(&family) => {
                 let root = self.families.root(&family).map(ToOwned::to_owned);
                 self.families.hold(family, loaded, root);
+                if let Some(size) = size {
+                    self.families.set_size(&family, size);
+                }
             }
             Ok(_) => {}
             Err(error) => warn!(%error, %family, "could not load the family; what needs it loads it again"),

@@ -367,6 +367,8 @@ mod tests {
         let digested = views(&core);
         assert!(!core.families.is_loaded(&FAMILY), "reading the views across families loads none");
         assert!(core.families.get(&FAMILY).is_some(), "anything else reading it loads it");
+        let stored = store.family_size(FAMILY).await.expect("sized");
+        assert_eq!(core.families.size(&FAMILY), Some(stored), "with its size, for the tick not to ask");
         assert!(core.families.is_loaded(&FAMILY));
         assert_eq!(digested, views(&core));
         assert!(digested.contains("still the same"));
@@ -449,11 +451,13 @@ mod tests {
         let again = Event::Request(Request::Show { thread: THREAD.to_string()[..12].to_owned() }, reply);
         assert!(core.unless_loading(again).is_none(), "and so does what comes after for the family");
         assert!(!core.families.is_loaded(&FAMILY));
-        let Some(Event::Loaded { family, result }) = inbox.recv().await else {
+        let Some(Event::Loaded { family, result, size }) = inbox.recv().await else {
             panic!("the loader answers");
         };
-        core.loaded(family, *result);
+        core.loaded(family, *result, size);
         assert!(core.families.is_loaded(&FAMILY));
+        let stored = core.store.family_size(FAMILY).await.expect("sized");
+        assert_eq!(core.families.size(&FAMILY), Some(stored), "its size came with it, for the tick not to ask");
         let shown: Vec<String> = std::iter::from_fn(|| match inbox.try_recv() {
             Ok(Event::Request(Request::Show { thread }, _)) => Some(thread),
             _ => None,
