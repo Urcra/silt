@@ -1,5 +1,4 @@
-import { Fragment, type ReactNode, useContext } from 'react'
-import { permissionModes, presetDriven } from '../agentState'
+import { useContext } from 'react'
 import type { AgentSetting } from '../api'
 import { effortLevel, isEffort, isModel } from '../agentSettings'
 import { Icon, Popover, cx } from '../ui'
@@ -8,44 +7,32 @@ import { ChipSelect, GHOST_CHIP } from './ChipSelect'
 import { ComposerFolded } from './composerFolded'
 
 /**
- * An agent's settings as both composers show them, in one row (ADR 0114): its model and how hard it thinks in one
- * chip, everything else behind one menu. On a phone, or where the row has no room for them, that menu, named by the
- * model, holds them all. Its modes don't show: the permissions menu moves the agent between them (ADR 0118).
+ * An agent's settings as both composers show them (ADR 0114): its model and how hard it thinks, in one chip. On a
+ * phone, or where the row has no room for that, a menu named by the model holds them instead. Its other settings don't
+ * show, nor its modes: the permissions menu moves the agent between them (ADR 0118).
  */
 export function AgentSettings({
-  modal = false,
   settings,
   value = (setting) => setting.current,
   onSetting,
-  more,
   narrow,
 }: {
-  /** Whether the agent has modes, which the permissions menu sets, so its mode listed as a setting too doesn't show. */
-  modal?: boolean
   settings: AgentSetting[]
   /** What a setting shows as chosen, where the composer keeps its own choice. */
   value?: (setting: AgentSetting) => string
   onSetting: (id: string, value: string) => void
-  /** Anything else of the agent's for the menu, such as stopping it. */
-  more?: ReactNode
   narrow: boolean
 }) {
   const roomless = useContext(ComposerFolded)
   const folded = narrow || roomless
-  // An agent may list its mode among its settings too, which the permissions menu already sets, and the preset sets
-  // its own switch for asking nothing.
-  const shown = settings.filter(
-    (setting) => !(setting.category === 'mode' && (modal || permissionModes(setting.choices))) && !presetDriven(setting),
-  )
-  const model = shown.find(isModel)
-  const effort = shown.find(isEffort)
-  const rest = shown.filter((setting) => setting !== model && setting !== effort)
+  const model = settings.find(isModel)
+  const effort = settings.find(isEffort)
   const chip = (setting: AgentSetting) => (
     <ChipSelect
       ghost
       key={setting.id}
       label={setting.name.toLowerCase()}
-      prefix={isModel(setting) ? undefined : isEffort(setting) ? 'Effort' : setting.name}
+      prefix={isModel(setting) ? undefined : 'Effort'}
       value={value(setting)}
       onChange={(chosen) => onSetting(setting.id, chosen)}
       options={setting.choices}
@@ -56,7 +43,6 @@ export function AgentSettings({
   const level = effort && effortLevel(effort.choices, value(effort))
   const bars = level && level.at !== null && <EffortBars at={level.at} of={level.of} />
   const named = [modelName, effortName && `${effortName} effort`].filter(Boolean).join(' · ')
-  const inMenu = folded ? [...shown.map(chip), more] : [...rest.map(chip), more]
   return (
     <>
       {!folded && (model || effort) && (
@@ -87,23 +73,21 @@ export function AgentSettings({
           )}
         </Popover>
       )}
-      {inMenu.some(Boolean) && (
+      {folded && (model || effort) && (
         <Popover
           label="agent settings"
           triggerLabel="agent settings"
           triggerClassName={GHOST_CHIP}
           panelClassName="w-72 p-2"
           trigger={
-            <span className="inline-flex items-center gap-1.5 text-fg-2" title="More of the agent's settings">
-              <Icon name={folded ? 'settings' : 'more'} className="h-3.5 w-3.5" />
-              {folded && <span className="text-fg-1">{modelName ?? 'Settings'}</span>}
-              {folded && bars}
+            <span className="inline-flex items-center gap-1.5 text-fg-2" title="The agent's model and effort">
+              <Icon name="settings" className="h-3.5 w-3.5" />
+              <span className="text-fg-1">{modelName ?? 'Settings'}</span>
+              {bars}
             </span>
           }
         >
-          <div className="flex flex-col items-start gap-1.5">
-            {inMenu.map((node, index) => node && <Fragment key={index}>{node}</Fragment>)}
-          </div>
+          <div className="flex flex-col items-start gap-1.5">{[model, effort].map((setting) => setting && chip(setting))}</div>
         </Popover>
       )}
     </>

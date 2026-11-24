@@ -533,6 +533,7 @@ async fn live(
     let agent = report.map(|report| {
         json!({
             "agent": report.agent,
+            "agent_id": report.agent_id,
             "state": report.state,
             "streaming": "",
             "thinking": "",

@@ -1,5 +1,6 @@
 import type { AgentChoiceItem, Preset } from '../api'
 import { PRESETS, ownModeSays } from '../agentState'
+import { Icon } from '../ui'
 import { AgentMark } from './AgentMark'
 import { ChipMenu } from './ChipMenu'
 
@@ -86,12 +87,15 @@ export function AgentChip({
   onChange,
   refused,
   footer,
+  onStop,
 }: {
   value: string
   agents: { id: string; name: string; description?: string | null }[]
   onChange: (agent: string) => void
   refused?: (agent: string) => string | undefined
   footer?: string
+  /** Where the agent runs, the menu ends with stopping it. */
+  onStop?: () => void
 }) {
   const chosen = agents.find((agent) => agent.id === value)
   return (
@@ -111,6 +115,18 @@ export function AgentChip({
       }))}
       onChange={onChange}
       footer={footer}
+      action={
+        onStop && {
+          label: 'Stop agent',
+          title: 'Stops the agent; the thread keeps everything it did',
+          lead: (
+            <span className="flex h-[18px] w-[18px] items-center justify-center text-fg-2">
+              <Icon name="stop" className="h-3.5 w-3.5" />
+            </span>
+          ),
+          run: onStop,
+        }
+      }
     />
   )
 }
