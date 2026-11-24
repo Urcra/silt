@@ -561,6 +561,30 @@ impl Store {
         stored.decode(0..stored.len())
     }
 
+    /// The family's deltas named `ids`, those stored: read each alone, for a
+    /// caller wanting a few without the whole log (ADR 0116).
+    pub async fn deltas_by_id(&self, family: FamilyId, ids: &[silt_types::DeltaId]) -> Result<Vec<Delta>, StoreError> {
+        let key = id_bytes(family.0);
+        let mut found = Vec::with_capacity(ids.len());
+        for id in ids {
+            let actor = id_bytes(id.actor.0);
+            let lamport = lamport_i64(id.lamport);
+            let seq = sqlx::query_scalar!(
+                "SELECT seq FROM deltas WHERE family_id = ? AND actor = ? AND lamport = ?",
+                key,
+                actor,
+                lamport
+            )
+            .fetch_optional(&self.pool)
+            .await?;
+            if let Some(seq) = seq {
+                let stored = self.stored_deltas_in(family, seq..seq + 1).await?;
+                found.extend(stored.decode(0..stored.len().min(1))?);
+            }
+        }
+        Ok(found)
+    }
+
     /// The family's deltas as the store holds them, read but not decoded,
     /// for a caller that needs only some of them decoded.
     pub async fn stored_deltas(&self, family: FamilyId) -> Result<StoredDeltas, StoreError> {

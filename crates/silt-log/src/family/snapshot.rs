@@ -65,7 +65,7 @@ struct Written<'a> {
     threads: &'a BTreeMap<ThreadId, ThreadState>,
     turns: &'a HashMap<SessionRef, Turns>,
     session_cwds: &'a HashMap<SessionRef, String>,
-    log: Vec<Logged>,
+    log: &'a [Logged],
 }
 
 /// [`Written`], read back: postcard keeps fields in order.
@@ -157,7 +157,7 @@ fn decode_apart(tree: &[u8], files: Part<'_>, rest: &[u8]) -> (Decoded<FileTree>
 /// A delta of the log, told apart from a different one stored under the
 /// same id by a fingerprint of its encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-struct Logged {
+pub(super) struct Logged {
     id: DeltaId,
     fingerprint: u64,
 }
@@ -183,23 +183,22 @@ impl Family {
     /// then told to [`Self::snapshot_stored`].
     pub fn snapshot(&mut self) -> Result<TakenSnapshot, postcard::Error> {
         let mut encoded = Vec::new();
-        for delta in &self.log.all()[self.fingerprints.len()..] {
+        let start = self.logged.len();
+        let new = match self.log.since(start) {
+            Some(new) => new,
+            None => &self.log.all()[start..],
+        };
+        for delta in new {
             encoded.clear();
             encoded = postcard::to_extend(delta, encoded)?;
-            self.fingerprints.push(fingerprint(&encoded));
+            self.logged.push(Logged { id: delta.span.first(), fingerprint: fingerprint(&encoded) });
         }
-        let log = self
-            .log
-            .all()
-            .iter()
-            .zip(&self.fingerprints)
-            .map(|(delta, &fingerprint)| Logged { id: delta.span.first(), fingerprint });
         let rest = Written {
             graph: &self.graph,
             threads: &self.threads,
             turns: &self.turns,
             session_cwds: &self.session_cwds,
-            log: log.collect(),
+            log: &self.logged,
         };
         let files = self.files.unstored()?;
         let data = Read::encode(&self.tree, &self.files.index(&files), &rest)?;
@@ -320,7 +319,7 @@ impl Family {
             turns: rest.turns,
             session_cwds: rest.session_cwds,
             log,
-            fingerprints: rest.log.iter().map(|logged| logged.fingerprint).collect(),
+            logged: rest.log,
             ..Self::default()
         }
     }
@@ -478,6 +477,24 @@ mod tests {
     }
 
     #[test]
+    fn a_snapshot_of_a_family_whose_log_was_let_go_of_reads_only_what_came_since() {
+        let files = MemoryFiles::default();
+        let mut family = Family::new();
+        let stored: Vec<Delta> = ["one", "two"].iter().map(|text| say(&mut family, text)).collect();
+        take(&mut family, &files);
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&reads);
+        family.release_log(Box::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            stored
+        }));
+        say(&mut family, "three");
+        let snapshot = take(&mut family, &files);
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0, "the log let go of isn't read back");
+        assert_eq!(logged(&snapshot).len(), 3);
+    }
+
+    #[test]
     fn a_snapshot_with_files_within_is_read_and_taken_again_with_them_apart() {
         let mut family = Family::new();
         let (a, mut stored) = file(&mut family, "a", "alpha\n");
@@ -487,7 +504,7 @@ mod tests {
             threads: &family.threads,
             turns: &family.turns,
             session_cwds: &family.session_cwds,
-            log: family.log().iter().map(|delta| Logged::of(delta).expect("encodes")).collect(),
+            log: &family.log().iter().map(|delta| Logged::of(delta).expect("encodes")).collect::<Vec<_>>(),
         };
         let mut old = Vec::new();
         for part in [
