@@ -115,11 +115,11 @@ export function withEarlier(updated: Loaded, held: Loaded | undefined): Loaded {
   return { ...updated, start: held.start, entries: earlier.concat(updated.entries), tasks: held.tasks }
 }
 
-function fetcher(id: string): Fetch {
+function fetcher(id: string, signal?: AbortSignal): Fetch {
   return (ask) =>
     'tail' in ask
-      ? api.history(id, undefined, undefined, { tail: ask.tail, before: ask.before })
-      : api.history(id, ask.offset, ask.limit, { known: ask.known })
+      ? api.history(id, undefined, undefined, { tail: ask.tail, before: ask.before, signal })
+      : api.history(id, ask.offset, ask.limit, { known: ask.known, signal })
 }
 
 /**
@@ -134,7 +134,7 @@ export function useHistory(id: string | null) {
     enabled: id !== null,
     queryFn: async ({ signal }) => {
       const before = queries.getQueryData<Loaded>(queryKey)
-      const updated = await loadHistory(fetcher(id!), before, (loaded) => queries.setQueryData(queryKey, loaded), signal)
+      const updated = await loadHistory(fetcher(id!, signal), before, (loaded) => queries.setQueryData(queryKey, loaded), signal)
       // Read again from its end, what changed before what was held: earlier pages held meanwhile are stale too.
       return before && updated.start === before.start ? withEarlier(updated, queries.getQueryData<Loaded>(queryKey)) : updated
     },

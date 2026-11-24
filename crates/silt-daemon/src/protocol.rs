@@ -2498,6 +2498,10 @@ pub enum BusEvent {
     Lan,
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
+    /// Sent on each socket every [`crate::web::BEAT`] whatever changed, so a
+    /// page can tell a quiet socket from a dead one, as a phone's can be
+    /// after it slept.
+    Beat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2525,7 +2529,7 @@ impl BusEvent {
             Self::Sample { ask, .. } | Self::SampleTool { ask, .. } => Some(format!("sample:{ask}")),
             Self::Room { .. } => Some("rooms".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
-            Self::Agents | Self::Approvals | Self::Appearance | Self::Lan | Self::Lagged => None,
+            Self::Agents | Self::Approvals | Self::Appearance | Self::Lan | Self::Lagged | Self::Beat => None,
         }
     }
 }
