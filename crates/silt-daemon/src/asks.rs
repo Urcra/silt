@@ -1,4 +1,4 @@
-//! Agents asking other agents (ADR 0117): an agent hands part of its work to
+//! Agents asking other agents (ADR 0120): an agent hands part of its work to
 //! an agent on another harness or model, which works in a thread of its own
 //! in its caller's family and reports back with its last message.
 

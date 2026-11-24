@@ -727,7 +727,7 @@ mod tests {
 
     /// Starts this computer's backend and a WSL distribution's through the
     /// commands the app runs, when `SILT_TEST_WSL` names a distribution with
-    /// `silt`, as the Windows CI job's does.
+    /// `silt`.
     #[test]
     fn the_native_and_a_distribution_backend_start() {
         let Some(distribution) = env::var("SILT_TEST_WSL").ok().filter(|name| !name.is_empty()) else {

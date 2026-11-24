@@ -173,7 +173,7 @@ pub struct Policy {
     /// What plugins may be on, and how their calls are held (ADR 0104).
     #[serde(default, skip_serializing_if = "crate::PluginPolicy::is_empty")]
     pub plugins: crate::PluginPolicy,
-    /// What agents may ask of other agents (ADR 0117).
+    /// What agents may ask of other agents (ADR 0120).
     #[serde(default, skip_serializing_if = "crate::AskPolicy::is_empty")]
     pub asks: crate::AskPolicy,
 }

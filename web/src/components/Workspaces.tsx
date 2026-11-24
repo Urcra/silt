@@ -649,7 +649,7 @@ function PresetSelect({
   )
 }
 
-/** Agents asking other agents (ADR 0117): whether they may, whom, how far an asked agent goes, how many at once, and how deep. */
+/** Agents asking other agents (ADR 0120): whether they may, whom, how far an asked agent goes, how many at once, and how deep. */
 function AskRules({
   mine,
   theirs,

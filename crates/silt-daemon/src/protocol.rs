@@ -329,6 +329,14 @@ pub enum Request {
         /// carries them (`silt_proto::view::cut_for_page`).
         #[serde(default)]
         cut: bool,
+        /// The last entries, from the start of the turn they begin in, in
+        /// place of `offset` and `limit` (ADR 0117).
+        #[serde(default)]
+        tail: Option<usize>,
+        /// With `tail`, the last entries before this one rather than the
+        /// history's end, as a page scrolled up to reads them.
+        #[serde(default)]
+        before: Option<usize>,
     },
     /// Search within a thread's history and the threads it came from.
     HistorySearch {
@@ -400,7 +408,7 @@ pub enum Request {
         text: String,
     },
     /// The agents `thread`'s agent may ask to do part of its work
-    /// (ADR 0117).
+    /// (ADR 0120).
     Askable {
         thread: String,
     },
@@ -2234,7 +2242,7 @@ pub struct StartOptions {
     pub workspace: Option<String>,
 }
 
-/// What an asked agent is to do (ADR 0117).
+/// What an asked agent is to do (ADR 0120).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
@@ -2296,7 +2304,7 @@ fn waits() -> bool {
     true
 }
 
-/// One agent asking another, as this machine keeps it (ADR 0117).
+/// One agent asking another, as this machine keeps it (ADR 0120).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct AskView {
@@ -2595,7 +2603,7 @@ pub enum BusEvent {
     Mrs,
     /// What an agent offers, its modes and settings, is newly known.
     Agents,
-    /// An agent asked another, or an ask moved on (ADR 0117).
+    /// An agent asked another, or an ask moved on (ADR 0120).
     Asks,
     /// An import from the web UI has gone through `done` of its `total`
     /// sessions.
@@ -2627,6 +2635,10 @@ pub enum BusEvent {
     Lan,
     /// The socket fell behind and missed events: fetch everything again.
     Lagged,
+    /// Sent on each socket every [`crate::web::BEAT`] whatever changed, so a
+    /// page can tell a quiet socket from a dead one, as a phone's can be
+    /// after it slept.
+    Beat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2654,7 +2666,7 @@ impl BusEvent {
             Self::Sample { ask, .. } | Self::SampleTool { ask, .. } => Some(format!("sample:{ask}")),
             Self::Room { .. } => Some("rooms".to_owned()),
             // Rare and small: every socket hears it, as any page may show a composer.
-            Self::Agents | Self::Asks | Self::Approvals | Self::Appearance | Self::Lan | Self::Lagged => None,
+            Self::Agents | Self::Asks | Self::Approvals | Self::Appearance | Self::Lan | Self::Lagged | Self::Beat => None,
         }
     }
 }

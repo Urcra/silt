@@ -19,7 +19,7 @@ pub(crate) fn silt_tool(title: &str) -> Option<&str> {
 }
 
 /// What kind of tool one of Silt's own counts as: asking another agent is
-/// a command (ADR 0117), and taking its changes an edit.
+/// a command (ADR 0120), and taking its changes an edit.
 pub(crate) fn silt_tool_kind(name: &str) -> Option<&'static str> {
     match name {
         "silt_ask" => Some("execute"),

@@ -147,7 +147,7 @@ function stands(step: ToolStep, tasks: Tasks): boolean {
 export function tasked(step: ToolStep, tasks: Tasks): boolean {
   const call = step.call
   if (!call) return false
-  // A call that asked another agent stands on its own, as a subagent's does (ADR 0117).
+  // A call that asked another agent stands on its own, as a subagent's does (ADR 0120).
   if (askOfCall(call)) return true
   return kindOf(call) === 'subagent' || (call.tool !== null && call.tool !== undefined && tasks.byCall.has(call.tool.id))
 }

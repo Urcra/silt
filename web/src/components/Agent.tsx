@@ -16,8 +16,9 @@ import {
   DEFAULT_PRESETS,
   PRESETS,
   STATE_PHRASE,
-  nextPreset,
-  permissionModes,
+  nextPermission,
+  ownModes,
+  presetForOwnMode,
   presetUnavailable,
   restartChoices,
   running,
@@ -629,11 +630,24 @@ export function AgentDock({
   // Before it runs, the preset says which mode it starts in (ADR 0114).
   const seenSettings = restart.settings
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
+  // One of the agent's own modes chosen before it starts, or none (null) where a preset was chosen since (ADR 0118).
+  const [chosenMode, setChosenMode] = useState<string | null>()
+  // The modes the agent has, live or as it last ran here: those that are permissions follow the preset, and its own,
+  // such as Copilot's Autopilot, are in the permissions menu (ADR 0118).
+  const agentModes = live ? status.modes?.available : seenModes
+  const own = ownModes(live ? status.modes : restart.modes)
+  const ownAgent = live ? status.agent_id : agent
+  const agentCalled = live ? status.agent : (seen?.name ?? '')
+  const inMode = live ? status.modes?.current : chosenMode === undefined ? stopped?.modes?.current : chosenMode
+  const ownChosen = own.find((mode) => mode.id === inMode)
+  const inOwn = ownChosen?.id
+  const refusedOwn = (mode: string) => modeRefused(workspace, ownAgent, mode)
   const startValue = (setting: AgentSetting) => restart.value(setting, chosenSettings[setting.id])
   const { attached, add, remove, clear, restore } = useAttachments()
   const chooseAgent = (chosen: string) => {
     setAgent(chosen)
     setChosenSettings({})
+    setChosenMode(undefined)
   }
   // Another agent takes the thread over: this one stops, keeping all it did, and the other starts here.
   const switchAgent = (chosen: string) => {
@@ -689,7 +703,7 @@ export function AgentDock({
       const started = api.startAgent(
         agent,
         { thread },
-        { preset, mode: null, settings, prompt: text.trim() ? text : null, attachments: files },
+        { preset, mode: inOwn ?? null, settings, prompt: text.trim() ? text : null, attachments: files },
       )
       starting.current = started
       const failed = () => {
@@ -751,17 +765,36 @@ export function AgentDock({
   const choosePreset = (picked: Preset) => {
     const before = preset
     onPreset(picked)
+    if (!live) setChosenMode(null)
     void api.setPreset(thread, picked).catch((failure: unknown) => {
       onPreset(before)
       setError(message(failure))
     })
   }
 
-  // Shift+Tab moves to the next preset the agent and the workspace allow; the agent's mode follows (ADR 0114).
+  // One of the agent's own modes, from the permissions menu: running, the agent moves into it; before, it starts in it.
+  // The preset shows what the daemon answers with there at once (ADR 0118).
+  const chooseMode = (mode: string) => {
+    const before = preset
+    onPreset(presetForOwnMode(mode))
+    if (!live) {
+      setChosenMode(mode)
+      return
+    }
+    setError(undefined)
+    api.setMode(thread, mode).catch((failure: unknown) => {
+      onPreset(before)
+      setError(message(failure))
+    })
+  }
+
+  // Shift+Tab moves to the next preset the agent and the workspace allow, then the agent's own modes; the agent's mode
+  // follows (ADR 0114, ADR 0118).
   const cycle = () => {
     if (hosted() && !live) return
-    const next = nextPreset(preset, refusedPreset)
-    if (next) choosePreset(next)
+    const next = nextPermission(preset, inOwn, own, refusedPreset, refusedOwn)
+    if (next?.mode !== undefined) chooseMode(next.mode)
+    else if (next) choosePreset(next.preset)
   }
 
   // Ready, waiting or planned, the page shows it already (the header, the cards); this says it only to a screen reader.
@@ -808,18 +841,11 @@ export function AgentDock({
   const attachable = (live || startable) && !hosted()
   const attach = (files: File[], pasted = false) => act(add(files, pasted))
 
-  // The modes the agent has, live or as it last ran here: permission modes follow the preset rather than show (ADR 0114).
-  const agentModes = live ? status.modes?.available : seenModes
-  const ownModes = permissionModes(agentModes) ? undefined : agentModes
-  const agentCalled = live ? status.agent : (seen?.name ?? '')
   const refusedPreset = (id: Preset) => presetRefused(workspace, id) ?? presetUnavailable(id, agentModes, agentCalled)
   const tools = (
     <>
-      {/* The same row as New thread's: the permissions, which agent, then its model and settings (ADR 0114). */}
-      {(live || !hosted()) && (live || startable || elsewhere || agents.length > 0) && (
-        <PermissionChip value={preset} onChange={choosePreset} refused={refusedPreset} />
-      )}
-      {/* Another agent here takes the thread over. */}
+      {/* The same row as New thread's: which agent, the permissions with its own modes, then its model and settings
+          (ADR 0118). Another agent here takes the thread over. */}
       {(live ? !hosted() && status.agent_id !== '' : !elsewhere && !hosted()) && agents.length > 0 && (
         <AgentChip
           value={live ? status.agent_id : agent}
@@ -827,6 +853,18 @@ export function AgentDock({
           onChange={(chosen) => (live ? switchAgent(chosen) : chooseAgent(chosen))}
           refused={(id) => agentRefused(workspace, id)}
           footer={live ? 'Another agent here takes the thread over' : undefined}
+        />
+      )}
+      {(live || !hosted()) && (live || startable || elsewhere || agents.length > 0) && (
+        <PermissionChip
+          value={preset}
+          onChange={choosePreset}
+          refused={refusedPreset}
+          own={
+            own.length > 0
+              ? { agent: ownAgent, name: agentCalled, modes: own, mode: inOwn, onMode: chooseMode, refused: refusedOwn }
+              : undefined
+          }
         />
       )}
       {!live && !elsewhere && !hosted() && choices.isSuccess && agents.length === 0 && (
@@ -837,10 +875,7 @@ export function AgentDock({
       {!live && !elsewhere && hosted() && <ContinueOn thread={thread} act={act} />}
       {live ? (
         <AgentSettings
-          modes={ownModes}
-          mode={status.modes?.current}
-          onMode={(mode) => act(api.setMode(thread, mode))}
-          refusedMode={(mode) => modeRefused(workspace, status.agent_id, mode)}
+          modal={Boolean(status.modes?.available.length)}
           settings={status.settings}
           onSetting={(id, value) => act(api.setSetting(thread, id, value))}
           more={
@@ -947,7 +982,9 @@ export function AgentDock({
       {preset === 'full_access' && (
         <p className="px-1 text-xs text-fg-2">
           <Icon name="alert" className="mr-1 inline h-3 w-3 text-warn" />
-          Full access: nothing asks; the agent&apos;s own sandbox is all that limits it.
+          {ownChosen && presetForOwnMode(ownChosen.id) === 'full_access'
+            ? `${ownChosen.name}: nothing asks, and ${agentCalled || 'the agent'} keeps going until it's done; its own sandbox is all that limits it.`
+            : "Full access: nothing asks; the agent's own sandbox is all that limits it."}
         </p>
       )}
       {(status?.error || error) && <p className="px-1 text-sm text-danger">{status?.error ?? error}</p>}

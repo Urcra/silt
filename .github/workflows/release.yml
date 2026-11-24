@@ -1,7 +1,6 @@
 # Builds `silt` from a tag and publishes it, with checksums, on the tag's
 # release: static binaries for Linux (ADR 0043), which scripts/install.sh
-# installs, and zips for Windows (ADR 0045), which scripts/install.ps1
-# installs.
+# installs. Windows isn't built here (ADR 0119).
 name: release
 
 on:
@@ -55,10 +54,6 @@ jobs:
             runner: ubuntu-24.04
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
-          - target: x86_64-pc-windows-msvc
-            runner: windows-2025
-          - target: aarch64-pc-windows-msvc
-            runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -69,30 +64,19 @@ jobs:
           path: web/dist
 
       - name: Tools
-        shell: bash
         run: |
-          if [ "$RUNNER_OS" = Linux ]; then
-            sudo apt-get update -q
-            sudo apt-get install -y -q musl-tools meson ninja-build libcap-dev
-          fi
+          sudo apt-get update -q
+          sudo apt-get install -y -q musl-tools meson ninja-build libcap-dev
           rustup show
           rustup target add ${{ matrix.target }}
 
-      - name: silt (Linux)
-        if: runner.os == 'Linux'
+      - name: silt
         env:
           CC: musl-gcc
           RUSTFLAGS: -C target-feature=+crt-static
         run: cargo build --locked --release -p silt-cli --target ${{ matrix.target }}
 
-      - name: silt (Windows)
-        if: runner.os == 'Windows'
-        env:
-          RUSTFLAGS: -C target-feature=+crt-static
-        run: cargo build --locked --release -p silt-cli --target ${{ matrix.target }}
-
-      - name: Archive (Linux)
-        if: runner.os == 'Linux'
+      - name: Archive
         run: |
           bin=target/${{ matrix.target }}/release/silt
           strip "$bin"
@@ -104,81 +88,13 @@ jobs:
           scripts/build-sandbox-tools.sh package
           tar -czf dist/silt-${{ matrix.target }}.tar.gz -C package .
 
-      - name: Archive (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $bin = "target/${{ matrix.target }}/release/silt.exe"
-          & $bin --version
-          New-Item -ItemType Directory dist | Out-Null
-          Compress-Archive -Path $bin -DestinationPath "dist/silt-${{ matrix.target }}.zip"
-
       - uses: actions/upload-artifact@v4
         with:
           name: silt-${{ matrix.target }}
           path: dist/
 
-  # The desktop app's installers for Windows, carrying the silt.exe built
-  # above and putting it on the user's PATH. Signed with Authenticode when
-  # the repository has WINDOWS_CERTIFICATE (a base64 .pfx) and
-  # WINDOWS_CERTIFICATE_PASSWORD; unsigned, with a warning, otherwise.
-  desktop-windows:
-    needs: build
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: silt-x86_64-pc-windows-msvc
-          path: dist
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Sidecar
-        shell: pwsh
-        run: |
-          Expand-Archive dist/silt-x86_64-pc-windows-msvc.zip -DestinationPath sidecar
-          New-Item -ItemType Directory crates/silt-desktop/binaries | Out-Null
-          Copy-Item sidecar/silt.exe crates/silt-desktop/binaries/silt-x86_64-pc-windows-msvc.exe
-
-      - name: Signing
-        shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          if (-not $env:WINDOWS_CERTIFICATE) {
-            Write-Warning "no WINDOWS_CERTIFICATE secret: the installers are unsigned"
-            exit 0
-          }
-          $pfx = Join-Path $env:RUNNER_TEMP 'silt.pfx'
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
-          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
-          $command = "`"$($signtool.FullName)`" sign /f `"$pfx`" /p `"$env:WINDOWS_CERTIFICATE_PASSWORD`" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 %1"
-          @{ bundle = @{ windows = @{ signCommand = $command } } } | ConvertTo-Json -Depth 4 | Set-Content crates/silt-desktop/sign.conf.json
-          "SIGN_CONFIG=--config sign.conf.json" >> $env:GITHUB_ENV
-
-      - name: Installers
-        working-directory: crates/silt-desktop
-        shell: bash
-        run: npx --yes @tauri-apps/cli@2.12.4 build --config tauri.release.conf.json $SIGN_CONFIG --bundles nsis,msi
-
-      - name: Archive
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory dist-desktop | Out-Null
-          $bundle = 'crates/silt-desktop/target/release/bundle'
-          Copy-Item (Get-ChildItem "$bundle/nsis/*.exe" | Select-Object -First 1) dist-desktop/silt-desktop-x86_64-pc-windows-msvc-setup.exe
-          Copy-Item (Get-ChildItem "$bundle/msi/*.msi" | Select-Object -First 1) dist-desktop/silt-desktop-x86_64-pc-windows-msvc.msi
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: silt-desktop-x86_64-pc-windows-msvc
-          path: dist-desktop/
-
   publish:
-    needs: [build, desktop-windows]
+    needs: build
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4

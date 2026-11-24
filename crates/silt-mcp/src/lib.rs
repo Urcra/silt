@@ -67,7 +67,7 @@ silt_artifact_guide first, follow what it says, then call silt_artifact, and cal
 version. silt_artifact_read gives back a version's source, to revise it after a handoff or a fork.";
 
 /// The tools that change something beyond the session: a message another
-/// agent then hears (ADR 0090), and asking another agent (ADR 0117).
+/// agent then hears (ADR 0090), and asking another agent (ADR 0120).
 pub const WRITING_TOOLS: &[&str] = &["silt_message", "silt_ask", "silt_ask_stop", "silt_ask_take"];
 
 /// The tools only a run watched in the web UI gets.

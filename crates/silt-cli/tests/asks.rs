@@ -1,4 +1,4 @@
-//! Agents asking other agents (ADR 0117): one fake agent asks another with
+//! Agents asking other agents (ADR 0120): one fake agent asks another with
 //! `silt_ask`, which works in a thread of its own and reports back.
 
 mod common;

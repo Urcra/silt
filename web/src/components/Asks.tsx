@@ -135,7 +135,7 @@ function TakeRow({ ask }: { ask: AskView }) {
 }
 
 /**
- * A call that asked another agent (ADR 0117): one card led by the asked agent's mark, name and model, opening to
+ * A call that asked another agent (ADR 0120): one card led by the asked agent's mark, name and model, opening to
  * where it works, what it was asked, its steps as it takes them, and its report.
  */
 export function AskCard({ step, thread, asked }: { step: ToolStep; thread: string; asked: AskCall }) {

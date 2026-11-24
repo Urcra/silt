@@ -72,7 +72,7 @@ function ThreadItem({
   thread: ThreadSummary
   nested?: boolean
   current?: boolean
-  /** The ask this thread answers, which nests it under the thread that asked (ADR 0117). */
+  /** The ask this thread answers, which nests it under the thread that asked (ADR 0120). */
   asked?: AskView
 }) {
   const now = useNow()

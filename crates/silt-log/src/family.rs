@@ -356,10 +356,11 @@ pub struct Family {
     session_cwds: HashMap<SessionRef, String>,
     log: Log,
     shapes: Shapes,
-    /// The fingerprints snapshots took of the log's first deltas. The log
-    /// only grows, so each delta is fingerprinted once rather than by every
-    /// snapshot, which made recording a long session quadratic.
-    fingerprints: Vec<u64>,
+    /// The ids and fingerprints snapshots took of the log's first deltas.
+    /// The log only grows, so each delta is fingerprinted once rather than by
+    /// every snapshot, which made recording a long session quadratic, and a
+    /// snapshot needn't read the log whole (ADR 0117).
+    logged: Vec<snapshot::Logged>,
     tree_changes: u64,
 }
 
@@ -385,6 +386,18 @@ impl Family {
     /// How many deltas the log holds, without reading those a snapshot covers.
     pub fn log_len(&self) -> usize {
         self.log.len()
+    }
+
+    /// The log from `from` on, if that's known without reading it whole.
+    pub fn log_since(&self, from: usize) -> Option<&[Delta]> {
+        self.log.since(from)
+    }
+
+    /// What of the log is known without reading it whole, and the position
+    /// of its first delta: its newest part, as a reader of what's recent
+    /// looks there first (ADR 0117).
+    pub fn recent_log(&self) -> (usize, &[Delta]) {
+        self.log.recent()
     }
 
     /// Where the session last started, as its agent reported it.

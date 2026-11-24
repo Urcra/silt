@@ -1,4 +1,4 @@
-//! Rules for agents asking other agents (ADR 0117).
+//! Rules for agents asking other agents (ADR 0120).
 
 use std::collections::BTreeSet;
 

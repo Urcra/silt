@@ -1,4 +1,4 @@
-// Which calls ask another agent (ADR 0117), read from the call alone.
+// Which calls ask another agent (ADR 0120), read from the call alone.
 import type { HistoryEntry } from './api.generated'
 
 /** Silt's own tool a call or a permission names: `silt_ask`, `mcp__silt__silt_ask`, `silt_ask (silt MCP Server)`. */

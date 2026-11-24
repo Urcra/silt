@@ -455,7 +455,7 @@ async fn themed(web: &Web, html: &str) -> String {
 }
 
 /// Sends a request through the daemon's event loop.
-/// Every agent's asks of other agents on this machine (ADR 0117).
+/// Every agent's asks of other agents on this machine (ADR 0120).
 async fn asks(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::Asks).await
 }
@@ -706,10 +706,17 @@ async fn relay_room(mut socket: WebSocket, server: &str, token: &str, join: Stri
 
 /// Sends the socket the events of the topics it subscribed to, until it
 /// closes.
+/// How often an events socket beats, whatever else it says; the page gives
+/// a socket up after 25 s of quiet (`QUIET_MS` in `web/src/bus.ts`).
+pub(crate) const BEAT: Duration = Duration::from_secs(10);
+
 async fn serve_events(mut socket: WebSocket, mut bus: broadcast::Receiver<BusEvent>) {
     let mut topics: HashSet<String> = HashSet::new();
+    let mut beat = tokio::time::interval_at(tokio::time::Instant::now() + BEAT, BEAT);
+    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let event = tokio::select! {
+            _ = beat.tick() => BusEvent::Beat,
             message = socket.recv() => match message {
                 Some(Ok(Message::Text(text))) => {
                     if let Ok(change) = serde_json::from_str::<BusSubscription>(&text) {
@@ -768,6 +775,8 @@ struct HistoryQuery {
     /// Entries as they were recorded, with images and long outputs whole.
     #[serde(default)]
     whole: bool,
+    tail: Option<usize>,
+    before: Option<usize>,
 }
 
 async fn history(State(web): State<Web>, Path(thread): Path<String>, Query(page): Query<HistoryQuery>) -> HttpResponse {
@@ -777,6 +786,8 @@ async fn history(State(web): State<Web>, Path(thread): Path<String>, Query(page)
         limit: page.limit.unwrap_or(usize::MAX),
         known: page.known,
         cut: !page.whole,
+        tail: page.tail,
+        before: page.before,
     };
     ask(&web, request).await
 }

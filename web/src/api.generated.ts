@@ -346,7 +346,7 @@ export type ChoiceAsked = {
  */
 value: string, label: string, description: string | null, };
 
-export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "asks" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "approvals" } | { "event": "appearance" } | { "event": "lan" } | { "event": "lagged" };
+export type BusEvent = { "event": "threads" } | { "event": "thread", thread: string, deltas: number, } | { "event": "agent", thread: string, status: AgentStatus | null, } | { "event": "queue", thread: string, } | { "event": "agent_text", thread: string, kind: TextKind, text: string, tool_use_id: string | null, restart: boolean, } | { "event": "inbox" } | { "event": "mrs" } | { "event": "agents" } | { "event": "asks" } | { "event": "importing", done: number, total: number, } | { "event": "sample", ask: string, text: string, } | { "event": "sample_tool", ask: string, call: number, name: string, input: unknown, } | { "event": "room", deliveries: unknown, } | { "event": "approvals" } | { "event": "appearance" } | { "event": "lan" } | { "event": "lagged" } | { "event": "beat" };
 
 export type DataClass = "location";
 
@@ -1505,7 +1505,12 @@ from: number | null,
  * The history as it is now, to name as `known` next time; a server's
  * pages name none, and are read whole again.
  */
-version: number | null, };
+version: number | null, 
+/**
+ * The entries before `from` with news of a task, cut, so a page read
+ * from the history's end knows what was started before it (ADR 0117).
+ */
+tasks: Array<HistoryEntry>, };
 
 export type InFlight = { thread: string, owner: string, files: Array<string>, last_ms: number, };
 
@@ -2034,7 +2039,7 @@ folder_layers?: Array<Array<FolderRule>>,
  */
 plugins?: PluginPolicy, 
 /**
- * What agents may ask of other agents (ADR 0117).
+ * What agents may ask of other agents (ADR 0120).
  */
 asks?: AskPolicy, };
 

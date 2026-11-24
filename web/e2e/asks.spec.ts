@@ -1,4 +1,4 @@
-// Agents asking other agents (ADR 0117): one fake agent asks another, and the thread shows the ask as a card, the asked
+// Agents asking other agents (ADR 0120): one fake agent asks another, and the thread shows the ask as a card, the asked
 // thread nested under it and saying who asked. With SILT_SCREENSHOTS set to a folder, it keeps pictures of each for
 // the pull request.
 import { execFileSync } from 'node:child_process'

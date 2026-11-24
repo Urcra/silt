@@ -24,7 +24,7 @@ const DESIGN_SYSTEM_SKILL: &str = "design-system";
 /// Longest text of one history entry an agent reads.
 const ENTRY_CHARS: usize = 4000;
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-/// An ask starts its agent, then waits up to 50 s for its report (ADR 0117).
+/// An ask starts its agent, then waits up to 50 s for its report (ADR 0120).
 const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
 /// A plugin's call may run its command for two minutes, or wait on the person.
 const PLUGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
@@ -522,6 +522,8 @@ machine. Pass `design_system` to choose one, or `none` to keep the page's own st
                     limit: number_arg(arguments, "limit").unwrap_or(DEFAULT_LIMIT),
                     known: None,
                     cut: false,
+                    tail: None,
+                    before: None,
                 })?;
                 Ok(render_page(&page))
             }

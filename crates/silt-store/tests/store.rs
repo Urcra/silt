@@ -85,6 +85,19 @@ async fn a_long_family_reads_the_same_once_packed_into_chunks() {
 }
 
 #[tokio::test]
+async fn deltas_are_read_by_id_from_chunks_and_rows_alike() {
+    let (_dir, store) = store_with_thread().await;
+    let appended = titles(1_200);
+    store.append_deltas(FAMILY, &appended).await.expect("appends");
+    let wanted = [&appended[5], &appended[999], &appended[1_000], &appended[1_199]];
+    let ids: Vec<DeltaId> = wanted.iter().map(|delta| delta.span.first()).collect();
+    let found = store.deltas_by_id(FAMILY, &ids).await.expect("reads");
+    assert_eq!(found, wanted.map(Clone::clone), "in a chunk and in rows after it");
+    let unknown = DeltaId::new(ActorId(9), Lamport(3));
+    assert!(store.deltas_by_id(FAMILY, &[unknown]).await.expect("reads").is_empty());
+}
+
+#[tokio::test]
 async fn search_rows_written_after_their_deltas_are_pending_until_written() {
     let (_dir, store) = store_with_thread().await;
     store.append_deltas(FAMILY, &titles(10)).await.expect("appends");

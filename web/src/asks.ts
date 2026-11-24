@@ -1,4 +1,4 @@
-// Agents asking other agents (ADR 0117): which call asked which agent, and which thread answers it.
+// Agents asking other agents (ADR 0120): which call asked which agent, and which thread answers it.
 import { useQuery } from '@tanstack/react-query'
 import { api } from './api'
 import type { AskView, HistoryEntry } from './api.generated'

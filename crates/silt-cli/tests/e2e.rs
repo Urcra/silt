@@ -1332,6 +1332,20 @@ fn browsers_hear_of_new_threads_and_of_changes_to_the_ones_they_watch() {
 }
 
 #[test]
+fn a_quiet_events_socket_still_beats() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let url = format!("{}/api/events?token={}", api.base.replacen("http", "ws", 1), api.token);
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    runtime.block_on(async {
+        let (mut socket, _) = tokio_tungstenite::connect_async(url).await.expect("connects");
+        let started = std::time::Instant::now();
+        event_where(&mut socket, |event| event["event"] == "beat").await;
+        assert!(started.elapsed() < Duration::from_secs(25), "a page gives a socket up after 25 s of quiet");
+    });
+}
+
+#[test]
 fn isolated_sessions_work_in_a_managed_checkout() {
     let env = Env::new();
     env.silt(&["claude", "--isolated"]);

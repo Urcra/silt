@@ -345,11 +345,11 @@ pub struct Core {
     themes_watch: Option<crate::watch::Watched>,
     /// How each thread's agent stands as last stored (ADR 0022).
     pub(crate) agent_runs: HashMap<ThreadId, silt_store::AgentRunRecord>,
-    /// Agents asking other agents (ADR 0117).
+    /// Agents asking other agents (ADR 0120).
     pub(crate) asks: crate::asks::Asks,
     /// What each thread's summary reads from its log, with the family's log
     /// length it was read at.
-    pub(crate) summary_cache: Mutex<HashMap<ThreadId, (usize, crate::views::LoggedSummary)>>,
+    pub(crate) summary_folds: Mutex<HashMap<FamilyId, crate::views::FamilyFold>>,
     /// This person's state of each thread (ADR 0024).
     pub(crate) personal: crate::personal::Personal,
     /// The control channel to the server (ADR 0026).
@@ -361,7 +361,7 @@ pub struct Core {
     pub(crate) draining: HashSet<String>,
     /// Threads' history entries, as of the length of the family's log they
     /// were read at, and where they changed between the readings before.
-    pub(crate) history_cache: Mutex<HashMap<ThreadId, crate::history::KeptHistory>>,
+    pub(crate) history_cache: Mutex<HashMap<ThreadId, crate::history::Kept>>,
     watchers: Arc<Watchers>,
     /// A listing of a checkout's whole worktree taken while the hook that
     /// will compare it loads, for that comparison to take.
@@ -640,7 +640,7 @@ impl Core {
             bus,
             agent_runs: HashMap::new(),
             asks: crate::asks::Asks::load(data_dir),
-            summary_cache: Mutex::new(HashMap::new()),
+            summary_folds: Mutex::new(HashMap::new()),
             personal: crate::personal::Personal::default(),
             control: crate::control::Control::default(),
             rename_waits: HashMap::new(),
@@ -1372,8 +1372,15 @@ impl Core {
                 }
                 to_response(self.open_web(once, project.as_deref()).await)
             }
-            Request::HistoryRead { thread, offset, limit, known, cut } => {
-                to_response(self.find_thread(&thread).map(|thread| self.history_page(thread, offset, limit, known, cut)))
+            Request::HistoryRead { thread, offset, limit, known, cut, tail, before } => {
+                let asked = crate::history::PageAsked { offset, limit, known, cut, tail, before };
+                match self.find_thread(&thread) {
+                    Ok(thread) => {
+                        let read = self.deltas_for_page(thread, asked).await;
+                        to_response::<_>(Ok(self.history_page(thread, asked, &read)))
+                    }
+                    Err(error) => Response::error(error),
+                }
             }
             Request::HistorySearch { thread, query, limit } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.history_search(thread, &query, limit).await),
@@ -2645,12 +2652,16 @@ impl Core {
         }
         let family = self.viewed(family_id)?;
         let seen = family.graph().version_vector(&family.thread_head(thread));
-        family.log().iter().rev().find_map(|delta| match &delta.op {
+        let commit = |delta: &Delta| match &delta.op {
             Op::Git(GitOp::Genesis { commit, .. } | GitOp::Committed { commit, .. }) if seen.contains(delta.span.first()) => {
                 Some(*commit)
             }
             _ => None,
-        })
+        };
+        // A thread's last commit is most often recent: the log is read whole
+        // only when it isn't among what came since it was.
+        let (start, recent) = family.recent_log();
+        recent.iter().rev().find_map(commit).or_else(|| (start > 0).then(|| family.log().iter().rev().find_map(commit)).flatten())
     }
 
     /// Threads whose lease moved to another device stop taking writes from
