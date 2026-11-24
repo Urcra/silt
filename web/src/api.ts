@@ -379,13 +379,21 @@ export const api = {
     ask: { version: number; theme: 'light' | 'dark'; parent: string; boot?: unknown },
   ) => request<{ path: string; expires_in_ms: number }>('POST', `${thread(id)}/artifacts/${artifact}/frame`, ask),
   /** A thread's history; with `limit`, only that many entries from the `offset`th, or from where it changed since
-   * the version `known`. A page leaves out images and the start of long outputs unless asked for `whole`. */
-  history: (id: string, offset?: number, limit?: number, options: { known?: number | null; whole?: boolean } = {}) => {
+   * the version `known`; with `tail`, the last that many before entry `before` (else the end), from the start of
+   * their turn. A page leaves out images and the start of long outputs unless asked for `whole`. */
+  history: (
+    id: string,
+    offset?: number,
+    limit?: number,
+    options: { known?: number | null; whole?: boolean; tail?: number; before?: number } = {},
+  ) => {
     const query = new URLSearchParams()
     if (limit !== undefined) query.set('offset', String(offset ?? 0))
     if (limit !== undefined) query.set('limit', String(limit))
     if (options.known !== undefined && options.known !== null) query.set('known', String(options.known))
     if (options.whole) query.set('whole', 'true')
+    if (options.tail !== undefined) query.set('tail', String(options.tail))
+    if (options.before !== undefined) query.set('before', String(options.before))
     const asked = query.toString()
     return request<HistoryPage>('GET', `${thread(id)}/history${asked ? `?${asked}` : ''}`)
   },
