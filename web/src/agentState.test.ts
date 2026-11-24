@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentChoice, AgentSetting, AgentStatus } from './api'
-import { modeForPreset, nextPreset, presetUnavailable, restartChoices, threadAgent } from './agentState'
+import {
+  modeForPreset,
+  nextPermission,
+  nextPreset,
+  ownModeSays,
+  ownModes,
+  presetForOwnMode,
+  presetUnavailable,
+  restartChoices,
+  threadAgent,
+} from './agentState'
 
 const model = (current: string): AgentSetting => ({
   id: 'model',
@@ -79,5 +89,40 @@ describe('presets', () => {
   it('move an agent without an auto mode to the one for Ask before commands', () => {
     expect(modeForPreset('auto', modes('default', 'acceptEdits', 'auto'))).toBe('auto')
     expect(modeForPreset('auto', modes('default', 'acceptEdits', 'bypassPermissions'))).toBe('acceptEdits')
+  })
+})
+
+describe("an agent's own modes", () => {
+  const modes = (current: string, ...ids: string[]) => ({
+    current,
+    available: ids.map((id) => ({ id, name: id.split('#').pop()!, description: null })),
+    plan: null,
+  })
+  const copilot = modes('x#agent', 'x#agent', 'x#plan', 'x#autopilot')
+
+  it('are neither permissions, its plan mode nor its default', () => {
+    expect(ownModes(copilot).map((mode) => mode.id)).toEqual(['x#autopilot'])
+    expect(ownModes(modes('build', 'build', 'plan', 'review')).map((mode) => mode.id)).toEqual(['review'])
+    expect(ownModes(modes('default', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'))).toEqual([])
+    expect(ownModes(modes('default', 'default', 'accept-edits', 'plan'))).toEqual([])
+    expect(ownModes(modes('chat', 'chat', 'default', 'acceptEdits', 'bypassPermissions'))).toEqual([])
+    expect(ownModes(null)).toEqual([])
+  })
+
+  it('answer as Full access in Autopilot, and ask for everything in the rest', () => {
+    expect(presetForOwnMode('x#autopilot')).toBe('full_access')
+    expect(presetForOwnMode('review')).toBe('ask_for_everything')
+    expect(ownModeSays({ id: 'review', name: 'Review', description: 'Reviews without editing' })).toBe(
+      'Reviews without editing · Silt asks you about every request',
+    )
+  })
+
+  it('come after the presets as Shift+Tab steps', () => {
+    const own = ownModes(copilot)
+    const none = () => undefined
+    expect(nextPermission('full_access', undefined, own, none, none)).toEqual({ mode: 'x#autopilot' })
+    expect(nextPermission('full_access', 'x#autopilot', own, none, none)).toEqual({ preset: 'plan' })
+    const capped = (preset: string) => (preset === 'full_access' || preset === 'auto' ? 'capped' : undefined)
+    expect(nextPermission('ask_before_commands', undefined, own, capped, () => 'capped')).toEqual({ preset: 'plan' })
   })
 })

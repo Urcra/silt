@@ -51,12 +51,80 @@ export function presetUnavailable(
 /** The presets a project can start its threads with: Plan is chosen per thread. */
 export const DEFAULT_PRESETS = PRESETS.filter((preset) => preset.id !== 'plan')
 
-/** Modes that say what the agent may do without asking, by the ids Claude's and Codex's adapters use; the daemon maps them to presets. */
-const PERMISSION_MODES = new Set(['default', 'read-only', 'acceptEdits', 'auto', 'bypassPermissions', 'dontAsk', 'full-access'])
+/** A mode's id as Silt knows it: Copilot's are links ending in `#agent`, `#plan` and `#autopilot`. */
+const modeKey = (id: string) => id.split('#').pop() ?? id
+
+/** Modes that say what the agent may do without asking, by the ids Claude's, Codex's, Antigravity's and Silt's own
+ * adapters use; the daemon maps them to presets. */
+const PERMISSION_MODES = new Set([
+  'default',
+  'read-only',
+  'acceptEdits',
+  'accept-edits',
+  'auto',
+  'bypassPermissions',
+  'dontAsk',
+  'full-access',
+  'chat',
+])
 
 /** Whether an agent's modes are its permissions, which then follow Silt's preset rather than show (ADR 0114). */
 export function permissionModes(modes: AgentChoiceItem[] | null | undefined): boolean {
-  return modes?.some((mode) => PERMISSION_MODES.has(mode.id)) ?? false
+  return modes?.some((mode) => PERMISSION_MODES.has(modeKey(mode.id))) ?? false
+}
+
+/** The agent's plan mode, found as the daemon finds it. */
+function isPlanMode(mode: AgentChoiceItem, modes: AgentModes): boolean {
+  return mode.id === modes.plan || mode.id.toLowerCase().includes('plan') || mode.name.toLowerCase().includes('plan')
+}
+
+/**
+ * The agent's own modes, which say how it works rather than what it may do, such as Copilot's Autopilot: the
+ * permissions menu lists them under its name (ADR 0118). Not those a preset moves it into, not its plan mode, which
+ * the Plan preset is, and not its default: the mode Ask before commands moves it to, else the first it lists.
+ */
+export function ownModes(modes: AgentModes | null | undefined): AgentChoiceItem[] {
+  if (!modes) return []
+  const fallback = modeForPreset('ask_before_commands', modes.available) ?? modes.available[0]?.id
+  return modes.available.filter(
+    (mode) => !PERMISSION_MODES.has(modeKey(mode.id)) && mode.id !== fallback && !isPlanMode(mode, modes),
+  )
+}
+
+/** The preset the daemon answers with in one of the agent's own modes: Autopilot asks nothing; in a mode Silt can't
+ * read, everything the agent asks goes to the person (ADR 0118). */
+export function presetForOwnMode(mode: string): Preset {
+  return modeKey(mode) === 'autopilot' ? 'full_access' : 'ask_for_everything'
+}
+
+/** What one of the agent's own modes does, as the permissions menu says it: the agent's words, and what Silt asks. */
+export function ownModeSays(mode: AgentChoiceItem): string {
+  if (modeKey(mode.id) === 'autopilot')
+    return 'nothing asks, and it keeps going until the work is done, without coming back to you'
+  return [mode.description, 'Silt asks you about every request'].filter(Boolean).join(' · ')
+}
+
+/** One step of the permissions menu: a preset, or one of the agent's own modes. */
+export type Permission = { preset: Preset; mode?: undefined } | { mode: string; preset?: undefined }
+
+/** The step after the one chosen that may be picked, for Shift+Tab: the presets, then the agent's own modes (ADR 0118). */
+export function nextPermission(
+  preset: Preset,
+  mode: string | undefined,
+  own: AgentChoiceItem[],
+  refused: (preset: Preset) => string | undefined,
+  refusedMode: (mode: string) => string | undefined,
+): Permission | undefined {
+  const steps: Permission[] = [
+    ...PRESETS.map((choice): Permission => ({ preset: choice.id })),
+    ...own.map((choice): Permission => ({ mode: choice.id })),
+  ]
+  const at = steps.findIndex((step) => (mode !== undefined ? step.mode === mode : step.preset === preset))
+  for (let step = 1; step < steps.length; step++) {
+    const next = steps[(at + step) % steps.length]!
+    if (!(next.mode !== undefined ? refusedMode(next.mode) : refused(next.preset))) return next
+  }
+  return undefined
 }
 
 /** The agent's mode that does what `preset` says, as the daemon picks it, when it has one. */
@@ -64,12 +132,11 @@ export function modeForPreset(preset: Preset, modes: AgentChoiceItem[] | null | 
   const wanted: Record<Preset, string[]> = {
     plan: ['plan'],
     ask_for_everything: ['default', 'read-only', 'agent'],
-    ask_before_commands: ['acceptEdits', 'agent'],
-    auto: ['auto', 'acceptEdits', 'agent'],
+    ask_before_commands: ['acceptEdits', 'accept-edits', 'agent'],
+    auto: ['auto', 'acceptEdits', 'accept-edits', 'agent'],
     full_access: ['bypassPermissions', 'full-access', 'dontAsk'],
   }
-  const key = (id: string) => id.split('#').pop() ?? id
-  return wanted[preset].map((id) => modes?.find((mode) => key(mode.id) === id)?.id).find(Boolean)
+  return wanted[preset].map((id) => modes?.find((mode) => modeKey(mode.id) === id)?.id).find(Boolean)
 }
 
 /** An agent's own switch for asking nothing, such as Copilot's Allow All, which the daemon sets from the preset (ADR 0049). */

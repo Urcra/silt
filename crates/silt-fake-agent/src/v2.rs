@@ -57,7 +57,7 @@ fn commands(prompted: bool) -> Value {
 fn options(mode: &str, model: &str) -> Value {
     json!([
         {"configId": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": mode,
-         "options": [{"value": "code", "name": "Code"}, {"value": "plan", "name": "Plan"}]},
+         "options": [{"value": "code", "name": "Code"}, {"value": "plan", "name": "Plan"}, {"value": "review", "name": "Review"}]},
         {"configId": "model", "name": "Model", "category": "model", "type": "select", "currentValue": model,
          "options": [{"value": "fast", "name": "Fast"}, {"value": "smart", "name": "Smart"}]}
     ])
@@ -168,7 +168,7 @@ pub async fn main() -> Result<()> {
             async move |request: v2::SetSessionConfigOptionRequest, responder: Responder<v2::SetSessionConfigOptionResponse>, connection: ConnectionTo<Client>| {
                 let value = serde_json::to_value(&request.value)?.get("value").and_then(Value::as_str).unwrap_or_default().to_owned();
                 let (id, config) = (request.session_id.to_string(), request.config_id.to_string());
-                if !matches!((config.as_str(), value.as_str()), ("mode", "code" | "plan") | ("model", "fast" | "smart")) {
+                if !matches!((config.as_str(), value.as_str()), ("mode", "code" | "plan" | "review") | ("model", "fast" | "smart")) {
                     return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data("no such setting"));
                 }
                 let configured = configured.clone();
