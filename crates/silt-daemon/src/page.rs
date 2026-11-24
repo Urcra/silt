@@ -265,7 +265,7 @@ impl Core {
         let span = DeltaSpan::new(self.thread_actor(thread), graph.next_lamport(), op.units() as u64);
         let delta = Delta { span, parents, thread, author: Author::User, time_ms: crate::core::now_ms(), op };
         delta.check_shape().map_err(|error| CoreError::Invalid(error.to_string()))?;
-        self.raw.entry(family_id).or_default().push(delta.clone());
+        self.families.raw_entry(family_id).push(delta.clone());
         self.persist(family_id, std::slice::from_ref(&delta)).await
     }
 
@@ -302,7 +302,7 @@ impl Core {
         if deltas.is_empty() {
             return Ok(());
         }
-        self.raw.entry(family_id).or_default().extend(deltas.iter().cloned());
+        self.families.raw_entry(family_id).extend(deltas.iter().cloned());
         self.persist(family_id, &deltas).await
     }
 

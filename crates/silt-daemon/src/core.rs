@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile};
 use silt_crdt::InodeId;
 use silt_git::{ListedFile, Repo};
-use silt_log::{Author, BaseText, ConvOp, Delta, Family, GitOp, Hide, Op, ThreadState, ThreadView};
+use silt_log::{Author, BaseText, ConvOp, Delta, GitOp, Hide, Op, ThreadState, ThreadView};
 use silt_proto::{Listing, Visibility};
 use silt_redact::Redactor;
 use silt_store::{CheckoutId, CheckoutRecord, SearchRow, SessionRead, SessionRecord, Store, ThreadRecord};
@@ -27,6 +27,14 @@ use crate::watch::{Watched, Watchers};
 
 pub enum Event {
     Request(Request, oneshot::Sender<Response>),
+    /// Time to take the next stale family digest (ADR 0116).
+    Digests,
+    /// The loader's answer for a family events wait for (ADR 0116).
+    Loaded {
+        family: FamilyId,
+        result: Box<Result<crate::load::Loaded, CoreError>>,
+        size: Option<u64>,
+    },
     /// Paths in a checkout may have changed, as the watcher noticed at
     /// `noticed`; `settled` once the agents' transcripts have had time to
     /// catch up.
@@ -181,10 +189,10 @@ pub(crate) struct Checkout {
 pub struct Core {
     pub(crate) store: Store,
     pub(crate) actor: ActorId,
-    pub(crate) families: HashMap<FamilyId, Family>,
-    /// Families only known from the server: their deltas, not yet projected
-    /// because there's no local clone to read git blobs from.
-    pub(crate) raw: HashMap<FamilyId, Vec<Delta>>,
+    /// Families projected here, and those only known from the server whose
+    /// deltas aren't projected, as there's no local clone to read git
+    /// blobs from; each held only while in use (ADR 0116).
+    pub(crate) families: crate::families::Families,
     pub(crate) threads: HashMap<ThreadId, ThreadRecord>,
     pub(crate) checkouts: BTreeMap<CheckoutId, Checkout>,
     pub(crate) sessions: Vec<Session>,
@@ -281,8 +289,12 @@ pub struct Core {
     pub(crate) heads: HashMap<CheckoutId, GitOid>,
     /// What each checkout's HEAD files looked like then.
     pub(crate) head_stamps: HashMap<CheckoutId, silt_git::HeadStamp>,
-    /// How much of each family's log its stored snapshot covers.
-    pub(crate) snapshotted: HashMap<FamilyId, usize>,
+    pub(crate) kept: crate::memory::Kept,
+    /// What the views across families read of those not held (ADR 0116).
+    pub(crate) digests: HashMap<FamilyId, crate::digest::Digest>,
+    pub(crate) waiting: crate::loading::Waiting,
+    /// Families whose stored digests don't say what the store holds.
+    pub(crate) stale_digests: Vec<FamilyId>,
     /// The position of each family's last stored delta this daemon holds.
     pub(crate) positions: HashMap<FamilyId, i64>,
     pub(crate) web: Option<crate::web::WebInfo>,
@@ -408,14 +420,13 @@ impl Core {
         core.remember_clones_threads_ran_in().await;
         core.share_workspace_homes();
         let families: HashSet<FamilyId> = core.threads.values().map(|thread| thread.family).collect();
-        for family_id in families {
+        for family_id in families.iter().copied() {
             let repo = core
                 .threads
                 .values()
                 .filter(|thread| thread.family == family_id && !thread.repo_root.as_os_str().is_empty())
                 .find_map(|thread| Repo::discover(&thread.repo_root).ok());
-            core.take_loaded(family_id, load::family(&core.store, family_id, repo.as_ref()).await?);
-            core.snapshot_if_due(family_id).await;
+            core.families.know(family_id, repo.map(|repo| repo.root().to_owned()));
             let state = core.store.sync_state(family_id).await?;
             core.syncs
                 .insert(family_id, ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view));
@@ -431,6 +442,7 @@ impl Core {
         core.load_agent_runs().await?;
         core.load_thread_states().await?;
         core.recover_plugin_calls().await?;
+        core.read_digests(&families).await?;
         // Queued rather than done here, so the socket is already taking
         // requests while they run; they still come before any request.
         for checkout in core.checkouts.values() {
@@ -489,7 +501,7 @@ impl Core {
             }
         };
         let (loaded, entries) = tokio::join!(load::family_unread(&core.store, thread.family, repo.as_ref()), entries);
-        core.take_loaded(thread.family, loaded?);
+        core.take_loaded(thread.family, loaded?, repo.as_ref());
         let mut sessions = vec![record];
         if let (Some(checkout), Some(entries)) = (checkout, entries?) {
             let (id, path) = (checkout.id, checkout.path.clone());
@@ -518,7 +530,7 @@ impl Core {
             }
             if !self.families.contains_key(&family) {
                 let repo = Repo::discover(path).ok();
-                self.take_loaded(family, load::family_unread(&self.store, family, repo.as_ref()).await?);
+                self.take_loaded(family, load::family_unread(&self.store, family, repo.as_ref()).await?, repo.as_ref());
             }
             let entries = stored_entries(&self.store, record.id).await?;
             held.push(record.id);
@@ -548,12 +560,12 @@ impl Core {
     ) -> Result<Self, CoreError> {
         let models = std::sync::Arc::new(crate::models::LocalModelsHere::new(data_dir, store.clone()));
         let bus = tokio::sync::broadcast::channel(crate::bus::CAPACITY).0;
+        let loader = if resident { Some(crate::families::Loader::start(data_dir)?) } else { None };
         let mut core = Self {
             lan: crate::lan::Lan::new(data_dir, bus.clone()),
             store,
             actor,
-            families: HashMap::new(),
-            raw: HashMap::new(),
+            families: crate::families::Families::new(loader),
             threads: HashMap::new(),
             checkouts: BTreeMap::new(),
             sessions: Vec::new(),
@@ -600,7 +612,10 @@ impl Core {
             sync_errors: HashMap::new(),
             heads: HashMap::new(),
             head_stamps: HashMap::new(),
-            snapshotted: HashMap::new(),
+            kept: crate::memory::Kept::default(),
+            digests: HashMap::new(),
+            waiting: crate::loading::Waiting::default(),
+            stale_digests: Vec::new(),
             positions: HashMap::new(),
             web: None,
             recoveries: Vec::new(),
@@ -1242,7 +1257,7 @@ impl Core {
                     *self.sync_epochs.entry(family).or_default() += 1;
                 }
                 self.syncs.clear();
-                for family in self.families.keys().chain(self.raw.keys()).copied().collect::<Vec<_>>() {
+                for family in self.families.ids() {
                     let state = self.store.sync_state(family).await.unwrap_or_default();
                     let sync = ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view);
                     self.replace_sync(family, sync);
@@ -1563,6 +1578,7 @@ impl Core {
                 warn!(%error, session = id, "could not read the session transcript");
             }
         }
+        self.keep_memory().await;
     }
 
     /// Whether nothing needs the tick soon: no agent running or awaited, no
@@ -2382,10 +2398,10 @@ impl Core {
         Ok(())
     }
 
-    async fn reload_family(&mut self, family_id: FamilyId) -> Result<(), CoreError> {
+    pub(crate) async fn reload_family(&mut self, family_id: FamilyId) -> Result<(), CoreError> {
         let repo = if self.families.contains_key(&family_id) { Some(self.family_repo(family_id)?) } else { None };
         let loaded = load::family(&self.store, family_id, repo.as_ref()).await?;
-        self.take_loaded(family_id, loaded);
+        self.take_loaded(family_id, loaded, repo.as_ref());
         let ids: Vec<CheckoutId> =
             self.checkouts.iter().filter(|(_, checkout)| checkout.family == family_id).map(|(id, _)| *id).collect();
         for id in ids {
@@ -2396,18 +2412,9 @@ impl Core {
         Ok(())
     }
 
-    pub(crate) fn take_loaded(&mut self, family_id: FamilyId, loaded: Loaded) {
-        match loaded {
-            Loaded::Projected { family, covered } => {
-                self.raw.remove(&family_id);
-                self.families.insert(family_id, *family);
-                self.snapshotted.insert(family_id, covered);
-            }
-            Loaded::Raw(deltas) => {
-                self.families.remove(&family_id);
-                self.raw.insert(family_id, deltas);
-            }
-        }
+    /// Holds what was loaded of the family from `repo`.
+    pub(crate) fn take_loaded(&mut self, family_id: FamilyId, loaded: Loaded, repo: Option<&Repo>) {
+        self.families.hold(family_id, loaded, repo.map(|repo| repo.root().to_owned()));
     }
 
     /// Saves the family's projection once enough was recorded since its last
@@ -2440,16 +2447,18 @@ impl Core {
         if self.sessions.iter().filter(draining).any(|session| session.family == family_id) {
             return;
         }
-        let Some(family) = self.families.get_mut(&family_id) else {
+        let Some((covered, outdated)) = self.families.snapshotted(&family_id) else {
             return;
         };
-        let covered = self.snapshotted.get(&family_id).copied().unwrap_or_default();
-        if family.log_len() < covered + load::SNAPSHOT_EVERY {
+        let Some(family) = self.families.loaded_mut(&family_id) else {
+            return;
+        };
+        if !outdated && family.log_len() < covered + load::SNAPSHOT_EVERY {
             return;
         }
         match load::save_snapshot(&self.store, family_id, family).await {
             Ok(covers) => {
-                self.snapshotted.insert(family_id, covers);
+                self.families.set_snapshotted(&family_id, covers);
             }
             Err(error) => warn!(%error, family = %family_id, "could not save a snapshot of the family"),
         }
@@ -2459,7 +2468,7 @@ impl Core {
         self.checkouts.get(&id).ok_or_else(|| CoreError::Invalid(format!("unknown checkout {id}")))
     }
 
-    pub(crate) fn families(&self) -> &HashMap<FamilyId, Family> {
+    pub(crate) fn families(&self) -> &crate::families::Families {
         &self.families
     }
 
@@ -2573,8 +2582,11 @@ impl Core {
     }
 
     /// The last commit the thread has recorded, its own or inherited.
-    fn recorded_commit(&self, family_id: FamilyId, thread: ThreadId) -> Option<GitOid> {
-        let family = self.families.get(&family_id)?;
+    pub(crate) fn recorded_commit(&self, family_id: FamilyId, thread: ThreadId) -> Option<GitOid> {
+        if let Some(digest) = self.digested(family_id) {
+            return digest.threads.get(&thread)?.commit;
+        }
+        let family = self.viewed(family_id)?;
         let seen = family.graph().version_vector(&family.thread_head(thread));
         family.log().iter().rev().find_map(|delta| match &delta.op {
             Op::Git(GitOp::Genesis { commit, .. } | GitOp::Committed { commit, .. }) if seen.contains(delta.span.first()) => {

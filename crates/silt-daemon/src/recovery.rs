@@ -50,12 +50,11 @@ impl Core {
             }
         }
         self.store.replace_deltas(family_id, &kept).await?;
-        self.snapshotted.remove(&family_id);
         let last = fetched.last().map(|(seq, delta)| (*seq, delta.span.first()));
         let sync = ClientSync::new(None, kept.len() as u64, last.map_or(0, |(seq, _)| seq), last.map(|(_, id)| id), 0);
         self.replace_sync(family_id, sync);
-        self.raw.remove(&family_id);
         self.families.insert(family_id, replacement);
+        self.digests.remove(&family_id);
 
         for (thread, conversation) in conversations {
             let recovery = self.fork_thread(thread).await?;

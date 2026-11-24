@@ -19,7 +19,7 @@ use crate::transcripts::native_entries;
 
 /// What a thread's summary reads from its log, kept until the family's log
 /// grows: parsing every line of every conversation is the listing's cost.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct LoggedSummary {
     title: Option<String>,
     agent: Option<String>,
@@ -115,6 +115,10 @@ impl Core {
         let mut logged = HashMap::new();
         let mut stale: BTreeSet<FamilyId> = BTreeSet::new();
         for record in records {
+            if let Some(digested) = self.digested(record.family).and_then(|digest| digest.threads.get(&record.id)) {
+                logged.insert(record.id, digested.summary.clone());
+                continue;
+            }
             match cache.get(&record.id) {
                 Some((length, summary)) if *length == self.local_log_len(record.family) => {
                     logged.insert(record.id, summary.clone());
@@ -126,18 +130,28 @@ impl Core {
         }
         for family in stale {
             let length = self.local_log_len(family);
-            let mut by_thread: HashMap<ThreadId, Vec<&Delta>> = HashMap::new();
-            for delta in self.local_log(family) {
-                by_thread.entry(delta.thread).or_default().push(delta);
-            }
-            for record in records.iter().filter(|record| record.family == family) {
-                let deltas = by_thread.get(&record.id).map_or(&[][..], Vec::as_slice);
-                let summary = self.logged_summary(record, deltas);
-                cache.insert(record.id, (length, summary.clone()));
-                logged.insert(record.id, summary);
+            let records: Vec<&ThreadRecord> = records.iter().copied().filter(|record| record.family == family).collect();
+            for (thread, summary) in self.summaries_in(family, &records) {
+                cache.insert(thread, (length, summary.clone()));
+                logged.insert(thread, summary);
             }
         }
         logged
+    }
+
+    /// The summaries of `records`, threads of `family`, read from its log.
+    pub(crate) fn summaries_in(&self, family: FamilyId, records: &[&ThreadRecord]) -> HashMap<ThreadId, LoggedSummary> {
+        let mut by_thread: HashMap<ThreadId, Vec<&Delta>> = HashMap::new();
+        for delta in self.local_log(family) {
+            by_thread.entry(delta.thread).or_default().push(delta);
+        }
+        records
+            .iter()
+            .map(|record| {
+                let deltas = by_thread.get(&record.id).map_or(&[][..], Vec::as_slice);
+                (record.id, self.logged_summary(record, deltas))
+            })
+            .collect()
     }
 
     fn logged_summary(&self, record: &ThreadRecord, deltas: &[&Delta]) -> LoggedSummary {

@@ -3,8 +3,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile, ImportFile, import};
-use silt_log::{Author, Delta, Family, FileView};
+use silt_checkout::{Bridge, DiskAction, DiskContent, DiskEntry, DiskFile, ImportFile, TEXT_LIMIT, import};
+use silt_log::{Author, Content, Delta, Family, FileView, Op};
 use silt_types::{ActorId, BlobHash, GitOid, ThreadId};
 
 const THREAD: ThreadId = ThreadId(1);
@@ -346,6 +346,23 @@ fn a_binary_git_file_that_becomes_text_is_replaced() {
         .ingest(&mut family, &mut bases(), "logo.png", Some(Checkout::file("now text\n")), &Author::User, 0)
         .expect("records the new text instead of failing on the binary base");
     assert_eq!(family_text(&family, "logo.png"), "now text\n");
+}
+
+#[test]
+fn a_git_file_too_long_for_text_is_replaced_rather_than_edited() {
+    let mut family = Family::new();
+    let generated = ImportFile { path: "generated.json".into(), oid: oid(4), executable: false };
+    import(&mut family, ActorId(100), THREAD, Some((oid(9), None)), &[generated], 0).expect("imports");
+    let mut bases = bases();
+    bases.insert(oid(4), "x".repeat(TEXT_LIMIT + 1));
+    let mut bridge = Bridge::new(ActorId(1), THREAD, BTreeMap::new());
+    let ingested = bridge
+        .ingest(&mut family, &mut bases, "generated.json", Some(Checkout::file("{}\n")), &Author::User, 0)
+        .expect("ingests");
+    let replaced = ingested.deltas.iter().any(|delta| matches!(delta.op, Op::SetContent { content: Content::Empty, .. }));
+    assert!(replaced, "the long base is never copied into the file's text");
+    let inode = family.tree().paths()["generated.json"];
+    assert_eq!(family.file(inode), Some(FileView::Text("{}\n".into())));
 }
 
 #[test]

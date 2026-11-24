@@ -24,6 +24,7 @@ which = "8.0.6"
 rustix = { version = "1.1.5", features = ["fs", "process", "pty", "termios"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2.191"
 rustix = { version = "1.1.5", features = ["fs", "process", "net", "pty", "termios"] }
 seccompiler = "0.5.0"
 

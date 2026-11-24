@@ -72,7 +72,7 @@ impl Core {
     /// Whether this core takes in what others store of the family: the
     /// daemon all of it, any other process only the families it holds.
     fn follows(&self, family: FamilyId) -> bool {
-        self.resident || self.families.contains_key(&family) || self.raw.contains_key(&family)
+        self.resident || self.families.knows(&family)
     }
 
     fn follows_thread(&self, thread: ThreadId) -> bool {
@@ -92,17 +92,18 @@ impl Core {
     /// a family `new` to this daemon. Returns those it didn't hold yet: a
     /// daemon loading without its turn may have read some already.
     async fn take_in(&mut self, family_id: FamilyId, new: bool, deltas: Vec<Delta>) -> Result<Vec<Delta>, CoreError> {
-        if new || !(self.families.contains_key(&family_id) || self.raw.contains_key(&family_id)) {
+        // A family not held is loaded whole, what was just stored with it.
+        if new || !self.families.is_loaded(&family_id) {
             let repo = self.family_repo(family_id).ok();
             let loaded = load::family(&self.store, family_id, repo.as_ref()).await?;
-            self.take_loaded(family_id, loaded);
+            self.take_loaded(family_id, loaded, repo.as_ref());
             let state = self.store.sync_state(family_id).await?;
             self.syncs
                 .entry(family_id)
                 .or_insert_with(|| ClientSync::new(state.generation, state.pushed, state.pulled, state.last_pulled, state.view));
             return Ok(Vec::new());
         }
-        if let Some(raw) = self.raw.get_mut(&family_id) {
+        if let Some(raw) = self.families.raw_mut(&family_id) {
             let held: HashSet<DeltaId> = raw.iter().map(|delta| delta.span.first()).collect();
             let fresh: Vec<Delta> = deltas.into_iter().filter(|delta| !held.contains(&delta.span.first())).collect();
             raw.extend_from_slice(&fresh);
