@@ -216,9 +216,9 @@ impl Core {
                 }
                 history.entries = Arc::new(read.entries);
                 history.turns = Arc::new(read.turns);
-                if history.entries.len() != before {
-                    history.note_change(length, before);
-                }
+                // Each version is noted, those adding no entry too, or a
+                // viewer holding one would be told to read it all again.
+                history.note_change(length, before);
                 history.version = length;
                 return history.clone();
             }
@@ -1028,6 +1028,32 @@ mod tests {
             assert_eq!(*kept.turns, whole.turns);
             assert_eq!(kept.turns.len(), 2);
             assert_eq!(kept.same_before(first.version), 2, "a viewer at the first reading reads on from its end");
+        }
+
+        /// Deltas that add no entry, as an artifact's page data, change
+        /// nothing a viewer holds: told otherwise, it read every entry again,
+        /// and an open artifact's page lost what it watched.
+        #[tokio::test]
+        async fn what_adds_no_entry_leaves_what_a_viewer_holds_as_it_was() {
+            let (_data, _repo, mut core) = core().await;
+            core.families.hold(
+                FAMILY,
+                crate::load::Loaded::Projected { family: Box::new(silt_log::Family::new()), covered: 0, outdated: false },
+                None,
+            );
+            for op in [prompt("draw a tree"), reply("Drawing it.")] {
+                write(&mut core, op);
+            }
+            let first = core.kept_history(THREAD);
+            write(&mut core, submitted());
+            let second = core.kept_history(THREAD);
+            assert!(second.version > first.version);
+            assert_eq!(second.entries.len(), first.entries.len(), "the mark is no entry");
+            assert_eq!(second.same_before(first.version), 2, "a viewer at the first reading holds all it needs");
+            write(&mut core, reply("Done."));
+            let third = core.kept_history(THREAD);
+            assert_eq!(third.same_before(second.version), 2, "and one at the second reads on from its end");
+            assert_eq!(third.same_before(first.version), 2);
         }
 
         #[tokio::test]

@@ -67,6 +67,9 @@ function transcript(cwd: string, session: string): string {
   return lines.join('\n') + '\n'
 }
 
+/** The thread's last entry, which it opens at. */
+const LAST_REPLY = `reply ${ROUNDS - 1}: changed it`
+
 test.beforeAll(() => {
   const { work, siltHome } = fixture()
   const repo = join(work, 'long')
@@ -98,24 +101,25 @@ test('a 2,000-message thread shows quickly and stays small', async ({ page }) =>
     await page.reload()
     await expect(row).toContainText(`${2 * ROUNDS} messages`, { timeout: 1000 })
   }).toPass({ timeout: 60_000 })
-  // Timed in the page, from the click to the first entry being drawn, as
-  // Playwright's own work before a click lands takes tens of milliseconds.
-  await page.evaluate(() => {
+  // Timed in the page, from the click to its last entry being drawn, as it
+  // opens at its end (ADR 0117), and Playwright's own work before a click
+  // lands takes tens of milliseconds.
+  await page.evaluate((last) => {
     const timed = window as unknown as Timed
     document.addEventListener('click', () => (timed.clicked = performance.now()), { capture: true, once: true })
     const drawn = new MutationObserver(() => {
-      if (document.querySelector('[data-testid="history"]')?.textContent?.includes('prompt 0: look at the module')) {
+      if (document.querySelector('[data-testid="history"]')?.textContent?.includes(last)) {
         drawn.disconnect()
         requestAnimationFrame(() => (timed.shown = performance.now()))
       }
     })
     drawn.observe(document.body, { childList: true, subtree: true, characterData: true })
-  })
+  }, LAST_REPLY)
   const history = page.waitForResponse((response) => response.url().includes('/history'))
   await link.click()
   const answered = await history
   console.log(`web.thread: the first history page is ${(await answered.body()).length} bytes`)
-  await expect(page.getByTestId('history').getByText('prompt 0: look at the module')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('history').getByText(LAST_REPLY)).toBeVisible({ timeout: 60_000 })
   const shown = await page.evaluate(() => {
     const { clicked, shown } = window as unknown as Timed
     return (shown ?? Number.NaN) - (clicked ?? Number.NaN)
@@ -139,7 +143,7 @@ async function openLong(page: import('@playwright/test').Page) {
   await page.goto(url)
   await allThreads(page)
   await page.getByRole('link', { name: thread }).click()
-  await expect(page.getByTestId('history').getByText(`reply ${ROUNDS - 1}: changed it`)).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('history').getByText(LAST_REPLY)).toBeVisible({ timeout: 60_000 })
 }
 
 /** The main thread's long tasks from here on, as the page reports them. */
