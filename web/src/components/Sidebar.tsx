@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useRef, useState } from 'react'
 import { useAgentStatus } from '../agentStatus'
 import { api, type ThreadSummary } from '../api'
 import type { AskView } from '../api.generated'
+import { type Caller, type FoldSaid, byCaller, foldListed, foldSaid, useAsksOpen } from '../askFold'
 import { askedIn, useAsks } from '../asks'
 import { isChat } from '../chats'
 import { useTopic } from '../bus'
@@ -48,18 +49,73 @@ function StateLine({ said, when }: { said: string | null; when: string | null })
   )
 }
 
-/** The threads in order, each one another agent asked for right after the thread that asked, while that one shows. */
-function underCallers(threads: ThreadSummary[], asks: AskView[]): ThreadSummary[] {
-  const ids = new Set(threads.map((thread) => thread.id))
-  const callerOf = (thread: ThreadSummary) => {
-    const caller = askedIn(asks, thread.id)?.caller
-    return caller && ids.has(caller) ? caller : undefined
-  }
-  const out: ThreadSummary[] = []
-  for (const thread of threads.filter((thread) => !callerOf(thread))) {
-    out.push(thread, ...threads.filter((asked) => callerOf(asked) === thread.id))
-  }
-  return out
+/** The asks a thread made, folded into one row under it until opened (ADR 0120): how many, whose, and what's most pressing. */
+function AskFold({ caller }: { caller: Caller }) {
+  const [open, setOpen] = useAsksOpen(caller.thread.id)
+  const [all, setAll] = useState(false)
+  const path = useRouterState({ select: (state) => state.location.pathname })
+  const current = path.startsWith('/t/') ? path.slice(3) : null
+  const { rows, more } = foldListed(caller.asked, open, all, current)
+  const said = foldSaid(caller.asked)
+  const agents = [...new Map(caller.asked.map(({ ask }) => [ask.agent, ask.agent_name])).entries()]
+  const count = `${caller.asked.length} ${caller.asked.length === 1 ? 'ask' : 'asks'}`
+  return (
+    <>
+      <li>
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          title={`Asked by ${caller.thread.title ?? 'this thread'}: ${agents.map(([, name]) => name).join(', ')}`}
+          className={cx(ROW, 'min-h-6 w-full gap-1.5 py-[3px] pl-[34px] text-left text-2xs text-fg-2 hover:text-fg-1')}
+        >
+          <Icon name={open ? 'chevronDown' : 'chevronRight'} className="h-3 w-3 shrink-0" />
+          <span className="flex shrink-0 gap-0.5 text-fg-3">
+            {agents.map(([agent, name]) => (
+              <AgentMark key={agent} agent={agent} name={name} className="h-3 w-3" />
+            ))}
+          </span>
+          <span className="shrink-0 font-medium text-fg-1">{count}</span>
+          {said && <FoldSaidLine said={said} />}
+        </button>
+      </li>
+      {rows.map(({ thread, ask }) => (
+        <ThreadItem key={thread.id} thread={thread} nested asked={ask} />
+      ))}
+      {open && (more > 0 || all) && (
+        <li>
+          <button
+            type="button"
+            aria-expanded={all}
+            onClick={() => setAll(!all)}
+            className="block py-1 pr-2 pl-[34px] text-left text-2xs text-fg-2 hover:text-fg-1 max-md:min-h-11"
+          >
+            {all ? 'Show fewer' : `Show ${more} more`}
+          </button>
+        </li>
+      )}
+    </>
+  )
+}
+
+function FoldSaidLine({ said }: { said: NonNullable<FoldSaid> }) {
+  if (said.kind === 'reported') return <span className="truncate">· reported</span>
+  const words = { needs_you: 'needs you', failed: 'failed', working: 'working' }[said.kind]
+  return (
+    <span className="flex min-w-0 items-center gap-[5px]">
+      ·
+      {said.kind === 'working' ? (
+        <Spinner className="h-2 w-2" />
+      ) : said.kind === 'failed' ? (
+        <Dot tone="danger" className="h-[5px] w-[5px]" />
+      ) : (
+        <span aria-hidden="true" className="block h-2 w-2 shrink-0 rounded-full border-[1.5px] border-accent bg-accent-tint" />
+      )}
+      <span className="truncate">
+        {said.count} {words}
+      </span>
+    </span>
+  )
 }
 
 /** One thread in the sidebar (ADR 0044): its state's mark and its title, then what it's at in words, so the title keeps the row's width. */
@@ -209,12 +265,10 @@ function ProjectGroup({
   const ordered = [...threads].sort(inListOrder(now))
   const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
   const asks = useAsks()
-  const shown = underCallers(
-    ordered.filter((thread) => !held(thread)),
-    asks,
-  )
-  const rest = ordered.filter(held)
-  const restKinds = new Set(rest.map((thread) => (old(thread, now) ? 'older' : section(thread, now))))
+  const callers = byCaller(ordered, asks)
+  const shown = callers.filter(({ thread }) => !held(thread))
+  const rest = callers.filter(({ thread }) => held(thread))
+  const restKinds = new Set(rest.map(({ thread }) => (old(thread, now) ? 'older' : section(thread, now))))
   const restSaid = restKinds.size > 1 ? 'more' : [...restKinds][0]
   const working = threads.filter(inProgress).length
   return (
@@ -247,8 +301,11 @@ function ProjectGroup({
       {open && (
         <>
           <ul>
-            {(showRest || older ? [...shown, ...rest] : shown).map((thread) => (
-              <ThreadItem key={thread.id} thread={thread} nested asked={askedIn(asks, thread.id)} />
+            {(showRest || older ? [...shown, ...rest] : shown).map((caller) => (
+              <Fragment key={caller.thread.id}>
+                <ThreadItem thread={caller.thread} nested asked={askedIn(asks, caller.thread.id)} />
+                {caller.asked.length > 0 && <AskFold caller={caller} />}
+              </Fragment>
             ))}
           </ul>
           {rest.length > 0 && !older && (
