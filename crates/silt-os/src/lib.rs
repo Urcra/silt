@@ -199,6 +199,31 @@ pub fn find_program(program: &str, path: &OsStr) -> Option<PathBuf> {
     which::which_in(program, Some(path), cwd).ok()
 }
 
+/// The `PATH` to look for programs on: this process's, and on Windows the
+/// directories the machine's and the user's `Path` list that it lacks.
+/// Windows gives a process the environment of the one that started it, and
+/// the daemon passes its own on when it restarts, so a program installed
+/// since the person signed in would otherwise stay unseen until they sign
+/// in again.
+pub fn program_path() -> std::ffi::OsString {
+    with_dirs(&std::env::var_os("PATH").unwrap_or_default(), imp::configured_path_dirs())
+}
+
+/// `path`, and after it those of `dirs` it lacks.
+fn with_dirs(path: &OsStr, dirs: Vec<PathBuf>) -> std::ffi::OsString {
+    let key = |dir: &Path| {
+        let text = dir.to_string_lossy();
+        program_key(text.trim_end_matches(['/', std::path::MAIN_SEPARATOR]))
+    };
+    let mut seen: std::collections::HashSet<String> = std::env::split_paths(path).map(|dir| key(&dir)).collect();
+    let added: Vec<PathBuf> = dirs.into_iter().filter(|dir| seen.insert(key(dir))).collect();
+    if added.is_empty() {
+        return path.to_owned();
+    }
+    std::env::join_paths(std::env::split_paths(path).filter(|dir| !dir.as_os_str().is_empty()).chain(added))
+        .unwrap_or_else(|_| path.to_owned())
+}
+
 /// What's on a `PATH`, each directory listed once, for asking about many
 /// programs: [`find_program`] looks in every directory for each one, which
 /// is slow where a directory is, such as a Windows drive seen from WSL.
@@ -293,6 +318,15 @@ pub fn needs_polling(root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_gains_only_the_directories_it_lacks() {
+        let path = std::env::join_paths(["/usr/bin", "/opt/tools/"]).expect("joins");
+        let dirs = ["/opt/tools", "/home/me/.local/bin", "/home/me/.local/bin"].map(PathBuf::from).to_vec();
+        let found: Vec<PathBuf> = std::env::split_paths(&with_dirs(&path, dirs)).collect();
+        assert_eq!(found, ["/usr/bin", "/opt/tools/", "/home/me/.local/bin"].map(PathBuf::from));
+        assert_eq!(with_dirs(&path, vec![PathBuf::from("/usr/bin")]), path, "unchanged when nothing is new");
+    }
 
     #[test]
     fn processes_name_their_parent_and_command() {
