@@ -1,5 +1,5 @@
 // A thread's history as the page holds it: its last page first, earlier pages only when the person scrolls up to
-// them, and, as the thread changes, only from where it changed (ADR 0116). Reading a long thread from its start drew
+// them, and, as the thread changes, only from where it changed (ADR 0117). Reading a long thread from its start drew
 // it a page at a time from the top, its tasks starting and ending as each page came, before the page could land at
 // its end.
 

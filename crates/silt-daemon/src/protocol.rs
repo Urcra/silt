@@ -330,7 +330,7 @@ pub enum Request {
         #[serde(default)]
         cut: bool,
         /// The last entries, from the start of the turn they begin in, in
-        /// place of `offset` and `limit` (ADR 0116).
+        /// place of `offset` and `limit` (ADR 0117).
         #[serde(default)]
         tail: Option<usize>,
         /// With `tail`, the last entries before this one rather than the

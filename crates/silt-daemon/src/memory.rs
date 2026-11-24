@@ -1,4 +1,4 @@
-//! What the daemon holds of the store, kept to what is in use (ADR 0115).
+//! What the daemon holds of the store, kept to what is in use (ADR 0116).
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant, SystemTime};
@@ -14,7 +14,7 @@ pub(crate) const UNUSED: Duration = Duration::from_secs(5 * 60);
 
 /// How long a family may go unused before it's let go of: once its files
 /// and log are, holding it costs little, and loading it again is what
-/// switching back to its thread would wait for (ADR 0116).
+/// switching back to its thread would wait for (ADR 0117).
 const FAMILY_UNUSED: Duration = Duration::from_secs(30 * 60);
 
 /// How much the families held may take, as the store holds them, before
@@ -33,18 +33,33 @@ const SWEEP_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// still read it.
 const SWEEP_GRACE: Duration = Duration::from_secs(60 * 60);
 
-/// When the daemon last let go of what was unused, and last swept, and how
-/// much the families it holds may take.
+/// When the daemon last let go of what was unused, when it next sweeps, and
+/// how much the families it holds may take.
 #[derive(Debug)]
 pub(crate) struct Kept {
     released: Instant,
-    swept: Option<Instant>,
+    sweep_at: Instant,
     pub(crate) budget: u64,
 }
 
 impl Default for Kept {
+    /// The first sweep waits out the grace: it reads every snapshot and
+    /// lists every file's state, too much for each start, and the states a
+    /// start writes are kept that long anyway.
     fn default() -> Self {
-        Self { released: Instant::now(), swept: None, budget: budget() }
+        let now = Instant::now();
+        Self { released: now, sweep_at: now + SWEEP_GRACE, budget: budget() }
+    }
+}
+
+impl Kept {
+    /// Whether to sweep at `now`, setting when to sweep next if so.
+    fn sweep_due(&mut self, now: Instant) -> bool {
+        if now < self.sweep_at {
+            return false;
+        }
+        self.sweep_at = now + SWEEP_EVERY;
+        true
     }
 }
 
@@ -85,8 +100,7 @@ impl Core {
             }
             silt_os::return_freed_memory();
         }
-        if self.resident && self.kept.swept.is_none_or(|swept| swept.elapsed() >= SWEEP_EVERY) {
-            self.kept.swept = Some(Instant::now());
+        if self.resident && self.kept.sweep_due(Instant::now()) {
             self.sweep_file_states().await;
         }
     }
@@ -291,6 +305,17 @@ mod tests {
     use crate::core::Event;
     use crate::protocol::Request;
 
+    #[test]
+    fn files_are_swept_once_the_grace_has_passed_since_start_then_now_and_then() {
+        let mut kept = Kept::default();
+        let start = Instant::now();
+        assert!(!kept.sweep_due(start), "not as the daemon starts");
+        assert!(!kept.sweep_due(start + SWEEP_GRACE / 2));
+        assert!(kept.sweep_due(start + SWEEP_GRACE + Duration::from_secs(1)));
+        assert!(!kept.sweep_due(start + SWEEP_GRACE + Duration::from_secs(2)), "not again at once");
+        assert!(kept.sweep_due(start + SWEEP_GRACE + SWEEP_EVERY + Duration::from_secs(1)));
+    }
+
     const THREAD: ThreadId = ThreadId(7);
     const FAMILY: FamilyId = FamilyId(9);
     const COMMIT: silt_types::GitOid = silt_types::GitOid([7; 20]);
@@ -348,6 +373,8 @@ mod tests {
         let digested = views(&core);
         assert!(!core.families.is_loaded(&FAMILY), "reading the views across families loads none");
         assert!(core.families.get(&FAMILY).is_some(), "anything else reading it loads it");
+        let stored = store.family_size(FAMILY).await.expect("sized");
+        assert_eq!(core.families.size(&FAMILY), Some(stored), "with its size, for the tick not to ask");
         assert!(core.families.is_loaded(&FAMILY));
         assert_eq!(digested, views(&core));
         assert!(digested.contains("still the same"));
@@ -488,11 +515,13 @@ mod tests {
         let again = Event::Request(Request::Show { thread: THREAD.to_string()[..12].to_owned() }, reply);
         assert!(core.unless_loading(again).is_none(), "and so does what comes after for the family");
         assert!(!core.families.is_loaded(&FAMILY));
-        let Some(Event::Loaded { family, result }) = inbox.recv().await else {
+        let Some(Event::Loaded { family, result, size }) = inbox.recv().await else {
             panic!("the loader answers");
         };
-        core.loaded(family, *result);
+        core.loaded(family, *result, size);
         assert!(core.families.is_loaded(&FAMILY));
+        let stored = core.store.family_size(FAMILY).await.expect("sized");
+        assert_eq!(core.families.size(&FAMILY), Some(stored), "its size came with it, for the tick not to ask");
         let shown: Vec<String> = std::iter::from_fn(|| match inbox.try_recv() {
             Ok(Event::Request(Request::Show { thread }, _)) => Some(thread),
             _ => None,

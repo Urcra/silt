@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO threads (id, family_id, repo, created_ms, owner_id, visibility, made_on)\n         VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "e23956edde4baf28035bbe862e4cce30f2836b714c4e2b3ff9e79d9d43c76f9f"
+}

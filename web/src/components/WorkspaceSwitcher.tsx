@@ -10,13 +10,15 @@ import { keys } from '../query'
 import { sections } from '../sections'
 import { hosted, serverName } from '../served'
 import { formatKeys, useActions } from '../shortcuts'
-import { Button, Dialog, Icon, Kbd, Popover, cx } from '../ui'
+import { Avatar, Button, Dialog, Dot, Icon, Kbd, Popover, cx } from '../ui'
 import { type Workspace, inWorkspace, orgsOf, setWorkspace, useWorkspace, workspaceValue } from '../workspace'
 
 interface Choice {
   name: string
   /** What it holds, under its name. */
   sub: string
+  /** Under its name in the sidebar's header, where the sub would crowd it. */
+  brief?: string
   /** How the palette and a screen reader name it. */
   long: string
   workspace: Workspace
@@ -30,8 +32,18 @@ interface Group {
   choices: Choice[]
 }
 
-/** A workspace's letter on a tile of its own colour, as the boards draw it. */
-export function WorkspaceBadge({ name, local = false, size = 28 }: { name: string; local?: boolean; size?: number }) {
+/** A workspace's letter on a tile of its own colour, as the boards draw it; every workspace at once as a grid. */
+export function WorkspaceBadge({
+  name,
+  local = false,
+  all = false,
+  size = 28,
+}: {
+  name: string
+  local?: boolean
+  all?: boolean
+  size?: number
+}) {
   const shades = [
     'bg-[var(--tobacco-500)]',
     'bg-[var(--slate-600)]',
@@ -47,10 +59,14 @@ export function WorkspaceBadge({ name, local = false, size = 28 }: { name: strin
       style={{ width: size, height: size }}
       className={cx(
         'inline-flex shrink-0 items-center justify-center rounded-md text-xs font-semibold',
-        local ? 'bg-surface-3 text-fg-1' : cx(shade, 'text-[var(--paper-50)]'),
+        all
+          ? 'border border-dashed border-fg-3 text-fg-2'
+          : local
+            ? 'bg-surface-3 text-fg-1'
+            : cx(shade, 'text-[var(--paper-50)]'),
       )}
     >
-      {local ? <Icon name="laptop" /> : name.slice(0, 1).toUpperCase()}
+      {all ? <Icon name="grid" /> : local ? <Icon name="laptop" /> : name.slice(0, 1).toUpperCase()}
     </span>
   )
 }
@@ -60,7 +76,12 @@ function counted(count: number, one: string, many: string): string {
 }
 
 /** Every workspace this machine can show (ADR 0032), grouped by server. */
-function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => number; current: Choice } {
+function useWorkspaces(): {
+  groups: Group[]
+  waiting: (shown: Workspace) => number
+  current: Choice
+  servers: { url: string; user: string; sync_error: string | null }[]
+} {
   const now = useNow()
   const workspace = useWorkspace()
   const status = useQuery({ queryKey: keys.status, queryFn: api.status })
@@ -94,7 +115,15 @@ function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => numb
   const groups: Group[] = [
     {
       label: 'Everywhere',
-      choices: [{ name: 'Everything', sub: 'every server and this machine', long: 'everything', workspace: { kind: 'all' } }],
+      choices: [
+        {
+          name: 'Everything',
+          sub: 'every server and this machine',
+          brief: servers.length > 0 ? 'every server and this machine' : 'this machine',
+          long: 'everything',
+          workspace: { kind: 'all' },
+        },
+      ],
     },
     ...servers.map((server, index) => {
       const host = serverName(server.url)
@@ -105,6 +134,7 @@ function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => numb
           {
             name: `All of ${host}`,
             sub: `${counted(projectCount(server.url, null), 'project', 'projects')} · signed in as ${server.user}`,
+            brief: host,
             long: `all of ${host}`,
             workspace: { kind: 'server', server: server.url, org: null } as Workspace,
             offline,
@@ -119,6 +149,7 @@ function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => numb
         {
           name: 'This machine',
           sub: `${counted(projectCount(null, null), 'project', 'projects')} · history stays here`,
+          brief: 'not synced',
           long: 'this machine',
           workspace: { kind: 'local' },
         },
@@ -155,6 +186,7 @@ function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => numb
         return {
           name: view.workspace.name,
           sub: `${serverLine(view)} · ${counted(view.projects.length, 'project', 'projects')}${isDefault ? ' · default' : ''}`,
+          brief: serverLine(view),
           long: `the ${view.workspace.name} workspace`,
           workspace: { kind: 'workspace', id: view.workspace.id, server: view.workspace.server?.url ?? null } as Workspace,
           offline: view.workspace.server
@@ -169,14 +201,38 @@ function useWorkspaces(): { groups: Group[]; waiting: (shown: Workspace) => numb
       groups.length,
       {
         label: 'Everywhere',
-        choices: [{ ...groups[0]!.choices[0]!, name: 'All workspaces', sub: 'for you only: agents never see across workspaces' }],
+        choices: [
+          {
+            ...groups[0]!.choices[0]!,
+            name: 'All workspaces',
+            sub: 'for you only: agents never see across workspaces',
+            brief: `${listed(workspaces.data.workspaces.map((view) => view.workspace.name))} · view only`,
+          },
+        ],
       },
       own,
     )
   }
   const all = groups.flatMap((group) => group.choices)
   const current = all.find((choice) => workspaceValue(choice.workspace) === workspaceValue(workspace)) ?? all[0]
-  return { groups, waiting, current }
+  return { groups, waiting, current, servers }
+}
+
+/** Names as a sentence lists them: "Work and Personal". */
+function listed(names: string[]): string {
+  return new Intl.ListFormat('en', { type: 'conjunction' }).format(names)
+}
+
+/** The tile a choice shows: every workspace, this machine, or its letter. */
+function badgeOf(choice: Choice, size = 28) {
+  return (
+    <WorkspaceBadge
+      name={choice.name}
+      local={choice.workspace.kind === 'local'}
+      all={choice.workspace.kind === 'all'}
+      size={size}
+    />
+  )
 }
 
 /**
@@ -187,7 +243,7 @@ export function WorkspaceSwitcher() {
   const queries = useQueryClient()
   const navigate = useNavigate()
   const [connecting, setConnecting] = useState(false)
-  const { groups, waiting, current } = useWorkspaces()
+  const { groups, waiting, current, servers } = useWorkspaces()
   const choose = (shown: Workspace) => {
     setWorkspace(shown)
     for (const key of [keys.orgs, keys.devices, keys.notificationSettings]) void queries.invalidateQueries({ queryKey: key })
@@ -209,16 +265,18 @@ export function WorkspaceSwitcher() {
     <>
       <Popover
         label="Switch workspace"
-        className="relative block min-w-0"
+        className="relative block min-w-0 flex-1"
         triggerLabel={`workspace: ${current.long}`}
-        triggerClassName="flex h-6 max-w-[170px] items-center gap-1 rounded-sm border border-line px-2 text-left text-xs text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11"
+        triggerClassName="flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-[5px] text-left text-fg-1 hover:bg-surface-2 aria-expanded:bg-surface-2 max-md:min-h-12"
         panelClassName="w-[340px] max-w-[calc(100vw-20px)] p-1.5"
         trigger={
           <>
-            <span className="truncate" title={host}>
-              {current.name}
+            {badgeOf(current)}
+            <span className="flex min-w-0 flex-1 flex-col" title={host}>
+              <span className="truncate font-medium">{current.name}</span>
+              <span className="truncate font-mono text-2xs text-fg-2">{current.brief ?? current.sub}</span>
             </span>
-            <Icon name="chevronDown" className="h-3 w-3 shrink-0" />
+            <Icon name="selector" className="h-3 w-3 shrink-0 text-fg-2" />
           </>
         }
       >
@@ -248,7 +306,7 @@ export function WorkspaceSwitcher() {
                         chosen && 'bg-accent-tint',
                       )}
                     >
-                      <WorkspaceBadge name={choice.name} local={choice.workspace.kind === 'local'} />
+                      {badgeOf(choice)}
                       <span className="flex min-w-0 flex-col">
                         <b className="truncate font-medium">{choice.name}</b>
                         <span className="truncate font-mono text-2xs text-fg-2">{choice.sub}</span>
@@ -279,6 +337,24 @@ export function WorkspaceSwitcher() {
                 })}
               </section>
             ))}
+            {servers.length > 0 && (
+              <section aria-label="Signed in" className="mt-1 border-t border-line-subtle pt-1">
+                <h3 className="px-2.5 pt-1.5 pb-1 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">Signed in</h3>
+                {servers.map((server) => (
+                  <div key={server.url} className="flex items-center gap-2.5 px-2.5 py-1.5">
+                    <Avatar name={server.user} size={22} />
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate">{server.user}</span>
+                      <span className="truncate font-mono text-2xs text-fg-2">on {serverName(server.url)}</span>
+                    </span>
+                    <span className="inline-flex shrink-0 items-center gap-1.5 text-2xs text-fg-2">
+                      <Dot tone={server.sync_error ? 'danger' : 'ok'} />
+                      {server.sync_error ? 'offline' : 'synced'}
+                    </span>
+                  </div>
+                ))}
+              </section>
+            )}
             <div className="mt-1 flex flex-col border-t border-line-subtle pt-1">
               {!hosted() && (
                 <Button

@@ -33,6 +33,13 @@ fn world() -> World {
     World { root, server, laptop, home }
 }
 
+/// Which of the person's machines holds the thread, as the web UI is told.
+fn machine_of(machine: &Machine, thread: &str) -> Option<String> {
+    let threads = machine.web("GET", "/api/threads", None);
+    let summary = threads.as_array()?.iter().find(|summary| summary["id"].as_str().is_some_and(|id| id.ends_with(thread)))?;
+    summary["machine"].as_str().map(str::to_owned)
+}
+
 #[test]
 fn a_thread_continues_on_another_machine() {
     let world = world();
@@ -45,6 +52,11 @@ fn a_thread_continues_on_another_machine() {
         eventually(|| home.log_line(&thread).is_some_and(|line| line.contains("remote") && line.contains("2 msgs"))),
         "the home machine sees the laptop's thread: {}",
         home.stdout(&["log"])
+    );
+    assert!(
+        eventually(|| machine_of(home, &thread).as_deref() == Some("laptop")),
+        "the home machine names the machine it was made on: {:?}",
+        machine_of(home, &thread)
     );
     // The laptop pushes its commits to the mirror in the background, apart
     // from the bundle, and resuming asks the mirror only once.
@@ -85,6 +97,8 @@ fn a_thread_continues_on_another_machine() {
         "the laptop sees what happened at home"
     );
     assert!(laptop.log_line(&thread).is_some_and(|line| line.contains("moved")), "{}", laptop.stdout(&["log"]));
+    assert_eq!(machine_of(laptop, &thread).as_deref(), Some("home"), "the laptop names the machine it moved to");
+    assert_eq!(machine_of(home, &thread), None, "nor does a machine name itself");
     let log = laptop.stdout(&["log"]);
     assert!(
         log.lines().any(|line| line.contains(&format!("fork of {thread}")) && line.contains("here")),

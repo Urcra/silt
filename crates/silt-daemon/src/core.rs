@@ -27,12 +27,13 @@ use crate::watch::{Watched, Watchers};
 
 pub enum Event {
     Request(Request, oneshot::Sender<Response>),
-    /// Time to take the next stale family digest (ADR 0115).
+    /// Time to take the next stale family digest (ADR 0116).
     Digests,
-    /// The loader's answer for a family events wait for (ADR 0115).
+    /// The loader's answer for a family events wait for (ADR 0116).
     Loaded {
         family: FamilyId,
         result: Box<Result<crate::load::Loaded, CoreError>>,
+        size: Option<u64>,
     },
     /// Paths in a checkout may have changed, as the watcher noticed at
     /// `noticed`; `settled` once the agents' transcripts have had time to
@@ -190,7 +191,7 @@ pub struct Core {
     pub(crate) actor: ActorId,
     /// Families projected here, and those only known from the server whose
     /// deltas aren't projected, as there's no local clone to read git
-    /// blobs from; each held only while in use (ADR 0115).
+    /// blobs from; each held only while in use (ADR 0116).
     pub(crate) families: crate::families::Families,
     pub(crate) threads: HashMap<ThreadId, ThreadRecord>,
     pub(crate) checkouts: BTreeMap<CheckoutId, Checkout>,
@@ -289,7 +290,7 @@ pub struct Core {
     /// What each checkout's HEAD files looked like then.
     pub(crate) head_stamps: HashMap<CheckoutId, silt_git::HeadStamp>,
     pub(crate) kept: crate::memory::Kept,
-    /// What the views across families read of those not held (ADR 0115).
+    /// What the views across families read of those not held (ADR 0116).
     pub(crate) digests: HashMap<FamilyId, crate::digest::Digest>,
     pub(crate) waiting: crate::loading::Waiting,
     /// Families whose stored digests don't say what the store holds.
@@ -1583,6 +1584,18 @@ impl Core {
             if let Err(error) = self.tail_session(&id).await {
                 warn!(%error, session = id, "could not read the session transcript");
             }
+        }
+        for checkout in self.checkouts.values().filter(|checkout| {
+            checkout._watched.as_ref().is_some_and(Watched::needs_rescan)
+                && !self.left_alone(&checkout.record)
+                && !self.recorded_elsewhere(checkout.record.thread)
+        }) {
+            let _ = self.events.send(Event::Changed {
+                checkout: checkout.record.id,
+                paths: vec![checkout.record.path.clone()],
+                noticed: Instant::now(),
+                settled: false,
+            });
         }
         self.keep_memory().await;
     }

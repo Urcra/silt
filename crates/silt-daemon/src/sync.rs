@@ -25,7 +25,7 @@ const PULL_RETRY: Duration = Duration::from_secs(1);
 const PULL_RETRY_MAX: Duration = Duration::from_secs(30);
 
 /// The family's deltas from `from` on: what came since the log was read
-/// whole needn't read it again (ADR 0116).
+/// whole needn't read it again (ADR 0117).
 pub(crate) fn log_since_in(families: &Families, family: FamilyId, from: usize) -> &[Delta] {
     if let Some(held) = families.get(&family) {
         return held.log_since(from).unwrap_or_else(|| held.log().get(from..).unwrap_or_default());
@@ -490,6 +490,7 @@ impl Core {
             self.announce(crate::protocol::BusEvent::Threads);
         }
         self.take_running_elsewhere(server, listing.running);
+        self.take_machines(listing.devices, listing.made_on);
         for info in listing.threads {
             self.collaborators.insert(info.id, info.collaborators.clone());
             if let Some(known) = self.threads.get(&info.id) {

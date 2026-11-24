@@ -112,7 +112,11 @@ function AgentCard({ thread, review }: { thread: ThreadSummary; review: MrSummar
   const asked = status?.permissions[0]
   if (thread.review && review && !asked && status?.state !== 'awaiting_input') return <ReviewCard thread={thread} mr={review} />
   const where =
-    thread.location === 'remote' ? 'on the server' : thread.location === 'moved' ? 'on another device' : `on ${device}`
+    thread.location === 'remote'
+      ? `on ${thread.machine ?? 'the server'}`
+      : thread.location === 'moved'
+        ? `on ${thread.machine ?? 'another device'}`
+        : `on ${device}`
   const meta = [status?.agent ?? thread.agent, title, where].filter(Boolean).join(' · ')
   if (asked) {
     const [first, second, ...rest] = asked.options

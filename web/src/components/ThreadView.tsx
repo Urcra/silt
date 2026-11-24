@@ -74,7 +74,17 @@ import {
   taskEntries,
   callsById,
 } from '../transcript'
-import { SessionLive, type Stoppable, StoppableTasks, type TaskState, type Tasks, TasksContext, mayRun, tasksOf } from '../tasks'
+import {
+  SessionLive,
+  type Stoppable,
+  StoppableTasks,
+  type TaskState,
+  type Tasks,
+  TasksContext,
+  mayRun,
+  runOf,
+  tasksOf,
+} from '../tasks'
 import { RunningStrip, TaskCard } from './Tasks'
 import {
   Avatar,
@@ -475,9 +485,12 @@ function failedIn(entries: HistoryEntry[]): number {
 }
 
 /** A subagent's own transcript, inside the card of the call that started it: its prompt, its work and what it said. */
-function SideTranscript({ side, ...props }: EntryProps & { side: string }) {
+function SideTranscript({ task, side, ...props }: EntryProps & { task: TaskState; side: string }) {
   const tasks = useContext(TasksContext)
-  const entries = tasks.sides.get(side) ?? []
+  const { from_ms, until_ms } = runOf(tasks, task)
+  const entries = (tasks.sides.get(side) ?? []).filter(
+    (entry) => (from_ms === null || entry.time_ms >= from_ms) && (until_ms === null || entry.time_ms < until_ms),
+  )
   if (entries.length === 0) return null
   return (
     <div data-testid="subagent-transcript" className="flex flex-col gap-2 border-l-2 border-line pl-3 text-sm">
@@ -513,8 +526,8 @@ function StepCard({ step, ...props }: EntryProps & { step: ToolStep }) {
   if (proposedPlan(call)) return <ProposedPlan step={step} />
   if (kindOf(call) === 'question') return <QuestionCard step={step} />
   if (tasked(step, tasks)) {
-    const side = (call.tool && tasks.byCall.get(call.tool.id)?.side) ?? null
-    return <TaskCard step={step}>{side && <SideTranscript side={side} {...props} />}</TaskCard>
+    const task = call.tool ? tasks.byCall.get(call.tool.id) : undefined
+    return <TaskCard step={step}>{task?.side && <SideTranscript task={task} side={task.side} {...props} />}</TaskCard>
   }
   return <CommandCard step={step} card />
 }
@@ -1760,8 +1773,9 @@ export function ThreadHeader({
 
 /** Where the thread's work is, for its header: this machine by name, the server, or another device. */
 function whereSaid(summary: ThreadSummary, device: string | null): { label: string; icon: IconName } {
-  if (summary.location === 'moved') return { label: 'moved to another device', icon: 'handoff' }
-  if (summary.location === 'remote') return { label: 'on the server', icon: 'cloud' }
+  if (summary.location === 'moved') return { label: `moved to ${summary.machine ?? 'another device'}`, icon: 'handoff' }
+  if (summary.location === 'remote')
+    return summary.machine ? { label: `on ${summary.machine}`, icon: 'monitor' } : { label: 'on the server', icon: 'cloud' }
   return { label: device ?? 'this machine', icon: 'monitor' }
 }
 
@@ -2068,7 +2082,7 @@ const NO_TURNS: TurnInfo[] = []
 const NO_COMMENTS: CommentView[] = []
 
 /** The thread's tasks, the same object until the entries they're read from change: those held, after the news of tasks
- * from before them, so a task started before what's held shows as it is (ADR 0116). */
+ * from before them, so a task started before what's held shows as it is (ADR 0117). */
 function useStableTasks(entries: HistoryEntry[], before: HistoryEntry[]): Tasks {
   const from = useMemo(() => taskEntries(before.concat(entries)), [entries, before])
   // What they were last read from, for the next render to compare with.
@@ -2111,7 +2125,7 @@ const HistoryList = memo(function HistoryList({
   complete: boolean
   /** What's held reaches the history's end. */
   atEnd: boolean
-  /** The index of the first entry held; those before it load as the person scrolls up to them (ADR 0116). */
+  /** The index of the first entry held; those before it load as the person scrolls up to them (ADR 0117). */
   start: number
   loadingEarlier: boolean
   onEarlier: () => void
@@ -2288,7 +2302,7 @@ function ThreadBody({
   thread: string
   /** The id in the address, maybe short. */
   id: string
-  /** The entries held, from the `start`th on (ADR 0116). */
+  /** The entries held, from the `start`th on (ADR 0117). */
   entries: HistoryEntry[]
   total: number
   start: number
@@ -2490,7 +2504,7 @@ function ThreadBody({
         ? call?.tool?.subject
         : (call?.tool?.detail ?? call?.tool?.subject)
     const title = said?.split('\n')[0] ?? task.summary?.split('\n')[0] ?? task.ids[0] ?? 'A task'
-    return { title, name: call?.tool?.subagent ?? null }
+    return { title, name: (task.resumes ?? call)?.tool?.subagent ?? null }
   }
   // A link into the history may name an inherited turn, so it shows them all.
   const folded = useMemo(

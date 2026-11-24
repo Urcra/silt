@@ -147,7 +147,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             }
             Event::Request(request, reply) => core.request(request, reply).await,
             Event::Changed { checkout, paths, noticed, settled } => core.changed(checkout, paths, noticed, settled).await,
-            Event::Loaded { family, result } => core.loaded(family, *result),
+            Event::Loaded { family, result, size } => core.loaded(family, *result, size),
             Event::Digests => core.take_stale_digest().await,
             Event::Tick => {
                 core.tick().await;

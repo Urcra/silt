@@ -19,7 +19,7 @@ pub(super) struct Log {
     /// How many deltas `unread` reads.
     covered: usize,
     /// Those applied after them, until the log is read whole: what a reader
-    /// of what's new reads without reading the rest (ADR 0116).
+    /// of what's new reads without reading the rest (ADR 0117).
     after: Vec<Delta>,
     /// Whether something read the whole log since [`Log::idle`] last asked.
     read: AtomicBool,

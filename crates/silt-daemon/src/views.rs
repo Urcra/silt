@@ -20,7 +20,7 @@ use crate::transcripts::native_entries;
 /// A family's log as folded for the views across families: each thread's
 /// summary so far and the merge requests' deltas. A thread's summary read
 /// every line of its conversation again each time its log grew; now only
-/// the lines added are read (ADR 0116).
+/// the lines added are read (ADR 0117).
 #[derive(Default)]
 pub(crate) struct FamilyFold {
     version: usize,
@@ -191,6 +191,11 @@ impl Core {
                     local_only: self.homes.get(&record.family) == Some(&crate::homes::Home::Local),
                     workspace: Some(self.family_workspace(record.family).id.to_string()),
                     cloud: logged.cloud,
+                    machine: lease
+                        .or_else(|| self.made_on(record.id))
+                        .filter(|holder| matches!(location, "moved" | "remote") && Some(*holder) != self.device_for(record.id))
+                        .and_then(|holder| self.machine_name(holder))
+                        .map(str::to_owned),
                 }
             })
             .collect();
@@ -235,7 +240,7 @@ impl Core {
     }
 
     /// `then` given the family's log folded: what was folded before, and
-    /// the deltas added since (ADR 0116).
+    /// the deltas added since (ADR 0117).
     pub(crate) fn folded<T>(&self, family: FamilyId, then: impl FnOnce(&FamilyFold) -> T) -> T {
         let mut folds = self.summary_folds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let length = self.local_log_len(family);

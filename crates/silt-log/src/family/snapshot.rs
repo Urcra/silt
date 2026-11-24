@@ -12,7 +12,7 @@ use super::{Family, FileState, Files, Log, NewFile, ReadCovered, ReadFile, Threa
 use crate::delta::{Delta, SessionRef};
 
 /// The encoding of [`Family::snapshot`]: the tree, an index of the files'
-/// states, stored apart, and the rest (ADR 0115).
+/// states, stored apart, and the rest (ADR 0116).
 pub const SNAPSHOT_FORMAT: i64 = 6;
 
 /// The encoding before files were stored apart: the tree, the files, the

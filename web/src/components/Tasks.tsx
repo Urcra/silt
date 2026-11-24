@@ -49,10 +49,12 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
   const ended = task?.ended_ms ?? (task ? null : (step.result?.time_ms ?? null))
   const took =
     status === 'running' ? (quiet ? null : duration(call.time_ms, now)) : ended !== null ? duration(call.time_ms, ended) : null
-  const kind = subagent ? call.tool?.detail?.trim() || 'Subagent' : 'In the background'
-  const name = subagent ? call.tool?.subagent?.trim() : undefined
+  const started = task?.resumes?.tool ?? call.tool
+  const kind = subagent ? started?.detail?.trim() || 'Subagent' : 'In the background'
+  const name = subagent ? started?.subagent?.trim() : undefined
   // What came back: a subagent's report, or a background command's launch message and what it said when it ended.
-  const report = subagent && status !== 'running' ? result?.text.trim() : undefined
+  // A message that resumed a subagent, as Claude's SendMessage, only says it did; the run's report is its news.
+  const report = subagent && kindOf(call) === 'subagent' && status !== 'running' ? result?.text.trim() : undefined
   const said = task?.summary?.trim()
   const canStop = status === 'running' && call.tool !== null && stoppable.calls.has(call.tool.id)
   return (
@@ -80,7 +82,7 @@ export function TaskCard({ step, children }: { step: ToolStep; children?: ReactN
               {name}
             </span>
           )}
-          <span className="shrink-0 text-fg-2">{kind}</span>
+          <span className="shrink-0 text-fg-2">{task?.resumes ? `${kind}, resumed` : kind}</span>
           <span className="min-w-0 flex-1 truncate text-fg-1 group-hover/row:text-accent-fg">{titleOf(step, subagent)}</span>
           {took && (
             <span className="shrink-0 font-mono text-fg-3 tabular-nums" data-volatile={status === 'running' || undefined}>

@@ -99,7 +99,7 @@ fn windows_name(part: &str) -> bool {
 
 /// Hands memory freed since back to the system. glibc keeps what a long
 /// process frees in its arenas, and a family the daemon lets go of can be
-/// hundreds of MB it would otherwise hold for good (ADR 0115).
+/// hundreds of MB it would otherwise hold for good (ADR 0116).
 pub fn return_freed_memory() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[expect(unsafe_code, reason = "glibc's malloc_trim has no safe wrapper")]

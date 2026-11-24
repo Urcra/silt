@@ -21,7 +21,7 @@ use crate::transcripts::{native_entries, shown_entries};
 const HISTORIES_KEPT: usize = 16;
 
 /// A thread's numbered history entries, each with the delta it came from,
-/// cut as a page carries them (ADR 0116).
+/// cut as a page carries them (ADR 0117).
 pub(crate) type HistoryEntries = Arc<Vec<(DeltaId, HistoryEntry)>>;
 
 /// Readings of a thread's history kept where it changed between.
@@ -189,7 +189,7 @@ impl Core {
         self.kept_history(thread).entries
     }
 
-    /// The thread's history as kept (ADR 0116): what its family's log
+    /// The thread's history as kept (ADR 0117): what its family's log
     /// added since is read on from where it was, unless it changed what came
     /// before, which reads it again whole, noting where it first changed, so
     /// a viewer holding an earlier version reads only from there.
@@ -366,7 +366,7 @@ impl Core {
         whole.into_iter().skip(first).take(count).collect()
     }
 
-    /// A page of `thread`'s history (ADR 0116): from entry `offset`, or from
+    /// A page of `thread`'s history (ADR 0117): from entry `offset`, or from
     /// where it changed since version `known` when that's earlier, or the
     /// last `tail` entries from the start of their turn. `cut` leaves out
     /// long outputs and images, as the web UI asks for them.

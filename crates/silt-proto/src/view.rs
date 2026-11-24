@@ -73,6 +73,10 @@ pub struct ThreadSummary {
     /// (ADR 0040). A fork doesn't inherit it.
     #[serde(default)]
     pub cloud: Option<String>,
+    /// Which of the person's own machines holds it, by name, when it isn't
+    /// the one answering: the device of its lease.
+    #[serde(default)]
+    pub machine: Option<String>,
 }
 
 /// The cloud session among a thread's own deltas.
@@ -699,14 +703,14 @@ pub struct HistoryPage {
     #[serde(default)]
     pub version: Option<usize>,
     /// The entries before `from` with news of a task, cut, so a page read
-    /// from the history's end knows what was started before it (ADR 0116).
+    /// from the history's end knows what was started before it (ADR 0117).
     #[serde(default)]
     pub tasks: Vec<HistoryEntry>,
 }
 
 /// Where a page of the last `tail` entries before entry `end` starts: the
 /// start of the turn holding the first of them, so it opens on a prompt
-/// (ADR 0116).
+/// (ADR 0117).
 pub fn tail_from<'a>(entry: impl Fn(usize) -> &'a HistoryEntry, end: usize, tail: usize) -> usize {
     let mut from = end.saturating_sub(tail);
     while from > 0 {

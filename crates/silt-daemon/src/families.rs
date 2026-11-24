@@ -1,4 +1,4 @@
-//! The families the daemon knows, each held only while in use (ADR 0115):
+//! The families the daemon knows, each held only while in use (ADR 0116):
 //! loaded when something reads it, and let go of once unused.
 //!
 //! What names a family loads it ahead, on the loader's thread, while the
@@ -53,9 +53,13 @@ struct Slot {
     root: Option<PathBuf>,
     /// When something last used it, in milliseconds since `started`.
     used: AtomicU64,
-    /// About how much it takes held, as the store holds it; none until known.
-    size: Option<u64>,
+    /// About how much it takes held, as the store holds it; [`UNSIZED`]
+    /// until known. The loader reads it with the family, so a load from a
+    /// shared reference records it too.
+    size: AtomicU64,
 }
+
+const UNSIZED: u64 = u64::MAX;
 
 pub(crate) struct Families {
     slots: HashMap<FamilyId, Slot>,
@@ -241,12 +245,12 @@ impl Families {
     }
 
     pub(crate) fn size(&self, family: &FamilyId) -> Option<u64> {
-        self.slots.get(family)?.size
+        Some(self.slots.get(family)?.size.load(Ordering::Relaxed)).filter(|size| *size != UNSIZED)
     }
 
     pub(crate) fn set_size(&mut self, family: &FamilyId, size: u64) {
         if let Some(slot) = self.slots.get_mut(family) {
-            slot.size = Some(size);
+            *slot.size.get_mut() = size.min(UNSIZED - 1);
         }
     }
 
@@ -265,8 +269,11 @@ impl Families {
         if let Some(held) = slot.held.get() {
             return Some(held);
         }
-        let loaded = self.load_now(*family, slot.root.clone())?;
-        Some(slot.held.get_or_init(|| loaded.into()))
+        let Fetched { result, size } = self.load_now(*family, slot.root.clone())?;
+        if let Some(size) = size {
+            slot.size.store(size.min(UNSIZED - 1), Ordering::Relaxed);
+        }
+        Some(slot.held.get_or_init(|| result.into()))
     }
 
     fn held_mut(&mut self, family: &FamilyId) -> Option<&mut Held> {
@@ -274,11 +281,11 @@ impl Families {
         self.slots.get_mut(family)?.held.get_mut()
     }
 
-    fn load_now(&self, family: FamilyId, root: Option<PathBuf>) -> Option<Loaded> {
+    fn load_now(&self, family: FamilyId, root: Option<PathBuf>) -> Option<Fetched<Loaded>> {
         let loader = self.loader.as_ref()?;
         match loader.load_blocking(family, root) {
-            Ok(loaded) => Some(loaded),
-            Err(error) => {
+            Ok(Fetched { result: Ok(loaded), size }) => Some(Fetched { result: loaded, size }),
+            Ok(Fetched { result: Err(error), .. }) | Err(error) => {
                 warn!(%error, %family, "could not load the family");
                 None
             }
@@ -292,7 +299,7 @@ impl Families {
             projected: false,
             root: None,
             used: AtomicU64::new(used),
-            size: None,
+            size: AtomicU64::new(UNSIZED),
         })
     }
 
@@ -325,8 +332,16 @@ struct Job {
 
 #[derive(Debug)]
 enum Reply {
-    Waiting(std::sync::mpsc::SyncSender<Result<Loaded, CoreError>>),
-    Later(oneshot::Sender<Result<Loaded, CoreError>>),
+    Waiting(std::sync::mpsc::SyncSender<Fetched>),
+    Later(oneshot::Sender<Fetched>),
+}
+
+/// What the loader loaded of a family, with how much the store holds of it,
+/// read with it so the core's tick needn't ask.
+#[derive(Debug)]
+pub(crate) struct Fetched<T = Result<Loaded, CoreError>> {
+    pub(crate) result: T,
+    pub(crate) size: Option<u64>,
 }
 
 impl Loader {
@@ -351,12 +366,17 @@ impl Loader {
                         }
                         Err(error) => Err(CoreError::Invalid(format!("the loader's store didn't open: {error}"))),
                     };
+                    let size = match (&store, &loaded) {
+                        (Ok(store), Ok(_)) => store.family_size(job.family).await.ok(),
+                        _ => None,
+                    };
+                    let fetched = Fetched { result: loaded, size };
                     match job.reply {
                         Reply::Waiting(reply) => {
-                            let _ = reply.send(loaded);
+                            let _ = reply.send(fetched);
                         }
                         Reply::Later(reply) => {
-                            let _ = reply.send(loaded);
+                            let _ = reply.send(fetched);
                         }
                     }
                 }
@@ -366,16 +386,16 @@ impl Loader {
     }
 
     /// Loads the family, waiting for it.
-    fn load_blocking(&self, family: FamilyId, root: Option<PathBuf>) -> Result<Loaded, CoreError> {
+    fn load_blocking(&self, family: FamilyId, root: Option<PathBuf>) -> Result<Fetched, CoreError> {
         let (reply, answer) = std::sync::mpsc::sync_channel(1);
         self.jobs
             .send(Job { family, root, reply: Reply::Waiting(reply) })
             .map_err(|_| CoreError::Invalid("the loader stopped".into()))?;
-        answer.recv().map_err(|_| CoreError::Invalid("the loader stopped".into()))?
+        answer.recv().map_err(|_| CoreError::Invalid("the loader stopped".into()))
     }
 
     /// Loads the family, answering when done.
-    pub(crate) fn load_later(&self, family: FamilyId, root: Option<PathBuf>) -> oneshot::Receiver<Result<Loaded, CoreError>> {
+    pub(crate) fn load_later(&self, family: FamilyId, root: Option<PathBuf>) -> oneshot::Receiver<Fetched> {
         let (reply, answer) = oneshot::channel();
         let _ = self.jobs.send(Job { family, root, reply: Reply::Later(reply) });
         answer

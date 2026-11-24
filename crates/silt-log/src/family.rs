@@ -359,7 +359,7 @@ pub struct Family {
     /// The ids and fingerprints snapshots took of the log's first deltas.
     /// The log only grows, so each delta is fingerprinted once rather than by
     /// every snapshot, which made recording a long session quadratic, and a
-    /// snapshot needn't read the log whole (ADR 0116).
+    /// snapshot needn't read the log whole (ADR 0117).
     logged: Vec<snapshot::Logged>,
     tree_changes: u64,
 }
@@ -395,7 +395,7 @@ impl Family {
 
     /// What of the log is known without reading it whole, and the position
     /// of its first delta: its newest part, as a reader of what's recent
-    /// looks there first (ADR 0116).
+    /// looks there first (ADR 0117).
     pub fn recent_log(&self) -> (usize, &[Delta]) {
         self.log.recent()
     }
