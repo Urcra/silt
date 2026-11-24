@@ -31,7 +31,10 @@ mod transcript;
 
 pub(crate) struct AcpRun {
     run: u64,
-    info: AgentInfo,
+    pub(crate) info: AgentInfo,
+    /// What it said since its last tool call: at its turn's end, its last
+    /// message, which an asked agent reports back (ADR 0120).
+    pub(crate) last_said: String,
     /// What its sandbox reaches and the run's token, when it runs in Silt's
     /// sandbox, for starting it again the same way (ADR 0093).
     sandbox: Option<(silt_workspace::Reach, String, String)>,
@@ -41,7 +44,7 @@ pub(crate) struct AcpRun {
     /// What to tell it once it's restarted with other folders.
     resume_note: Option<String>,
     checkout_id: CheckoutId,
-    checkout: PathBuf,
+    pub(crate) checkout: PathBuf,
     handle: Option<AgentHandle>,
     /// Commands given before the agent was up.
     queued: Vec<Command>,
@@ -186,6 +189,9 @@ struct First {
     prompt: String,
     plan: bool,
     attachments: Vec<Attachment>,
+    /// Who the prompt is from when it isn't the person: the agent that
+    /// asked this one (ADR 0120).
+    author: Option<String>,
 }
 
 /// What the fork's agent is asked for a change guide.
@@ -753,6 +759,7 @@ impl Core {
             AcpRun {
                 run,
                 info,
+                last_said: String::new(),
                 sandbox: kept,
                 folders,
                 resume_note: None,
@@ -787,7 +794,7 @@ impl Core {
                 planning: false,
                 presents_plans,
                 back_to: None,
-                first: options.prompt.map(|prompt| First { prompt, plan: options.plan, attachments }),
+                first: options.prompt.map(|prompt| First { prompt, plan: options.plan, attachments, author: None }),
                 accepts: Accepts::default(),
                 guiding: None,
                 reports_work: false,
@@ -941,8 +948,20 @@ impl Core {
 
     /// Sends the prompt the agent was started with.
     async fn send_first(&mut self, thread: ThreadId, first: First) -> Result<(), CoreError> {
-        self.acp_prompt_with(&thread.to_string(), &first.prompt, first.plan, first.attachments).await?;
+        match first.author {
+            Some(author) => self.send_prompt(thread, &author, &first.prompt, first.attachments).await?,
+            None => {
+                self.acp_prompt_with(&thread.to_string(), &first.prompt, first.plan, first.attachments).await?;
+            }
+        }
         Ok(())
+    }
+
+    /// The first prompt goes as from `author` rather than the person.
+    pub(crate) fn first_from(&mut self, thread: ThreadId, author: String) {
+        if let Some(first) = self.acp.get_mut(&thread).and_then(|run| run.first.as_mut()) {
+            first.author = Some(author);
+        }
     }
 
     /// Tells the agent `text` while it works. An agent that takes steers
@@ -1036,7 +1055,7 @@ impl Core {
 
     /// Records and sends a prompt by `author`, with teammates' drafts, the
     /// thread's notices and, first in a new session, its conversation.
-    async fn send_prompt(
+    pub(crate) async fn send_prompt(
         &mut self,
         thread: ThreadId,
         author: &str,
@@ -1095,6 +1114,7 @@ impl Core {
         run.state = AgentState::Working;
         run.error = None;
         run.suggestion = None;
+        run.last_said.clear();
         run.last_prompt = Some((prompt.clone(), attachments.clone()));
         send(run, Command::Prompt { text: prompt, attachments });
         self.agent_changed(thread).await;
@@ -1201,8 +1221,15 @@ impl Core {
             self.remember_seen(thread);
         }
         let run = self.acp.get_mut(&thread).expect("caller checked");
-        let kind = permission.tool_kind.clone().or_else(|| run.tool_kinds.get(&permission.tool_call_id).cloned());
-        match crate::presets::decide(preset, kind.as_deref(), &permission.option_kinds) {
+        let title = run.tool_said.get(&permission.tool_call_id).map_or(permission.title.as_str(), |(title, _)| title.as_str());
+        let silt = crate::presets::silt_tool(title).or_else(|| crate::presets::silt_tool(&permission.title));
+        let asks = silt == Some("silt_ask");
+        let kind = silt
+            .and_then(crate::presets::silt_tool_kind)
+            .map(str::to_owned)
+            .or_else(|| permission.tool_kind.clone())
+            .or_else(|| run.tool_kinds.get(&permission.tool_call_id).cloned());
+        match crate::presets::decide_with(preset, kind.as_deref(), asks, &permission.option_kinds) {
             Some(option) => send(run, Command::Answer { id: permission.id, option: Some(option.to_owned()) }),
             None => run.asking.push(permission),
         }
@@ -1552,8 +1579,9 @@ impl Core {
                 run.handle = Some(handle);
             }
             AcpEvent::Started(Err(error)) => {
-                run.error = Some(error);
+                run.error = Some(error.clone());
                 run.state = AgentState::Error;
+                self.ask_ended_early(thread, format!("it couldn't start: {error}")).await;
             }
             AcpEvent::Login { .. } => unreachable!("handled by acp_event"),
             AcpEvent::Agent(silt_acp::Event::Ready {
@@ -1666,7 +1694,11 @@ impl Core {
             AcpEvent::Agent(silt_acp::Event::Update(update)) => self.acp_update(thread, update).await?,
             AcpEvent::Agent(silt_acp::Event::Permission(permission)) => self.permission_asked(thread, permission),
             AcpEvent::Agent(silt_acp::Event::Question(question)) => self.question_asked(thread, question).await?,
-            AcpEvent::Agent(silt_acp::Event::SignIn(methods)) => self.sign_in_needed(thread, methods).await?,
+            AcpEvent::Agent(silt_acp::Event::SignIn(methods)) => {
+                let name = run.info.name.clone();
+                self.sign_in_needed(thread, methods).await?;
+                self.ask_ended_early(thread, format!("{name} needs you to sign in to it on this machine")).await;
+            }
             AcpEvent::Agent(silt_acp::Event::Context { used, size }) => run.context = Some(ContextUse { used, size }),
             AcpEvent::Agent(silt_acp::Event::TurnUsage { input, output }) => {
                 // What the turn cost comes after what it said.
@@ -1708,7 +1740,10 @@ impl Core {
                 run.tool_said.clear();
                 run.calls_running.clear();
                 let signing_in = run.sign_in.is_some();
+                let said = std::mem::take(&mut run.last_said);
+                let stopped = run.stopped;
                 self.questions_dropped(thread).await?;
+                self.ask_turn_ended(thread, &reason, stopped, said).await;
                 if !signing_in && self.restart_for_folders(thread).await {
                     return Ok(());
                 }
@@ -1716,6 +1751,7 @@ impl Core {
                 if !signing_in {
                     self.next_prompt(thread).await?;
                 }
+                self.hand_over_reports(thread).await?;
             }
             AcpEvent::Agent(silt_acp::Event::Failed(error)) => run.error = Some(crate::protocol::error_chain(&*error)),
             AcpEvent::Agent(silt_acp::Event::Exited) => {
@@ -1724,7 +1760,9 @@ impl Core {
                 run.subagents.clear();
                 run.state = AgentState::Stopped;
                 run.handle = None;
+                let why = run.error.clone().unwrap_or_else(|| "its agent stopped".to_owned());
                 self.close_agent_session(thread).await?;
+                self.ask_ended_early(thread, why).await;
             }
         }
         Ok(())
@@ -1771,7 +1809,8 @@ impl Core {
             self.acp.get_mut(&thread).expect("caller checked").session = Some(id);
             return Ok(());
         }
-        let primer = self.primer(thread);
+        // An asked agent starts with only what it was asked (ADR 0120).
+        let primer = if self.asks.asked_in(thread).is_some() { None } else { self.primer(thread) };
         let id = uuid::Uuid::now_v7().simple().to_string();
         self.register_session(NewSession {
             agent: &acp::Acp,
@@ -1821,7 +1860,9 @@ impl Core {
                     self.flush_acp(thread).await?;
                 }
                 self.announce_text(thread, TextKind::Message, &text);
-                self.acp.get_mut(&thread).expect("caller checked").text.push_str(&text);
+                let run = self.acp.get_mut(&thread).expect("caller checked");
+                run.text.push_str(&text);
+                run.last_said.push_str(&text);
             }
             Update::Thought(text) => {
                 if !run.text.is_empty() {
@@ -1836,6 +1877,7 @@ impl Core {
             }
             Update::UserText(_) => {}
             Update::ToolCall { id, title, kind, input } => {
+                run.last_said.clear();
                 run.calls_running.insert(id.clone());
                 run.labels.insert(id.clone(), label_of(&title, &kind, input.as_ref()));
                 run.tool_kinds.insert(id.clone(), kind.clone());

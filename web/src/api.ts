@@ -3,9 +3,10 @@
 // arrives once in the URL fragment from `silt open`, or is traded for the
 // one-time code a browser opened by `silt open` carries, and is kept for the tab.
 
-import { apiUrl } from './served'
+import { apiUrl, hosted } from './served'
 import { askedServer } from './workspace'
 import type {
+  AskView,
   AppearanceMode,
   AppearanceSettings,
   TextSettings,
@@ -656,6 +657,10 @@ export const api = {
   share: (id: string, user: string, remove: boolean) => request<string>('POST', `${thread(id)}/share`, { user, remove }),
   offerMergeRequest: (id: string, title: string) => request<MrSummary>('POST', `${thread(id)}/mrs`, { title }),
   mergeRequests: () => request<MrSummary[]>('GET', '/api/mrs'),
+  /** Agents' asks of other agents on this machine (ADR 0120); the hosted app runs no agents, so none. */
+  asks: () => (hosted() ? Promise.resolve([]) : request<AskView[]>('GET', '/api/asks')),
+  askStop: (id: string) => request<AskView>('POST', `/api/asks/${encodeURIComponent(id)}/stop`),
+  askTake: (id: string) => request<string>('POST', `/api/asks/${encodeURIComponent(id)}/take`),
   /** A merge request; `brief` leaves out its diff and the fork's conversation. */
   mergeRequest: (id: string, hidden: Hidden = {}, brief = false) => {
     const params = hiddenParams(new URLSearchParams(), hidden)

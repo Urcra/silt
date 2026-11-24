@@ -345,6 +345,8 @@ pub struct Core {
     themes_watch: Option<crate::watch::Watched>,
     /// How each thread's agent stands as last stored (ADR 0022).
     pub(crate) agent_runs: HashMap<ThreadId, silt_store::AgentRunRecord>,
+    /// Agents asking other agents (ADR 0120).
+    pub(crate) asks: crate::asks::Asks,
     /// What each thread's summary reads from its log, with the family's log
     /// length it was read at.
     pub(crate) summary_folds: Mutex<HashMap<FamilyId, crate::views::FamilyFold>>,
@@ -637,6 +639,7 @@ impl Core {
             rooms: silt_proto::rooms::Hub::default(),
             bus,
             agent_runs: HashMap::new(),
+            asks: crate::asks::Asks::load(data_dir),
             summary_folds: Mutex::new(HashMap::new()),
             personal: crate::personal::Personal::default(),
             control: crate::control::Control::default(),
@@ -726,6 +729,21 @@ impl Core {
                     Err(error) => Err(error),
                 };
                 let _ = reply.send(to_response(answer));
+                return;
+            }
+            if let Request::Askable { .. }
+            | Request::Ask { .. }
+            | Request::AskWait { .. }
+            | Request::AskStop { .. }
+            | Request::AskTake { .. } = &*asking
+            {
+                // An agent the web UI runs asks for its own thread only.
+                match self.run_thread(&token).await.and_then(|thread| self.find_thread(&thread)) {
+                    Ok(thread) => self.ask_request(Some(thread), *asking, reply).await,
+                    Err(error) => {
+                        let _ = reply.send(to_response::<()>(Err(error)));
+                    }
+                }
                 return;
             }
             if let Request::Agents { .. } | Request::Message { .. } = &*asking {
@@ -847,8 +865,35 @@ impl Core {
             }
             None => {}
         }
+        if let Request::Askable { .. }
+        | Request::Ask { .. }
+        | Request::AskWait { .. }
+        | Request::AskStop { .. }
+        | Request::AskTake { .. } = &request
+        {
+            let caller = match &request {
+                Request::Askable { thread } | Request::Ask { thread, .. } | Request::AskWait { thread, .. } => {
+                    Some(thread.clone())
+                }
+                Request::AskStop { thread, .. } | Request::AskTake { thread, .. } => thread.clone(),
+                _ => None,
+            };
+            match caller.map(|caller| self.find_thread(&caller)).transpose() {
+                Ok(caller) => self.ask_request(caller, request, reply).await,
+                Err(error) => {
+                    let _ = reply.send(to_response::<()>(Err(error)));
+                }
+            }
+            return;
+        }
         let response = match request {
             Request::OnServer { .. } => Response::error("a request names one server at a time"),
+            Request::Asks => Response::ok(self.asks_view()),
+            Request::Askable { .. }
+            | Request::Ask { .. }
+            | Request::AskWait { .. }
+            | Request::AskStop { .. }
+            | Request::AskTake { .. } => Response::error("an ask is answered above"),
             Request::Scoped { .. } => Response::error("a request carries one token"),
             Request::PluginTools | Request::PluginCall { .. } | Request::PluginWait { .. } => {
                 Response::error("only an agent's run calls plugins, with its token")
