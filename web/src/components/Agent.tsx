@@ -625,10 +625,10 @@ export function AgentDock({
   // Before it runs, the preset says which mode it starts in (ADR 0114).
   const seenSettings = restart.settings
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
-  // One of the agent's own modes chosen before it starts, or none (null) where a preset was chosen since (ADR 0115).
+  // One of the agent's own modes chosen before it starts, or none (null) where a preset was chosen since (ADR 0118).
   const [chosenMode, setChosenMode] = useState<string | null>()
   // The modes the agent has, live or as it last ran here: those that are permissions follow the preset, and its own,
-  // such as Copilot's Autopilot, are in the permissions menu (ADR 0115).
+  // such as Copilot's Autopilot, are in the permissions menu (ADR 0118).
   const agentModes = live ? status.modes?.available : seenModes
   const own = ownModes(live ? status.modes : restart.modes)
   const ownAgent = live ? status.agent_id : agent
@@ -768,7 +768,7 @@ export function AgentDock({
   }
 
   // One of the agent's own modes, from the permissions menu: running, the agent moves into it; before, it starts in it.
-  // The preset shows what the daemon answers with there at once (ADR 0115).
+  // The preset shows what the daemon answers with there at once (ADR 0118).
   const chooseMode = (mode: string) => {
     const before = preset
     onPreset(presetForOwnMode(mode))
@@ -784,7 +784,7 @@ export function AgentDock({
   }
 
   // Shift+Tab moves to the next preset the agent and the workspace allow, then the agent's own modes; the agent's mode
-  // follows (ADR 0114, ADR 0115).
+  // follows (ADR 0114, ADR 0118).
   const cycle = () => {
     if (hosted() && !live) return
     const next = nextPermission(preset, inOwn, own, refusedPreset, refusedOwn)
@@ -840,7 +840,7 @@ export function AgentDock({
   const tools = (
     <>
       {/* The same row as New thread's: which agent, the permissions with its own modes, then its model and settings
-          (ADR 0115). Another agent here takes the thread over. */}
+          (ADR 0118). Another agent here takes the thread over. */}
       {(live ? !hosted() && status.agent_id !== '' : !elsewhere && !hosted()) && agents.length > 0 && (
         <AgentChip
           value={live ? status.agent_id : agent}

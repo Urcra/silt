@@ -3,6 +3,7 @@
 //! the projection, and decoding the 100,000 deltas a snapshot covers took
 //! it longer than everything else it did (ADR 0034).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use crate::delta::Delta;
@@ -16,6 +17,8 @@ pub(super) struct Log {
     /// Until then: how to read the deltas a snapshot covers, and those
     /// applied after them.
     unread: Mutex<Option<Unread>>,
+    /// Whether something read the whole log since [`Log::idle`] last asked.
+    read: AtomicBool,
 }
 
 struct Unread {
@@ -28,10 +31,15 @@ impl Log {
     /// A log whose first `covered` deltas are read only when something
     /// reads the log.
     pub(super) fn unread(covered: usize, read: ReadCovered) -> Self {
-        Self { whole: OnceLock::new(), unread: Mutex::new(Some(Unread { covered, read, after: Vec::new() })) }
+        Self {
+            whole: OnceLock::new(),
+            unread: Mutex::new(Some(Unread { covered, read, after: Vec::new() })),
+            read: AtomicBool::new(false),
+        }
     }
 
     pub(super) fn all(&self) -> &[Delta] {
+        self.read.store(true, Ordering::Relaxed);
         self.whole.get_or_init(|| {
             let Unread { covered, read, after } =
                 self.unread.lock().unwrap_or_else(PoisonError::into_inner).take().expect("unread until the log is known");
@@ -68,9 +76,29 @@ impl Log {
     }
 }
 
+impl Log {
+    pub(super) fn is_read(&self) -> bool {
+        self.whole.get().is_some()
+    }
+
+    /// Whether the log is read whole and nothing read it since the last
+    /// time this asked.
+    pub(super) fn idle(&mut self) -> bool {
+        let read = std::mem::replace(self.read.get_mut(), false);
+        self.whole.get().is_some() && !read
+    }
+
+    /// Lets go of the log, to read with `read` when next read. `read` must
+    /// give back every delta the log holds now, in order.
+    pub(super) fn release(&mut self, read: ReadCovered) {
+        *self = Self::unread(self.len(), read);
+    }
+}
+
 impl From<Vec<Delta>> for Log {
     fn from(deltas: Vec<Delta>) -> Self {
-        Self { whole: OnceLock::from(deltas), unread: Mutex::new(None) }
+        // Just made, as good as just read.
+        Self { whole: OnceLock::from(deltas), unread: Mutex::new(None), read: AtomicBool::new(true) }
     }
 }
 
@@ -124,5 +152,22 @@ mod tests {
         log.push(after.clone());
         assert_eq!(log.all(), [covered, after.clone(), after]);
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_log_unread_since_last_asked_is_let_go_of_and_read_back() {
+        let family = Family::new();
+        let deltas = vec![titled(&family, "one"), titled(&family, "two")];
+        let mut log = Log::from(deltas.clone());
+        assert!(!log.idle(), "just made");
+        assert!(log.idle());
+        log.all();
+        assert!(!log.idle(), "read since");
+        assert!(log.idle());
+        let read_back = deltas.clone();
+        log.release(Box::new(move || read_back));
+        assert!(!log.idle(), "let go of, so not read whole");
+        assert_eq!(log.len(), 2);
+        assert_eq!(log.all(), deltas);
     }
 }

@@ -285,7 +285,7 @@ test('the command palette', async ({ page }) => {
     await shown.keyboard.press('Escape')
     const drawer = shown.getByRole('button', { name: 'show projects' })
     if ((shown.viewportSize()?.width ?? 0) < 768 && (await drawer.count()) > 0) await drawer.click()
-    await shown.getByRole('button', { name: 'command palette' }).click()
+    await shown.getByRole('navigation', { name: 'projects' }).getByRole('button', { name: 'Search' }).click()
     await shown.getByLabel('command', { exact: true }).fill('farewell')
     await expect(shown.getByText('In history, including before compaction')).toBeVisible()
     // The group shows at once, with Search everything; its hits come once the search answers.

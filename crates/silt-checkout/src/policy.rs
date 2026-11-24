@@ -4,6 +4,12 @@
 
 use silt_crdt::is_git_dir_name;
 
+/// Files larger than this are kept whole, as blobs, rather than as text
+/// merged character by character: a long file's text history was most of
+/// a family's memory (ADR 0116). Whoever writes a delta applies it, never
+/// whoever applies one, so every replica projects the same.
+pub const TEXT_LIMIT: usize = 5 * 1024 * 1024;
+
 /// Whether `path`, relative to the checkout, may be written or removed. On
 /// Windows it must also be a path Windows can hold as named (ADR 0045).
 pub fn is_writable(path: &str) -> bool {

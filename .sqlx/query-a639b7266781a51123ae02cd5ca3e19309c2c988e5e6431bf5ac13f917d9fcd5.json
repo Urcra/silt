@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT (SELECT COALESCE(SUM(LENGTH(data)), 0) FROM deltas WHERE family_id = ?1)\n                    + (SELECT COALESCE(SUM(LENGTH(data)), 0) FROM delta_chunks WHERE family_id = ?1)\n                    + (SELECT COALESCE(SUM(LENGTH(data)), 0) FROM family_snapshots WHERE family_id = ?1) AS \"size!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "size!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a639b7266781a51123ae02cd5ca3e19309c2c988e5e6431bf5ac13f917d9fcd5"
+}

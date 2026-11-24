@@ -1053,7 +1053,7 @@ test("the agent's own modes are in the permissions menu, and the Plan preset pla
   // Wide enough for the agent's chips to stand in the row beside the right panel, rather than fold into one.
   await page.setViewportSize({ width: 1600, height: 900 })
   await startInNewThread(page, 'Fake agent')
-  // Its default, Code, and its plan mode, which the Plan preset is, have no chip of their own (ADR 0115).
+  // Its default, Code, and its plan mode, which the Plan preset is, have no chip of their own (ADR 0118).
   await expect(page.getByLabel('mode', { exact: true })).toHaveCount(0)
   await pickModel(page, 'Smart')
   await expect(page.getByRole('button', { name: /^model and effort: Smart/ })).toBeVisible()

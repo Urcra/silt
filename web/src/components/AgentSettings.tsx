@@ -10,7 +10,7 @@ import { ComposerFolded } from './composerFolded'
 /**
  * An agent's settings as both composers show them, in one row (ADR 0114): its model and how hard it thinks in one
  * chip, everything else behind one menu. On a phone, or where the row has no room for them, that menu, named by the
- * model, holds them all. Its modes don't show: the permissions menu moves the agent between them (ADR 0115).
+ * model, holds them all. Its modes don't show: the permissions menu moves the agent between them (ADR 0118).
  */
 export function AgentSettings({
   modal = false,

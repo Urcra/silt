@@ -289,8 +289,7 @@ impl Core {
 
     /// Each family's log here.
     fn every_log(&self) -> impl Iterator<Item = &[silt_log::Delta]> {
-        let families: HashSet<FamilyId> = self.families.keys().chain(self.raw.keys()).copied().collect();
-        families.into_iter().map(|family| self.local_log(family)).collect::<Vec<_>>().into_iter()
+        self.families.ids().into_iter().map(|family| self.local_log(family)).collect::<Vec<_>>().into_iter()
     }
 }
 

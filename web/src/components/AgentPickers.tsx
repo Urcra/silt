@@ -10,7 +10,7 @@ const MODE = 'mode:'
 
 /**
  * The thread's permissions, the same five for every agent (ADR 0114), then the agent's own modes, such as Copilot's
- * Autopilot, under its name (ADR 0115). The chip shows the label alone, after the agent's mark in the row.
+ * Autopilot, under its name (ADR 0118). The chip shows the label alone, after the agent's mark in the row.
  */
 export function PermissionChip({
   value,

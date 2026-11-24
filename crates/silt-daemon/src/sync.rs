@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use silt_crdt::InodeId;
-use silt_log::{Applied, ConvOp, Delta, Family, LogError, Op};
+use silt_log::{Applied, ConvOp, Delta, LogError, Op};
 use silt_proto::{Listing, ThreadInfo};
 use silt_store::{CheckoutId, SearchRow, Store, SyncState, ThreadRecord};
 use silt_sync::{ClientSync, Effect, Outcome};
@@ -11,6 +11,7 @@ use silt_types::{BlobHash, DeltaId, FamilyId, ThreadId};
 use tracing::warn;
 
 use crate::core::{Core, CoreError, Event, RepoBases, touched_inode};
+use crate::families::Families;
 use crate::homes::Home;
 use crate::remote::{Remote, RemoteError};
 
@@ -23,32 +24,35 @@ const PULL_WAIT: Duration = Duration::from_secs(20);
 const PULL_RETRY: Duration = Duration::from_secs(1);
 const PULL_RETRY_MAX: Duration = Duration::from_secs(30);
 
-fn log_of<'a>(families: &'a HashMap<FamilyId, Family>, raw: &'a HashMap<FamilyId, Vec<Delta>>, family: FamilyId) -> &'a [Delta] {
+fn log_of(families: &Families, family: FamilyId) -> &[Delta] {
     match families.get(&family) {
         Some(family) => family.log(),
-        None => raw.get(&family).map_or(&[], Vec::as_slice),
+        None => families.raw(&family).map_or(&[], Vec::as_slice),
     }
 }
 
 impl Core {
     /// Every delta of the family in local order, projected or not.
     pub(crate) fn local_log(&self, family: FamilyId) -> &[Delta] {
-        log_of(&self.families, &self.raw, family)
+        log_of(&self.families, family)
     }
 
     /// How long [`Self::local_log`] is, without reading what a snapshot covers.
     pub(crate) fn local_log_len(&self, family: FamilyId) -> usize {
+        if let Some(held) = self.families.loaded(&family) {
+            return held.log_len();
+        }
+        if let Some(digest) = self.digested(family) {
+            return digest.log_len;
+        }
         match self.families.get(&family) {
             Some(family) => family.log_len(),
-            None => self.raw.get(&family).map_or(0, Vec::len),
+            None => self.families.raw(&family).map_or(0, Vec::len),
         }
     }
 
     pub(crate) fn family_ids(&self) -> Vec<FamilyId> {
-        let mut ids: Vec<FamilyId> = self.families.keys().chain(self.raw.keys()).copied().collect();
-        ids.sort();
-        ids.dedup();
-        ids
+        self.families.ids()
     }
 
     /// Starts any push, pull or listing that is due.
@@ -109,7 +113,13 @@ impl Core {
     /// The family's next deltas to push, redacted, unless a push is in
     /// flight or there is nothing to push.
     pub(crate) fn next_push(&mut self, family: FamilyId) -> Option<PushBatch> {
-        let log = log_of(&self.families, &self.raw, family);
+        // Read without loading a family not held, which has nothing to push
+        // unless it was let go of before a server was set up for it.
+        let len = self.local_log_len(family) as u64;
+        if self.syncs.get(&family).is_some_and(|sync| sync.pushed() >= len) {
+            return None;
+        }
+        let log = log_of(&self.families, family);
         let push =
             self.syncs.entry(family).or_default().next_push(log.len() as u64, |at| silt_log::stored_len(&log[at as usize]))?;
         let mut found = Vec::new();
@@ -231,7 +241,7 @@ impl Core {
         };
         // A family listed before any of it is stored here has nowhere to keep
         // its progress yet; it is saved with the first deltas pulled.
-        if !self.families.contains_key(&family) && !self.raw.contains_key(&family) {
+        if !self.families.knows(&family) {
             return;
         }
         let state = SyncState {
@@ -306,7 +316,7 @@ impl Core {
                 }
             }
         } else {
-            let raw = self.raw.entry(family_id).or_default();
+            let raw = self.families.raw_entry(family_id);
             let known: HashSet<DeltaId> = raw.iter().map(|delta| delta.span.first()).collect();
             for delta in deltas {
                 if let Err(error) = delta.check_shape() {
@@ -469,6 +479,7 @@ impl Core {
             self.announce(crate::protocol::BusEvent::Threads);
         }
         self.take_running_elsewhere(server, listing.running);
+        self.take_machines(listing.devices, listing.made_on);
         for info in listing.threads {
             self.collaborators.insert(info.id, info.collaborators.clone());
             if let Some(known) = self.threads.get(&info.id) {
@@ -505,8 +516,8 @@ impl Core {
                 warn!(%error, "could not record a thread from the server");
                 continue;
             }
-            if !self.families.contains_key(&info.family) {
-                self.raw.entry(info.family).or_default();
+            if !self.families.knows(&info.family) {
+                self.families.raw_entry(info.family);
             }
             self.threads.insert(info.id, record);
         }

@@ -5,6 +5,7 @@ use silt_log::{Author, BaseText, Content, Delta, Family, FileView, LogError, Op}
 use silt_types::{ActorId, BlobHash, Frontier, GitOid, ThreadId};
 
 use crate::diff::text_edits;
+use crate::policy::TEXT_LIMIT;
 
 /// What the checkout last read from or wrote to disk for one path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -405,9 +406,9 @@ impl Writer<'_> {
     fn update(&mut self, actor: ActorId, inode: InodeId, disk: &DiskFile, version: Frontier) -> Result<(), BridgeError> {
         let editable = match self.family.file(inode) {
             Some(FileView::Text(_)) => true,
-            // A git blob that isn't text (it was binary until now) can't be
-            // edited as text; the new text replaces it.
-            Some(FileView::GitText(oid)) => self.bases.text(oid).is_some(),
+            // A git blob that isn't text (it was binary until now), or is
+            // too long to hold as text, isn't edited; the new text replaces it.
+            Some(FileView::GitText(oid)) => self.bases.text(oid).is_some_and(|base| base.len() <= TEXT_LIMIT),
             _ => false,
         };
         match &disk.content {

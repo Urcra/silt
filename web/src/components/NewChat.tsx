@@ -34,7 +34,7 @@ export function NewChat() {
   const [chosenAgent, setAgent] = useState<string>()
   const [chosenSettings, setChosenSettings] = useState<Record<string, string>>({})
   const [chosenPreset, setChosenPreset] = useState<Preset>()
-  // One of the agent's own modes to start it in, such as Copilot's Autopilot, from the permissions menu (ADR 0115).
+  // One of the agent's own modes to start it in, such as Copilot's Autopilot, from the permissions menu (ADR 0118).
   const [chosenMode, setChosenMode] = useState<string>()
   const setPreset = (preset: Preset) => {
     setChosenPreset(preset)

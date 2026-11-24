@@ -50,8 +50,8 @@ test('lists threads from the daemon', async () => {
     }),
   )
   render(<App />)
-  // The sidebar's wordmark, and the phone header's, which a stylesheet hides on a desktop.
-  expect(await screen.findAllByRole('link', { name: 'silt' })).not.toHaveLength(0)
+  // The sidebar's title is the workspace it shows (ADR 0115).
+  expect(await screen.findByRole('button', { name: /^workspace: / })).toBeInTheDocument()
   // With no clone, `/` is the first open's new thread, and the sidebar lists the thread (ADR 0044).
   expect(await screen.findByText('Pick a folder to start in')).toBeInTheDocument()
   await waitFor(() => expect(screen.getAllByText('Fix the lexer')).toHaveLength(1))
@@ -150,6 +150,7 @@ test('threads are grouped by project, newest first', () => {
     local_only: false,
     workspace: null,
     cloud: null,
+    machine: null,
   })
   const grouped = projects([thread('a', 'github.com/u/b', 1), thread('b', '', 2), thread('c', 'github.com/u/b', 3)])
   expect(grouped.map(([repo, threads]) => [repo, threads.map((each) => each.id)])).toEqual([
@@ -165,4 +166,65 @@ test('old hash links move to paths', () => {
   expect(legacyPath('#/inbox')).toBe('/inbox')
   expect(legacyPath('#/')).toBe('/')
   expect(legacyPath('#token=1')).toBeUndefined()
+})
+
+test('the sidebar names the workspace at its top, and at its bottom the machine, how it stands, and Settings', async () => {
+  const summary = (id: string, title: string, overrides: Partial<ThreadSummary>) => ({
+    id,
+    repo: 'github.com/u/r',
+    title,
+    agent: 'claude',
+    created_ms: 1,
+    messages: 2,
+    edits: 0,
+    shared: false,
+    location: 'here',
+    forked_from: null,
+    owner: '',
+    collaborators: [],
+    last_ms: Date.now(),
+    merged: false,
+    review: false,
+    mine: {
+      pinned: false,
+      snoozed_until: null,
+      snoozed_at: null,
+      wake_on_activity: false,
+      settled: false,
+      seen_ms: null,
+      reviewed_turn: null,
+    },
+    machine: null,
+    ...overrides,
+  })
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) => {
+      const body = path.startsWith('/api/threads')
+        ? [
+            summary('0123456789abcdef0123456789abcdef', 'Fix the lexer', { agent_state: 'working' }),
+            summary('fedcba9876543210fedcba9876543210', 'Tidy the parser', { location: 'remote', machine: 'homelab' }),
+          ]
+        : path.startsWith('/api/status')
+          ? {
+              servers: [{ url: 'https://silt.example.dev', user: 'ada', device: 'd1', name: 'laptop', sync_error: null }],
+              sync_error: null,
+            }
+          : []
+      return new Response(JSON.stringify(body), { status: 200 })
+    }),
+  )
+  render(<App />)
+  const workspace = await screen.findByRole('button', { name: 'workspace: everything' })
+  await waitFor(() => expect(workspace).toHaveTextContent('Everythingevery server and this machine'))
+  const machine = await screen.findByRole('button', { name: 'machine: This computer' })
+  await waitFor(() => expect(machine).toHaveTextContent('This computerSynced · 1 running'))
+  expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings')
+  await waitFor(() => expect(screen.getByText('Tidy the parser').parentElement).toHaveTextContent(/On homelab/))
+
+  fireEvent.click(machine)
+  const menu = screen.getByRole('dialog', { name: 'Switch machine' })
+  expect(within(menu).getByRole('button', { name: /This computer/ })).toHaveTextContent('laptop · 1 running')
+  expect(within(menu).queryByRole('button', { name: 'Add a machine' })).toBeNull()
+  expect(within(menu).getByRole('button', { name: /Devices and sync/ })).toHaveTextContent('silt.example.dev')
 })

@@ -10,7 +10,7 @@ export interface ChipChoice {
   refused?: string
   /** Before the name, such as the agent's mark. */
   lead?: ReactNode
-  /** Over the first choice of a group that follows others, such as the agent's own modes after the presets (ADR 0115). */
+  /** Over the first choice of a group that follows others, such as the agent's own modes after the presets (ADR 0118). */
   group?: { key: string; heading: ReactNode }
 }
 

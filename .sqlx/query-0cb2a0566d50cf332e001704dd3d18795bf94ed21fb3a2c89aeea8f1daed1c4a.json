@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT t.id, t.family_id, t.repo, t.created_ms, t.visibility, u.name AS owner\n             FROM threads t JOIN users u ON u.id = t.owner_id\n             WHERE t.deleted_ms IS NULL ORDER BY t.created_ms",
+  "query": "SELECT t.id, t.family_id, t.repo, t.created_ms, l.device_id AS \"device_id?\", l.epoch AS \"epoch?\", u.name AS owner,\n             t.visibility, t.made_on\n         FROM threads t\n         JOIN users u ON u.id = t.owner_id\n         LEFT JOIN leases l ON l.thread_id = t.id\n         ORDER BY t.created_ms",
   "describe": {
     "columns": [
       {
@@ -48,8 +48,41 @@
         }
       },
       {
-        "name": "visibility",
+        "name": "device_id?",
         "ordinal": 4,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "leases",
+            "name": "device_id"
+          }
+        }
+      },
+      {
+        "name": "epoch?",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "leases",
+            "name": "epoch"
+          }
+        }
+      },
+      {
+        "name": "owner",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "visibility",
+        "ordinal": 7,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -59,13 +92,13 @@
         }
       },
       {
-        "name": "owner",
-        "ordinal": 5,
-        "type_info": "Text",
+        "name": "made_on",
+        "ordinal": 8,
+        "type_info": "Blob",
         "origin": {
           "Table": {
-            "table": "users",
-            "name": "name"
+            "table": "threads",
+            "name": "made_on"
           }
         }
       }
@@ -79,8 +112,11 @@
       false,
       false,
       true,
-      false
+      true,
+      false,
+      true,
+      true
     ]
   },
-  "hash": "f3da60642adcca507bdab49450928bd6150c7915814ea348d945f46760f705f5"
+  "hash": "0cb2a0566d50cf332e001704dd3d18795bf94ed21fb3a2c89aeea8f1daed1c4a"
 }

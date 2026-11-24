@@ -219,21 +219,40 @@ impl Core {
     /// Merge requests involving `selector`'s thread, or all of them.
     pub(crate) fn mr_list(&self, selector: Option<&str>) -> Result<Vec<MrSummary>, CoreError> {
         let thread = selector.map(|selector| self.find_thread(selector)).transpose()?;
-        let mut requests: Vec<(&Family, MergeRequest)> = self
-            .families
-            .values()
-            .flat_map(|family| family.merge_requests().into_iter().map(move |request| (family, request)))
-            .filter(|(_, request)| thread.is_none_or(|thread| request.fork == thread || request.target == thread))
+        let families: Vec<FamilyId> = self.families.keys().copied().collect();
+        let mut requests: Vec<(MergeRequest, MrSummary)> = families
+            .into_iter()
+            .flat_map(|family| self.requests_in(family))
+            .filter(|(request, _)| thread.is_none_or(|thread| request.fork == thread || request.target == thread))
             .collect();
-        requests.sort_by_key(|(_, request)| request.opened_ms);
-        Ok(requests.iter().map(|(family, request)| mr_summary(family, request)).collect())
+        requests.sort_by_key(|(request, _)| request.opened_ms);
+        Ok(requests.into_iter().map(|(_, summary)| summary).collect())
+    }
+
+    /// The family's merge requests with their summaries: from the family if
+    /// held, else from its digest.
+    pub(crate) fn requests_in(&self, family_id: FamilyId) -> Vec<(MergeRequest, MrSummary)> {
+        if let Some(digest) = self.digested(family_id) {
+            return digest.requests.clone();
+        }
+        let Some(family) = self.viewed(family_id) else {
+            return Vec::new();
+        };
+        family
+            .merge_requests()
+            .into_iter()
+            .map(|request| {
+                let summary = mr_summary(family, &request);
+                (request, summary)
+            })
+            .collect()
     }
 
     pub(crate) fn find_mr(&self, selector: &str) -> Result<(FamilyId, MergeRequest), CoreError> {
-        let matches: Vec<(FamilyId, MergeRequest)> = self
-            .families
-            .iter()
-            .flat_map(|(id, family)| family.merge_requests().into_iter().map(|request| (*id, request)))
+        let families: Vec<FamilyId> = self.families.keys().copied().collect();
+        let matches: Vec<(FamilyId, MergeRequest)> = families
+            .into_iter()
+            .flat_map(|family| self.requests_in(family).into_iter().map(move |(request, _)| (family, request)))
             .filter(|(_, request)| short_mr(request.id) == selector || request.id.to_string() == selector)
             .collect();
         match <[_; 1]>::try_from(matches) {

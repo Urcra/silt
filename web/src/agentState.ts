@@ -80,7 +80,7 @@ function isPlanMode(mode: AgentChoiceItem, modes: AgentModes): boolean {
 
 /**
  * The agent's own modes, which say how it works rather than what it may do, such as Copilot's Autopilot: the
- * permissions menu lists them under its name (ADR 0115). Not those a preset moves it into, not its plan mode, which
+ * permissions menu lists them under its name (ADR 0118). Not those a preset moves it into, not its plan mode, which
  * the Plan preset is, and not its default: the mode Ask before commands moves it to, else the first it lists.
  */
 export function ownModes(modes: AgentModes | null | undefined): AgentChoiceItem[] {
@@ -92,7 +92,7 @@ export function ownModes(modes: AgentModes | null | undefined): AgentChoiceItem[
 }
 
 /** The preset the daemon answers with in one of the agent's own modes: Autopilot asks nothing; in a mode Silt can't
- * read, everything the agent asks goes to the person (ADR 0115). */
+ * read, everything the agent asks goes to the person (ADR 0118). */
 export function presetForOwnMode(mode: string): Preset {
   return modeKey(mode) === 'autopilot' ? 'full_access' : 'ask_for_everything'
 }
@@ -107,7 +107,7 @@ export function ownModeSays(mode: AgentChoiceItem): string {
 /** One step of the permissions menu: a preset, or one of the agent's own modes. */
 export type Permission = { preset: Preset; mode?: undefined } | { mode: string; preset?: undefined }
 
-/** The step after the one chosen that may be picked, for Shift+Tab: the presets, then the agent's own modes (ADR 0115). */
+/** The step after the one chosen that may be picked, for Shift+Tab: the presets, then the agent's own modes (ADR 0118). */
 export function nextPermission(
   preset: Preset,
   mode: string | undefined,

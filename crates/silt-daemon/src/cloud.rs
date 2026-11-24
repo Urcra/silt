@@ -60,14 +60,8 @@ impl Core {
 
     /// The launches, each with the thread recording it once one does.
     pub(crate) fn cloud_launches(&self) -> Vec<CloudLaunch> {
-        let recorded: Vec<(CloudSessionId, String)> = self
-            .threads
-            .values()
-            .filter_map(|record| {
-                let state = self.families.get(&record.family)?.thread(record.id)?;
-                Some((state.cloud_session()?.clone(), record.id.to_string()))
-            })
-            .collect();
+        let recorded: Vec<(CloudSessionId, String)> =
+            self.threads.values().filter_map(|record| Some((self.cloud_session_of(record)?, record.id.to_string()))).collect();
         self.cloud_launches
             .iter()
             .map(|launch| {

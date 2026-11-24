@@ -5,7 +5,7 @@
 //! per conversation, which Silt can't write; it reads agy's index of
 //! conversations for where each ran (docs/research/agents.md, ADR 0063).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -200,6 +200,8 @@ pub fn resumable_in(app: &Path, id: &str) -> bool {
 struct Pending {
     id: String,
     name: String,
+    /// Whom a `send_message` call writes to.
+    recipient: Option<String>,
 }
 
 /// Reads a transcript, pairing each tool call with the step that answers
@@ -208,8 +210,11 @@ struct Pending {
 #[derive(Default)]
 pub struct AntigravityReader {
     pending: VecDeque<Pending>,
-    /// Subagents by conversation id, with the call that started each.
+    /// Subagents by conversation id, with the call that started each, or
+    /// the `send_message` that woke it last.
     subagents: HashMap<String, String>,
+    /// Subagents that went idle, which a message wakes.
+    idle: HashSet<String>,
     /// Commands left running in the background, by task id: the call that
     /// started each and its command line.
     commands: HashMap<String, (String, String)>,
@@ -268,7 +273,8 @@ impl Reader for AntigravityReader {
                         input: call.get("args").cloned().unwrap_or(Value::Null),
                         kind: None,
                     });
-                    self.pending.push_back(Pending { id, name });
+                    let recipient = call.pointer("/args/Recipient").and_then(Value::as_str).map(str::to_owned);
+                    self.pending.push_back(Pending { id, name, recipient });
                 }
                 // A reply that calls no tool ends the turn.
                 if calls.is_empty() {
@@ -294,6 +300,14 @@ impl Reader for AntigravityReader {
                         self.subagents.insert(subagent.clone(), call.id.clone());
                         read.entries.push(Entry::Task(task(&subagent, &call.id, TaskStatus::Running, None)));
                     }
+                    if call.name == "send_message"
+                        && done
+                        && let Some(subagent) = call.recipient.filter(|recipient| self.idle.remove(recipient))
+                        && let Some(started) = self.subagents.get_mut(&subagent)
+                    {
+                        started.clone_from(&call.id);
+                        read.entries.push(Entry::Task(task(&subagent, &call.id, TaskStatus::Running, None)));
+                    }
                     if let Some((id, line)) = command {
                         read.entries.push(Entry::Task(background(&id, &call.id, TaskStatus::Running, None)));
                         self.commands.insert(id, (call.id.clone(), line));
@@ -311,6 +325,7 @@ impl Reader for AntigravityReader {
                 let idle =
                     self.subagents.iter().find(|(subagent, _)| content.contains(&format!("Subagent {subagent} has gone idle")));
                 if let Some((subagent, call)) = idle {
+                    self.idle.insert(subagent.clone());
                     let said = content
                         .split_once("most recent response: ")
                         .map(|(_, said)| said.split("</SYSTEM_MESSAGE>").next().unwrap_or(said).trim().to_owned());
@@ -630,6 +645,42 @@ mod tests {
                 Mark::ToolFinished { tool_use_id: "step-1-1".into() },
                 Mark::Stopped,
             ]
+        );
+    }
+
+    #[test]
+    fn a_message_to_an_idle_subagent_runs_it_again_under_the_message() {
+        let sub = "39497b42-d96f-4954-855d-69dd29a7d6f3";
+        let idle = |index: u64, said: &str| {
+            json!({"step_index": index, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
+                "content": format!("<SYSTEM_MESSAGE>\n[Message] content=Subagent {sub} has gone idle. This was the subagent's most recent response: {said}\n</SYSTEM_MESSAGE>")})
+        };
+        let message = |index: u64| {
+            json!({"step_index": index, "type": "PLANNER_RESPONSE", "status": "DONE",
+                "tool_calls": [{"name": "send_message", "args": {"Recipient": sub, "Message": "count the tests too"}}]})
+        };
+        let (entries, _) = read_all(&[
+            json!({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE",
+                "tool_calls": [{"name": "invoke_subagent", "args": {"Prompt": "count files", "TypeName": "self"}}]}),
+            generic(2, "DONE", &format!("Created the following subagent:\n{{\n  \"conversationId\": \"{sub}\"\n}}")),
+            message(3),
+            generic(4, "DONE", "Message sent."),
+            idle(5, "12 files"),
+            message(6),
+            generic(7, "DONE", "Message sent."),
+            idle(8, "3 tests"),
+        ]);
+        let tasks: Vec<&Task> =
+            entries.iter().filter_map(|entry| if let Entry::Task(task) = entry { Some(task) } else { None }).collect();
+        assert_eq!(
+            tasks,
+            [
+                &task(sub, "step-1-0", TaskStatus::Running, None),
+                &task(sub, "step-1-0", TaskStatus::Completed, Some("12 files".into())),
+                &task(sub, "step-6-0", TaskStatus::Running, None),
+                &task(sub, "step-6-0", TaskStatus::Completed, Some("3 tests".into())),
+            ],
+            "the message to it at work woke nothing"
         );
     }
 
