@@ -235,6 +235,13 @@ impl Core {
         history
     }
 
+    /// Whether the thread's history is kept as its family's log is now.
+    pub(crate) fn history_kept_now(&self, thread: ThreadId) -> bool {
+        let length = self.local_log_len(self.threads[&thread].family);
+        let cache = self.history_cache.lock().unwrap_or_else(PoisonError::into_inner);
+        cache.get(&thread).is_some_and(|kept| kept.history.version == length)
+    }
+
     /// The thread's turns, read with its history.
     pub(crate) fn kept_turns(&self, thread: ThreadId) -> Arc<Vec<TurnInfo>> {
         Arc::clone(&self.kept_history(thread).turns)
