@@ -122,18 +122,42 @@ fn transcript_in(config: &Path, cwd: &Path, session: &str) -> Option<PathBuf> {
         .find(|path| path.exists())
 }
 
-/// The background tasks that `lines` of a Claude Code transcript report
-/// ended, by Claude's id for each, with how they ended.
-pub fn tasks_ended(lines: &str) -> Vec<(String, TaskStatus)> {
-    lines
-        .lines()
-        .filter(|line| line.contains("<task-notification>"))
-        .flat_map(normalize)
-        .filter_map(|entry| match entry {
-            Entry::Task(task) if task.status != TaskStatus::Running => Some((task.id, task.status)),
-            _ => None,
-        })
-        .collect()
+/// The background tasks and subagents that `lines` of a Claude Code
+/// transcript report ended, each once, with how they ended and the call
+/// that started it.
+pub fn tasks_ended(lines: &str) -> Vec<Task> {
+    let mut ended: Vec<Task> = Vec::new();
+    let reported = lines.lines().filter(|line| line.contains("<task-notification>")).flat_map(|line| {
+        queued_notification(line).map_or_else(
+            || {
+                normalize(line)
+                    .into_iter()
+                    .filter_map(|entry| match entry {
+                        Entry::Task(task) => Some(task),
+                        _ => None,
+                    })
+                    .collect()
+            },
+            |task| vec![task],
+        )
+    });
+    for task in reported {
+        if task.status != TaskStatus::Running && !ended.iter().any(|seen| seen.id == task.id) {
+            ended.push(task);
+        }
+    }
+    ended
+}
+
+/// The task notification a transcript line queues for the agent. The end of
+/// a subagent's own task is queued in the main transcript, but told in the
+/// subagent's.
+fn queued_notification(line: &str) -> Option<Task> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value["type"] != "queue-operation" || value["operation"] != "enqueue" {
+        return None;
+    }
+    task_notification(value["content"].as_str()?)
 }
 
 /// Writes a session's files so `claude --resume <id>` run in `cwd` continues
@@ -913,9 +937,43 @@ mod tests {
         let started = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t1","type":"tool_result","content":"Command running in background with ID: b3r"}]},"toolUseResult":{"backgroundTaskId":"b3r"}}"#;
         let lines =
             [started.to_owned(), report("b3r", "completed"), reminded.to_string(), report("k1", "killed"), report("r1", "")];
+        let ended: Vec<_> = tasks_ended(&lines.join("\n")).into_iter().map(|task| (task.id, task.status)).collect();
+        assert_eq!(ended, [("b3r".to_owned(), TaskStatus::Completed), ("k1".to_owned(), TaskStatus::Stopped)]);
+    }
+
+    /// As Claude Code 2.1 wrote them on Windows: the end of a command a
+    /// subagent left running is queued in the main transcript, and only the
+    /// subagent's tells it.
+    #[test]
+    fn a_task_ended_in_a_subagent_is_read_from_the_queue_of_the_main_transcript() {
+        let notification = |id: &str, call: &str, status: &str| {
+            format!(
+                "<task-notification>\n<task-id>{id}</task-id>\n<tool-use-id>{call}</tool-use-id>\n<status>{status}</status>\n</task-notification>"
+            )
+        };
+        let queued = |operation: &str, content: &str| {
+            json!({"type": "queue-operation", "operation": operation, "sessionId": "s", "content": content}).to_string()
+        };
+        let told = json!({"type": "user", "message": {"role": "user", "content": notification("b1", "toolu_B", "completed")}});
+        let lines = [
+            queued("enqueue", &notification("bzi0", "toolu_P", "completed")),
+            queued("remove", &notification("bzi0", "toolu_P", "completed")),
+            queued("enqueue", &notification("b244", "toolu_G", "killed")),
+            queued("enqueue", &notification("b1", "toolu_B", "completed")),
+            told.to_string(),
+            queued("enqueue", "Keep going"),
+        ];
+        let ended: Vec<_> = tasks_ended(&lines.join("\n"))
+            .into_iter()
+            .map(|task| (task.id, task.call.unwrap_or_default(), task.status))
+            .collect();
         assert_eq!(
-            tasks_ended(&lines.join("\n")),
-            [("b3r".to_owned(), TaskStatus::Completed), ("k1".to_owned(), TaskStatus::Stopped)]
+            ended,
+            [
+                ("bzi0".to_owned(), "toolu_P".to_owned(), TaskStatus::Completed),
+                ("b244".to_owned(), "toolu_G".to_owned(), TaskStatus::Stopped),
+                ("b1".to_owned(), "toolu_B".to_owned(), TaskStatus::Completed),
+            ]
         );
     }
 

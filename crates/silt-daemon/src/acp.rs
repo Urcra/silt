@@ -130,8 +130,8 @@ pub(crate) struct AcpRun {
     /// Commands left running in the background, by the agent's id for each.
     background: HashMap<String, Background>,
     /// Subagents running, by the call that started each, which may go on
-    /// after the turn.
-    subagents: HashSet<String>,
+    /// after the turn, with the agent's id for each where it gave one.
+    subagents: HashMap<String, Option<String>>,
     /// How many commands and subagents the thread list was last told of.
     background_listed: usize,
     /// When its background commands were last looked for among its
@@ -166,6 +166,8 @@ pub(crate) struct AcpRun {
 struct Background {
     /// The call that started it.
     call: String,
+    /// The call that started the subagent it runs for, if one does.
+    parent: Option<String>,
     started: Instant,
     /// What it runs, as the agent gave it.
     command: String,
@@ -784,7 +786,7 @@ impl Core {
                 labels: HashMap::new(),
                 woke_by: Vec::new(),
                 background: HashMap::new(),
-                subagents: HashSet::new(),
+                subagents: HashMap::new(),
                 background_listed: 0,
                 background_checked: Instant::now(),
                 stopped_tasks: HashSet::new(),
@@ -1428,7 +1430,7 @@ impl Core {
         let run = self.running(thread)?;
         let not_running = || CoreError::Invalid("that command isn't running in the background".into());
         let (task, kept) = run.background.iter().find(|(_, kept)| kept.call == call).ok_or_else(not_running)?;
-        let (task, command) = (task.clone(), kept.command.clone());
+        let (task, command, parent) = (task.clone(), kept.command.clone(), kept.parent.clone());
         if command.trim().is_empty() {
             return Err(CoreError::Invalid("the agent didn't say what the command runs, so Silt can't find it".into()));
         }
@@ -1443,7 +1445,8 @@ impl Core {
         run.background.remove(&task);
         run.stopped_tasks.insert(call.to_owned());
         self.flush_acp(thread).await?;
-        self.record_acp(thread, &acp::task(call, Some(&task), Some("background"), "stopped")).await?;
+        let record = acp::task(call, Some(&task), Some("background"), "stopped");
+        self.record_acp(thread, &placed(record, parent.as_deref())).await?;
         self.agent_changed(thread).await;
         Ok("stopped")
     }
@@ -1849,25 +1852,10 @@ impl Core {
                     if news.status != "running" && run.read_ended.contains(&id) {
                         return Ok(());
                     }
-                    if let (Some("background"), Some(task)) = (news.kind.as_deref(), &news.id) {
-                        if news.status == "running" {
-                            let command = run
-                                .tool_said
-                                .get(&id)
-                                .and_then(|(_, input)| input.as_ref()?.get("command")?.as_str().map(str::to_owned))
-                                .unwrap_or_default();
-                            run.background.entry(task.clone()).or_insert_with(|| Background {
-                                call: id.clone(),
-                                started: Instant::now(),
-                                command,
-                            });
-                        } else {
-                            run.background.remove(task);
-                        }
-                    }
+                    track_background(run, &id, &news, None);
                     if news.kind.as_deref() == Some("subagent") {
                         if news.status == "running" {
-                            run.subagents.insert(id.clone());
+                            run.subagents.insert(id.clone(), news.id.clone());
                         } else {
                             run.subagents.remove(&id);
                         }
@@ -2017,7 +2005,7 @@ impl Core {
         let mut due = Vec::new();
         for (thread, run) in &mut self.acp {
             let Some(transcript) = run.transcript.clone() else { continue };
-            if run.background.is_empty() || run.background_checked.elapsed() < BACKGROUND_CHECK {
+            if run.in_background() == 0 || run.background_checked.elapsed() < BACKGROUND_CHECK {
                 continue;
             }
             run.background_checked = Instant::now();
@@ -2038,20 +2026,26 @@ impl Core {
             };
             let Some(run) = self.acp.get_mut(&thread) else { continue };
             run.transcript = Some(transcript);
-            let ended: Vec<_> = ended
-                .into_iter()
-                .filter_map(|(task, status)| Some((run.background.get(&task)?.call.clone(), task, status)))
-                .collect();
-            if ended.is_empty() {
-                continue;
-            }
-            run.read_ended.extend(ended.iter().map(|(call, _, _)| call.clone()));
-            for (_, task, status) in ended {
-                if let Err(error) = self.background_ended(thread, &task, Some(status)).await {
-                    warn!(%error, %thread, "could not record that a background command ended");
+            let mut changed = false;
+            for ended in ended {
+                let run = self.acp.get_mut(&thread).expect("looked up above");
+                let recorded = if let Some(kept) = run.background.get(&ended.id) {
+                    run.read_ended.insert(kept.call.clone());
+                    self.background_ended(thread, &ended.id, Some(ended.status)).await
+                } else if let Some(call) = subagent_of(&run.subagents, &ended) {
+                    run.read_ended.insert(call.clone());
+                    self.subagent_ended(thread, &call, &ended).await
+                } else {
+                    continue;
+                };
+                changed = true;
+                if let Err(error) = recorded {
+                    warn!(%error, %thread, "could not record that work left running ended");
                 }
             }
-            self.agent_changed(thread).await;
+            if changed {
+                self.agent_changed(thread).await;
+            }
         }
     }
 
@@ -2061,14 +2055,31 @@ impl Core {
     async fn background_ended(&mut self, thread: ThreadId, task: &str, status: Option<TaskStatus>) -> Result<(), CoreError> {
         let Some(run) = self.acp.get_mut(&thread) else { return Ok(()) };
         let Some(kept) = run.background.remove(task) else { return Ok(()) };
-        if run.state == AgentState::Idle {
+        // A subagent's command sets off the subagent, not the agent.
+        if run.state == AgentState::Idle && kept.parent.is_none() {
             let label = run.labels.get(&kept.call).cloned();
             let how = status.map_or("ended", TaskStatus::as_str);
             run.woke_by.push(ended(Some("background"), label.as_deref(), how));
         }
         let status = status.unwrap_or(TaskStatus::Completed).as_str();
         self.flush_acp(thread).await?;
-        self.record_acp(thread, &acp::task(&kept.call, Some(task), Some("background"), status)).await
+        let record = acp::task(&kept.call, Some(task), Some("background"), status);
+        self.record_acp(thread, &placed(record, kept.parent.as_deref())).await
+    }
+
+    /// Records that the subagent started by `call` ended, as the transcript
+    /// told: Claude's adapter may never say so.
+    async fn subagent_ended(&mut self, thread: ThreadId, call: &str, ended: &silt_agents::Task) -> Result<(), CoreError> {
+        let Some(run) = self.acp.get_mut(&thread) else { return Ok(()) };
+        let Some(agent) = run.subagents.remove(call) else { return Ok(()) };
+        let status = ended.status.as_str();
+        if run.state == AgentState::Idle {
+            let label = run.labels.get(call).cloned();
+            run.woke_by.push(self::ended(Some("subagent"), label.as_deref(), status));
+        }
+        self.flush_acp(thread).await?;
+        let id = agent.unwrap_or_else(|| ended.id.clone());
+        self.record_acp(thread, &acp::task(call, Some(&id), Some("subagent"), status)).await
     }
 
     /// Records what a subagent did, inside the call `parent` that started
@@ -2090,6 +2101,8 @@ impl Core {
             Update::ToolCall { id, title, kind, input } => {
                 let run = self.acp.get_mut(&thread).expect("caller checked");
                 run.tool_kinds.insert(id.clone(), kind.clone());
+                run.labels.insert(id.clone(), label_of(&title, &kind, input.as_ref()));
+                run.tool_said.insert(id.clone(), (title.clone(), input.clone()));
                 self.flush_within(thread).await?;
                 self.record_acp(thread, &acp::within(&acp::tool_call(&id, &title, &kind, input.as_ref()), &parent)).await?;
             }
@@ -2105,6 +2118,12 @@ impl Core {
                     self.record_acp(thread, &acp::within(&record, &parent)).await?;
                 }
                 if let Some(news) = task {
+                    let run = self.acp.get_mut(&thread).expect("caller checked");
+                    let told = run.stopped_tasks.contains(&id) || run.read_ended.contains(&id);
+                    if news.status != "running" && told {
+                        return Ok(());
+                    }
+                    track_background(run, &id, &news, Some(&parent));
                     let record = acp::task(&id, news.id.as_deref(), news.kind.as_deref(), &news.status);
                     self.record_acp(thread, &acp::within(&record, &parent)).await?;
                 }
@@ -2489,6 +2508,45 @@ fn label_of(title: &str, kind: &str, input: Option<&serde_json::Value>) -> Strin
 }
 
 /// What ended, as the notice of the turn it set off says it.
+/// Keeps what the agent, or one of its subagents (`parent`), left running in
+/// the background, by the news of the call `call`.
+fn track_background(run: &mut AcpRun, call: &str, news: &silt_acp::TaskNews, parent: Option<&str>) {
+    let (Some("background"), Some(task)) = (news.kind.as_deref(), &news.id) else { return };
+    if news.status != "running" {
+        run.background.remove(task);
+        return;
+    }
+    let command = run
+        .tool_said
+        .get(call)
+        .and_then(|(_, input)| input.as_ref()?.get("command")?.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    run.background.entry(task.clone()).or_insert_with(|| Background {
+        call: call.to_owned(),
+        parent: parent.map(str::to_owned),
+        started: Instant::now(),
+        command,
+    });
+}
+
+/// The call of the running subagent a task notification names, by its call
+/// or by the agent's id for it: a subagent set running again runs under the
+/// call that woke it.
+fn subagent_of(subagents: &HashMap<String, Option<String>>, ended: &silt_agents::Task) -> Option<String> {
+    if let Some(call) = ended.call.as_ref().filter(|call| subagents.contains_key(*call)) {
+        return Some(call.clone());
+    }
+    subagents.iter().find(|(_, agent)| agent.as_deref() == Some(ended.id.as_str())).map(|(call, _)| call.clone())
+}
+
+/// `record` where it belongs: inside the subagent started by `parent`, if one is.
+fn placed(record: String, parent: Option<&str>) -> String {
+    match parent {
+        Some(parent) => acp::within(&record, parent),
+        None => record,
+    }
+}
+
 fn ended(kind: Option<&str>, label: Option<&str>, status: &str) -> String {
     let how = match status {
         "completed" => "finished",
