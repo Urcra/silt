@@ -9,9 +9,13 @@ use tracing::{debug, warn};
 
 use crate::core::Core;
 
-/// How long a family, or a family's file, may go unused before it's let
-/// go of.
+/// How long a family's file or log may go unused before it's let go of.
 pub(crate) const UNUSED: Duration = Duration::from_secs(5 * 60);
+
+/// How long a family may go unused before it's let go of: once its files
+/// and log are, holding it costs little, and loading it again is what
+/// switching back to its thread would wait for (ADR 0117).
+const FAMILY_UNUSED: Duration = Duration::from_secs(30 * 60);
 
 /// How much the families held may take, as the store holds them, before
 /// the least recently used are let go of sooner (`SILT_FAMILY_BUDGET_MB`).
@@ -145,7 +149,7 @@ impl Core {
         let budget = self.kept.budget;
         let mut going = Vec::new();
         for (family, unused) in free {
-            if unused >= UNUSED || total > budget {
+            if unused >= FAMILY_UNUSED || total > budget {
                 total = total.saturating_sub(size(&family));
                 going.push(family);
             }
@@ -295,6 +299,8 @@ mod tests {
     use silt_types::ActorId;
     use tokio::sync::{mpsc, oneshot};
 
+    use std::collections::HashMap;
+
     use super::*;
     use crate::core::Event;
     use crate::protocol::Request;
@@ -421,6 +427,64 @@ mod tests {
         assert!(!held.log_decoded(), "let go of");
         assert_eq!(held.log(), log);
         assert_eq!(log, store.deltas(FAMILY).await.expect("reads"));
+    }
+
+    #[tokio::test]
+    async fn an_active_familys_views_read_what_it_added_without_reading_its_log_back() {
+        let (data, _repo, store) = store_with_thread().await;
+        let (mut core, _inbox) = loaded_core(store.clone(), data.path()).await;
+        let held = core.families.get_mut(&FAMILY).expect("loads");
+        held.log();
+        core.thread_summaries();
+        core.history_page(
+            THREAD,
+            crate::history::PageAsked { offset: 0, limit: usize::MAX, known: None, cut: true, tail: Some(50), before: None },
+            &HashMap::new(),
+        );
+        core.release_log(FAMILY).await;
+        let held = core.families.get_mut(&FAMILY).expect("held");
+        let renamed = Op::Conv(ConvOp::Title("renamed while held".into()));
+        let delta = held.delta(ActorId(1), THREAD, Author::User, 9, held.thread_head(THREAD), renamed);
+        held.apply(delta, &mut HashMap::new()).expect("applies");
+        let title = core
+            .thread_summaries()
+            .into_iter()
+            .find(|summary| summary.id == THREAD.to_string())
+            .and_then(|summary| summary.title);
+        assert_eq!(title.as_deref(), Some("renamed while held"));
+        core.mr_list(None).expect("lists");
+        core.history_page(
+            THREAD,
+            crate::history::PageAsked { offset: 0, limit: usize::MAX, known: None, cut: true, tail: Some(50), before: None },
+            &HashMap::new(),
+        );
+        assert!(!core.families.loaded(&FAMILY).expect("held").log_decoded(), "what it added was read alone");
+    }
+
+    #[tokio::test]
+    async fn a_page_of_a_history_kept_as_it_is_now_is_answered_without_loading_the_family() {
+        let (data, _repo, store) = store_with_thread().await;
+        let (mut core, _inbox) = loaded_core(store, data.path()).await;
+        let page = |cut| Request::HistoryRead {
+            thread: THREAD.to_string(),
+            offset: 0,
+            limit: usize::MAX,
+            known: None,
+            cut,
+            tail: Some(50),
+            before: None,
+        };
+        let (reply, _answer) = oneshot::channel();
+        assert!(core.unless_loading(Event::Request(page(true), reply)).is_none(), "not kept yet, it waits for the load");
+        core.history_entries(THREAD);
+        assert!(core.history_kept_now(THREAD));
+        core.let_go(FAMILY);
+        core.waiting = crate::loading::Waiting::default();
+        let (reply, _answer) = oneshot::channel();
+        assert!(core.unless_loading(Event::Request(page(true), reply)).is_some(), "kept, it's answered at once");
+        assert!(!core.families.is_loaded(&FAMILY));
+        let (reply, _answer) = oneshot::channel();
+        assert!(core.unless_loading(Event::Request(page(false), reply)).is_none(), "read whole, it waits");
     }
 
     #[tokio::test]

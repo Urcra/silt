@@ -48,12 +48,12 @@ export function useSending(thread: string): Sending[] {
  * the entries it followed: its own words first, else any, as the agent may have
  * been told them otherwise (with the others' drafts, or a command expanded).
  */
-export function arrived(sent: Sending[], entries: { kind: string; text: string }[]): number[] {
+export function arrived(sent: Sending[], entries: { index: number; kind: string; text: string }[]): number[] {
   const taken = new Set<number>()
   const ids = new Set<number>()
   const claim = (item: Sending, fits: (text: string) => boolean) => {
     const at = entries.findIndex(
-      (entry, index) => index >= item.after && !taken.has(index) && entry.kind === 'user' && fits(entry.text),
+      (entry, index) => entry.index >= item.after && !taken.has(index) && entry.kind === 'user' && fits(entry.text),
     )
     if (at === -1) return
     taken.add(at)
