@@ -25,6 +25,7 @@ silt-agents = { path = "../silt-agents" }
 silt-daemon = { path = "../silt-daemon" }
 silt-design = { path = "../silt-design" }
 silt-git = { path = "../silt-git" }
+sha2 = "0.11.1"
 silt-log = { path = "../silt-log" }
 silt-llm = { path = "../silt-llm" }
 silt-local = { path = "../silt-local" }

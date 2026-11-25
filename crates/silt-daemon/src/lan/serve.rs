@@ -2,7 +2,7 @@
 //! and plain HTTP that serves only the authority's certificate. Handshakes
 //! run each in a task of their own, so a slow one holds up no other.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,6 +22,42 @@ const READY: usize = 64;
 /// Listens on every interface, IPv4, at `port`.
 pub(crate) async fn bind(port: u16) -> std::io::Result<TcpListener> {
     TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port))).await
+}
+
+/// Whether a connection from `address` can come from the network the phones
+/// are on: a private, link-local or shared (carrier NAT, Tailscale) address,
+/// or this machine. On a server or a public Wi-Fi, the listener is reachable
+/// from further away; those connections are dropped unanswered.
+pub(crate) fn nearby(address: IpAddr) -> bool {
+    match address.to_canonical() {
+        IpAddr::V4(v4) => {
+            let shared = v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64;
+            v4.is_private() || v4.is_loopback() || v4.is_link_local() || shared
+        }
+        IpAddr::V6(v6) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00 || (v6.segments()[0] & 0xffc0) == 0xfe80,
+    }
+}
+
+/// A listener that takes only connections from [`nearby`] addresses.
+pub(crate) struct Nearby(pub(crate) TcpListener);
+
+impl axum::serve::Listener for Nearby {
+    type Io = TcpStream;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            let (stream, peer) = axum::serve::Listener::accept(&mut self.0).await;
+            if nearby(peer.ip()) {
+                return (stream, peer);
+            }
+            tracing::debug!(%peer, "dropped a connection from outside the local network");
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.0.local_addr()
+    }
 }
 
 /// Where a phone's connection comes from, for the person deciding on it.
@@ -81,6 +117,10 @@ pub(crate) fn secure(listener: TcpListener, current: Arc<Current>, app: Router) 
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     continue;
                 };
+                if !nearby(peer.ip()) {
+                    tracing::debug!(%peer, "dropped a connection from outside the local network");
+                    continue;
+                }
                 let (acceptor, sender) = (acceptor.clone(), sender.clone());
                 tokio::spawn(async move {
                     if let Ok(Ok(tls)) = tokio::time::timeout(HANDSHAKE, acceptor.accept(stream)).await {
@@ -105,9 +145,35 @@ pub(crate) fn secure(listener: TcpListener, current: Arc<Current>, app: Router) 
 /// Serves `app` over plain HTTP.
 pub(crate) fn plain(listener: TcpListener, app: Router) -> tokio::task::AbortHandle {
     tokio::spawn(async move {
-        if let Err(error) = axum::serve(listener, app).await {
+        if let Err(error) = axum::serve(Nearby(listener), app).await {
             tracing::warn!(%error, "the certificate's page stopped");
         }
     })
     .abort_handle()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nearby;
+
+    #[test]
+    fn only_the_local_network_is_nearby() {
+        for address in [
+            "192.168.1.40",
+            "10.0.0.5",
+            "172.16.3.1",
+            "100.101.102.103",
+            "169.254.1.1",
+            "127.0.0.1",
+            "::1",
+            "fd12::1",
+            "fe80::1",
+            "::ffff:192.168.1.40",
+        ] {
+            assert!(nearby(address.parse().expect("address")), "{address}");
+        }
+        for address in ["8.8.8.8", "93.184.215.14", "100.128.0.1", "2001:db8::1", "::ffff:8.8.8.8"] {
+            assert!(!nearby(address.parse().expect("address")), "{address}");
+        }
+    }
 }

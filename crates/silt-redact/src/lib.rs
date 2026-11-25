@@ -3,24 +3,30 @@
 //! secret, values listed in a secrets file, and well-known token formats.
 //!
 //! Transcript lines, titles, merge request texts, comments and live drafts
-//! get `[REDACTED:<id>]`, which names the secret by a short hash without
-//! giving it away, and is deterministic, so pushing the same delta again
-//! gives the same bytes. Files follow git: what git would commit is synced
-//! as it is, and nothing puts secrets back.
+//! get `[REDACTED:<id>]`, which names the secret by a short keyed hash
+//! without giving it away (ADR 0123). The key stays on the machine, so the
+//! id can't be checked against a guess anywhere else, and it is kept, so
+//! pushing the same delta again gives the same bytes. Files follow git:
+//! what git would commit is synced as it is, and nothing puts secrets back.
 
 use std::env;
+use std::fmt;
 use std::path::Path;
 use std::sync::{LazyLock, OnceLock};
 
 use aho_corasick::{AhoCorasick, Input, MatchKind};
-use sha2::{Digest, Sha256};
+use hmac::{Hmac, KeyInit, Mac};
+use sha2::Sha256;
 use silt_log::{CommentOp, ConvOp, Delta, MrOp, Op};
 
 const MIN_SECRET_LEN: usize = 8;
 const MIN_TOKEN_BODY: usize = 16;
-/// Hex digits of a secret's hash in its placeholder: enough to tell a
-/// machine's secrets apart, too few to check guesses against.
+/// Hex digits of a secret's keyed hash in its placeholder: enough to tell a
+/// machine's secrets apart.
 const ID_LEN: usize = 12;
+const KEY_LEN: usize = 32;
+/// The redaction key's file in a data directory.
+pub const KEY_FILE: &str = "redaction-key";
 /// Parts of an environment variable's name, split at `_`, that mark its
 /// value as a secret: a part equal to one of these, or ending in one of the
 /// first five (`APIKEY`, `GHTOKEN`).
@@ -29,14 +35,85 @@ const SECRET_NAME_PARTS: [&str; 7] = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PAS
 const NOT_SECRET_PARTS: [&str; 12] = ["URL", "URI", "PATH", "FILE", "DIR", "SOCK", "HOST", "PORT", "NAME", "EMAIL", "USER", "ID"];
 const TOKEN_PREFIXES: [&str; 9] = ["github_pat_", "ghp_", "gho_", "ghs_", "sk-ant-", "sk-", "xoxb-", "xoxp-", "AKIA"];
 
-/// The secret's short hash, which names it in placeholders.
-pub fn id(secret: &str) -> String {
-    Sha256::digest(secret.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect::<String>()[..ID_LEN].to_owned()
+/// The key a machine's placeholders are made with. It never leaves the
+/// machine: with only an unkeyed hash in a placeholder, anyone holding the
+/// server's data could test guesses of a weak secret against it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RedactionKey([u8; KEY_LEN]);
+
+impl fmt::Debug for RedactionKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RedactionKey(..)")
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum KeyError {
+    #[error("could not read or write the redaction key at {path}")]
+    Io {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the redaction key at {0} isn't {KEY_LEN} bytes of hex")]
+    Malformed(std::path::PathBuf),
+    #[error("the system's random number generator failed")]
+    Random(#[source] getrandom::Error),
+}
+
+impl RedactionKey {
+    pub fn from_bytes(bytes: [u8; KEY_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// A key from the system's random number generator.
+    pub fn generate() -> Result<Self, KeyError> {
+        let mut bytes = [0; KEY_LEN];
+        getrandom::fill(&mut bytes).map_err(KeyError::Random)?;
+        Ok(Self(bytes))
+    }
+
+    /// The key kept at `path`, made and kept there, readable by this user
+    /// alone, when there is none yet.
+    pub fn load_or_create(path: &Path) -> Result<Self, KeyError> {
+        let io = |source| KeyError::Io { path: path.to_owned(), source };
+        match std::fs::read_to_string(path) {
+            Ok(text) => Self::from_hex(text.trim()).ok_or_else(|| KeyError::Malformed(path.to_owned())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let key = Self::generate()?;
+                silt_os::write_private(path, format!("{}\n", key.hex()).as_bytes()).map_err(io)?;
+                Ok(key)
+            }
+            Err(error) => Err(io(error)),
+        }
+    }
+
+    fn from_hex(text: &str) -> Option<Self> {
+        if text.len() != KEY_LEN * 2 || !text.is_ascii() {
+            return None;
+        }
+        let mut bytes = [0; KEY_LEN];
+        for (byte, pair) in bytes.iter_mut().zip(text.as_bytes().chunks(2)) {
+            *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+        }
+        Some(Self(bytes))
+    }
+
+    fn hex(&self) -> String {
+        self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+}
+
+/// The secret's short keyed hash, which names it in placeholders.
+pub fn id(key: &RedactionKey, secret: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(&key.0).expect("HMAC takes a key of any length");
+    mac.update(secret.as_bytes());
+    mac.finalize().into_bytes().iter().map(|byte| format!("{byte:02x}")).collect::<String>()[..ID_LEN].to_owned()
 }
 
 /// What replaces the secret.
-pub fn placeholder(secret: &str) -> String {
-    format!("[REDACTED:{}]", id(secret))
+pub fn placeholder(key: &RedactionKey, secret: &str) -> String {
+    format!("[REDACTED:{}]", id(key, secret))
 }
 
 /// Values in a secrets file, one per line; blank lines and `#` comments are
@@ -88,8 +165,9 @@ pub struct Redacted {
     pub found: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Redactor {
+    key: RedactionKey,
     secrets: Vec<String>,
     /// Built on first use from `secrets`.
     matchers: OnceLock<SecretMatchers>,
@@ -133,8 +211,8 @@ impl SecretMatchers {
 }
 
 impl Redactor {
-    pub fn new(secrets: Vec<String>) -> Self {
-        let mut redactor = Self { secrets, matchers: OnceLock::new() };
+    pub fn new(key: RedactionKey, secrets: Vec<String>) -> Self {
+        let mut redactor = Self { key, secrets, matchers: OnceLock::new() };
         redactor.normalize();
         redactor
     }
@@ -152,8 +230,9 @@ impl Redactor {
 
     /// Secrets from this process's environment. Variables that aren't
     /// valid UTF-8 are skipped.
-    pub fn from_env() -> Self {
+    pub fn from_env(key: RedactionKey) -> Self {
         Self::new(
+            key,
             env::vars_os()
                 .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
                 .filter(|(name, value)| is_secret_variable(name, value))
@@ -212,12 +291,12 @@ impl Redactor {
     fn cover_json(&self, line: &str, found: &mut Vec<String>) -> String {
         let matchers = self.matchers();
         let covered = self.cover_with(line, &matchers.json, |pattern| matchers.json_secrets[pattern], found);
-        cover_tokens(covered, found)
+        self.cover_tokens(covered, found)
     }
 
     fn cover(&self, text: &str, found: &mut Vec<String>) -> String {
         let covered = self.cover_with(text, &self.matchers().plain, |pattern| pattern, found);
-        cover_tokens(covered, found)
+        self.cover_tokens(covered, found)
     }
 
     /// `text` with each match of `matcher` replaced by the placeholder of
@@ -232,23 +311,23 @@ impl Redactor {
         let mut out = String::with_capacity(text.len());
         matcher.replace_all_with(text, &mut out, |matched, _, out| {
             let secret = &self.secrets[secret_of(matched.pattern().as_usize())];
-            out.push_str(&placeholder(secret));
+            out.push_str(&placeholder(&self.key, secret));
             found.push(secret.clone());
             true
         });
         out
     }
-}
 
-fn cover_tokens(mut out: String, found: &mut Vec<String>) -> String {
-    for (start, end) in tokens(&out).into_iter().rev() {
-        let secret = out[start..end].to_owned();
-        out.replace_range(start..end, &placeholder(&secret));
-        found.push(secret);
+    fn cover_tokens(&self, mut out: String, found: &mut Vec<String>) -> String {
+        for (start, end) in tokens(&out).into_iter().rev() {
+            let secret = out[start..end].to_owned();
+            out.replace_range(start..end, &placeholder(&self.key, &secret));
+            found.push(secret);
+        }
+        found.sort();
+        found.dedup();
+        out
     }
-    found.sort();
-    found.dedup();
-    out
 }
 
 /// Byte ranges of well-known token formats in `text`.
@@ -291,6 +370,14 @@ mod tests {
 
     const TOKEN: &str = "ghp_abcdefghijklmnopqrstuvwxyz123456";
 
+    fn key() -> RedactionKey {
+        RedactionKey::from_bytes([7; KEY_LEN])
+    }
+
+    fn placeholder(secret: &str) -> String {
+        super::placeholder(&key(), secret)
+    }
+
     fn delta(op: Op) -> Delta {
         Delta {
             span: DeltaSpan::new(ActorId(1), Lamport(1), op.units() as u64),
@@ -304,7 +391,7 @@ mod tests {
 
     #[test]
     fn replaces_known_secrets_and_token_formats_with_named_placeholders() {
-        let redactor = Redactor::new(vec!["hunter2hunter2".into(), "short".into()]);
+        let redactor = Redactor::new(key(), vec!["hunter2hunter2".into(), "short".into()]);
         let line = format!(r#"{{"text":"pw hunter2hunter2 and {TOKEN} and short and sk-ab"}}"#);
         let (redacted, found) = redactor.replace_found(&line);
         assert_eq!(
@@ -317,7 +404,7 @@ mod tests {
 
     #[test]
     fn file_edits_follow_git_and_conversation_is_redacted() {
-        let redactor = Redactor::new(vec!["s3cr3t-value".into()]);
+        let redactor = Redactor::new(key(), vec!["s3cr3t-value".into()]);
         let insert = delta(Op::Text {
             inode: InodeId(DeltaId::new(ActorId(1), Lamport(0))),
             op: TextOp::Insert { pos: 0, content: format!("KEY=s3cr3t-value {TOKEN}") },
@@ -333,8 +420,8 @@ mod tests {
     #[test]
     fn many_secrets_cost_one_pass() {
         let secrets: Vec<String> = (0..5_000).map(|n| format!("secret-value-{n:05}")).collect();
-        let many = Redactor::new(secrets);
-        let one = Redactor::new(vec!["secret-value-04321".to_owned()]);
+        let many = Redactor::new(key(), secrets);
+        let one = Redactor::new(key(), vec!["secret-value-04321".to_owned()]);
         let text = "plain words and secret-value-04321 and \"secret-value-00007\" ".repeat(2_000);
         let (replaced, found) = many.replace_found(&text);
         assert_eq!(found, ["secret-value-00007", "secret-value-04321"]);
@@ -357,15 +444,35 @@ mod tests {
     }
 
     #[test]
+    fn placeholders_depend_on_the_machine_s_key() {
+        let other = RedactionKey::from_bytes([8; KEY_LEN]);
+        assert_ne!(placeholder(TOKEN), super::placeholder(&other, TOKEN), "a guess can't be checked without the key");
+        assert_eq!(placeholder(TOKEN), placeholder(TOKEN), "pushing again gives the same bytes");
+    }
+
+    #[test]
+    fn a_key_is_made_once_and_kept() {
+        let dir = std::env::temp_dir().join(format!("silt-redact-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("redaction-key");
+        let _ = std::fs::remove_file(&path);
+        let made = RedactionKey::load_or_create(&path).expect("made");
+        assert_eq!(RedactionKey::load_or_create(&path).expect("read back"), made);
+        std::fs::write(&path, "not hex").expect("write");
+        assert!(matches!(RedactionKey::load_or_create(&path), Err(KeyError::Malformed(_))));
+        std::fs::remove_dir_all(&dir).expect("cleaned up");
+    }
+
+    #[test]
     fn leaves_ordinary_text_alone() {
-        let redactor = Redactor::new(Vec::new());
+        let redactor = Redactor::new(key(), Vec::new());
         let text = "risk-free task-runner sk-ip ask-me";
         assert_eq!(redactor.replace(text), text);
     }
 
     #[test]
     fn transcript_lines_are_matched_as_json() {
-        let redactor = Redactor::new(vec![r#"pa"ss\word12"#.to_owned()]);
+        let redactor = Redactor::new(key(), vec![r#"pa"ss\word12"#.to_owned()]);
         let line = r#"{"text":"pw pa\"ss\\word12\nghp_abcdefghijklmnopqrstuvwxyz123456 done"}"#;
         let mut found = Vec::new();
         let redacted = redactor.cover_json(line, &mut found);

@@ -751,7 +751,16 @@ fn prepare_trusted(script: &Path, checkout: &Path, source: &Path) -> bool {
     if fs::read(source.join(relative)).is_ok_and(|own| own == bytes) {
         return true;
     }
-    let digest = silt_redact::id(&String::from_utf8_lossy(&bytes));
+    // The first 12 hex digits of its SHA-256, as `trusted-prepare` has always
+    // kept them.
+    let digest: String = {
+        use sha2::Digest;
+        sha2::Sha256::digest(String::from_utf8_lossy(&bytes).as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()[..12]
+            .to_owned()
+    };
     let trusted = paths::data_dir().join("trusted-prepare");
     if fs::read_to_string(&trusted).is_ok_and(|known| known.lines().any(|line| line.trim() == digest)) {
         return true;

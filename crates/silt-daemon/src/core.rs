@@ -3243,14 +3243,23 @@ pub(crate) async fn stored_entries(store: &Store, checkout: CheckoutId) -> Resul
 }
 
 /// Redacts the secrets in this process's environment and in the data
-/// directory's `secrets` file.
+/// directory's `secrets` file, with this machine's key (ADR 0123).
 pub(crate) fn redactor(data_dir: &Path) -> Redactor {
     let file = data_dir.join("secrets");
     let secrets = silt_redact::read_secrets_file(&file).unwrap_or_else(|error| {
         warn!(%error, path = %file.display(), "could not read the secrets file; its secrets are not redacted");
         Vec::new()
     });
-    Redactor::from_env().with(secrets)
+    Redactor::from_env(redaction_key(data_dir)).with(secrets)
+}
+
+/// This machine's redaction key, else one for this run alone: placeholders
+/// then differ after a restart, which costs nothing but their sameness.
+fn redaction_key(data_dir: &Path) -> silt_redact::RedactionKey {
+    silt_redact::RedactionKey::load_or_create(&data_dir.join(silt_redact::KEY_FILE)).unwrap_or_else(|error| {
+        warn!(error = %crate::protocol::error_chain(&error), "could not keep a redaction key; using one for this run");
+        silt_redact::RedactionKey::generate().expect("the system's random number generator works")
+    })
 }
 
 /// Answers `reply` once `call`, a call to the server, is done, off the event

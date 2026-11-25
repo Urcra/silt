@@ -84,10 +84,10 @@ fn a_thread_continues_on_another_machine() {
     assert!(show.contains("> Please add a farewell line to main"), "{show}");
     assert!(show.contains("> Continuing at home: add a home line"), "{show}");
     let token = "ghp_abcdefghijklmnopqrstuvwxyz0123";
-    assert!(
-        show.contains(&format!("I used {} to fetch it", silt_redact::placeholder(token))),
-        "the home machine doesn't know the token: {show}"
-    );
+    // Named by the key of the machine that redacted it, the laptop (ADR 0123).
+    let key = silt_redact::RedactionKey::load_or_create(&laptop.silt_home.join(silt_redact::KEY_FILE)).expect("the laptop's key");
+    let placeholder = silt_redact::placeholder(&key, token);
+    assert!(show.contains(&format!("I used {placeholder} to fetch it")), "the home machine doesn't know the token: {show}");
     assert!(laptop.stdout(&["show", &thread]).contains("ghp_abcdefghijklmnopqrstuvwxyz0123"));
     assert!(!dir_contains(&world.server.data, b"ghp_abcdefghijklmnopqrstuvwxyz0123"), "secrets stay off the server");
     assert!(home.log_line(&thread).is_some_and(|line| line.contains("here")));
@@ -111,11 +111,7 @@ fn a_thread_continues_on_another_machine() {
     fs::create_dir_all(&desk_home).expect("mkdir");
     fs::write(desk_home.join("secrets"), format!("# deploy token\n{token}\n")).expect("write");
     let desk = Machine::new(world.root.path(), "desk", &world.root.path().join("origin.git"), &world.server);
-    assert!(
-        eventually(|| desk.try_stdout(&["show", &thread]).contains(&silt_redact::placeholder(token))),
-        "{}",
-        desk.try_stdout(&["show", &thread])
-    );
+    assert!(eventually(|| desk.try_stdout(&["show", &thread]).contains(&placeholder)), "{}", desk.try_stdout(&["show", &thread]));
     assert!(!desk.stdout(&["show", &thread]).contains(token));
 }
 
