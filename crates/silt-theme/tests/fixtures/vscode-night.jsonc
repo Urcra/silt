@@ -1,5 +1,6 @@
 {
-  // Written for Silt's tests, in the shape of a VS Code colour theme.
+  // Written for Silt's tests, in the shape of a VS Code colour theme, with
+  // colours from Tokyo Night (MIT, Copyright (c) 2018-present Enkia; see NOTICE).
   "name": "Fixture Night",
   "type": "dark",
   "colors": {

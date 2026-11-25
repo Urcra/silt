@@ -1,8 +1,8 @@
 // Vendored from Zed (https://github.com/zed-industries/zed, crates/sum_tree),
 // Copyright Zed Industries, Inc., licensed under the Apache License, Version 2.0.
 // Modified for Silt: removed the rayon-based parallel constructors, tracing
-// instrumentation and the logging test setup; added `update_item` and
-// `splice_item`.
+// instrumentation and the logging test setup; `arrayvec` replaced by
+// `heapless`; added `update_item` and `splice_item`.
 
 mod cursor;
 mod tree_map;

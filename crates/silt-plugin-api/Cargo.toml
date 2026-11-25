@@ -4,7 +4,7 @@ description = "The SDK for Silt plugins (ADR 0104): the silt:plugin@1 world, typ
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license = "MIT"
 publish.workspace = true
 
 [lints]

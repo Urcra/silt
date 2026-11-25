@@ -1,5 +1,5 @@
 From 0c3385e5a9695466f86205a62b2e1efa36e7e856 Mon Sep 17 00:00:00 2001
-From: Silt <noreply@example.invalid>
+From: Silt contributors <noreply@example.invalid>
 Date: Fri, 20 Nov 2026 04:14:54 +0000
 Subject: [PATCH] feat: serve _session/steering and _claude/background_tasks on
  ACP v2

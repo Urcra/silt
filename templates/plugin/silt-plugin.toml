@@ -3,7 +3,7 @@ name = "Notes"
 version = "0.1.0"
 publisher = "example"
 description = "Reads and adds notes in Example Notes, each note added asked unless you allow it."
-license = "MIT OR Apache-2.0"
+license = "MIT"
 repository = "https://github.com/example/silt-notes"
 world = "silt:plugin@1"
 build = { cargo = { package = "silt-plugin-notes", toolchain = "1.99.1" } }

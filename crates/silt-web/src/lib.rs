@@ -46,4 +46,14 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn the_ui_carries_its_dependencies_licences() {
+        if super::Assets::get("index.html").is_some() {
+            let notices = super::Assets::get("THIRD-PARTY-NOTICES.txt").expect("the build writes its notices");
+            let text = String::from_utf8_lossy(&notices.data);
+            assert!(text.contains("@fontsource/ibm-plex-sans") && text.contains("SIL Open Font License"), "{text:.200}");
+            assert!(text.contains("\nreact ") && text.contains("License: MIT"), "{text:.200}");
+        }
+    }
 }

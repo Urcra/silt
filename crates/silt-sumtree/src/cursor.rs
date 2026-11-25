@@ -1,7 +1,8 @@
 // Vendored from Zed (https://github.com/zed-industries/zed, crates/sum_tree),
 // Copyright Zed Industries, Inc., licensed under the Apache License, Version 2.0.
 // Modified for Silt: removed the rayon-based parallel constructors, tracing
-// instrumentation and the logging test setup.
+// instrumentation and the logging test setup; `arrayvec` replaced by
+// `heapless`.
 
 use super::*;
 use heapless::Vec as ArrayVec;
