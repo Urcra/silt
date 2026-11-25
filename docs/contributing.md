@@ -62,14 +62,19 @@ It names each step as it starts, with the time so far, and ends with how long ea
 
 Commit however you like; a pull request's CI runs the checks, and the full gate runs before a merge. Maintainers commit with `scripts/commit.sh "<message>"`, which commits everything (`git add -A`) and pushes, and only a tree the gate passed on. A full gate that passes records the tree it checked (`scripts/tree-id.sh`, the tree `git add -A` would commit) in `target/gate-passed`, so a commit right after `scripts/gate.sh` doesn't run it again, nor does trying again after a failed push. Otherwise `commit.sh` runs the gate itself, showing each step while the output goes to a log, and refuses to commit when the tree changed while the gate ran, as the gate didn't check those edits. A change to Markdown alone skips the gate, except the generated `docs/reference/cli.md`. Messages are Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `chore:`, `build:`, with an optional scope such as `feat(crdt):`), and say what changed rather than which task it was.
 
-On a pull request, people with write access can start a Claude Code cloud session from a comment (`.github/workflows/claude-commands.yml`):
-- `/claude gate` runs the gate, resolves conflicts and pushes fixes.
-- `/claude review`, or `/claude review fix`, reviews the PR, and with `fix` fixes what it found.
-- `/claude watch` stays on the PR until it's merged, fixing conflicts, review comments and gate failures as they come. `/claude unwatch` stops it.
-- `/claude fix` merges the base in if it conflicts, makes the changes review threads and comments ask for, replies and resolves them, and pushes. It never merges.
-- `/claude merge` runs the full gate on the PR merged with its base, fixes conflicts and failures (up to two rounds), waits for CI, and merges with a merge commit. It refuses while review threads or change requests are open. These two run in GitHub Actions (`.github/workflows/claude-fix-merge.yml`), so their comments come from `claude[bot]`.
+People with write access can have Claude work on an issue or pull request from a comment (`.github/workflows/claude.yml`). It runs in GitHub Actions, and what it writes comes from `claude[bot]`. Notes after the command steer it.
+- On a pull request:
+  - `/claude fix` merges the base in if it conflicts, makes the changes open reviews and comments ask for, replies and resolves them, and pushes. It never merges.
+  - `/claude merge` runs the full gate on the PR merged with its base, fixes conflicts and failures (up to two rounds), waits for CI, and merges with a merge commit. It refuses while review threads or change requests are open.
+  - `/claude gate` does the same without the merge, and says whether the gate passed.
+  - `/claude review` posts a review; `/claude review fix` also fixes what it found.
+- On an issue:
+  - `/claude fix` opens a pull request that fixes it, with screenshots of any screen it changes, or asks questions when the issue is unclear.
+  - `/claude plan` comments a plan: the approach, the files, tests, risks and open questions.
+  - `/claude triage` sets labels and a milestone, names likely duplicates, and asks for what the report lacks.
+- On either, `/claude ask <question>` answers from the code without changing anything, and `/claude cancel` stops that issue's or PR's running jobs.
 
-`gate`, `review` and `watch` each fire a scheduled task on claude.ai through its API trigger; the watch task's prompt is in `.github/claude-tasks/watch.md`.
+Claude weighs each comment by its author: the owner first, then members, collaborators and contributors; anyone else's comments only inform it. It never decides to merge: `.github/scripts/claude.sh`, taken from the default branch, merges only a head that passed the gate and CI. The gate runs there with the budgets reported rather than held, as on CI.
 
 Windows (ADR 0045) has no CI job and no release builds (ADR 0119), so it's checked locally: the gate's Windows clippy, Wine, `scripts/wsl-handoff.sh` between a native `silt` and a WSL distribution's, and a real Windows machine through `just install-wsl`. `SILT_HANDOFF_LOCAL=1` runs the handoff script on Linux, with both machines here. To check Windows locally, `rustup target add x86_64-pc-windows-gnu` and install MinGW (`apt-get install mingw-w64`); with Wine (`apt-get install wine64`), `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine64 cargo test --target x86_64-pc-windows-gnu -p silt-os` runs Windows tests too. Wine lacks some of Windows: symlinks and the pipe's first-instance flag behave differently there. The tests in `crates/silt-cli/tests` drive Rust stand-ins for the agent CLIs (`silt-fake-claude`, `-codex`, `-gemini`, `-copilot`, `-opencode`, in `silt-fake-agent`) and run on Windows too, except those that send Unix signals or need a Unix terminal. `cargo test -p silt-cli` alone needs `cargo build -p silt-fake-agent` first.
 

@@ -1,0 +1,52 @@
+# The toolchain the gate and Claude's builds need on a GitHub runner, used by
+# .github/workflows/claude.yml.
+name: Silt's toolchain
+description: Rust, Node and pnpm, the sandbox's tools, Playwright's browser, and builds on the larger disk
+inputs:
+  cache-key:
+    description: Keeps each kind of job's Rust cache apart, as they build different things.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Free disk space
+      shell: bash
+      run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+    - name: The sandbox's tools
+      shell: bash
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -y -q bubblewrap passt
+        # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+    - name: Builds on the larger disk
+      shell: bash
+      run: |
+        if [ -d /mnt ] && [ ! -e target ]; then
+          sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+        fi
+    - name: Rust
+      shell: bash
+      run: rustup show
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      with:
+        key: ${{ inputs.cache-key }}
+        workspaces: |
+          .
+          plugins -> ../target/plugins
+    - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      with:
+        package_json_file: web/package.json
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: .nvmrc
+        cache: pnpm
+        cache-dependency-path: web/pnpm-lock.yaml
+    - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+      with:
+        tool: cargo-nextest,cargo-deny
+    - name: Web dependencies and Playwright's browser
+      shell: bash
+      run: |
+        pnpm -C web install --frozen-lockfile
+        pnpm -C web exec playwright install --with-deps chromium
