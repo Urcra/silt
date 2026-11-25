@@ -1,5 +1,5 @@
 // Agents asking other agents (ADR 0120): one fake agent asks another, and the thread shows the ask as a card, the asked
-// thread nested under it and saying who asked. With SILT_SCREENSHOTS set to a folder, it keeps pictures of each for
+// thread folded under it in the sidebar and saying who asked. With SILT_SCREENSHOTS set to a folder, it keeps pictures of each for
 // the pull request.
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -82,12 +82,21 @@ test("an agent asks another, and the ask's card, the asked thread and its report
   await picture(page, '4-phone')
   await page.setViewportSize({ width: 1440, height: 900 })
 
-  // The asked thread nests under its caller in the sidebar, and says who asked.
+  // The asked thread folds under its caller in the sidebar, which opens to it saying who asked.
   const nav = page.getByRole('navigation', { name: 'projects' })
+  const fold = nav.getByRole('button', { name: /1 ask/ })
+  await expect(fold).toContainText('reported')
+  await expect(nav.getByTestId('asked-mark')).toBeHidden()
+  await picture(page, '6-sidebar-folded')
+  await fold.click()
   await expect(nav.getByTestId('asked-mark')).toBeVisible()
+  await picture(page, '7-sidebar-opened')
+  await fold.click()
   await card.getByRole('link', { name: 'Open its thread' }).click()
   await expect(page.getByTestId('asked-by')).toContainText('asked by')
   await expect(page.getByTestId('asked-note')).toContainText('Fake v1 asked for this thread')
+  // Open, it's listed under its caller's fold even while the fold is closed.
+  await expect(nav.getByTestId('asked-mark')).toBeVisible()
   await page.getByTestId('asked-note').scrollIntoViewIfNeeded()
   await picture(page, '2-asked-thread')
 })

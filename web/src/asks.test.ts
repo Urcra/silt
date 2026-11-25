@@ -44,7 +44,9 @@ const ask = (more: Partial<AskView>): AskView => ({
 test("Silt's tools are known by name however an agent titles them", () => {
   expect(siltTool('mcp__silt__silt_ask')).toBe('silt_ask')
   expect(siltTool('silt_ask (silt MCP Server)')).toBe('silt_ask')
+  expect(siltTool('silt: silt_ask {"agent":"agy"}')).toBe('silt_ask')
   expect(siltTool('silt_ask_wait')).toBe('silt_ask_wait')
+  expect(siltTool('other: silt_ask')).toBeNull()
   expect(siltTool('Bash')).toBeNull()
   expect(siltTool(null)).toBeNull()
 })
@@ -54,6 +56,7 @@ test('a call that asked another agent stands on its own, and finds its ask by it
   expect(askOfCall(asking)?.agent).toBe('agy')
   expect(tasked({ call: asking, result: null, images: [] }, NO_TASKS)).toBe(true)
   expect(askOfCall(call('silt_ask_wait', { ask: 'a1' }))).toBeNull()
+  expect(askOfCall(call('silt: silt_ask', { agent: 'agy', prompt: 'Draw' }))?.prompt).toBe('Draw')
 
   const earlier = ask({ id: 'a0', started_ms: 1_000, state: 'done' })
   const this_one = ask({})

@@ -1,9 +1,11 @@
 // Which calls ask another agent (ADR 0120), read from the call alone.
 import type { HistoryEntry } from './api.generated'
 
-/** Silt's own tool a call or a permission names: `silt_ask`, `mcp__silt__silt_ask`, `silt_ask (silt MCP Server)`. */
+/** Silt's own tool a call or a permission names: `silt_ask`, `mcp__silt__silt_ask`, `silt_ask (silt MCP Server)`, `silt: silt_ask`. */
 export function siltTool(title: string | null | undefined): string | null {
-  const name = title?.trim().split(/\s+/)[0]?.split('__').pop()
+  const words = title?.trim().split(/\s+/) ?? []
+  const word = words[0] === 'silt:' ? words[1] : words[0]
+  const name = word?.split('__').pop()
   return name?.startsWith('silt_') ? name : null
 }
 
