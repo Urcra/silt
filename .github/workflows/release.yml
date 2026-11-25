@@ -1,6 +1,6 @@
 # Builds `silt` from a tag and publishes it, with checksums, on the tag's
-# release: static binaries for Linux (ADR 0043), which scripts/install.sh
-# installs. Windows isn't built here (ADR 0119).
+# release: static binaries for Linux (ADR 0043). Unused until every platform
+# can be built. Windows isn't built here (ADR 0119).
 name: release
 
 on:

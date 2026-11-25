@@ -256,7 +256,7 @@ pub fn tunnel(machine: &Machine, port: u16) -> Command {
     command
 }
 
-/// What to say when neither this computer's build nor a release runs there.
+/// What to say when this computer's build doesn't run there.
 const BUILD_THERE: &str =
     "Build it there with `cargo install --locked --git https://github.com/Urcra/silt silt-cli`, then try again.";
 
@@ -311,41 +311,20 @@ pub fn version_of(stdout: &str) -> Option<String> {
     (!version.chars().any(char::is_control)).then(|| version.to_owned())
 }
 
-/// The release a stable build's version names, such as `v0.3.0` for
-/// `0.3.0 (stable a1b2c3d)`; none for a nightly build, which has none.
-pub fn release_of(version: &str) -> Option<String> {
-    let (number, label) = version.split_once(" (")?;
-    let plain = !number.is_empty() && number.chars().all(|char| char.is_ascii_alphanumeric() || matches!(char, '.' | '-'));
-    (plain && label.starts_with("stable")).then(|| format!("v{number}"))
-}
-
 /// How a machine gets this computer's build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Plan {
     /// Copied as it is: the machine has this computer's OS and CPU.
     Copy,
-    /// The release of the same version, built for the machine, by
-    /// install.sh there.
-    Release(String),
-    /// Neither: why, and what to do instead.
+    /// It can't be: why, and what to do instead.
     Cannot(String),
 }
 
-pub fn plan(here: &Platform, there: &Platform, version: &str, host: &str) -> Plan {
+pub fn plan(here: &Platform, there: &Platform, host: &str) -> Plan {
     if here == there {
         return Plan::Copy;
     }
-    // The platforms install.sh has release binaries for.
-    let released = there.os == "linux" && matches!(&*there.arch, "x86_64" | "aarch64");
-    match release_of(version) {
-        Some(tag) if released => Plan::Release(tag),
-        Some(_) => Plan::Cannot(format!(
-            "`{host}` runs {there}, and Silt has release builds only for Linux on x86_64 and aarch64, while this computer’s `silt` is built for {here}. {BUILD_THERE}"
-        )),
-        None => Plan::Cannot(format!(
-            "`{host}` runs {there}, and this computer’s `silt` is a nightly build for {here}, which has no release to download. {BUILD_THERE}"
-        )),
-    }
+    Plan::Cannot(format!("`{host}` runs {there}, while this computer’s `silt` is built for {here}. {BUILD_THERE}"))
 }
 
 /// `path` with the home directory as `~`, as messages show it.
@@ -400,17 +379,6 @@ pub fn place_line(targets: &[&str]) -> String {
 /// Removes the copies, as a check that failed leaves them.
 pub fn discard_line(targets: &[&str]) -> String {
     plain_sh(&format!(r#"for t in "$@"; do {BESIDE}; rm -f "$new"; done"#), targets)
-}
-
-/// Runs install.sh, given on stdin, for the release `tag`, into `dir`.
-pub fn release_line(tag: &str, dir: &str) -> String {
-    format!("exec env {} {} sh -s", sh_quote(&format!("SILT_VERSION={tag}")), sh_quote(&format!("SILT_INSTALL_DIR={dir}")))
-}
-
-/// What install.sh said went wrong, from its `silt install: ` lines.
-pub fn release_failure(stderr: &str) -> String {
-    let said = stderr.lines().filter_map(|line| line.trim().strip_prefix("silt install: ")).next_back();
-    said.unwrap_or_else(|| stderr.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("it failed")).to_owned()
 }
 
 /// Why a copy didn't run there, from what running it said: most often a C
@@ -679,7 +647,7 @@ impl Failure {
             }
             Self::NoSsh => "`ssh` isn't installed on this computer. Install OpenSSH's client, then retry.".to_owned(),
             Self::NoSilt => format!(
-                "Signed in, but `silt` isn’t installed on `{host}`. Silt can install this computer’s build there, or install it yourself with `curl -fsSL https://raw.githubusercontent.com/Urcra/silt/main/scripts/install.sh | sh`."
+                "Signed in, but `silt` isn’t installed on `{host}`. Silt can install this computer’s build there, or build it there yourself with `cargo install --locked --git https://github.com/Urcra/silt silt-cli`."
             ),
             Self::NotWritable { path, user } => {
                 let whose = user.as_deref().map_or_else(|| "yours".to_owned(), |user| format!("`{user}`’s"));
@@ -925,23 +893,13 @@ mod tests {
 
         assert_eq!(version_of("silt 0.0.1 (nightly a1b2c3d)\n").as_deref(), Some("0.0.1 (nightly a1b2c3d)"));
         assert_eq!(version_of("Welcome!\nsilt 0.0.1 (nightly a1b2c3d)\n\n").as_deref(), Some("0.0.1 (nightly a1b2c3d)"));
-        assert_eq!(release_of("0.3.0 (stable a1b2c3d)").as_deref(), Some("v0.3.0"));
-        assert_eq!(release_of("0.3.0 (stable)").as_deref(), Some("v0.3.0"));
-        assert_eq!(release_of("0.0.1 (nightly a1b2c3d, with changes)"), None);
 
-        let (nightly, stable) = ("0.0.1 (nightly a1b2c3d)", "0.3.0 (stable a1b2c3d)");
-        assert_eq!(plan(&linux("x86_64"), &linux("x86_64"), nightly, "vps"), Plan::Copy);
-        assert_eq!(plan(&linux("x86_64"), &linux("aarch64"), stable, "vps"), Plan::Release("v0.3.0".into()));
-        let windows = Platform { os: "windows".into(), arch: "x86_64".into() };
-        assert_eq!(plan(&windows, &linux("x86_64"), stable, "vps"), Plan::Release("v0.3.0".into()));
-        let Plan::Cannot(why) = plan(&linux("x86_64"), &linux("aarch64"), nightly, "vps") else { panic!("no plan") };
-        assert!(
-            why.starts_with("`vps` runs Linux aarch64, and this computer’s `silt` is a nightly build for Linux x86_64"),
-            "{why}"
-        );
+        assert_eq!(plan(&linux("x86_64"), &linux("x86_64"), "vps"), Plan::Copy);
+        let Plan::Cannot(why) = plan(&linux("x86_64"), &linux("aarch64"), "vps") else { panic!("no plan") };
+        assert!(why.starts_with("`vps` runs Linux aarch64, while this computer’s `silt` is built for Linux x86_64"), "{why}");
         assert!(why.contains("`cargo install --locked --git https://github.com/Urcra/silt silt-cli`"));
-        let mac = Platform { os: "macos".into(), arch: "aarch64".into() };
-        assert!(matches!(plan(&linux("x86_64"), &mac, stable, "mini"), Plan::Cannot(why) if why.contains("only for Linux")));
+        let windows = Platform { os: "windows".into(), arch: "x86_64".into() };
+        assert!(matches!(plan(&windows, &linux("x86_64"), "vps"), Plan::Cannot(_)));
     }
 
     #[test]
@@ -957,10 +915,6 @@ mod tests {
             "it needs `GLIBC_2.39`, newer than the system there"
         );
         assert_eq!(wont_run_of("sh: 1: /home/me/.local/bin/.silt.new: Exec format error\n"), "exec format error");
-        assert_eq!(
-            release_failure("silt install: downloading x\nsilt install: no release binary for riscv64\n"),
-            "no release binary for riscv64"
-        );
         assert_eq!(restarted("restarted\n"), Restarted::Now);
         assert_eq!(restarted("restarts once no agent works in it: 2 agents work in it now\n"), Restarted::Waiting(2));
         assert_eq!(restarted("restarts once no agent works in it: an agent works in it now\n"), Restarted::Waiting(1));

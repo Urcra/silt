@@ -9,16 +9,10 @@
 #   SILT_PASSWORD  that account's password
 set -eu
 
-# A release binary when one can be downloaded, else built from source. The
-# script is fetched first: a failed download piped into `sh` would succeed.
+# Built from source. Recording needs neither the web UI nor the plugins
+# Silt ships, nor the tools that build them.
 if ! command -v silt >/dev/null; then
-    if install=$(curl -fsSL https://raw.githubusercontent.com/Urcra/silt/main/scripts/install.sh) &&
-        printf '%s\n' "$install" | SILT_INSTALL_DIR=/usr/local/bin sh; then
-        :
-    else
-        # Recording needs no web UI, nor the tools that build it.
-        SILT_SKIP_WEB_BUILD=1 cargo install --locked --git https://github.com/Urcra/silt silt-cli
-    fi
+    SILT_SKIP_WEB_BUILD=1 SILT_SKIP_PLUGIN_BUILD=1 cargo install --locked --git https://github.com/Urcra/silt silt-cli
 fi
 
 if [ -n "${SILT_SERVER:-}" ]; then
