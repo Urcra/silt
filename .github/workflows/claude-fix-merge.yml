@@ -47,7 +47,6 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.issue.number }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      HELPER: ${{ runner.temp }}/claude-pr.sh
     steps:
       - name: The command
         id: command
@@ -66,6 +65,8 @@ jobs:
           printf '%s\n%s\n' "$rest" "$(printf '%s\n' "$BODY" | tail -n +2)" >"$RUNNER_TEMP/notes.txt"
           gh api "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content=eyes >/dev/null
           # The checks that guard a merge come from the default branch, not the PR.
+          HELPER="$RUNNER_TEMP/claude-pr.sh"
+          echo "HELPER=$HELPER" >>"$GITHUB_ENV"
           gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/claude-pr.sh?ref=$DEFAULT_BRANCH" \
             -H 'Accept: application/vnd.github.raw' >"$HELPER"
           chmod +x "$HELPER"
