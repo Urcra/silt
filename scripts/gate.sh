@@ -4,22 +4,43 @@
 # A pass records the tree it checked in target/gate-passed, which lets
 # scripts/commit.sh commit that tree without running the gate again.
 #
-# Usage: scripts/gate.sh [--quick]
+# Usage: scripts/gate.sh [--quick | --part checks|tests|perf]
 #   --quick  formatting, lints and the workspace's tests only: for iterating,
 #            as it records no pass.
+#   --part   one third of the gate, for running the thirds on separate
+#            machines at once (.github/workflows/claude.yml): checks is
+#            formatting, licences, lints, clippy and the wasm, web, desktop
+#            and speech checks; tests is the build and the tests; perf is the
+#            perf build, the budgets and the end-to-end tests. A part records
+#            no pass.
 set -eu
 cd "$(dirname "$0")/.."
 
+usage() {
+    echo "usage: scripts/gate.sh [--quick | --part checks|tests|perf]" >&2
+    exit 2
+}
 quick=false
+part=
 case "${1:-}" in
     "") ;;
     --quick) quick=true ;;
-    *) echo "usage: scripts/gate.sh [--quick]" >&2; exit 2 ;;
+    --part)
+        case "${2:-}" in
+            checks | tests | perf) part=$2 ;;
+            *) usage ;;
+        esac
+        ;;
+    *) usage ;;
 esac
+# Whether this run does a step of the given part: all of them without --part.
+in_part() {
+    [ -z "$part" ] || [ "$part" = "$1" ]
+}
 
 started=$(date +%s)
 tree=$(scripts/tree-id.sh)
-$quick || rm -f target/gate-passed
+$quick || [ -n "$part" ] || rm -f target/gate-passed
 
 # Each step is named on stdout, and on fd 3 when the caller opened it, as
 # scripts/commit.sh does to show progress while it keeps the rest for its
@@ -78,6 +99,7 @@ pkg-config --exists webkit2gtk-4.1 2>/dev/null && has_desktop=true
 has_voice=false
 [ "$(uname -s)" = Linux ] && [ "${SILT_SKIP_VOICE:-0}" = 0 ] && has_voice=true
 
+if in_part checks; then
 step "formatting"
 cargo fmt --all -- --check
 if $has_voice; then (cd crates/silt-voice && cargo fmt -- --check); fi
@@ -100,13 +122,18 @@ fi
 if $has_web; then
     step "web lint"
     pnpm -C web lint
-    # The UI is embedded in the binary, so it's built before cargo builds
-    # silt-web. With the mocks, which the screen references draw as the
-    # boards do (ADR 0039).
+fi
+fi
+
+# The UI is embedded in the binary, so it's built before cargo builds
+# silt-web, by every part. With the mocks, which the screen references draw
+# as the boards do (ADR 0039).
+if $has_web; then
     step "web build"
     VITE_SILT_MOCKS=on pnpm -C web build
 fi
 
+if in_part checks; then
 step "clippy"
 cargo clippy --workspace --all-targets -- -D warnings
 # The plugins Silt ships, and the probe its host is tested with (ADR 0104),
@@ -134,7 +161,9 @@ if $has_web; then
     # `pnpm test` would build the wasm again; the web build just did.
     pnpm -C web exec vitest run
 fi
+fi
 
+if in_part tests; then
 if ! $quick; then
     # Every binary, the ones no test runs too.
     step "build"
@@ -154,6 +183,7 @@ else
     skip "nextest, which isn't installed (cargo install --locked cargo-nextest); cargo test runs the tests one binary at a time"
     cargo test --workspace
 fi
+fi
 
 if $quick; then
     done_step
@@ -162,6 +192,7 @@ if $quick; then
     exit 0
 fi
 
+if in_part checks; then
 # The desktop app is its own workspace, as it needs WebKitGTK (ADR 0041).
 if $has_desktop; then
     step "desktop app"
@@ -189,6 +220,7 @@ if $has_voice; then
 else
     skip "crates/silt-voice, which is built on Linux only for now, and not with SILT_SKIP_VOICE=1"
 fi
+fi
 
 # Performance budgets (ADR 0034), timed on an optimized build. Their limits
 # are set for the machines Silt is developed on (ADR 0037), so a slower one,
@@ -196,6 +228,7 @@ fi
 # recorded for scripts/commit.sh.
 enforce_budgets=true
 [ "${SILT_BENCH_ENFORCE:-1}" = 0 ] && enforce_budgets=false
+if in_part perf; then
 step "perf build"
 cargo build --profile perf -p silt-cli -p silt-bench
 step "performance budgets"
@@ -211,12 +244,15 @@ if $has_web; then
     step "end-to-end tests"
     SILT="$PWD/target/perf/silt" pnpm -C web e2e
 fi
+fi
 
 done_step
 printf '%s' "$summary"
-# Only a tree that stayed as it was while the gate ran, with its budgets
-# held, has passed.
-if ! $enforce_budgets; then
+# Only a tree that stayed as it was while the whole gate ran, with its
+# budgets held, has passed.
+if [ -n "$part" ]; then
+    echo "gate: the $part part passed in $(elapsed "$started"); a part isn't recorded"
+elif ! $enforce_budgets; then
     echo "gate: passed in $(elapsed "$started") with the budgets only reported, so this pass isn't recorded"
 elif [ "$(scripts/tree-id.sh)" = "$tree" ]; then
     echo "$tree" >target/gate-passed

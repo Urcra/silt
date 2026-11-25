@@ -57,24 +57,107 @@ took() {
     fi
 }
 
+# merge and gate run as several jobs on several runners, so their comment is
+# drawn from the run's own jobs, as GitHub reports them, by whichever job
+# pushes it.
+iso() {
+    [ -n "$1" ] && [ "$1" != null ] && date -d "$1" +%s
+}
+
+job_line() {
+    # job_line <label> <job json or empty> [nested]
+    local label=$1 job=$2 indent=${3:-} status conclusion start end now time detail
+    now=$(date +%s)
+    if [ -z "$job" ]; then
+        printf -- '%s- ⬜ %s\n' "$indent" "$label"
+        return
+    fi
+    status=$(jq -r .status <<<"$job")
+    conclusion=$(jq -r .conclusion <<<"$job")
+    start=$(iso "$(jq -r .started_at <<<"$job")" || true)
+    end=$(iso "$(jq -r .completed_at <<<"$job")" || true)
+    time=
+    [ -n "$start" ] && time=" · $(took $(( ${end:-$now} - start )))"
+    case "$status:$conclusion" in
+        completed:success) printf -- '%s- ✅ %s%s\n' "$indent" "$label" "$time" ;;
+        completed:failure)
+            detail=$(gh api "repos/$repo/check-runs/$(jq -r .id <<<"$job")/annotations" \
+                --jq '[.[] | select(.title == "gate")][0].message // empty' 2>/dev/null || true)
+            printf -- '%s- ❌ %s%s%s\n' "$indent" "$label" "${detail:+: $detail}" "$time"
+            ;;
+        completed:cancelled) printf -- '%s- ⏹ %s%s\n' "$indent" "$label" "$time" ;;
+        completed:skipped) printf -- '%s- ➖ ~~%s~~\n' "$indent" "$label" ;;
+        in_progress:*) printf -- '%s- ⏳ **%s**%s\n' "$indent" "$label" "$time" ;;
+        *) printf -- '%s- ⬜ %s\n' "$indent" "$label" ;;
+    esac
+}
+
+render_jobs() {
+    local jobs name part state finish step
+    jobs=$(gh api "repos/$repo/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" --jq '.jobs' 2>/dev/null || echo '[]')
+    pick() { jq -c --arg name "$1" 'map(select(.name == $name)) | last // empty' <<<"$jobs"; }
+    parts() {
+        # A gate's line, with its three parts under it.
+        local label=$1 prefix=$2 found skipped
+        found=$(jq -c --arg p "$prefix (" '[.[] | select(.name | startswith($p))]' <<<"$jobs")
+        skipped=$(jq -r 'length > 0 and all(.conclusion == "skipped")' <<<"$found")
+        if [ "$(jq length <<<"$found")" -eq 0 ]; then
+            printf -- '- ⬜ %s\n' "$label"
+        elif [ "$skipped" = true ]; then
+            printf -- '- ➖ ~~%s~~\n' "$label"
+        else
+            printf -- '- %s\n' "$label"
+            for part in checks tests perf; do
+                job_line "$part" "$(pick "$prefix ($part)")" '  '
+            done
+        fi
+    }
+    job_line "Checks" "$(pick Start)"
+    parts "Gate (merged with base)" "Gate"
+    state=$(pick "Fix round 1")
+    if [ -n "$state" ] && [ "$(jq -r .conclusion <<<"$state")" != skipped ]; then
+        job_line "Fixes, round 1 (Claude's comment below)" "$state"
+        parts "Gate again" "Gate again 1"
+        state=$(pick "Fix round 2")
+        if [ -n "$state" ] && [ "$(jq -r .conclusion <<<"$state")" != skipped ]; then
+            job_line "Fixes, round 2 (Claude's comment below)" "$state"
+            parts "Gate again" "Gate again 2"
+        fi
+    fi
+    if [ "$(cat "$temp/status-command")" = merge ]; then
+        finish=$(pick Finish)
+        for step in CI Merge; do
+            if [ -n "$finish" ]; then
+                job_line "$step" "$(jq -c --arg s "$step" '.steps // [] | map(select(.name == $s)) | last // empty' <<<"$finish")"
+            else
+                job_line "$step" ""
+            fi
+        done
+    fi
+}
+
 status_render() {
     local now key label state start end time
     now=$(date +%s)
     # shellcheck disable=SC2016 # the backticks are Markdown
     printf '**`/claude %s`** for @%s · started %s UTC · [log](%s)\n\n' \
         "$(cat "$temp/status-command")" "${REQUESTER:-}" "$(date -u -d "@$(cat "$temp/status-start")" +%H:%M)" "${RUN_URL:-}"
-    while IFS='|' read -r key label state start end; do
-        time=
-        [ -n "$start" ] && time=" · $(took $(( ${end:-$now} - start )))"
-        case "$state" in
-            done) printf -- '- ✅ %s%s\n' "$label" "$time" ;;
-            active) printf -- '- ⏳ **%s**%s\n' "$label" "$time" ;;
-            failed) printf -- '- ❌ %s%s\n' "$label" "$time" ;;
-            cancelled) printf -- '- ⏹ %s%s\n' "$label" "$time" ;;
-            skipped) printf -- '- ➖ ~~%s~~\n' "$label" ;;
-            *) printf -- '- ⬜ %s\n' "$label" ;;
-        esac
-    done <"$phases"
+    if [ -e "$temp/status-jobs" ]; then
+        render_jobs
+    else
+        while IFS='|' read -r key label state start end; do
+            time=
+            [ -n "$start" ] && time=" · $(took $(( ${end:-$now} - start )))"
+            case "$state" in
+                done) printf -- '- ✅ %s%s\n' "$label" "$time" ;;
+                active) printf -- '- ⏳ **%s**%s\n' "$label" "$time" ;;
+                failed) printf -- '- ❌ %s%s\n' "$label" "$time" ;;
+                cancelled) printf -- '- ⏹ %s%s\n' "$label" "$time" ;;
+                skipped) printf -- '- ➖ ~~%s~~\n' "$label" ;;
+                *) printf -- '- ⬜ %s\n' "$label" ;;
+            esac
+        done <"$phases"
+    fi
     if [ -s "$temp/status-result" ]; then
         printf '\n%s\n' "$(cat "$temp/status-result")"
     fi
@@ -101,9 +184,16 @@ cmd_status() {
             date +%s >"$temp/status-start"
             status_plan "$1" "${2:-}" >"$phases"
             : >"$temp/status-result"
+            case "$kind:$1" in
+                pr:merge | pr:gate) touch "$temp/status-jobs" ;;
+            esac
             jq -n --arg body "$(status_render)" '{body: $body}' |
                 gh api "repos/$repo/issues/$number/comments" --input - --jq .id >"$temp/status-id"
             echo "STATUS_ID=$(cat "$temp/status-id")" >>"${GITHUB_ENV:-/dev/null}"
+            {
+                echo "status_id=$(cat "$temp/status-id")"
+                echo "status_start=$(cat "$temp/status-start")"
+            } >>"$out"
             nohup "$0" status watch >/dev/null 2>&1 &
             echo $! >"$temp/status-watch"
             ;;
@@ -132,10 +222,27 @@ cmd_status() {
             : >"$temp/status-id"
             touch "$temp/status-handed"
             ;;
+        attach)
+            # A later job of merge or gate takes up the comment Start posted.
+            [ -n "${STATUS_ID:-}" ] || return 0
+            echo "$STATUS_ID" >"$temp/status-id"
+            echo "$STATUS_START" >"$temp/status-start"
+            echo "$STATUS_COMMAND" >"$temp/status-command"
+            touch "$temp/status-jobs" "$temp/status-result"
+            : >"$phases"
+            status_push || true
+            nohup "$0" status watch >/dev/null 2>&1 &
+            echo $! >"$temp/status-watch"
+            ;;
+        push)
+            [ -s "$temp/status-id" ] || return 0
+            kill "$(cat "$temp/status-watch" 2>/dev/null)" 2>/dev/null || true
+            status_push
+            ;;
         watch)
             while :; do
                 status_push || true
-                sleep 15
+                if [ -e "$temp/status-jobs" ]; then sleep 30; else sleep 15; fi
             done
             ;;
         final)
@@ -149,6 +256,19 @@ cmd_status() {
             fi
             [ -s "$temp/status-id" ] || return 0
             kill "$(cat "$temp/status-watch" 2>/dev/null)" 2>/dev/null || true
+            if [ -e "$temp/status-jobs" ]; then
+                # The other jobs carry on; the result is Finish's to say.
+                if [ ! -s "$temp/status-result" ]; then
+                    if gh api "repos/$repo/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
+                        --jq '.jobs[].conclusion' 2>/dev/null | grep -qx cancelled; then
+                        echo "⏹ Cancelled" >"$temp/status-result"
+                    elif [ "$1" = failure ]; then
+                        echo "❌ Failed. See the [log](${RUN_URL:-})." >"$temp/status-result"
+                    fi
+                fi
+                status_push
+                return 0
+            fi
             local job=$1 end
             case "$job" in
                 cancelled) end=cancelled ;;
@@ -199,10 +319,16 @@ cmd_parse() {
     case "$kind:$command:$mode" in
         pr:fix:* | pr:merge:* | pr:gate:* | pr:review:fix | issue:fix:*) build=true ;;
     esac
+    # merge and gate run the gate's parts as jobs of their own.
+    local gated=false
+    case "$kind:$command" in
+        pr:merge | pr:gate) gated=true ;;
+    esac
     {
         echo "command=$command"
         echo "mode=$mode"
         echo "build=$build"
+        echo "gated=$gated"
     } >>"$out"
     cmd_status init "$command" "$mode"
 }
@@ -291,73 +417,42 @@ check_target() {
         echo "head=$(jq -r .headRefName <<<"$view")"
         echo "base=$(jq -r .baseRefName <<<"$view")"
         echo "sha=$(jq -r .headRefOid <<<"$view")"
+        echo "base_sha=$(gh api "repos/$repo/git/ref/heads/$(jq -r .baseRefName <<<"$view")" --jq .object.sha)"
     } >>"$out"
 }
 
-# Checks out the head as it is on GitHub, merges its base in without
-# pushing, and runs the full gate on the result.
-cmd_gate() {
-    local round=$1 head base sha base_sha log key=gate
-    if [ "$round" -gt 1 ]; then
-        key=fixes
-        cmd_status set fixes active "Fixes, round $((round - 1))/2: gate"
-    else
-        cmd_status set gate active
-    fi
-    head=$(pr_field headRefName)
-    base=$(pr_field baseRefName)
-    git fetch --quiet origin "$base" "$head"
-    git checkout --quiet -B "$head" "origin/$head"
-    sha=$(git rev-parse HEAD)
-    base_sha=$(git rev-parse "origin/$base")
-    {
-        echo "sha=$sha"
-        echo "base_sha=$base_sha"
-    } >>"$out"
-    if ! git -c user.name=gate -c user.email=gate@localhost merge --quiet --no-edit "origin/$base" >/dev/null 2>&1; then
-        git diff --name-only --diff-filter=U >"$temp/conflicts.txt"
+# One part of the full gate (scripts/gate.sh --part) on `sha` merged with
+# `base_sha`, as one of three jobs at once. A failure leaves what Claude needs
+# in $RUNNER_TEMP/gate-failure, and a one-line annotation the status comment
+# shows.
+cmd_gate_part() {
+    local round=$1 part=$2 sha=$3 base_sha=$4 log step
+    mkdir -p "$temp/gate-failure"
+    git fetch --quiet origin "$base_sha" 2>/dev/null || true
+    git checkout --quiet --detach "$sha"
+    if ! git -c user.name=gate -c user.email=gate@localhost merge --quiet --no-edit "$base_sha" >/dev/null 2>&1; then
+        git diff --name-only --diff-filter=U >"$temp/gate-failure/conflicts.txt"
         git merge --abort
-        echo "conflicts with $base in: $(paste -sd' ' "$temp/conflicts.txt")"
-        [ "$key" = gate ] && cmd_status set gate failed "Gate: conflicts with \`$base\`"
-        {
-            echo "passed=false"
-            echo "conflicts=true"
-        } >>"$out"
-        return
+        echo "::error title=gate::conflicts with the base in $(paste -sd' ' "$temp/gate-failure/conflicts.txt")"
+        return 1
     fi
-    echo "conflicts=false" >>"$out"
-    log="$temp/gate-$round.log"
+    log="$temp/gate-$part.log"
     # The budgets are set for the machines Silt is built on, not a runner,
     # so they're reported rather than held (SILT_BENCH_ENFORCE=0).
-    if SILT_BENCH_ENFORCE=0 SILT_SKIP_VOICE=1 scripts/gate.sh >"$log" 2>&1; then
-        echo "passed=true" >>"$out"
-        if [ "$key" = gate ]; then
-            cmd_status set gate 'done' "Gate: passed on \`${sha:0:8}\` + \`$base\`"
-        else
-            cmd_status set fixes 'done' "Fixes: gate passed on \`${sha:0:8}\` + \`$base\`"
-        fi
-    else
-        # What Claude gets to fix: the step that failed and the errors in it.
-        {
-            grep '^gate: \[' "$log" | tail -1
-            grep -E '^error|FAILED|FAIL |panicked|✘|No space left' -A8 "$log" | head -150
-            echo '...'
-            tail -60 "$log"
-        } >"$temp/gate-$round-failure.txt"
-        echo "passed=false" >>"$out"
-        local step
-        step=$(grep '^gate: \[' "$log" | tail -1 | sed 's/^gate: \[[^]]*\] //')
-        if [ "$key" = gate ]; then
-            cmd_status set gate failed "Gate: failed at ${step:-unknown step} (\`${sha:0:8}\`)"
-        elif [ "$round" -ge 3 ]; then
-            cmd_status set fixes failed "Fixes: gate still failing at ${step:-unknown step}"
-        fi
+    if SILT_BENCH_ENFORCE=0 SILT_SKIP_VOICE=1 scripts/gate.sh --part "$part" 2>&1 | tee "$log"; then
+        return 0
     fi
-    grep '^gate: \[' "$log" | tail -1 || true
-    tail -5 "$log"
-    # The merge with the base was only for the gate; the branch is left as
-    # it is on GitHub, for Claude to work on.
-    git reset --quiet --hard "origin/$head"
+    step=$(grep '^gate: \[' "$log" | tail -1 | sed 's/^gate: \[[^]]*\] //')
+    # What Claude gets to fix: the step that failed and the errors in it.
+    {
+        echo "gate part: $part, round $round, failed at: ${step:-unknown step}"
+        # No match is fine: the tail below still says what happened.
+        grep -E '^error|FAILED|FAIL |panicked|✘|No space left' -A8 "$log" | head -150 || true
+        echo '...'
+        tail -60 "$log"
+    } >"$temp/gate-failure/$part.txt"
+    echo "::error title=gate::failed at ${step:-an unknown step}"
+    return 1
 }
 
 # Waits for every check run on the head commit to finish, and says
@@ -407,7 +502,7 @@ cmd_merge() {
         say "Not merged: branch moved to \`${now:0:8}\` after the gate passed on \`${sha:0:8}\`. Run \`/claude merge\` again."
         return 1
     fi
-    if [ "$(git ls-remote origin "refs/heads/$base" | cut -f1)" != "$base_sha" ]; then
+    if [ "$(gh api "repos/$repo/git/ref/heads/$base" --jq .object.sha)" != "$base_sha" ]; then
         cmd_status set merge failed
         say "Not merged: \`$base\` moved after the gate passed. Run \`/claude merge\` again."
         return 1
@@ -423,16 +518,51 @@ cmd_merge() {
     say "✅ Merged \`${sha:0:8}\` into \`$base\`"
 }
 
-# Whether Claude's commits since `from` touch what it may never change.
+# What Claude's round pushed: the head and base the next gate runs on, and
+# whether the commits since `from` touch what it may never change.
 cmd_guard() {
-    local from=$1 to=$2 touched
-    touched=$(git diff --name-only "$from" "$to" -- .github | paste -sd' ')
+    local from=$1 head=$2 base=$3 now touched
+    git fetch --quiet origin "$head" "$base"
+    now=$(git rev-parse "origin/$head")
+    {
+        echo "sha=$now"
+        echo "base_sha=$(git rev-parse "origin/$base")"
+    } >>"$out"
+    if [ "$now" = "$from" ]; then
+        echo "moved=false" >>"$out"
+        echo "ok=true" >>"$out"
+        return
+    fi
+    echo "moved=true" >>"$out"
+    touched=$(git diff --name-only "$from" "$now" -- .github | paste -sd' ')
     if [ -n "$touched" ]; then
         say "❌ Stopped: fixes changed \`.github/\` ($touched). Not merged; check the branch."
         echo "ok=false" >>"$out"
     else
         echo "ok=true" >>"$out"
     fi
+}
+
+# The head and base a whole gate passed on, from the rounds' results, and for
+# gate, the result.
+cmd_passed() {
+    local sha='' base_sha=''
+    if [ "${R1:-}" = success ]; then sha=$S1 base_sha=$B1
+    elif [ "${R2:-}" = success ]; then sha=$S2 base_sha=$B2
+    elif [ "${R3:-}" = success ]; then sha=$S3 base_sha=$B3
+    fi
+    {
+        echo "sha=$sha"
+        echo "base_sha=$base_sha"
+    } >>"$out"
+    if [ -n "$sha" ]; then
+        if [ "$(cat "$temp/status-command")" = gate ]; then
+            cmd_status result "✅ Gate passed (\`${sha:0:8}\` + base)"
+        fi
+    elif [ "${GUARD1:-}" != false ] && [ "${GUARD2:-}" != false ]; then
+        cmd_status result "❌ Gate still failing after 2 rounds, or conflicts unresolved. See Claude's comments and the [log](${RUN_URL:-})."
+    fi
+    return 0
 }
 
 # Stops this issue's or PR's other Claude runs, queued or running.
@@ -477,9 +607,9 @@ notes() {
 # The prompt for a command, or for a round of `merge` or `gate` after a gate
 # that failed or couldn't run for conflicts, as the step output `text`.
 cmd_prompt() {
-    local command=$1 round=${2:-} conflicts=${3:-false} where head base what=
+    local command=$1 round=${2:-} where head base what=
     if [ -n "$round" ]; then
-        cmd_status set fixes active "Fixes, round $round/2: Claude fixing $( [ "$conflicts" = true ] && echo "conflicts" || echo "the gate failure" ) (see its comment)"
+        :
     else
         cmd_status set claude 'done'
         cmd_status handoff
@@ -502,11 +632,18 @@ cmd_prompt() {
         case "$kind:$command" in
             pr:fix) prompt_pr_fix ;;
             pr:merge | pr:gate)
-                if [ "$conflicts" = true ]; then
-                    what="The branch conflicts with \`$base\` in: $(paste -sd' ' "$temp/conflicts.txt"). Resolve that first; the gate couldn't run."
+                local failures="$temp/failures" f parts=''
+                if [ -s "$failures/conflicts.txt" ]; then
+                    what="The branch conflicts with \`$base\` in: $(paste -sd' ' "$failures/conflicts.txt"). Resolve that first; the gate couldn't run."
                 else
-                    cp "$temp/gate-$round-failure.txt" "$(git rev-parse --git-dir)/gate-failure.txt"
-                    what="The full gate failed on the head merged with \`$base\`. The failing step and its errors are in .git/gate-failure.txt."
+                    for f in "$failures"/*.txt; do
+                        [ -e "$f" ] || continue
+                        parts="$parts $(basename "$f" .txt)"
+                        printf '==== %s\n' "$(basename "$f" .txt)"
+                        cat "$f"
+                        echo
+                    done >"$(git rev-parse --git-dir)/gate-failure.txt"
+                    what="The full gate failed on the head merged with \`$base\`, in its part(s):$parts. The failing steps and their errors are in .git/gate-failure.txt."
                 fi
                 prompt_pr_gate
                 ;;
@@ -626,6 +763,6 @@ Don't change any file or branch.
 EOF
 }
 
-cmd=$1
+cmd=${1//-/_}
 shift
 "cmd_$cmd" "$@"
