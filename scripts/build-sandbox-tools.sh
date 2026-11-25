@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the bubblewrap and pasta that Silt's Linux releases ship beside
+# Builds the bubblewrap and pasta that Silt's Linux release archives carry beside
 # `silt`, as `silt-bwrap` and `silt-pasta`, linked statically so they run on
 # any distribution (ADR 0093). Their licenses and where their sources are go
 # in `licenses/`. Needs curl, meson, ninja, make and libcap's static library

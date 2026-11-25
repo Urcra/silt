@@ -20,8 +20,7 @@ fn main() {
             "the web UI isn't built and can't be: {missing}.\n\
              Building it needs Node.js with pnpm (`corepack enable pnpm`, or \
              `npm install -g pnpm`) and the wasm32-unknown-unknown target \
-             (`rustup target add wasm32-unknown-unknown`). Or install a release \
-             binary (scripts/install.sh), or set SILT_SKIP_WEB_BUILD=1 for a silt \
+             (`rustup target add wasm32-unknown-unknown`). Or set SILT_SKIP_WEB_BUILD=1 for a silt \
              without the web UI."
         );
     }

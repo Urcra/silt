@@ -24,10 +24,6 @@ pub const MACHINES: &str = "machines.json";
 /// How long the tunnel may take to answer once started.
 const FORWARD_WAIT: Duration = Duration::from_secs(15);
 
-/// Installs a release there when this computer's build can't run there
-/// (ADR 0109).
-const INSTALL_SCRIPT: &str = include_str!("../../../scripts/install.sh");
-
 /// The sandbox's programs, which `silt` finds beside it (ADR 0093).
 const BESIDE_SILT: [&str; 3] = ["silt-bwrap", "silt-pasta", "silt-pasta.avx2"];
 
@@ -511,15 +507,11 @@ impl Machines {
         let Some(there) = &found.platform else {
             return fail(report, planned_at, Failure::Other(format!("Couldn't tell what `{host}` runs.")));
         };
-        let plan = machines::plan(&Platform::here(), there, &local.version, host);
+        let plan = machines::plan(&Platform::here(), there, host);
         match &plan {
             Plan::Cannot(why) => return fail(report, planned_at, Failure::Other(why.clone())),
             Plan::Copy if !updating => {
                 self.told(report, Step::Platform, StepState::Done(format!("`{host}` runs {there}, as this computer does")));
-            }
-            Plan::Release(tag) if !updating => {
-                let said = format!("`{host}` runs {there}, so it gets release `{tag}` built for it");
-                self.told(report, Step::Platform, StepState::Done(said));
             }
             _ => {}
         }
@@ -596,44 +588,6 @@ impl Machines {
                     return fail(report, Step::Check, failure);
                 }
                 self.told(report, Step::Check, StepState::Done(format!("It runs there: silt {version}")));
-            }
-            Plan::Release(tag) => {
-                let in_dir = machines::shown_path(&dir, home);
-                self.told(
-                    report,
-                    Step::Copy,
-                    StepState::Doing(format!("Downloading silt {tag} there and installing it in `{in_dir}`…")),
-                );
-                let line = machines::release_line(&tag, &dir);
-                let installed =
-                    exchange(machines::run_on(machine, control, &line), Some(&mut INSTALL_SCRIPT.as_bytes()), &mut |_| {});
-                match installed {
-                    Ok(output) if output.status.success() => {}
-                    Ok(output) if output.status.code() != Some(255) => {
-                        let said = machines::release_failure(&String::from_utf8_lossy(&output.stderr));
-                        return fail(
-                            report,
-                            Step::Copy,
-                            Failure::Other(format!("Installing release `{tag}` there failed: {said}.")),
-                        );
-                    }
-                    Ok(output) => {
-                        return fail(
-                            report,
-                            Step::Copy,
-                            machines::failure_of(&String::from_utf8_lossy(&output.stderr), output.status.code()),
-                        );
-                    }
-                    Err(failure) => return fail(report, Step::Copy, failure),
-                }
-                self.told(report, Step::Copy, StepState::Done(format!("Installed release `{tag}` in `{in_dir}`")));
-                self.told(report, Step::Check, StepState::Running);
-                let said = run(machines::run_on(machine, control, &machines::in_their_shell(&target, &["--version"])));
-                match said.map(|said| machines::version_of(&said)) {
-                    Ok(Some(said)) => self.told(report, Step::Check, StepState::Done(format!("It runs there: silt {said}"))),
-                    Ok(None) => return fail(report, Step::Check, Failure::WontRun("it said nothing".to_owned())),
-                    Err(failure) => return fail(report, Step::Check, failure),
-                }
             }
             Plan::Cannot(_) => unreachable!("failed above"),
         }
