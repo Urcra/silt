@@ -493,6 +493,14 @@ cmd_gate_part() {
         echo '...'
         tail -60 "$log"
     } >"$temp/gate-failure/$part.txt"
+    # A screen that differs from its reference can only be judged by looking.
+    if [ -d web/test-results ]; then
+        find web/test-results -name '*-expected.png' -o -name '*-actual.png' -o -name '*-diff.png' |
+            while read -r image; do
+                mkdir -p "$temp/gate-failure/screens"
+                cp "$image" "$temp/gate-failure/screens/$(basename "$(dirname "$image")")--$(basename "$image")"
+            done
+    fi
     echo "::error title=gate::failed at ${step:-an unknown step}"
     return 1
 }
@@ -710,6 +718,10 @@ cmd_prompt() {
                         echo
                     done >"$(git rev-parse --git-dir)/gate-failure.txt"
                     what="The full gate failed on the head merged with \`$base\`, in its part(s):$parts. The failing steps and their errors are in .git/gate-failure.txt."
+                    if [ -d "$failures/screens" ]; then
+                        cp -r "$failures/screens" "$(git rev-parse --git-dir)/gate-screens"
+                        what="$what Each screen that differed from its reference has Playwright's expected, actual and diff images in .git/gate-screens/; look at them before deciding whether the change or the reference is wrong."
+                    fi
                 fi
                 prompt_pr_gate
                 ;;
