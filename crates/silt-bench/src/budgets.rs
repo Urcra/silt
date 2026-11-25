@@ -137,7 +137,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "tracking a 100 MB transcript, the daemon already running",
         dev: Limit::Time(Duration::from_secs(1)),
         cloud: Limit::Time(Duration::from_secs(4)),
-        ci: Limit::Time(Duration::from_secs(2)),
+        ci: Limit::Time(Duration::from_millis(2400)),
         status: Status::Enforced,
     },
     Budget {
@@ -145,7 +145,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "`silt import` of a 100 MB transcript, the daemon already running",
         dev: Limit::Time(Duration::from_secs(1)),
         cloud: Limit::Time(Duration::from_secs(4)),
-        ci: Limit::Time(Duration::from_secs(2)),
+        ci: Limit::Time(Duration::from_millis(2400)),
         status: Status::Enforced,
     },
     Budget {
@@ -161,7 +161,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "the hook that finds no daemon and captures in process before starting one, p95 of the slowest event, at 100k deltas and 20k files",
         dev: Limit::Time(Duration::from_millis(50)),
         cloud: Limit::Time(Duration::from_millis(230)),
-        ci: Limit::Time(Duration::from_millis(200)),
+        ci: Limit::Time(Duration::from_millis(230)),
         status: Status::Enforced,
     },
     Budget {
@@ -193,7 +193,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "the capture step after a Bash call, comparing a 50,000-file checkout",
         dev: Limit::Time(Duration::from_millis(200)),
         cloud: Limit::Time(Duration::from_millis(850)),
-        ci: Limit::Time(Duration::from_millis(450)),
+        ci: Limit::Time(Duration::from_millis(520)),
         status: Status::Enforced,
     },
     Budget {
@@ -233,7 +233,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "`silt sync --once` pushing a family holding 100 MB of transcript to a server, at 100 MB/s",
         dev: Limit::Time(Duration::from_secs(1)),
         cloud: Limit::Time(Duration::from_millis(2600)),
-        ci: Limit::Time(Duration::from_millis(2200)),
+        ci: Limit::Time(Duration::from_secs(3)),
         status: Status::Enforced,
     },
     Budget {
@@ -524,7 +524,7 @@ mod tests {
         let summary = summary(&shown, Machine::Ci, &measured, "4 cores, ext2/ext3");
         assert!(summary.contains("On 4 cores, ext2/ext3, with CI limits."), "{summary}");
         assert!(summary.contains("| `sync.pull` | 1.30 s | < 2.60 s | ✅ | < 1.00 s | ❌ |"), "{summary}");
-        assert!(summary.contains("| `sync.push` | - | < 2.20 s |  | < 1.00 s |  |"), "{summary}");
+        assert!(summary.contains("| `sync.push` | - | < 3.00 s |  | < 1.00 s |  |"), "{summary}");
     }
 
     #[test]

@@ -9,40 +9,40 @@
 
 It also failed anyway. `silt-bench report` exited with failure whenever an enforced budget was over its limit, so a pull request that only bumps a dependency failed at the budgets on a runner, and its fix rounds were spent on a slowdown nobody made.
 
-One run on a runner, from that pull request:
+Two runs on runners, from that pull request, on the same code; the second is `check`'s, the better of two where a budget was over:
 
-| Budget | Runner | Dev limit |
-|---|---|---|
-| `record.import` | 939 ms | < 1 s |
-| `import.session` | 1.05 s | < 1 s |
-| `record.hook` | 14.0 ms | < 20 ms |
-| `record.hook_daemonless` | 101 ms | < 50 ms |
-| `store.size` | 0.57× | ≤ 1.5× |
-| `daemon.startup` | 5.8 ms | < 100 ms |
-| `daemon.ready` | 317 ms | < 1 s |
-| `checkout.rescan` | 210 ms | < 200 ms |
-| `daemon.idle` | 0.07 % of a core | ≤ 0.1 % |
-| `sync.push` | 1.10 s | < 1 s |
-| `sync.pull` | 1.30 s | < 1 s |
-| `app.threads` | 76.5 ms | < 100 ms |
-| `app.history` | 1.5 ms | < 100 ms |
-| `page.fold` | 4.9 ms | < 10 ms |
-| `doc.replay` | 5.6 ms | < 15 ms |
-| `sheet.eval` | 11.5 ms | < 20 ms |
+| Budget | First runner | Second runner | Dev limit |
+|---|---|---|---|
+| `record.import` | 939 ms | 1.75 s | < 1 s |
+| `import.session` | 1.05 s | 1.85 s | < 1 s |
+| `record.hook` | 14.0 ms | 27.4 ms | < 20 ms |
+| `record.hook_daemonless` | 101 ms | 169 ms | < 50 ms |
+| `store.size` | 0.57× | 0.57× | ≤ 1.5× |
+| `daemon.startup` | 5.8 ms | 7.0 ms | < 100 ms |
+| `daemon.ready` | 317 ms | 432 ms | < 1 s |
+| `checkout.rescan` | 210 ms | 397 ms | < 200 ms |
+| `daemon.idle` | 0.07 % of a core | 0.08 % | ≤ 0.1 % |
+| `sync.push` | 1.10 s | 2.28 s | < 1 s |
+| `sync.pull` | 1.30 s | 1.92 s | < 1 s |
+| `app.threads` | 76.5 ms | 88.4 ms | < 100 ms |
+| `app.history` | 1.5 ms | 1.2 ms | < 100 ms |
+| `page.fold` | 4.9 ms | 5.2 ms | < 10 ms |
+| `doc.replay` | 5.6 ms | 6.3 ms | < 15 ms |
+| `sheet.eval` | 11.5 ms | 11.7 ms | < 20 ms |
 
-A runner is close to the development machine on most budgets and up to twice as slow on a few, so the cloud limits would let a large regression through.
+Runners differ: the second was up to twice as slow as the first on the import, the hooks, the rescan and the push, much as cloud containers differ (ADR 0037). Even the slower one is faster than a cloud session's machine on most budgets, so the cloud limits would let a large regression through.
 
 ## Decision
-**A third set of limits, CI's.** Each budget has a CI limit, about twice what the runner measured, rounded, and never tighter than the dev limit:
+**A third set of limits, CI's.** Each budget has a CI limit, about 1.3 times the slower runner's measurement and about twice the faster one's, rounded, and never tighter than the dev limit:
 
 | Budget | CI limit |
 |---|---|
-| `record.import`, `import.session` | < 2 s |
+| `record.import`, `import.session` | < 2.4 s |
 | `record.hook` | < 40 ms |
-| `record.hook_daemonless` | < 200 ms |
-| `checkout.rescan` | < 450 ms |
+| `record.hook_daemonless` | < 230 ms |
+| `checkout.rescan` | < 520 ms |
 | `daemon.idle` | ≤ 0.2 % of a core |
-| `sync.push` | < 2.2 s |
+| `sync.push` | < 3 s |
 | `sync.pull` | < 2.6 s |
 | `app.threads` | < 200 ms |
 | `page.fold` | < 15 ms |
@@ -59,7 +59,7 @@ The rest keep their dev limits, which the runner met with room to spare. The web
 **`report` only reports.** `silt-bench report` exits with success whatever it measured; only `check` fails.
 
 ## Consequences
-- The gate on a runner catches a regression of about twice a budget, and the run says which budgets are off their targets, so a slowdown is visible without failing an unrelated change.
-- The CI limits come from one run. If a runner fails a budget with no change to explain it, the limit is measured again over three runs, as ADR 0037's were, and this table changes.
+- The gate on a runner catches a regression of a third or more on a slow runner, and of about twice on a fast one, and the run says which budgets are off their targets, so a slowdown is visible without failing an unrelated change.
+- The limits were first set at twice the faster run alone; the slower runner then failed `sync.push` at 2.28 s against 2.2 s with no change to explain it, which set them as above. If a runner fails a budget again with no change to explain it, its limit is measured again and this table changes.
 - GitHub may change its runners; the summary's table shows when the measurements move.
 - `SILT_BENCH_ENFORCE=0` remains for any other slower machine.
