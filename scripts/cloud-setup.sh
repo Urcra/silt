@@ -42,6 +42,13 @@ if [ "$(cargo nextest --version 2>/dev/null | awk 'NR == 1 {print $2}')" != "$NE
     fi
 fi
 
+# The gate checks every dependency's licence with cargo-deny.
+DENY=0.22.1
+if [ "$(cargo deny --version 2>/dev/null | awk 'NR == 1 {print $2}')" != "$DENY" ]; then
+    step "cargo-deny $DENY"
+    cargo install --locked cargo-deny --version "$DENY"
+fi
+
 # A full gate's builds outgrow a cloud container's disk with full debug
 # info, and nobody steps through code with a debugger there, so the
 # workspace's crates get only line tables, as dependencies do, still enough

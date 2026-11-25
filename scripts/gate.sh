@@ -85,6 +85,18 @@ if $has_desktop; then (cd crates/silt-desktop && cargo fmt -- --check); fi
 (cd plugins && cargo fmt --all -- --check)
 if $has_web; then pnpm -C web fmt:check; fi
 
+# Every dependency's licence is one deny.toml allows, in each workspace;
+# the web UI's build checks its own.
+if command -v cargo-deny >/dev/null; then
+    step "licences"
+    cargo deny --log-level error check licenses
+    (cd plugins && cargo deny --log-level error --config ../deny.toml check licenses)
+    if $has_voice; then (cd crates/silt-voice && cargo deny --log-level error --config ../../deny.toml check licenses); fi
+    if $has_desktop; then (cd crates/silt-desktop && cargo deny --log-level error --config ../../deny.toml check licenses); fi
+else
+    skip "the licence check, as cargo-deny isn't installed (cargo install --locked cargo-deny)"
+fi
+
 if $has_web; then
     step "web lint"
     pnpm -C web lint

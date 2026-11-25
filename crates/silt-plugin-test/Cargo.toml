@@ -4,7 +4,7 @@ description = "A stand-in for Silt's plugin host (ADR 0104): a plugin loaded as 
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license = "MIT"
 publish.workspace = true
 
 [lints]

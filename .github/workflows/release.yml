@@ -8,7 +8,7 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 # A release is the stable channel: it learns of newer releases rather than
 # following `main` (ADR 0100).
@@ -69,6 +69,7 @@ jobs:
           sudo apt-get install -y -q musl-tools meson ninja-build libcap-dev
           rustup show
           rustup target add ${{ matrix.target }}
+          cargo install --locked cargo-about --features cli --version 0.9.3
 
       - name: silt
         env:
@@ -86,6 +87,10 @@ jobs:
           mkdir dist package
           cp "$bin" package/silt
           scripts/build-sandbox-tools.sh package
+          # Silt's licence and notices, and those of everything built into it.
+          cp LICENSE NOTICE package/
+          cp web/dist/THIRD-PARTY-NOTICES.txt package/THIRD-PARTY-NOTICES-web.txt
+          cargo about generate --locked --target ${{ matrix.target }} -m crates/silt-cli/Cargo.toml about.hbs -o package/THIRD-PARTY-NOTICES-rust.txt
           tar -czf dist/silt-${{ matrix.target }}.tar.gz -C package .
 
       - uses: actions/upload-artifact@v4
@@ -96,6 +101,8 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:

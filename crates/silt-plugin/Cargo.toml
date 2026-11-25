@@ -4,7 +4,7 @@ description = "Plugins (ADR 0104): the manifest and its validation, cards, effec
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license = "MIT"
 publish.workspace = true
 
 [lints]
