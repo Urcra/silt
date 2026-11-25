@@ -89,9 +89,8 @@ pub fn ask_claude(
     }
     let launch = Launch::new("claude");
     // On Windows an npm install is `claude.cmd`, which a bare name misses.
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let program =
-        silt_os::find_program(&launch.program.to_string_lossy(), &path).unwrap_or_else(|| launch.program.clone().into());
+    let program = silt_os::find_program(&launch.program.to_string_lossy(), &silt_os::program_path())
+        .unwrap_or_else(|| launch.program.clone().into());
     let mut command = Command::new(&program);
     command.args(print_args(tools, model));
     // Images go in a message of the stream, as plain text can't carry them.
