@@ -117,6 +117,8 @@ pub enum OpenError {
     Stored(#[from] silt_log::StoredError),
     #[error("could not set up the HTTP client for sign-in providers")]
     HttpClient(#[from] reqwest::Error),
+    #[error(transparent)]
+    RedactionKey(#[from] silt_redact::KeyError),
 }
 
 /// One family's room, locked on its own so families sync independently.
@@ -205,6 +207,9 @@ struct Shared {
     viewers: Mutex<HashMap<UserId, (VisibilityAt, Arc<Viewer>)>>,
     viewer_serial: std::sync::atomic::AtomicU64,
     data_dir: std::path::PathBuf,
+    /// The key of the placeholders this server writes for secrets in what
+    /// it records itself (ADR 0123).
+    pub(crate) redaction_key: silt_redact::RedactionKey,
     config: Config,
     http: reqwest::Client,
     /// The CDN files artifacts load through this server, when its config
@@ -248,6 +253,7 @@ impl Server {
     pub async fn open_with(data_dir: &Path, config: Config) -> Result<Self, OpenError> {
         tokio::fs::create_dir_all(data_dir).await?;
         let db = open_serving_db(data_dir).await?;
+        let redaction_key = silt_redact::RedactionKey::load_or_create(&data_dir.join(silt_redact::KEY_FILE))?;
         let generation = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().expect("8 bytes"));
         let purged = lifecycle::load_purged(&db).await?;
         let mut stored: BTreeMap<FamilyId, Vec<Delta>> = BTreeMap::new();
@@ -302,6 +308,7 @@ impl Server {
                 viewers: Mutex::new(HashMap::new()),
                 viewer_serial: std::sync::atomic::AtomicU64::new(0),
                 data_dir: data_dir.to_owned(),
+                redaction_key,
                 vendor: silt_vendor::Vendor::new(&data_dir.join("vendor")),
                 purged: Mutex::new(purged),
                 presence: Mutex::new(presence::Board::default()),

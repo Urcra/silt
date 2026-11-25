@@ -257,7 +257,7 @@ async fn append(
 async fn write(server: &Server, caller: Caller, family: FamilyId, thread: ThreadId, ops: Vec<Op>) -> Result<(), ApiError> {
     let _one = server.shared.writes.lock().await;
     let actor = crate::writes::actor_of(server, caller.user).await?;
-    let redactor = silt_redact::Redactor::new(Vec::new());
+    let redactor = silt_redact::Redactor::new(server.shared.redaction_key.clone(), Vec::new());
     let deltas = {
         let slot = server.room_or_new(family).await;
         let mut parents = silt_log::thread_head_in(slot.room.deltas(), slot.room.graph(), thread);

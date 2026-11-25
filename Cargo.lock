@@ -6534,11 +6534,15 @@ name = "silt-redact"
 version = "0.0.1"
 dependencies = [
  "aho-corasick",
+ "getrandom 0.4.3",
+ "hmac 0.13.0",
  "serde_json",
  "sha2 0.11.1",
  "silt-crdt",
  "silt-log",
+ "silt-os",
  "silt-types",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
