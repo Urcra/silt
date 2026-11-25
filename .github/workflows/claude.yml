@@ -14,7 +14,8 @@
 #   /claude plan [notes]          a plan as a comment, no code
 #   /claude triage [notes]        labels, milestone, duplicates, what's missing
 # On either:
-#   /claude ask <question>        an answer from the code, no changes
+#   /claude ask <question>        an answer from the code, no changes; any other
+#                                 text after /claude is a question too
 #   /claude cancel                stop this issue's or PR's running Claude jobs
 #
 # merge and gate run the gate's three parts (scripts/gate.sh --part) as
@@ -139,10 +140,51 @@ jobs:
       - name: Setting up
         if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
         run: '"$HELPER" status set setup active'
-      - uses: ./.github/actions/setup
+      - name: Free disk space
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: The sandbox's tools
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap passt
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Builds on the larger disk
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        run: |
+          if [ -d /mnt ] && [ ! -e target ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+          fi
+      - name: Rust
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
         with:
-          cache-key: claude
+          key: claude
+          workspaces: |
+            .
+            plugins -> ../target/plugins
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Web dependencies and Playwright's browser
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium
       - name: Set up
         if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
         run: '"$HELPER" status set setup ''done'''
@@ -207,9 +249,42 @@ jobs:
           ref: ${{ needs.start.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: The sandbox's tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap passt
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Builds on the larger disk
+        run: |
+          if [ -d /mnt ] && [ ! -e target ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+          fi
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          cache-key: gate-${{ matrix.part }}
+          key: gate-${{ matrix.part }}
+          workspaces: |
+            .
+            plugins -> ../target/plugins
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Web dependencies and Playwright's browser
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium
       - name: Gate
         run: '"$HELPER" gate-part 1 "${{ matrix.part }}" "${{ needs.start.outputs.sha }}" "${{ needs.start.outputs.base_sha }}"'
       - name: The failure, for the fixes
@@ -258,9 +333,42 @@ jobs:
           ref: ${{ needs.start.outputs.head }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: The sandbox's tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap passt
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Builds on the larger disk
+        run: |
+          if [ -d /mnt ] && [ ! -e target ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+          fi
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          cache-key: claude
+          key: claude
+          workspaces: |
+            .
+            plugins -> ../target/plugins
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Web dependencies and Playwright's browser
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: gate-1-*
@@ -323,9 +431,42 @@ jobs:
           ref: ${{ needs.fix1.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: The sandbox's tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap passt
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Builds on the larger disk
+        run: |
+          if [ -d /mnt ] && [ ! -e target ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+          fi
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          cache-key: gate-${{ matrix.part }}
+          key: gate-${{ matrix.part }}
+          workspaces: |
+            .
+            plugins -> ../target/plugins
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Web dependencies and Playwright's browser
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium
       - name: Gate
         run: '"$HELPER" gate-part 2 "${{ matrix.part }}" "${{ needs.fix1.outputs.sha }}" "${{ needs.fix1.outputs.base_sha }}"'
       - name: The failure, for the fixes
@@ -374,9 +515,42 @@ jobs:
           ref: ${{ needs.start.outputs.head }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: The sandbox's tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap passt
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Builds on the larger disk
+        run: |
+          if [ -d /mnt ] && [ ! -e target ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+          fi
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          cache-key: claude
+          key: claude
+          workspaces: |
+            .
+            plugins -> ../target/plugins
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Web dependencies and Playwright's browser
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: gate-2-*
@@ -439,9 +613,42 @@ jobs:
           ref: ${{ needs.fix2.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: The sandbox's tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap passt
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Builds on the larger disk
+        run: |
+          if [ -d /mnt ] && [ ! -e target ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+          fi
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          cache-key: gate-${{ matrix.part }}
+          key: gate-${{ matrix.part }}
+          workspaces: |
+            .
+            plugins -> ../target/plugins
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Web dependencies and Playwright's browser
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium
       - name: Gate
         run: '"$HELPER" gate-part 3 "${{ matrix.part }}" "${{ needs.fix2.outputs.sha }}" "${{ needs.fix2.outputs.base_sha }}"'
       - name: The status comment
