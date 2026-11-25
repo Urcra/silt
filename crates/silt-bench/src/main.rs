@@ -12,6 +12,7 @@ mod fixtures;
 mod measure;
 
 use std::collections::HashMap;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Instant;
@@ -19,7 +20,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use exn::{Exn, ResultExt};
 
-use budgets::{BUDGETS, Budget, Machine, Measured, Status, Verdict};
+use budgets::{BUDGETS, Budget, Env, Machine, Measured, Status, Verdict};
 use fixtures::Fixtures;
 use measure::Scenario;
 
@@ -88,9 +89,13 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
     };
     let fixture_dir = cli.fixtures.clone().unwrap_or_else(|| bin.parent().unwrap_or(bin).join("silt-bench"));
     let fixtures = Fixtures::in_dir(&fixture_dir);
-    let limits =
-        Machine::choose(std::env::var("SILT_BENCH_MACHINE").ok().as_deref(), std::env::var("CLAUDE_CODE_REMOTE").ok().as_deref())
-            .map_err(fail)?;
+    let (chosen, remote, actions) = (
+        std::env::var("SILT_BENCH_MACHINE").ok(),
+        std::env::var("CLAUDE_CODE_REMOTE").ok(),
+        std::env::var("GITHUB_ACTIONS").ok(),
+    );
+    let limits = Machine::choose(Env { chosen: chosen.as_deref(), remote: remote.as_deref(), actions: actions.as_deref() })
+        .map_err(fail)?;
     for name in &cli.only {
         if budgets::budget(name).is_none() {
             return Err(fail(format!("no budget is named {name}")));
@@ -134,8 +139,27 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
 
     let machine = machine(&fixture_dir);
     println!("silt-bench on {machine}, with {limits}");
-    for budget in BUDGETS.iter().filter(|budget| selected.contains(budget) || measured.contains_key(budget.name)) {
+    let shown: Vec<&Budget> =
+        BUDGETS.iter().filter(|budget| selected.contains(budget) || measured.contains_key(budget.name)).collect();
+    for budget in &shown {
         println!("{}", budgets::line(budget, limits, measured.get(budget.name).copied()));
+    }
+    if limits != Machine::Dev {
+        off_target(&shown, &measured, actions.as_deref() == Some("true"));
+    }
+    if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+        let summary = budgets::summary(&shown, limits, &measured, &machine);
+        if let Err(error) = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path)
+            .and_then(|mut file| file.write_all(summary.as_bytes()))
+        {
+            eprintln!("silt-bench: the job summary wasn't written: {error}");
+        }
+    }
+    if cli.mode == Mode::Report {
+        return Ok(true);
     }
     let mut within = true;
     for budget in selected.iter().filter(|budget| budget.status == Status::Enforced) {
@@ -157,6 +181,21 @@ async fn run(cli: &Cli) -> Result<bool, Exn<BenchError>> {
         }
     }
     Ok(within)
+}
+
+/// The dev limits stay the targets on a machine held to its own (ADR 0037),
+/// so a budget over one is noted, on a runner as a warning on the job.
+fn off_target(shown: &[&Budget], measured: &HashMap<&str, Measured>, actions: bool) {
+    for budget in shown {
+        let Some(line) = measured.get(budget.name).and_then(|measured| budgets::off_target(budget, *measured)) else {
+            continue;
+        };
+        if actions {
+            println!("::warning title=off target::{line}");
+        } else {
+            eprintln!("{line}");
+        }
+    }
 }
 
 fn over(selected: &[&Budget], limits: Machine, measured: &HashMap<&str, Measured>, name: &str) -> bool {

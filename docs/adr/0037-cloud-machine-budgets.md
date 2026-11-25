@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-10-22
 - Amends: [ADR 0034](0034-performance-budgets.md) (where budgets are measured)
+- Amended by: [ADR 0126](0126-budgets-for-a-github-actions-runner.md) (a GitHub Actions runner's limits)
 
 ## Context
 ADR 0034 set every budget on the development machine (32 cores, ext4) and left them unscaled for slower machines. Silt is also worked on from Claude Code cloud sessions: a KVM guest with 4 vCPUs at 2.1 GHz and 15 GiB. There, `silt-bench check` fails on ten of twelve budgets with no regression, so the gate can never pass and nothing can be committed through `scripts/commit.sh`.

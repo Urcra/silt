@@ -1,5 +1,6 @@
 //! The budgets of ADR 0034, and how a measurement compares with one.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
@@ -52,6 +53,8 @@ pub struct Budget {
     pub dev: Limit,
     /// On a cloud session's machine, which is several times slower (ADR 0037).
     pub cloud: Limit,
+    /// On a GitHub Actions runner (ADR 0126).
+    pub ci: Limit,
     pub status: Status,
 }
 
@@ -60,27 +63,42 @@ impl Budget {
         match machine {
             Machine::Dev => self.dev,
             Machine::Cloud => self.cloud,
+            Machine::Ci => self.ci,
         }
     }
 }
 
-/// Which limits apply: the machine the budgets were set on, or a cloud
-/// session's (ADR 0037).
+/// Which limits apply: the machine the budgets were set on, a cloud
+/// session's (ADR 0037), or a GitHub Actions runner's (ADR 0126).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Machine {
     Dev,
     Cloud,
+    Ci,
+}
+
+/// The variables a machine is chosen by.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Env<'a> {
+    /// `SILT_BENCH_MACHINE`
+    pub chosen: Option<&'a str>,
+    /// `CLAUDE_CODE_REMOTE`, which cloud sessions set to `true`
+    pub remote: Option<&'a str>,
+    /// `GITHUB_ACTIONS`, which runners set to `true`
+    pub actions: Option<&'a str>,
 }
 
 impl Machine {
-    /// From `SILT_BENCH_MACHINE` when it's set, and otherwise from
-    /// `CLAUDE_CODE_REMOTE`, which cloud sessions set to `true`.
-    pub fn choose(chosen: Option<&str>, remote: Option<&str>) -> Result<Self, String> {
-        match chosen {
+    /// From `SILT_BENCH_MACHINE` when it's set, and otherwise from where
+    /// this runs.
+    pub fn choose(env: Env<'_>) -> Result<Self, String> {
+        match env.chosen {
             Some("dev") => Ok(Self::Dev),
             Some("cloud") => Ok(Self::Cloud),
-            Some(other) => Err(format!("SILT_BENCH_MACHINE is {other:?}; it takes dev or cloud")),
-            None if remote == Some("true") => Ok(Self::Cloud),
+            Some("ci") => Ok(Self::Ci),
+            Some(other) => Err(format!("SILT_BENCH_MACHINE is {other:?}; it takes dev, cloud or ci")),
+            None if env.actions == Some("true") => Ok(Self::Ci),
+            None if env.remote == Some("true") => Ok(Self::Cloud),
             None => Ok(Self::Dev),
         }
     }
@@ -91,6 +109,7 @@ impl fmt::Display for Machine {
         match self {
             Self::Dev => f.write_str("dev limits"),
             Self::Cloud => f.write_str("cloud limits"),
+            Self::Ci => f.write_str("CI limits"),
         }
     }
 }
@@ -118,6 +137,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "tracking a 100 MB transcript, the daemon already running",
         dev: Limit::Time(Duration::from_secs(1)),
         cloud: Limit::Time(Duration::from_secs(4)),
+        ci: Limit::Time(Duration::from_secs(2)),
         status: Status::Enforced,
     },
     Budget {
@@ -125,6 +145,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "`silt import` of a 100 MB transcript, the daemon already running",
         dev: Limit::Time(Duration::from_secs(1)),
         cloud: Limit::Time(Duration::from_secs(4)),
+        ci: Limit::Time(Duration::from_secs(2)),
         status: Status::Enforced,
     },
     Budget {
@@ -132,6 +153,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "`silt hook` forwarded to the running daemon, p95 of the slowest event, at 100k deltas and 20k files",
         dev: Limit::Time(Duration::from_millis(20)),
         cloud: Limit::Time(Duration::from_millis(70)),
+        ci: Limit::Time(Duration::from_millis(40)),
         status: Status::Enforced,
     },
     Budget {
@@ -139,6 +161,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "the hook that finds no daemon and captures in process before starting one, p95 of the slowest event, at 100k deltas and 20k files",
         dev: Limit::Time(Duration::from_millis(50)),
         cloud: Limit::Time(Duration::from_millis(230)),
+        ci: Limit::Time(Duration::from_millis(200)),
         status: Status::Enforced,
     },
     Budget {
@@ -146,6 +169,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "the data dir over the transcript bytes it records",
         dev: Limit::Ratio(1.5),
         cloud: Limit::Ratio(1.5),
+        ci: Limit::Ratio(1.5),
         status: Status::Enforced,
     },
     Budget {
@@ -153,6 +177,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "spawning the daemon to its first answer, holding every fixture",
         dev: Limit::Time(Duration::from_millis(100)),
         cloud: Limit::Time(Duration::from_millis(100)),
+        ci: Limit::Time(Duration::from_millis(100)),
         status: Status::Enforced,
     },
     Budget {
@@ -160,6 +185,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "spawning the daemon to its first thread listing, holding every fixture (100 MB of transcript), at 100 MB/s",
         dev: Limit::Time(Duration::from_secs(1)),
         cloud: Limit::Time(Duration::from_millis(1600)),
+        ci: Limit::Time(Duration::from_secs(1)),
         status: Status::Enforced,
     },
     Budget {
@@ -167,6 +193,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "the capture step after a Bash call, comparing a 50,000-file checkout",
         dev: Limit::Time(Duration::from_millis(200)),
         cloud: Limit::Time(Duration::from_millis(850)),
+        ci: Limit::Time(Duration::from_millis(450)),
         status: Status::Enforced,
     },
     Budget {
@@ -174,6 +201,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "CPU of a daemon with nothing to do, over 10 s",
         dev: Limit::CoreShare(0.001),
         cloud: Limit::CoreShare(0.002),
+        ci: Limit::CoreShare(0.002),
         status: Status::Enforced,
     },
     Budget {
@@ -181,6 +209,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "a 2,000-message thread in the browser",
         dev: Limit::Described("shown < 100 ms, heap < 200 MB"),
         cloud: Limit::Described("shown < 210 ms, heap < 200 MB"),
+        ci: Limit::Described("shown < 210 ms, heap < 200 MB"),
         status: Status::Elsewhere("enforced by web/e2e/perf.spec.ts on the perf build"),
     },
     Budget {
@@ -188,6 +217,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "long tasks over 100 wheel notches up that thread (ADR 0101)",
         dev: Limit::Described("< 500 ms blocked"),
         cloud: Limit::Described("< 1 s blocked"),
+        ci: Limit::Described("< 1 s blocked"),
         status: Status::Elsewhere("enforced by web/e2e/perf.spec.ts on the perf build"),
     },
     Budget {
@@ -195,6 +225,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "history read again after one change to that thread, open (ADR 0101)",
         dev: Limit::Described("< 64 KB"),
         cloud: Limit::Described("< 64 KB"),
+        ci: Limit::Described("< 64 KB"),
         status: Status::Elsewhere("enforced by web/e2e/perf.spec.ts on any build"),
     },
     Budget {
@@ -202,6 +233,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "`silt sync --once` pushing a family holding 100 MB of transcript to a server, at 100 MB/s",
         dev: Limit::Time(Duration::from_secs(1)),
         cloud: Limit::Time(Duration::from_millis(2600)),
+        ci: Limit::Time(Duration::from_millis(2200)),
         status: Status::Enforced,
     },
     Budget {
@@ -209,6 +241,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "`silt resume` pulling that family onto another machine and restoring its session, at 100 MB/s",
         dev: Limit::Time(Duration::from_secs(1)),
         cloud: Limit::Time(Duration::from_secs(7)),
+        ci: Limit::Time(Duration::from_millis(2600)),
         status: Status::Enforced,
     },
     Budget {
@@ -216,6 +249,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "the server's hosted app listing threads, holding that family",
         dev: Limit::Time(Duration::from_millis(100)),
         cloud: Limit::Time(Duration::from_millis(200)),
+        ci: Limit::Time(Duration::from_millis(200)),
         status: Status::Enforced,
     },
     Budget {
@@ -223,6 +257,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "the hosted app's first page of that family's 100 MB session, the first time it's opened",
         dev: Limit::Time(Duration::from_millis(100)),
         cloud: Limit::Time(Duration::from_millis(230)),
+        ci: Limit::Time(Duration::from_millis(100)),
         status: Status::Enforced,
     },
     Budget {
@@ -230,6 +265,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "a page's data folded along its thread: 10,000 writes over 1,000 documents",
         dev: Limit::Time(Duration::from_millis(10)),
         cloud: Limit::Time(Duration::from_millis(25)),
+        ci: Limit::Time(Duration::from_millis(15)),
         status: Status::Enforced,
     },
     Budget {
@@ -237,6 +273,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "a doc's text replayed from 20,000 edits",
         dev: Limit::Time(Duration::from_millis(15)),
         cloud: Limit::Time(Duration::from_millis(40)),
+        ci: Limit::Time(Duration::from_millis(15)),
         status: Status::Enforced,
     },
     Budget {
@@ -244,6 +281,7 @@ pub const BUDGETS: &[Budget] = &[
         measures: "a 1,000-row sheet folded from its cells and computed, a SUM on every row",
         dev: Limit::Time(Duration::from_millis(20)),
         cloud: Limit::Time(Duration::from_millis(50)),
+        ci: Limit::Time(Duration::from_millis(25)),
         status: Status::Enforced,
     },
 ];
@@ -344,6 +382,48 @@ pub fn tolerated(budget: &Budget, limits: Machine, measured: Measured, tolerance
     )
 }
 
+/// What's printed for a budget held to another machine's limit that's
+/// over the dev limit, which stays the target (ADR 0037). It doesn't fail.
+pub fn off_target(budget: &Budget, measured: Measured) -> Option<String> {
+    (verdict(budget.dev, measured) == Verdict::Over)
+        .then(|| format!("off target: {} measured {measured}, dev target {}", budget.name, budget.dev))
+}
+
+/// The report as a Markdown table, for a GitHub Actions job's summary.
+pub fn summary(shown: &[&Budget], limits: Machine, measured: &HashMap<&str, Measured>, machine: &str) -> String {
+    let mut out = format!("### Performance budgets\n\nOn {machine}, with {limits}.\n\n");
+    if limits == Machine::Dev {
+        out.push_str("| Budget | Measured | Limit | |\n|---|---|---|---|\n");
+    } else {
+        out.push_str("| Budget | Measured | Limit | | Dev target | |\n|---|---|---|---|---|---|\n");
+    }
+    for budget in shown {
+        let measured = measured.get(budget.name).copied();
+        let (value, held, target) = match measured {
+            Some(measured) => {
+                (measured.to_string(), mark(verdict(budget.limit(limits), measured)), mark(verdict(budget.dev, measured)))
+            }
+            None => ("-".to_owned(), "", ""),
+        };
+        let limit = budget.limit(limits);
+        if limits == Machine::Dev {
+            out.push_str(&format!("| `{}` | {value} | {limit} | {held} |\n", budget.name));
+        } else {
+            out.push_str(&format!("| `{}` | {value} | {limit} | {held} | {} | {target} |\n", budget.name, budget.dev));
+        }
+    }
+    out.push('\n');
+    out
+}
+
+fn mark(verdict: Verdict) -> &'static str {
+    match verdict {
+        Verdict::Within => "✅",
+        Verdict::Over => "❌",
+        Verdict::Mismatched => "",
+    }
+}
+
 fn verdict_word(verdict: Verdict) -> &'static str {
     match verdict {
         Verdict::Within => "within",
@@ -401,7 +481,7 @@ mod tests {
     #[test]
     fn every_budget_measured_here_has_a_comparable_limit() {
         for budget in BUDGETS {
-            for limit in [budget.dev, budget.cloud] {
+            for limit in [budget.dev, budget.cloud, budget.ci] {
                 let comparable = !matches!(limit, Limit::Described(_));
                 assert_eq!(comparable, !matches!(budget.status, Status::Elsewhere(_)), "{}", budget.name);
             }
@@ -409,26 +489,52 @@ mod tests {
     }
 
     #[test]
-    fn a_cloud_limit_is_of_the_same_kind_and_never_tighter() {
+    fn another_machines_limit_is_of_the_same_kind_and_never_tighter() {
         for budget in BUDGETS {
-            let looser = match (budget.dev, budget.cloud) {
-                (Limit::Time(dev), Limit::Time(cloud)) => cloud >= dev,
-                (Limit::Ratio(dev), Limit::Ratio(cloud)) | (Limit::CoreShare(dev), Limit::CoreShare(cloud)) => cloud >= dev,
-                (Limit::Described(_), Limit::Described(_)) => true,
-                _ => false,
-            };
-            assert!(looser, "{}", budget.name);
+            for other in [budget.cloud, budget.ci] {
+                let looser = match (budget.dev, other) {
+                    (Limit::Time(dev), Limit::Time(other)) => other >= dev,
+                    (Limit::Ratio(dev), Limit::Ratio(other)) | (Limit::CoreShare(dev), Limit::CoreShare(other)) => other >= dev,
+                    (Limit::Described(_), Limit::Described(_)) => true,
+                    _ => false,
+                };
+                assert!(looser, "{}", budget.name);
+            }
         }
     }
 
     #[test]
-    fn the_machine_is_chosen_by_name_or_by_a_cloud_session() {
-        assert_eq!(Machine::choose(None, None), Ok(Machine::Dev));
-        assert_eq!(Machine::choose(None, Some("true")), Ok(Machine::Cloud));
-        assert_eq!(Machine::choose(None, Some("false")), Ok(Machine::Dev));
-        assert_eq!(Machine::choose(Some("dev"), Some("true")), Ok(Machine::Dev));
-        assert_eq!(Machine::choose(Some("cloud"), None), Ok(Machine::Cloud));
-        assert!(Machine::choose(Some("laptop"), None).is_err());
+    fn the_machine_is_chosen_by_name_or_by_where_it_runs() {
+        let env = |chosen, remote, actions| Env { chosen, remote, actions };
+        assert_eq!(Machine::choose(env(None, None, None)), Ok(Machine::Dev));
+        assert_eq!(Machine::choose(env(None, Some("true"), None)), Ok(Machine::Cloud));
+        assert_eq!(Machine::choose(env(None, Some("false"), None)), Ok(Machine::Dev));
+        assert_eq!(Machine::choose(env(None, None, Some("true"))), Ok(Machine::Ci));
+        assert_eq!(Machine::choose(env(None, Some("true"), Some("true"))), Ok(Machine::Ci));
+        assert_eq!(Machine::choose(env(Some("dev"), Some("true"), Some("true"))), Ok(Machine::Dev));
+        assert_eq!(Machine::choose(env(Some("cloud"), None, None)), Ok(Machine::Cloud));
+        assert_eq!(Machine::choose(env(Some("ci"), None, None)), Ok(Machine::Ci));
+        assert!(Machine::choose(env(Some("laptop"), None, None)).is_err());
+    }
+
+    #[test]
+    fn the_summary_puts_the_dev_target_beside_another_machines_limit() {
+        let shown = [budget(SYNC_PULL).expect("listed"), budget(SYNC_PUSH).expect("listed")];
+        let measured = HashMap::from([(SYNC_PULL, Measured::Time(Duration::from_millis(1300)))]);
+        let summary = summary(&shown, Machine::Ci, &measured, "4 cores, ext2/ext3");
+        assert!(summary.contains("On 4 cores, ext2/ext3, with CI limits."), "{summary}");
+        assert!(summary.contains("| `sync.pull` | 1.30 s | < 2.60 s | ✅ | < 1.00 s | ❌ |"), "{summary}");
+        assert!(summary.contains("| `sync.push` | - | < 2.20 s |  | < 1.00 s |  |"), "{summary}");
+    }
+
+    #[test]
+    fn only_a_measurement_over_the_dev_limit_is_off_target() {
+        let budget = budget(SYNC_PULL).expect("listed");
+        assert_eq!(off_target(budget, Measured::Time(Duration::from_millis(900))), None);
+        assert_eq!(
+            off_target(budget, Measured::Time(Duration::from_millis(1300))).as_deref(),
+            Some("off target: sync.pull measured 1.30 s, dev target < 1.00 s")
+        );
     }
 
     #[test]

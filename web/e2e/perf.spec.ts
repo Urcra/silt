@@ -7,14 +7,25 @@ import { SILT, allThreads, fixture } from './fixture'
 // `web.thread` of ADR 0034: a 2,000-message thread shows in under 100 ms
 // and keeps the page under 200 MB. Timed on the optimized build the gate
 // passes in `$SILT`; a debug build only reports. A cloud session's machine
-// has its own limit, chosen as silt-bench chooses it (ADR 0037).
+// and a GitHub Actions runner have their own limits, chosen as silt-bench
+// chooses them, and the dev limit stays the target (ADRs 0037 and 0126).
 const ENFORCED = process.env.SILT !== undefined && process.env.SILT_BENCH_ENFORCE !== '0'
-const CLOUD = (process.env.SILT_BENCH_MACHINE ?? (process.env.CLAUDE_CODE_REMOTE === 'true' ? 'cloud' : 'dev')) === 'cloud'
-const SHOWN_BUDGET_MS = CLOUD ? 210 : 100
+const ACTIONS = process.env.GITHUB_ACTIONS === 'true'
+const MACHINE = process.env.SILT_BENCH_MACHINE ?? (ACTIONS ? 'ci' : process.env.CLAUDE_CODE_REMOTE === 'true' ? 'cloud' : 'dev')
+const DEV = MACHINE === 'dev'
+const SHOWN_TARGET_MS = 100
+const SHOWN_BUDGET_MS = DEV ? SHOWN_TARGET_MS : 210
 const HEAP_BUDGET_MB = 200
 const ROUNDS = 1000
 
 let thread = ''
+
+/** Notes a measurement over the dev target on a machine held to its own limit, as silt-bench does. */
+function offTarget(name: string, ms: number, target: number) {
+  if (DEV || ms < target) return
+  const line = `off target: ${name} measured ${ms.toFixed(0)} ms, dev target < ${target} ms`
+  console.log(ACTIONS ? `::warning title=off target::${line}` : line)
+}
 
 /** When the thread's link was clicked and its first entry drawn, in the page's clock. */
 interface Timed {
@@ -163,6 +174,7 @@ test('a 2,000-message thread shows quickly and stays small', async ({ page }) =>
   console.log(
     `web.thread: shown in ${shown.toFixed(0)} ms (budget ${SHOWN_BUDGET_MS}), heap ${heapMb.toFixed(0)} MB (budget ${HEAP_BUDGET_MB})`,
   )
+  offTarget('web.thread', shown, SHOWN_TARGET_MS)
   if (ENFORCED) {
     expect(shown, 'web.thread: shown').toBeLessThan(SHOWN_BUDGET_MS)
     expect(heapMb, 'web.thread: heap').toBeLessThan(HEAP_BUDGET_MB)
@@ -193,7 +205,8 @@ async function watchLongTasks(page: import('@playwright/test').Page) {
 // `web.scroll` (ADR 0101): scrolling the 2,000-message thread draws only the rows coming into view, so the page
 // keeps answering. Each scroll drew the whole page and parsed every row's Markdown again: 13 s blocked over 150
 // wheel notches on a long session.
-const SCROLL_BLOCKED_MS = CLOUD ? 1000 : 500
+const SCROLL_TARGET_MS = 500
+const SCROLL_BLOCKED_MS = DEV ? SCROLL_TARGET_MS : 1000
 
 test('a long thread scrolls without holding the page', async ({ page }) => {
   test.setTimeout(180_000)
@@ -209,6 +222,7 @@ test('a long thread scrolls without holding the page', async ({ page }) => {
   await page.waitForTimeout(300)
   const blocked = (await longTasks()).reduce((total, duration) => total + duration, 0)
   console.log(`web.scroll: ${blocked.toFixed(0)} ms blocked over 100 notches (budget ${SCROLL_BLOCKED_MS})`)
+  offTarget('web.scroll', blocked, SCROLL_TARGET_MS)
   if (ENFORCED) expect(blocked, 'web.scroll: blocked').toBeLessThan(SCROLL_BLOCKED_MS)
 })
 

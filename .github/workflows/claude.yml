@@ -295,12 +295,12 @@ jobs:
           path: ${{ runner.temp }}/gate-failure/
       - name: The status comment
         if: always()
-        run: '"$HELPER" status push'
+        run: '"$HELPER" status push "${{ job.status }}"'
 
   fix1:
     name: Fix round 1
     needs: [start, gate1]
-    if: always() && needs.start.outputs.ok == 'true' && needs.start.outputs.gated == 'true' && needs.gate1.result == 'failure'
+    if: ${{ !cancelled() && needs.start.outputs.ok == 'true' && needs.start.outputs.gated == 'true' && needs.gate1.result == 'failure' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
@@ -395,12 +395,12 @@ jobs:
         run: '"$HELPER" guard "${{ needs.start.outputs.sha }}" "${{ needs.start.outputs.head }}" "${{ needs.start.outputs.base }}"'
       - name: The status comment
         if: always()
-        run: '"$HELPER" status push'
+        run: '"$HELPER" status push "${{ job.status }}"'
 
   gate2:
     name: Gate again 1 (${{ matrix.part }})
     needs: [start, fix1]
-    if: always() && needs.fix1.outputs.ok == 'true' && needs.fix1.outputs.moved == 'true'
+    if: ${{ !cancelled() && needs.fix1.outputs.ok == 'true' && needs.fix1.outputs.moved == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -477,12 +477,12 @@ jobs:
           path: ${{ runner.temp }}/gate-failure/
       - name: The status comment
         if: always()
-        run: '"$HELPER" status push'
+        run: '"$HELPER" status push "${{ job.status }}"'
 
   fix2:
     name: Fix round 2
     needs: [start, fix1, gate2]
-    if: always() && needs.gate2.result == 'failure'
+    if: ${{ !cancelled() && needs.gate2.result == 'failure' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
@@ -577,12 +577,12 @@ jobs:
         run: '"$HELPER" guard "${{ needs.fix1.outputs.sha }}" "${{ needs.start.outputs.head }}" "${{ needs.start.outputs.base }}"'
       - name: The status comment
         if: always()
-        run: '"$HELPER" status push'
+        run: '"$HELPER" status push "${{ job.status }}"'
 
   gate3:
     name: Gate again 2 (${{ matrix.part }})
     needs: [start, fix2]
-    if: always() && needs.fix2.outputs.ok == 'true' && needs.fix2.outputs.moved == 'true'
+    if: ${{ !cancelled() && needs.fix2.outputs.ok == 'true' && needs.fix2.outputs.moved == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -653,13 +653,13 @@ jobs:
         run: '"$HELPER" gate-part 3 "${{ matrix.part }}" "${{ needs.fix2.outputs.sha }}" "${{ needs.fix2.outputs.base_sha }}"'
       - name: The status comment
         if: always()
-        run: '"$HELPER" status push'
+        run: '"$HELPER" status push "${{ job.status }}"'
 
   # The head a gate passed on, CI on it, and for merge, the merge.
   finish:
     name: Finish
     needs: [start, gate1, fix1, gate2, fix2, gate3]
-    if: always() && needs.start.outputs.ok == 'true' && needs.start.outputs.gated == 'true'
+    if: ${{ !cancelled() && needs.start.outputs.ok == 'true' && needs.start.outputs.gated == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:
