@@ -14,6 +14,13 @@ export interface ChipChoice {
   group?: { key: string; heading: ReactNode }
 }
 
+export interface ChipAction {
+  label: string
+  title?: string
+  lead?: ReactNode
+  run: () => void
+}
+
 /**
  * A chip in the composer's row that opens a list to pick one from: each choice's name with what it does under it, a
  * refused one greyed with why (ADR 0114). It floats over the page, so the row's scrolling doesn't clip it.
@@ -27,6 +34,7 @@ export function ChipMenu({
   title,
   heading,
   footer,
+  action,
   ghost = true,
   className,
 }: {
@@ -41,6 +49,8 @@ export function ChipMenu({
   /** Over the list, as `Permissions`. */
   heading?: string
   footer?: ReactNode
+  /** Under everything, something to do rather than pick, such as stopping the agent. */
+  action?: ChipAction
   /** Borderless until hovered, in the composer's row; else bordered, as in a form. */
   ghost?: boolean
   className?: string
@@ -68,6 +78,15 @@ export function ChipMenu({
           options={options}
           heading={heading}
           footer={footer}
+          action={
+            action && {
+              ...action,
+              run: () => {
+                close()
+                action.run()
+              },
+            }
+          }
           onPick={(id) => {
             close()
             onChange(id)
@@ -84,6 +103,7 @@ function ChoiceList({
   options,
   heading,
   footer,
+  action,
   onPick,
 }: {
   label: string
@@ -91,6 +111,7 @@ function ChoiceList({
   options: ChipChoice[]
   heading?: string
   footer?: ReactNode
+  action?: ChipAction
   onPick: (id: string) => void
 }) {
   const list = useRef<HTMLDivElement>(null)
@@ -103,7 +124,11 @@ function ChoiceList({
     const step = { ArrowDown: 1, ArrowUp: -1 }[event.key]
     if (!step || !list.current) return
     event.preventDefault()
-    const items = [...list.current.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]:not([aria-disabled="true"])')]
+    const items = [
+      ...list.current.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitemradio"]:not([aria-disabled="true"]), [role="menuitem"]',
+      ),
+    ]
     const at = items.indexOf(document.activeElement as HTMLButtonElement)
     items[(at + step + items.length) % items.length]?.focus()
   }
@@ -155,6 +180,20 @@ function ChoiceList({
         )
       })}
       {footer && <div className="mt-1 border-t border-line-subtle px-2 pt-1.5 pb-1 text-2xs text-fg-3">{footer}</div>}
+      {action && (
+        <div className={cx('mt-1 pt-1', !footer && 'border-t border-line-subtle')}>
+          <button
+            type="button"
+            role="menuitem"
+            title={action.title}
+            onClick={action.run}
+            className="flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left text-sm text-fg-1 hover:bg-surface-2 focus:bg-surface-2 focus:outline-none max-md:min-h-11"
+          >
+            {action.lead && <span className="flex shrink-0">{action.lead}</span>}
+            <span className="truncate">{action.label}</span>
+          </button>
+        </div>
+      )}
     </div>
   )
 }
