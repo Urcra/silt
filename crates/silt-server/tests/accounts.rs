@@ -516,8 +516,9 @@ async fn oidc_and_github_sign_people_in_by_policy() {
     assert_eq!(again.status(), StatusCode::SEE_OTHER, "the same identity signs in to the same account");
     assert_eq!(admin.users().await.expect("users").len(), users.len());
 
-    provider.lock().expect("lock").next_user =
-        Some(json!({"sub": "u-2", "preferred_username": "mallory", "email": "mallory@elsewhere.org", "email_verified": true}));
+    provider.lock().expect("lock").next_user = Some(
+        json!({"sub": "u-2", "preferred_username": "mallory", "email": "mallory@elsewhere.example", "email_verified": true}),
+    );
     assert_eq!(
         provider_sign_in(&base, &provider, "oidc", "").await.status(),
         StatusCode::FORBIDDEN,

@@ -1,4 +1,4 @@
-//! Expected results come from diamond-types (M0-10 probe), with actor ids
+//! Expected results come from diamond-types (a probe of its API), with actor ids
 //! ordered like its agent names.
 
 use silt_crdt::{Bias, CausalError, CharId, ReplicaError, TextError, TextOp, TextReplica};

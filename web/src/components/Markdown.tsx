@@ -80,7 +80,7 @@ const sized = (className?: string) => /(^|\s)text-(2xs|xs|sm|base|lg|ui|ui-lg|la
 
 /**
  * A message as Markdown. Its HTML is shown as text and its images by name
- * only: an agent's words are other people's content (M9's review).
+ * only: an agent's words are other people's content, which may be hostile.
  */
 export const Markdown = memo(function Markdown({ text, className }: { text: string; className?: string }) {
   return (
