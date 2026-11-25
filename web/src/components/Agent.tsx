@@ -851,18 +851,29 @@ export function AgentDock({
   const attach = (files: File[], pasted = false) => act(add(files, pasted))
 
   const refusedPreset = (id: Preset) => presetRefused(workspace, id) ?? presetUnavailable(id, agentModes, agentCalled)
+  // Running, the chip stops the agent wherever it is; another agent takes over only where this daemon can start one.
+  const switchable = live && !hosted() && status.agent_id !== '' && agents.length > 0
+  // A server before it relayed the agent's id leaves it out; its name still finds its mark.
+  const runningId = (live && (status.agent_id || status.agent)) || ''
   const tools = (
     <>
       {/* The same row as New thread's: which agent, the permissions with its own modes, then its model and settings
           (ADR 0118). Another agent here takes the thread over. */}
-      {(live ? !hosted() && status.agent_id !== '' : !elsewhere && !hosted()) && agents.length > 0 && (
+      {live ? (
         <AgentChip
-          value={live ? status.agent_id : agent}
-          agents={agents}
-          onChange={(chosen) => (live ? switchAgent(chosen) : chooseAgent(chosen))}
+          value={runningId}
+          agents={switchable ? agents : [{ id: runningId, name: status.agent }]}
+          onChange={(chosen) => switchable && switchAgent(chosen)}
           refused={(id) => agentRefused(workspace, id)}
-          footer={live ? 'Another agent here takes the thread over' : undefined}
+          footer={switchable ? 'Another agent here takes the thread over' : undefined}
+          onStop={() => act(api.stopAgent(thread))}
         />
+      ) : (
+        !elsewhere &&
+        !hosted() &&
+        agents.length > 0 && (
+          <AgentChip value={agent} agents={agents} onChange={chooseAgent} refused={(id) => agentRefused(workspace, id)} />
+        )
       )}
       {(live || !hosted()) && (live || startable || elsewhere || agents.length > 0) && (
         <PermissionChip
@@ -884,19 +895,8 @@ export function AgentDock({
       {!live && !elsewhere && hosted() && <ContinueOn thread={thread} act={act} />}
       {live ? (
         <AgentSettings
-          modal={Boolean(status.modes?.available.length)}
           settings={status.settings}
           onSetting={(id, value) => act(api.setSetting(thread, id, value))}
-          more={
-            <Button
-              variant="ghost"
-              size="sm"
-              title="Stops the agent; the thread keeps everything it did"
-              onClick={() => act(api.stopAgent(thread))}
-            >
-              Stop agent
-            </Button>
-          }
           narrow={narrow}
         />
       ) : (

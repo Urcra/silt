@@ -165,7 +165,7 @@ fn show_tools() -> Vec<Value> {
                     "value": {"description": "The document, for set"},
                     "fields": {"type": "object", "description": "Fields to merge in, for update; a null field removes it"},
                     "query": {"type": "object", "description": "For query: where (a list of {field, op, value}), order_by, descending, limit"},
-                    "writes": {"type": "array", "description": "For batch: each {op: set|update|delete, path, value|fields}, all or none"},
+                    "writes": {"type": "array", "items": {"type": "object"}, "description": "For batch: each {op: set|update|delete, path, value|fields}, all or none"},
                     "as_level": {"type": "string", "enum": ["read", "comment", "collaborator"], "description": "For get, list and query: read as another person at this level, to check that the rules hide from them what they should; writes refuse it"}
                 },
                 "required": ["id", "op"]
@@ -530,6 +530,35 @@ fn error_response(id: &Value, code: i64, message: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Gemini refuses every tool of a session when one array's schema has no
+    /// `items`, so Antigravity couldn't start with Silt's tools at all.
+    #[test]
+    fn every_array_in_a_tool_says_what_it_holds() {
+        fn arrays_without_items(schema: &Value, at: String, found: &mut Vec<String>) {
+            match schema {
+                Value::Object(fields) => {
+                    if fields.get("type") == Some(&json!("array")) && !fields.contains_key("items") {
+                        found.push(at.clone());
+                    }
+                    for (name, value) in fields {
+                        arrays_without_items(value, format!("{at}.{name}"), found);
+                    }
+                }
+                Value::Array(values) => {
+                    for (index, value) in values.iter().enumerate() {
+                        arrays_without_items(value, format!("{at}[{index}]"), found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        for tool in tools(true).as_array().expect("a list") {
+            arrays_without_items(&tool["inputSchema"], tool["name"].as_str().expect("a name").to_owned(), &mut found);
+        }
+        assert!(found.is_empty(), "arrays without items: {found:?}");
+    }
 
     #[test]
     fn every_tool_only_reads_but_messages_and_asks_to_other_agents() {

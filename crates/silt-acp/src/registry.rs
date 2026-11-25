@@ -347,7 +347,9 @@ pub fn agent_environment(agent_id: &str, data_dir: &Path) -> Vec<(String, String
     let named = |names: &[&str], name: &str| {
         names.iter().any(|listed| if cfg!(windows) { listed.eq_ignore_ascii_case(name) } else { *listed == name })
     };
+    let path = silt_os::program_path();
     std::env::vars_os()
+        .map(|(name, value)| if named(&["PATH"], &name.to_string_lossy()) { (name, path.clone()) } else { (name, value) })
         .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(name, _)| {
             named(&TOOLS, name)
@@ -455,7 +457,7 @@ pub fn all(data_dir: &Path) -> Vec<AgentInfo> {
 /// binary was downloaded already. The registry lists far more agents than
 /// anyone has, and `npx` would fetch any of them.
 pub fn installed_here(data_dir: &Path) -> Vec<AgentInfo> {
-    let programs = silt_os::Programs::on(&silt_os::linux_path(&std::env::var_os("PATH").unwrap_or_default()));
+    let programs = silt_os::Programs::on(&silt_os::linux_path(&silt_os::program_path()));
     all(data_dir).into_iter().filter(|agent| is_installed(agent, data_dir, &programs)).collect()
 }
 
@@ -495,7 +497,7 @@ pub struct AgentCommand {
 /// The command that starts `agent`, downloading and unpacking a binary
 /// distribution into `data_dir` first when needed.
 pub async fn command(agent: &AgentInfo, data_dir: &Path) -> Result<AgentCommand, RegistryError> {
-    let programs = silt_os::Programs::on(&silt_os::linux_path(&std::env::var_os("PATH").unwrap_or_default()));
+    let programs = silt_os::Programs::on(&silt_os::linux_path(&silt_os::program_path()));
     command_with(agent, data_dir, &programs).await
 }
 

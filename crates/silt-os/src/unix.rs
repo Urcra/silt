@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, Write as _};
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::os::unix::process::CommandExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub fn make_private_dir(dir: &Path) -> io::Result<()> {
     fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
@@ -41,6 +41,10 @@ pub fn is_executable(metadata: &fs::Metadata) -> bool {
 
 pub fn without_run_extension(_name: &str) -> Option<&str> {
     None
+}
+
+pub fn configured_path_dirs() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 pub fn make_executable(path: &Path) -> io::Result<()> {
