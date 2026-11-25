@@ -121,7 +121,7 @@ function modePreset(mode: string): Preset | undefined {
   return undefined
 }
 
-/** Why the agent's `mode` isn't allowed in the workspace, or nothing when it is. Copilot's modes say how it works, not what it asks (ADR 0049). */
+/** Why the agent's `mode` isn't allowed in the workspace, or nothing when it is. Copilot's modes say how it works, not what it asks (ADR 0124). */
 export function modeRefused(view: WorkspaceView | undefined, agent: string, mode: string): string | undefined {
   const cap = view?.effective.max_preset
   if (!view || !cap || cap === 'full_access') return undefined

@@ -323,7 +323,7 @@ pub struct OrgPolicy {
     pub policy: Policy,
 }
 
-/// What an agent's mode means for its permissions (ADR 0048, ADR 0049).
+/// What an agent's mode means for its permissions (ADR 0048, ADR 0124).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModeMeaning {
     /// The mode answers as this preset would.
