@@ -76,7 +76,7 @@ fi
 has_desktop=false
 pkg-config --exists webkit2gtk-4.1 2>/dev/null && has_desktop=true
 has_voice=false
-[ "$(uname -s)" = Linux ] && has_voice=true
+[ "$(uname -s)" = Linux ] && [ "${SILT_SKIP_VOICE:-0}" = 0 ] && has_voice=true
 
 step "formatting"
 cargo fmt --all -- --check
@@ -187,14 +187,23 @@ if $has_voice; then
         cargo test
     )
 else
-    skip "crates/silt-voice, which is built on Linux only for now"
+    skip "crates/silt-voice, which is built on Linux only for now, and not with SILT_SKIP_VOICE=1"
 fi
 
-# Performance budgets (ADR 0034), timed on an optimized build.
+# Performance budgets (ADR 0034), timed on an optimized build. Their limits
+# are set for the machines Silt is developed on (ADR 0037), so a slower one,
+# or CI's, reports them with SILT_BENCH_ENFORCE=0, and that pass isn't
+# recorded for scripts/commit.sh.
+enforce_budgets=true
+[ "${SILT_BENCH_ENFORCE:-1}" = 0 ] && enforce_budgets=false
 step "perf build"
 cargo build --profile perf -p silt-cli -p silt-bench
 step "performance budgets"
-target/perf/silt-bench check --tolerance "${SILT_BENCH_TOLERANCE:-0}"
+if $enforce_budgets; then
+    target/perf/silt-bench check --tolerance "${SILT_BENCH_TOLERANCE:-0}"
+else
+    target/perf/silt-bench report
+fi
 
 # Playwright drives the built UI against a real daemon, the optimized one,
 # as `web.thread` is timed there.
@@ -205,8 +214,11 @@ fi
 
 done_step
 printf '%s' "$summary"
-# Only a tree that stayed as it was while the gate ran has passed.
-if [ "$(scripts/tree-id.sh)" = "$tree" ]; then
+# Only a tree that stayed as it was while the gate ran, with its budgets
+# held, has passed.
+if ! $enforce_budgets; then
+    echo "gate: passed in $(elapsed "$started") with the budgets only reported, so this pass isn't recorded"
+elif [ "$(scripts/tree-id.sh)" = "$tree" ]; then
     echo "$tree" >target/gate-passed
     echo "gate: passed in $(elapsed "$started")"
 else

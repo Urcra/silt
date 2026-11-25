@@ -1,0 +1,47 @@
+name: Bug
+description: Something Silt does wrong.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to make it happen again
+      description: The steps, the commands and their output. Leave out secrets and private code.
+  - type: input
+    id: version
+    attributes:
+      label: Silt's version
+      description: The output of `silt --version`, or the commit you built.
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      multiple: true
+      options:
+        - Linux
+        - WSL
+        - Windows
+        - macOS
+        - The server
+        - The hosted app or a phone
+        - The desktop app
+  - type: input
+    id: agent
+    attributes:
+      label: The agent and its version
+      description: Such as Claude Code 2.3.1, if an agent is involved.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant lines of `daemon.log` in your data directory, with `SILT_LOG=debug` if you can.
+      render: text

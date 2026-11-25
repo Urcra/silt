@@ -1,0 +1,31 @@
+# Weekly updates, grouped, for each workspace and the web UI. A version
+# younger than a week isn't proposed, as pnpm's minimumReleaseAge asks.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directories: ["/", "/plugins", "/crates/silt-desktop", "/crates/silt-voice"]
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      web:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]

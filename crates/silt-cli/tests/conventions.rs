@@ -132,10 +132,10 @@ fn skills_and_rules_reach_every_agent() {
     assert!(!config.contains("developer_instructions"), "Codex reads AGENTS.md and .agents/skills itself: {config}");
 
     let thread = thread_of(&machine);
-    let mut mcp = std::process::Command::new(env!("CARGO_BIN_EXE_silt"))
-        .args(["mcp", "--thread", &thread, "--checkout"])
+    // With the machine's own home, so skills of whoever runs the tests stay out.
+    let mut mcp = machine
+        .command(&["mcp", "--thread", &thread, "--checkout"], &[])
         .arg(&machine.repo)
-        .env("SILT_HOME", &machine.silt_home)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
