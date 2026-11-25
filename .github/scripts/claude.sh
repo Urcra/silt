@@ -576,9 +576,14 @@ cmd_guard() {
         return
     fi
     echo "moved=true" >>"$out"
-    touched=$(git diff --name-only "$from" "$now" -- .github | paste -sd' ')
+    # A merge of the base brings the base's own .github/ along, which is
+    # trusted; what counts is a file there that now differs from the base's.
+    touched=$(git diff --name-only "$from" "$now" -- .github | while read -r file; do
+        [ "$(git rev-parse -q --verify "$now:$file" || true)" = "$(git rev-parse -q --verify "origin/$base:$file" || true)" ] ||
+            echo "$file"
+    done | paste -sd' ')
     if [ -n "$touched" ]; then
-        say "❌ Stopped: fixes changed \`.github/\` ($touched). Not merged; check the branch."
+        echo "touched=$touched" >>"$out"
         echo "ok=false" >>"$out"
     else
         echo "ok=true" >>"$out"
@@ -601,7 +606,9 @@ cmd_passed() {
         if [ "$(cat "$temp/status-command")" = gate ]; then
             cmd_status result "✅ Gate passed (\`${sha:0:8}\` + base)"
         fi
-    elif [ "${GUARD1:-}" != false ] && [ "${GUARD2:-}" != false ]; then
+    elif [ "${GUARD1:-}" = false ] || [ "${GUARD2:-}" = false ]; then
+        cmd_status result "❌ Stopped: the fixes changed \`.github/\` (${TOUCHED1:-}${TOUCHED2:-}). Not merged; check the branch."
+    else
         cmd_status result "❌ Gate didn't pass. See the jobs above and the [log](${RUN_URL:-})."
     fi
     return 0
