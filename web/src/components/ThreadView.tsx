@@ -86,6 +86,8 @@ import {
   tasksOf,
 } from '../tasks'
 import { RunningStrip, TaskCard } from './Tasks'
+import { AskCard, AskStrip, AskedNote } from './Asks'
+import { askOfCall, askedIn, useAsks } from '../asks'
 import {
   Avatar,
   Button,
@@ -523,6 +525,8 @@ function SideTranscript({ task, side, ...props }: EntryProps & { task: TaskState
 function StepCard({ step, ...props }: EntryProps & { step: ToolStep }) {
   const tasks = useContext(TasksContext)
   const call = step.call!
+  const asked = askOfCall(call)
+  if (asked) return <AskCard step={step} thread={props.thread} asked={asked} />
   if (proposedPlan(call)) return <ProposedPlan step={step} />
   if (kindOf(call) === 'question') return <QuestionCard step={step} />
   if (tasked(step, tasks)) {
@@ -1649,6 +1653,7 @@ export function ThreadHeader({
   const where = summary ? whereSaid(summary, status.data?.servers?.[0]?.name ?? null) : null
   const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
   const source = summary?.forked_from ? threads.data?.find((candidate) => candidate.id === summary.forked_from) : undefined
+  const asked = askedIn(useAsks(), thread)
   return (
     <header className="@container/head sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2.5 border-b border-line-subtle bg-bg px-4 md:pr-3 md:pl-5">
       <DrawerButton />
@@ -1701,7 +1706,20 @@ export function ThreadHeader({
               · <AgentMark agent={summary.agent} labelled className="h-[13px] w-[13px]" />
             </span>
           )}
-          {summary?.forked_from && !summary.title?.startsWith('Fork of ') && (
+          {asked && (
+            <span className="inline-flex min-w-0 shrink items-center gap-1" data-testid="asked-by">
+              · asked by{' '}
+              <AgentMark
+                agent={asked.caller_agent_id || asked.caller_agent}
+                name={asked.caller_agent}
+                className="h-[13px] w-[13px]"
+              />
+              <Link className="min-w-0 truncate text-accent-fg" to="/t/$id" params={{ id: asked.caller }} data-volatile>
+                {source?.title ?? short(asked.caller)}
+              </Link>
+            </span>
+          )}
+          {summary?.forked_from && !asked && !summary.title?.startsWith('Fork of ') && (
             <span className="inline-flex min-w-0 shrink items-center gap-1">
               · fork of
               <Link
@@ -2325,6 +2343,7 @@ function ThreadBody({
   const stats = useQuery({ queryKey: keys.diffStats(thread, statsOf), queryFn: () => api.diffStats(thread, statsOf) })
   const reloadComments = useCallback(() => queries.invalidateQueries({ queryKey: keys.comments(id) }), [queries, id])
   const summary = threads.data?.find((candidate) => candidate.id === thread)
+  const askedHere = askedIn(useAsks(), thread)
   const [tab, setTab] = useState<InspectorTab>('changes')
   // A thread started to make or change a design system shows it beside the conversation first (ADR 0088).
   const design = useQuery({
@@ -2762,6 +2781,11 @@ function ThreadBody({
                             }}
                           />
                           <div className="mx-auto flex w-full max-w-(--read-width) flex-1 flex-col px-4 md:px-6">
+                            {askedHere && (
+                              <div className="pt-3">
+                                <AskedNote ask={askedHere} />
+                              </div>
+                            )}
                             {summary?.cloud && (
                               <div className="pt-3">
                                 <CloudSession thread={summary} />
@@ -2813,8 +2837,9 @@ function ThreadBody({
                               )}
                             </div>
                             <div className="sticky bottom-0 z-10 mt-auto bg-bg pt-1 pb-3 before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-6 before:bg-gradient-to-t before:from-bg before:to-transparent md:pb-5">
-                              <div className="mb-2 empty:hidden">
+                              <div className="mb-2 flex flex-col gap-2 empty:hidden">
                                 <RunningStrip labels={taskLabels} />
+                                <AskStrip thread={thread} />
                               </div>
                               <ThreadComposer
                                 thread={thread}

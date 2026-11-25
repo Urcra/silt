@@ -65,6 +65,8 @@ impl Request {
             | Self::FileHistory { .. }
             | Self::InFlight { .. }
             | Self::Agents { .. }
+            | Self::Askable { .. }
+            | Self::Asks
             | Self::Blame { .. }
             | Self::Comments { .. }
             | Self::AnchorLines { .. }
@@ -202,6 +204,10 @@ impl Request {
             | Self::MrCreate { .. }
             | Self::OpenWeb { .. }
             | Self::Message { .. }
+            | Self::Ask { .. }
+            | Self::AskWait { .. }
+            | Self::AskStop { .. }
+            | Self::AskTake { .. }
             | Self::SetVisibility { .. }
             | Self::OnServer { .. }
             | Self::PutArtifact { .. }
