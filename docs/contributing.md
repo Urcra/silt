@@ -53,7 +53,7 @@ The sandbox's bubblewrap and pasta can go beside `silt` (ADR 0093), as the relea
 4. the pure crates built for `wasm32`;
 5. the web UI's unit tests, then `cargo build` and the tests, with `cargo nextest` when it's installed and `cargo test` otherwise;
 6. `crates/silt-desktop` when WebKitGTK is installed, and `crates/silt-voice` on Linux unless `SILT_SKIP_VOICE=1`: build, clippy and tests;
-7. the performance budgets that are enforced, on an optimized build. Their limits are set for the machines Silt is developed on, so on a slower one `SILT_BENCH_ENFORCE=0` only reports them, and the end-to-end timing too; a pass made that way isn't recorded;
+7. the performance budgets that are enforced, on an optimized build. Their limits are set for the machines Silt is developed on, with looser ones for a cloud session's and a GitHub Actions runner's, so on another slower one `SILT_BENCH_ENFORCE=0` only reports them, and the end-to-end timing too; a pass made that way isn't recorded;
 8. the Playwright end-to-end tests, two spec files at a time, then the timed one alone.
 
 Format the web UI with `pnpm -C web fmt`. A commit that only reformats goes in `.git-blame-ignore-revs`, which GitHub's blame skips; `git config blame.ignoreRevsFile .git-blame-ignore-revs` makes `git blame` skip it too.
@@ -74,7 +74,7 @@ People with write access can have Claude work on an issue or pull request from a
   - `/claude triage` sets labels and a milestone, names likely duplicates, and asks for what the report lacks.
 - On either, `/claude ask <question>`, or any question after `/claude`, answers from the code without changing anything, and `/claude cancel` stops that issue's or PR's running jobs.
 
-Claude weighs each comment by its author: the owner first, then members, collaborators and contributors; anyone else's comments only inform it. It never decides to merge: `.github/scripts/claude.sh`, taken from the default branch, merges only a head that passed the gate and CI. The gate runs there with the budgets reported rather than held, as on CI.
+Claude weighs each comment by its author: the owner first, then members, collaborators and contributors; anyone else's comments only inform it. It never decides to merge: `.github/scripts/claude.sh`, taken from the default branch, merges only a head that passed the gate and CI. The gate there holds the budgets to a runner's own limits, and counts in the status comment the budgets off their dev targets.
 
 Windows (ADR 0045) has no CI job and no release builds (ADR 0119), so it's checked locally: the gate's Windows clippy, Wine, `scripts/wsl-handoff.sh` between a native `silt` and a WSL distribution's, and a real Windows machine through `just install-wsl`. `SILT_HANDOFF_LOCAL=1` runs the handoff script on Linux, with both machines here. To check Windows locally, `rustup target add x86_64-pc-windows-gnu` and install MinGW (`apt-get install mingw-w64`); with Wine (`apt-get install wine64`), `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine64 cargo test --target x86_64-pc-windows-gnu -p silt-os` runs Windows tests too. Wine lacks some of Windows: symlinks and the pipe's first-instance flag behave differently there. The tests in `crates/silt-cli/tests` drive Rust stand-ins for the agent CLIs (`silt-fake-claude`, `-codex`, `-gemini`, `-copilot`, `-opencode`, in `silt-fake-agent`) and run on Windows too, except those that send Unix signals or need a Unix terminal. `cargo test -p silt-cli` alone needs `cargo build -p silt-fake-agent` first.
 
@@ -147,8 +147,9 @@ Built rather than kept:
 
 ## Performance budgets
 `silt-bench` measures Silt against the budgets of [ADR 0034](adr/0034-performance-budgets.md), on fixtures as big as real use: a 100 MB transcript, a 50,000-file repository and a family of ten forks. Build it optimized with `cargo build --profile perf -p silt-cli -p silt-bench`.
-- `target/perf/silt-bench report` measures every budget.
+- `target/perf/silt-bench report` measures every budget, and never fails.
 - `target/perf/silt-bench check` measures only the enforced ones, and fails naming the budget and what it measured. The gate runs it.
+- The limits are the development machine's, a cloud session's ([ADR 0037](adr/0037-cloud-machine-budgets.md)) or a GitHub Actions runner's ([ADR 0126](adr/0126-budgets-for-a-github-actions-runner.md)), from `SILT_BENCH_MACHINE=dev|cloud|ci`, or else from where it runs. The dev limits stay the targets: elsewhere, a budget over its dev limit prints an `off target:` line without failing, which on a runner is a warning on the job, and the job's summary gets the table.
 - `--only <budget>` measures just that budget.
 - `--tolerance <percent>` passes a budget over its limit by at most that much, printing a `slower than budget:` line for it. The gate takes it from `SILT_BENCH_TOLERANCE`. `scripts/commit.sh` sets it to 50 and repeats those lines with a warning, so a busy machine doesn't block a commit. When you see that warning, check whether the slowdown is expected ([ADR 0052](adr/0052-commits-tolerate-a-slower-machine.md)).
 

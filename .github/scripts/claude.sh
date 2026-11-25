@@ -66,7 +66,7 @@ iso() {
 
 job_line() {
     # job_line <label> <job json or empty> [nested]
-    local label=$1 job=$2 indent=${3:-} status conclusion start end now time detail
+    local label=$1 job=$2 indent=${3:-} status conclusion start end now time detail=
     now=$(date +%s)
     if [ -z "$job" ]; then
         printf -- '%s- ⬜ %s\n' "$indent" "$label"
@@ -79,7 +79,10 @@ job_line() {
     time=
     [ -n "$start" ] && time=" · $(took $(( ${end:-$now} - start )))"
     case "$status:$conclusion" in
-        completed:success) printf -- '%s- ✅ %s%s\n' "$indent" "$label" "$time" ;;
+        completed:success)
+            [ "$label" = perf ] && detail=$(off_target "$job")
+            printf -- '%s- ✅ %s%s%s\n' "$indent" "$label" "${detail:+: $detail}" "$time"
+            ;;
         completed:failure)
             detail=$(gh api "repos/$repo/check-runs/$(jq -r .id <<<"$job")/annotations" \
                 --jq '[.[] | select(.title == "gate")][0].message // empty' 2>/dev/null || true)
@@ -96,6 +99,19 @@ job_line() {
             fi
             ;;
         *) printf -- '%s- ⬜ %s\n' "$indent" "$label" ;;
+    esac
+}
+
+# How many budgets a perf part measured over their dev targets, which it
+# passed on a runner's own limits.
+off_target() {
+    local count
+    count=$(gh api "repos/$repo/check-runs/$(jq -r .id <<<"$1")/annotations" \
+        --jq '[.[] | select(.title == "off target")] | length' 2>/dev/null || echo 0)
+    case "$count" in
+        0 | '') ;;
+        1) echo "1 budget off its dev target" ;;
+        *) echo "$count budgets off their dev targets" ;;
     esac
 }
 
@@ -463,9 +479,9 @@ cmd_gate_part() {
         return 1
     fi
     log="$temp/gate-$part.log"
-    # The budgets are set for the machines Silt is built on, not a runner,
-    # so they're reported rather than held (SILT_BENCH_ENFORCE=0).
-    if SILT_BENCH_ENFORCE=0 SILT_SKIP_VOICE=1 scripts/gate.sh --part "$part" 2>&1 | tee "$log"; then
+    # On a runner the budgets are held to its own limits, and a measurement
+    # over the dev target is a warning on the job (ADR 0126).
+    if SILT_SKIP_VOICE=1 scripts/gate.sh --part "$part" 2>&1 | tee "$log"; then
         return 0
     fi
     step=$(grep '^gate: \[' "$log" | tail -1 | sed 's/^gate: \[[^]]*\] //')

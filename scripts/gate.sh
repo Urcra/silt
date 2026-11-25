@@ -223,9 +223,10 @@ fi
 fi
 
 # Performance budgets (ADR 0034), timed on an optimized build. Their limits
-# are set for the machines Silt is developed on (ADR 0037), so a slower one,
-# or CI's, reports them with SILT_BENCH_ENFORCE=0, and that pass isn't
-# recorded for scripts/commit.sh.
+# are set for the machines Silt is developed on, with looser ones for a
+# cloud session's (ADR 0037) and a GitHub Actions runner's (ADR 0126). Any
+# other slower machine reports them with SILT_BENCH_ENFORCE=0, and that pass
+# isn't recorded for scripts/commit.sh.
 enforce_budgets=true
 [ "${SILT_BENCH_ENFORCE:-1}" = 0 ] && enforce_budgets=false
 if in_part perf; then

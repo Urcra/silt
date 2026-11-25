@@ -6,6 +6,7 @@
 - Amended by: [ADR 0052](0052-commits-tolerate-a-slower-machine.md) (a commit tolerates a slower machine), [ADR 0101](0101-the-ui-under-heavy-load.md) (scrolling a long thread, and what a change reads again)
 - Amended by: [ADR 0036](0036-a-hook-starts-the-daemon.md): A hook that finds no daemon starts one
 - Amended by: [ADR 0037](0037-cloud-machine-budgets.md): Budgets for a cloud session's machine
+- Amended by: [ADR 0126](0126-budgets-for-a-github-actions-runner.md): Budgets for a GitHub Actions runner
 - Amended by: [ADR 0091](0091-a-faster-gate-and-a-pass-that-stands.md): A faster gate, and a pass that stands
 
 ## Context
