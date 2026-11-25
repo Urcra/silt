@@ -312,9 +312,9 @@ jobs:
         run: |
           say() { "$HELPER" status result "$1"; }
           if [ -n "$SHA" ]; then
-            say "✅ Gate passed on \`${SHA:0:8}\`, merged with its base."
+            say "✅ Gate passed (\`${SHA:0:8}\` + base)"
           elif [ "$GUARD1" != false ] && [ "$GUARD2" != false ]; then
-            say "❌ The full gate still fails after two rounds of fixes, or the conflicts couldn't be resolved. Claude's comments above say what it tried; the run's log has the gate's output."
+            say "❌ Gate still failing after 2 rounds, or conflicts unresolved. See Claude's comments and the [log]($RUN_URL)."
           fi
       - name: CI on that head
         id: ci
@@ -339,12 +339,12 @@ jobs:
             exit 0 # the guard said why
           elif [ -n "$SHA" ]; then
             case "$CI_RESULT" in
-              failed) say "Not merging: the full gate passed on \`${SHA:0:8}\`, but CI failed there: $CI_FAILED." ;;
-              none) say "Not merging: the full gate passed on \`${SHA:0:8}\`, but no CI checks started on it within 15 minutes." ;;
-              *) say "Not merging: the full gate passed on \`${SHA:0:8}\`, but CI didn't finish there within two hours." ;;
+              failed) say "Not merged: CI failed on \`${SHA:0:8}\`: $CI_FAILED" ;;
+              none) say "Not merged: no CI checks started on \`${SHA:0:8}\` within 15 min." ;;
+              *) say "Not merged: CI on \`${SHA:0:8}\` timed out after 2h." ;;
             esac
           else
-            say "Not merging: the full gate still fails after two rounds of fixes, or the conflicts couldn't be resolved. Claude's comments above say what it tried; the run's log has the gate's output."
+            say "Not merged: gate still failing after 2 rounds, or conflicts unresolved. See Claude's comments and the [log]($RUN_URL)."
           fi
 
       - name: The status comment
