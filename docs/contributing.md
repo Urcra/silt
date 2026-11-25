@@ -66,8 +66,10 @@ On a pull request, people with write access can start a Claude Code cloud sessio
 - `/claude gate` runs the gate, resolves conflicts and pushes fixes.
 - `/claude review`, or `/claude review fix`, reviews the PR, and with `fix` fixes what it found.
 - `/claude watch` stays on the PR until it's merged, fixing conflicts, review comments and gate failures as they come. `/claude unwatch` stops it.
+- `/claude fix` merges the base in if it conflicts, makes the changes review threads and comments ask for, replies and resolves them, and pushes. It never merges.
+- `/claude merge` runs the full gate on the PR merged with its base, fixes conflicts and failures (up to two rounds), waits for CI, and merges with a merge commit. It refuses while review threads or change requests are open. These two run in GitHub Actions (`.github/workflows/claude-fix-merge.yml`), so their comments come from `claude[bot]`.
 
-Each command fires a scheduled task on claude.ai through its API trigger; the watch task's prompt is in `.github/claude-tasks/watch.md`.
+`gate`, `review` and `watch` each fire a scheduled task on claude.ai through its API trigger; the watch task's prompt is in `.github/claude-tasks/watch.md`.
 
 Windows (ADR 0045) has no CI job and no release builds (ADR 0119), so it's checked locally: the gate's Windows clippy, Wine, `scripts/wsl-handoff.sh` between a native `silt` and a WSL distribution's, and a real Windows machine through `just install-wsl`. `SILT_HANDOFF_LOCAL=1` runs the handoff script on Linux, with both machines here. To check Windows locally, `rustup target add x86_64-pc-windows-gnu` and install MinGW (`apt-get install mingw-w64`); with Wine (`apt-get install wine64`), `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine64 cargo test --target x86_64-pc-windows-gnu -p silt-os` runs Windows tests too. Wine lacks some of Windows: symlinks and the pipe's first-instance flag behave differently there. The tests in `crates/silt-cli/tests` drive Rust stand-ins for the agent CLIs (`silt-fake-claude`, `-codex`, `-gemini`, `-copilot`, `-opencode`, in `silt-fake-agent`) and run on Windows too, except those that send Unix signals or need a Unix terminal. `cargo test -p silt-cli` alone needs `cargo build -p silt-fake-agent` first.
 
