@@ -87,6 +87,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       NUMBER: ${{ github.event.issue.number }}
       KIND: ${{ github.event.issue.pull_request && 'pr' || 'issue' }}
+      REQUESTER: ${{ github.event.comment.user.login }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: The command
@@ -123,6 +124,9 @@ jobs:
           persist-credentials: false
 
       # The toolchain, for the commands that build, test or push.
+      - name: Setting up
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.build == 'true'
+        run: '"$HELPER" status set setup active'
       - name: Free disk space
         if: steps.target.outputs.ok == 'true' && steps.command.outputs.build == 'true'
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -167,6 +171,7 @@ jobs:
         run: |
           pnpm -C web install --frozen-lockfile
           pnpm -C web exec playwright install --with-deps chromium
+          "$HELPER" status set setup 'done'
 
       # Every command but merge and gate: one go for Claude.
       - name: What to do
@@ -178,6 +183,7 @@ jobs:
           REVIEW_MODE: ${{ steps.command.outputs.mode }}
         run: '"$HELPER" prompt "${{ steps.command.outputs.command }}"'
       - name: Claude
+        id: claude
         if: steps.prompt.outcome == 'success'
         uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1.0.290
         env:
@@ -192,6 +198,10 @@ jobs:
             --permission-mode acceptEdits
             --allowedTools "${{ steps.command.outputs.build == 'true' && 'Bash,Read,Edit,Write,Glob,Grep,TodoWrite' || 'Read,Glob,Grep,TodoWrite,Bash(gh api:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git fetch:*),Bash(git grep:*)' }}"
             --disallowedTools "Bash(gh pr merge:*),Bash(gh pr close:*),Bash(gh pr review:*),Bash(gh issue close:*),Bash(gh issue delete:*),Bash(gh repo:*),Bash(gh release:*),Bash(gh secret:*),Bash(gh variable:*),Bash(gh workflow:*),Bash(gh run:*),Bash(gh label delete:*)"
+
+      - name: Claude's result
+        if: always() && steps.prompt.outcome == 'success'
+        run: '"$HELPER" status set claude "${{ steps.claude.outcome == ''success'' && ''done'' || ''failed'' }}"'
 
       # merge and gate on a pull request: the gate, then up to two rounds of
       # fixes, each gated again.
@@ -304,7 +314,7 @@ jobs:
           GUARD1: ${{ steps.guard1.outputs.ok }}
           GUARD2: ${{ steps.guard2.outputs.ok }}
         run: |
-          say() { printf '%s\n\n---\n_Run by [this workflow](%s)_\n' "$1" "$RUN_URL" | gh pr comment "$NUMBER" --body-file -; }
+          say() { "$HELPER" status result "$1"; }
           if [ -n "$SHA" ]; then
             say "✅ Gate passed on \`${SHA:0:8}\`, merged with its base."
           elif [ "$GUARD1" != false ] && [ "$GUARD2" != false ]; then
@@ -328,7 +338,7 @@ jobs:
           GUARD2: ${{ steps.guard2.outputs.ok }}
           SHA: ${{ steps.passed.outputs.sha }}
         run: |
-          say() { printf '%s\n\n---\n_Run by [this workflow](%s)_\n' "$1" "$RUN_URL" | gh pr comment "$NUMBER" --body-file -; }
+          say() { "$HELPER" status result "$1"; }
           if [ "$GUARD1" = false ] || [ "$GUARD2" = false ]; then
             exit 0 # the guard said why
           elif [ -n "$SHA" ]; then
@@ -340,3 +350,7 @@ jobs:
           else
             say "Not merging: the full gate still fails after two rounds of fixes, or the conflicts couldn't be resolved. Claude's comments above say what it tried; the run's log has the gate's output."
           fi
+
+      - name: The status comment
+        if: always() && steps.command.outputs.command != ''
+        run: '"$HELPER" status final "${{ job.status }}"'
