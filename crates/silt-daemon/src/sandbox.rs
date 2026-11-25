@@ -628,6 +628,7 @@ fn listen(socket: &Path) -> std::io::Result<std::os::unix::net::UnixListener> {
     Ok(listener)
 }
 
+#[cfg(unix)]
 fn github_host(host: &str) -> bool {
     let host = host.trim_start_matches("*.");
     host == "github.com" || host.ends_with(".github.com")
@@ -881,6 +882,7 @@ fn bubblewrap_unavailable() -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn git(dir: &Path, args: &[&str]) {
         let status = std::process::Command::new("git")
             .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always"])

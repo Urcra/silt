@@ -750,6 +750,7 @@ pub(crate) fn image(block: &serde_json::Map<String, Value>) -> Option<Entry> {
     Some(Entry::Image {
         media_type: source.get("media_type")?.as_str()?.to_owned(),
         data: source.get("data")?.as_str()?.to_owned(),
+        stored: None,
     })
 }
 

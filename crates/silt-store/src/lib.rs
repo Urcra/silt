@@ -13,7 +13,7 @@ use silt_types::{ActorId, BlobHash, DeltaId, FamilyId, Frontier, Lamport, Thread
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 
-pub use blobs::BlobStore;
+pub use blobs::{BlobStore, ChunkError, Chunked, hash_file};
 pub use plugin_calls::{GrantRecord, PluginCallRecord};
 pub use queue::QueuedPrompt;
 

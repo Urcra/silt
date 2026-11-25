@@ -35,6 +35,8 @@ import { useShownTheme } from '../theme'
 import { Button, Dialog, Icon, IconButton, Menu, type MenuItem, Spinner, cx, toast } from '../ui'
 import { ArtifactCommentsButton, AskForChange } from './ArtifactComments'
 import { KindIcon, ShownImage } from './ArtifactCards'
+import { artifactMedia } from '../mediaInfo'
+import { VideoPlayer, ZoomableImage } from './Media'
 import { Markdown } from './Markdown'
 import { mermaidSvg, withDiagramsDrawn } from '../mermaid'
 import { Broker, callOf } from '../bridge/broker'
@@ -109,10 +111,10 @@ export function ArtifactList({
       )}
       {images.length > 0 && (
         <section aria-label="images the agent showed" className="flex flex-col gap-2">
-          <h3 className="font-mono text-2xs tracking-[0.08em] text-fg-2 uppercase">Images the agent showed</h3>
+          <h3 className="font-mono text-2xs tracking-[0.08em] text-fg-2 uppercase">Images and videos the agent showed</h3>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
             {images.map((image) => (
-              <ShownImage key={image.entry.index} thread={thread} entry={image.entry} />
+              <ShownImage key={image.entry.index} thread={thread} entry={image.entry} tile />
             ))}
           </div>
         </section>
@@ -238,7 +240,8 @@ export function ArtifactViewer({
   const content = useQuery({
     queryKey: keys.artifact(thread, shown?.artifact.blob ?? ''),
     queryFn: () => api.artifact(thread, shown!.artifact.blob),
-    enabled: Boolean(shown),
+    // An image or a video is read by range from its blob rather than whole (ADR 0121).
+    enabled: Boolean(shown) && !readByBlob(shown!.artifact),
     staleTime: Infinity,
   })
   // The CSS the version's design system compiled to, which its frame is given (ADR 0071).
@@ -487,7 +490,13 @@ export function ArtifactViewer({
             <IconButton icon="code" label="Source" aria-pressed={source} onClick={() => setSource(true)} className={PRESSED} />
           )}
         </span>
-        <span className="inline-flex shrink-0 items-center gap-0.5 @max-xl/artifact:hidden">
+        <span
+          className={cx(
+            'inline-flex shrink-0 items-center gap-0.5 @max-xl/artifact:hidden',
+            // A picture has its own zoom (ADR 0121).
+            PICTURES.has(artifact.kind) && 'hidden',
+          )}
+        >
           <IconButton icon="reload" label="Reload" onClick={() => setReloads(reloads + 1)} />
           <Menu
             label="Zoom"
@@ -549,7 +558,9 @@ export function ArtifactViewer({
         <IconButton icon="x" label="Close the artifact" onClick={onClose} />
       </div>
       <div className="relative min-h-0 flex-1 overflow-hidden bg-elevated">
-        {content.data && styled ? (
+        {readByBlob(artifact) ? (
+          <PanelMedia key={artifact.blob} thread={thread} artifact={artifact} />
+        ) : content.data && styled ? (
           <ArtifactPage
             key={`${artifact.blob}-${reloads}`}
             thread={thread}
@@ -856,7 +867,7 @@ function ArtifactPage({
     </div>
   )
   if (artifact.kind === 'markdown') return page(<Markdown text={textOf(content)} />)
-  if (artifact.kind === 'mermaid') return page(<Mermaid text={textOf(content)} title={artifact.title} />)
+  if (artifact.kind === 'mermaid') return <Mermaid text={textOf(content)} title={artifact.title} zoomable />
   const typed = (viewer: ReactNode) => <Suspense fallback={null}>{viewer}</Suspense>
   // Types Silt draws from the version's JSON (ADR 0076).
   if (artifact.kind === 'slides')
@@ -906,10 +917,34 @@ function ArtifactPage({
         {textOf(content)}
       </pre>
     )
-  return page(<img src={dataUrl(content)} alt={artifact.title} className="mx-auto block max-w-full rounded-sm bg-white" />)
+  return <ZoomableImage layout="floating" media={{ kind: 'image', title: artifact.title, src: dataUrl(content) }} />
 }
 
-export function Mermaid({ text, title }: { text: string; title: string }) {
+/** The kinds that are a picture, which zoom and pan rather than take the page's zoom. */
+const PICTURES = new Set(['image', 'video', 'svg', 'mermaid'])
+
+/** An image or a video, which the panel reads by range from its blob (ADR 0121); an SVG is read as text. */
+function readByBlob(artifact: ArtifactView): boolean {
+  return artifact.kind === 'video' || (artifact.kind === 'image' && artifact.media_type !== 'image/svg+xml')
+}
+
+/** An artifact's image, zoomable, or its video, beside the conversation. */
+function PanelMedia({ thread, artifact }: { thread: string; artifact: ArtifactView }) {
+  const media = artifactMedia(thread, artifact)
+  if (media.kind === 'video')
+    return (
+      <div className="absolute inset-0 grid place-items-center overflow-auto bg-bg p-4">
+        <VideoPlayer media={media} variant="panel" />
+      </div>
+    )
+  return (
+    <div className="absolute inset-0" data-testid="artifact-image">
+      <ZoomableImage layout="floating" media={media} />
+    </div>
+  )
+}
+
+export function Mermaid({ text, title, zoomable = false }: { text: string; title: string; zoomable?: boolean }) {
   const id = `mermaid${useId()}`
   const [drawn, setDrawn] = useState<{ svg: string } | { error: string } | null>(null)
   useEffect(() => {
@@ -928,6 +963,12 @@ export function Mermaid({ text, title }: { text: string; title: string }) {
       <div className="flex flex-col gap-2">
         <p className="text-sm text-danger">The diagram doesn't draw: {drawn.error}</p>
         <pre className="font-mono text-xs whitespace-pre-wrap text-fg-2">{text}</pre>
+      </div>
+    )
+  if (zoomable)
+    return (
+      <div className="absolute inset-0" data-testid="artifact-diagram">
+        <ZoomableImage layout="floating" media={{ kind: 'image', title, src: svgUrl(drawn.svg) }} />
       </div>
     )
   return (

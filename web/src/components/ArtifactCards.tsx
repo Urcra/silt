@@ -1,67 +1,116 @@
-// What agents showed the person in the conversation (ADR 0068): images,
+// What agents showed the person in the conversation (ADR 0068): images and videos,
 // and cards that open an artifact beside it. Kept apart from the panel's
 // viewer, which loads only once an artifact opens.
 
 import { useContext, useState } from 'react'
 import type { HistoryEntry } from '../api'
-import { ArtifactActions, useArtifactContent } from '../artifactActions'
-import { dataUrl, kindLabel } from '../artifacts'
-import { message } from '../query'
-import { Dialog, Icon, Spinner, cx } from '../ui'
+import { ArtifactActions } from '../artifactActions'
+import { kindLabel } from '../artifacts'
+import { artifactMedia, clock, formatOf, sizeOf, thumbSrc } from '../mediaInfo'
+import { Icon, cx } from '../ui'
+import { KeptHereOnly, MediaViewer, Unavailable, VideoPlayer } from './Media'
 
-/** An image an agent showed in the conversation, with its caption; it opens at full size. */
-export function ShownImage({ thread, entry }: { thread: string; entry: HistoryEntry }) {
+/**
+ * An image or a video an agent showed in the conversation, with its caption (ADR 0121). An image shows its smallest
+ * preview and opens in the viewer; a video plays where it is and opens in the viewer at the moment it's at.
+ */
+export function ShownImage({ thread, entry, tile = false }: { thread: string; entry: HistoryEntry; tile?: boolean }) {
   const artifact = entry.artifact!
-  const content = useArtifactContent(thread, artifact)
-  const [open, setOpen] = useState(false)
+  const media = artifactMedia(thread, artifact)
+  const [open, setOpen] = useState<{ at?: number } | null>(null)
+  const [missing, setMissing] = useState(false)
+  const [seen, setSeen] = useState<{ duration: number; width: number; height: number } | null>(null)
+  // A video's length and pixels, once the player has read them.
+  const facts = seen
+    ? `${formatOf(artifact.media_type)} · ${clock(seen.duration)} · ${seen.width}×${seen.height} · ${sizeOf(artifact.size)}`
+    : media.meta
+  const caption = (
+    <>
+      <figcaption className="text-2xs text-fg-3">
+        {artifact.caption && <span className="text-fg-2">{artifact.caption} · </span>}
+        {facts}
+      </figcaption>
+      <KeptHereOnly state={media.state} />
+    </>
+  )
+  // In a grid of them, each is a tile of one size; a video shows its first frame and plays in the viewer.
+  if (tile)
+    return (
+      <figure className="flex min-w-0 flex-col gap-1.5" data-testid={media.kind === 'video' ? 'shown-video' : 'shown-image'}>
+        <button
+          type="button"
+          aria-label={`open the ${media.kind} ${artifact.caption ?? artifact.title}`}
+          onClick={() => setOpen({})}
+          className="relative aspect-video w-full cursor-zoom-in overflow-hidden rounded-md border border-line bg-surface-1 hover:border-line-strong"
+        >
+          {media.kind === 'video' ? (
+            <>
+              <video src={media.src} preload="metadata" muted playsInline className="h-full w-full object-cover" />
+              <span className="absolute inset-0 m-auto grid h-9 w-9 place-items-center rounded-full border border-white/20 bg-[#140e08]/60 text-[#f4ecdd]">
+                <Icon name="playSolid" className="ml-0.5 h-4 w-4" />
+              </span>
+            </>
+          ) : (
+            <img
+              src={thumbSrc(thread, artifact.blob, artifact.previews)}
+              alt={artifact.caption ?? artifact.title}
+              className="h-full w-full object-contain"
+            />
+          )}
+        </button>
+        {caption}
+        {open && <MediaViewer media={media} onClose={() => setOpen(null)} />}
+      </figure>
+    )
+  if (media.kind === 'video')
+    return (
+      <figure className="flex w-fit max-w-full flex-col gap-1.5" data-testid="shown-video">
+        <VideoPlayer media={media} variant="inline" onExpand={(at) => setOpen({ at })} onMetadata={setSeen} />
+        {caption}
+        {open && <MediaViewer media={media} startAt={open.at ?? 0} onClose={() => setOpen(null)} />}
+      </figure>
+    )
   const alt = artifact.caption ?? artifact.title
   return (
     <figure className="flex w-fit max-w-full flex-col gap-1.5" data-testid="shown-image">
-      <button
-        type="button"
-        aria-label={`open the image ${alt}`}
-        onClick={() => setOpen(true)}
-        disabled={!content.data}
-        className="flex min-h-24 min-w-32 items-center justify-center overflow-hidden rounded-md border border-line bg-surface-1 hover:border-line-strong"
-      >
-        {content.data ? (
-          <img src={dataUrl(content.data)} alt={alt} className="block max-h-72 max-w-full object-contain md:max-w-[420px]" />
-        ) : content.error ? (
-          <span className="px-3 text-2xs text-fg-2">{message(content.error)}</span>
-        ) : (
-          <Spinner />
-        )}
-      </button>
-      <figcaption className="text-2xs text-fg-3">
-        {artifact.caption && <span className="text-fg-2">{artifact.caption} · </span>}
-        {artifact.media_type.replace(/^image\//, '').toUpperCase()} · {sizeOf(artifact.size)}
-      </figcaption>
-      {content.data && (
-        <Dialog open={open} onClose={() => setOpen(false)} title={alt} wide>
-          <img src={dataUrl(content.data)} alt={alt} className="max-h-[75vh] w-full object-contain" />
-        </Dialog>
+      {missing && media.state ? (
+        <div className="grid aspect-video w-[420px] max-w-full place-items-center rounded-md border border-line bg-surface-1 p-4">
+          <Unavailable state={media.state} kind="image" onBack={() => setMissing(false)} />
+        </div>
+      ) : (
+        <button
+          type="button"
+          aria-label={`open the image ${alt}`}
+          onClick={() => setOpen({})}
+          className="flex min-h-24 min-w-32 cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-line bg-surface-1 hover:border-line-strong"
+        >
+          <img
+            src={thumbSrc(thread, artifact.blob, artifact.previews)}
+            alt={alt}
+            onError={() => setMissing(true)}
+            className="block max-h-72 max-w-full object-contain md:max-w-[420px]"
+          />
+        </button>
       )}
+      {caption}
+      {open && <MediaViewer media={media} onClose={() => setOpen(null)} />}
     </figure>
   )
-}
-
-function sizeOf(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 export function KindIcon({ kind, className }: { kind: string; className?: string }) {
   const name =
     kind === 'image' || kind === 'svg' || kind === 'canvas'
       ? 'image'
-      : kind === 'mermaid'
-        ? 'graph'
-        : kind === 'slides'
-          ? 'play'
-          : kind === 'data'
-            ? 'list'
-            : 'file'
+      : kind === 'video'
+        ? 'video'
+        : kind === 'mermaid'
+          ? 'graph'
+          : kind === 'slides'
+            ? 'play'
+            : kind === 'data'
+              ? 'list'
+              : 'file'
   return <Icon name={name} className={className} />
 }
 

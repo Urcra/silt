@@ -263,6 +263,144 @@ async fn routes_without_an_account_take_only_small_bodies() {
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
+/// A large blob goes up in chunks, in order, going on from what arrived
+/// after a dropped connection, is checked whole, and is read by range
+/// (ADR 0121).
+#[tokio::test]
+async fn a_large_blob_goes_up_in_chunks_and_is_read_by_range() {
+    let data = tempfile::tempdir().expect("temp dir");
+    let base = start(data.path()).await;
+    let (client, _) = Client::login(data.path(), &base).await;
+    let bytes: Vec<u8> = (0..30_000u32).map(|n| (n % 251) as u8).collect();
+    let hash = BlobStore::hash(&bytes);
+    let size = bytes.len();
+    let chunk = |offset: usize, end: usize, size: usize| {
+        client
+            .request(reqwest::Method::PUT, &format!("/v1/blobs/{hash}/chunks?offset={offset}&size={size}"))
+            .body(bytes[offset..end].to_vec())
+            .send()
+    };
+    let state = || async {
+        let answer = client.request(reqwest::Method::GET, &format!("/v1/blobs/{hash}/state")).send().await.expect("sends");
+        answer.json::<silt_proto::BlobState>().await.expect("a state")
+    };
+    let first = chunk(0, 12_000, size).await.expect("sends");
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(state().await, silt_proto::BlobState { stored: false, received: 12_000, size: None, ..Default::default() });
+    assert_eq!(chunk(0, 12_000, size).await.expect("sends").status(), StatusCode::CONFLICT, "only where it left off");
+    assert_eq!(chunk(12_000, 30_000, size - 1).await.expect("sends").status(), StatusCode::BAD_REQUEST, "past its size");
+    let last: silt_proto::BlobState = chunk(12_000, 30_000, size).await.expect("sends").json().await.expect("state");
+    assert!(last.stored, "{last:?}");
+
+    let family = Family::new();
+    let bundle = family.delta(
+        ActorId(9),
+        THREAD,
+        Author::User,
+        0,
+        family.thread_head(THREAD),
+        Op::Git(silt_log::GitOp::Bundle { commits: Vec::new(), blob: hash }),
+    );
+    assert_eq!(client.push(vec![bundle]).await.status(), StatusCode::OK);
+    assert_eq!(
+        state().await,
+        silt_proto::BlobState { stored: true, received: size as u64, size: Some(size as u64), ..Default::default() }
+    );
+    let part = client
+        .request(reqwest::Method::GET, &format!("/v1/blobs/{hash}"))
+        .header(reqwest::header::RANGE, "bytes=29990-")
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(part.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(part.headers()[reqwest::header::CONTENT_RANGE], "bytes 29990-29999/30000");
+    assert_eq!(&part.bytes().await.expect("body")[..], &bytes[29_990..]);
+
+    let other = BlobStore::hash(b"what was promised");
+    let damaged = client
+        .request(reqwest::Method::PUT, &format!("/v1/blobs/{other}/chunks?offset=0&size=14"))
+        .body(b"something else".to_vec())
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(damaged.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // Whoever may read it hears that it arrived damaged and comes again.
+    let names = |blob| {
+        let family = Family::new();
+        family.delta(
+            ActorId(10),
+            THREAD,
+            Author::User,
+            0,
+            family.thread_head(THREAD),
+            Op::Git(silt_log::GitOp::Bundle { commits: Vec::new(), blob }),
+        )
+    };
+    assert_eq!(client.push(vec![names(other)]).await.status(), StatusCode::OK);
+    let told: silt_proto::BlobState = client
+        .request(reqwest::Method::GET, &format!("/v1/blobs/{other}/state"))
+        .send()
+        .await
+        .expect("sends")
+        .json()
+        .await
+        .expect("a state");
+    assert!(told.damaged && !told.stored, "{told:?}");
+}
+
+/// A server's owner can cap the files it keeps; it keeps any size by default.
+#[tokio::test]
+async fn a_server_keeps_files_up_to_its_cap() {
+    let data = tempfile::tempdir().expect("temp dir");
+    let config = silt_server::Config { max_file_mib: Some(1), ..silt_server::Config::default() };
+    let server = Server::open_with(data.path(), config).await.expect("opens");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    tokio::spawn(server.serve(listener));
+    let (client, _) = Client::login(data.path(), &base).await;
+    let large = vec![1u8; (1 << 20) + 1];
+    let hash = BlobStore::hash(&large);
+    let whole =
+        client.request(reqwest::Method::PUT, &format!("/v1/blobs/{hash}")).body(large.clone()).send().await.expect("sends");
+    assert_eq!(whole.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let chunked = client
+        .request(reqwest::Method::PUT, &format!("/v1/blobs/{hash}/chunks?offset=0&size={}", large.len()))
+        .body(large[..1024].to_vec())
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(chunked.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(chunked.text().await.expect("body").contains("at most 1 MiB"));
+    // Whoever may read it hears why it won't arrive.
+    let family = Family::new();
+    let names = family.delta(
+        ActorId(9),
+        THREAD,
+        Author::User,
+        0,
+        family.thread_head(THREAD),
+        Op::Git(silt_log::GitOp::Bundle { commits: Vec::new(), blob: hash }),
+    );
+    assert_eq!(client.push(vec![names]).await.status(), StatusCode::OK);
+    let told: silt_proto::BlobState = client
+        .request(reqwest::Method::GET, &format!("/v1/blobs/{hash}/state"))
+        .send()
+        .await
+        .expect("sends")
+        .json()
+        .await
+        .expect("a state");
+    assert!(!told.stored && told.refused.as_deref().is_some_and(|why| why.contains("at most 1 MiB")), "{told:?}");
+    let small = b"fits".to_vec();
+    let fits = client
+        .request(reqwest::Method::PUT, &format!("/v1/blobs/{}", BlobStore::hash(&small)))
+        .body(small)
+        .send()
+        .await
+        .expect("sends");
+    assert_eq!(fits.status(), StatusCode::NO_CONTENT);
+}
+
 #[tokio::test]
 async fn blobs_threads_and_leases() {
     let data = tempfile::tempdir().expect("temp dir");

@@ -85,6 +85,10 @@ fn a_work_workspace_holds_its_agents_to_its_rules_and_keeps_its_history_apart() 
 
     // A personal thread, in the default workspace, as before.
     laptop.silt(&["claude"]);
+    #[cfg_attr(
+        not(unix),
+        expect(unused_variables, reason = "read before Work's sessions exist; used where hooks go over a Unix socket")
+    )]
     let personal_session = fs::read_dir(laptop.claude_dir.join("projects"))
         .expect("projects")
         .flatten()

@@ -38,15 +38,16 @@ pub fn name_of(line: &str) -> Option<String> {
 
 /// A prompt by `by`, naming the files attached to it; each file's content
 /// is recorded beside the session under that name.
-/// A prompt with the names of the files attached to it, and the images
-/// among them as `(media type, base64)`, kept so the history can show them.
-pub fn prompt(text: &str, by: &str, attached: &[String], images: &[(String, String)]) -> String {
+/// A prompt with the names of the files attached to it, and the images and
+/// videos among them, kept so the history can show them: inline as base64,
+/// or since ADR 0121 named by their blobs.
+pub fn prompt(text: &str, by: &str, attached: &[String], media: &[silt_proto::view::ImageView]) -> String {
     let mut record = json!({"t": "prompt", "text": text, "by": by});
     if !attached.is_empty() {
         record["attached"] = json!(attached);
     }
-    if !images.is_empty() {
-        record["images"] = images.iter().map(|(media_type, data)| json!({"media_type": media_type, "data": data})).collect();
+    if !media.is_empty() {
+        record["images"] = json!(media);
     }
     record.to_string()
 }
@@ -275,8 +276,8 @@ pub fn read_line(line: &str) -> Read {
             read.marks.push(Mark::PromptSubmitted);
             read.entries.push(Entry::User { text: with_attached(field("text"), &record) });
             for image in record["images"].as_array().into_iter().flatten() {
-                if let (Some(media_type), Some(data)) = (image["media_type"].as_str(), image["data"].as_str()) {
-                    read.entries.push(Entry::Image { media_type: media_type.to_owned(), data: data.to_owned() });
+                if let Ok(silt_proto::view::ImageView { media_type, data, stored }) = serde_json::from_value(image.clone()) {
+                    read.entries.push(Entry::Image { media_type, data, stored });
                 }
             }
         }
@@ -533,12 +534,17 @@ mod tests {
 
     #[test]
     fn a_prompt_names_its_attachments_and_keeps_its_images() {
-        let read = read_line(&prompt("look", "alice", &["prompt-1/shot.png".into()], &[("image/png".into(), "AAAA".into())]));
+        let inline = silt_proto::view::ImageView { media_type: "image/png".into(), data: "AAAA".into(), stored: None };
+        let stored = silt_proto::view::StoredMedia { blob: "ab".repeat(32), size: 41 << 20, ..Default::default() };
+        let video =
+            silt_proto::view::ImageView { media_type: "video/mp4".into(), data: String::new(), stored: Some(stored.clone()) };
+        let read = read_line(&prompt("look", "alice", &["prompt-1/shot.png".into()], &[inline, video]));
         assert_eq!(
             read.entries,
             [
                 Entry::User { text: "look\n\n(attached: prompt-1/shot.png)".into() },
-                Entry::Image { media_type: "image/png".into(), data: "AAAA".into() }
+                Entry::Image { media_type: "image/png".into(), data: "AAAA".into(), stored: None },
+                Entry::Image { media_type: "video/mp4".into(), data: String::new(), stored: Some(stored) }
             ]
         );
     }
@@ -563,6 +569,9 @@ mod tests {
             capabilities: Some([("db".to_owned(), serde_json::json!({}))].into()),
             by: Some("ann".into()),
             files: None,
+            width: None,
+            height: None,
+            previews: Vec::new(),
         };
         let read = read_line(&artifact(&shown));
         assert_eq!(read.entries, vec![Entry::Artifact(Box::new(shown.clone()))]);
@@ -582,7 +591,7 @@ mod tests {
             read.entries,
             [
                 Entry::ToolResult { tool_use_id: "c1".into(), text: "Took a screenshot".into(), is_error: false },
-                Entry::Image { media_type: "image/jpeg".into(), data: "/9j/".into() }
+                Entry::Image { media_type: "image/jpeg".into(), data: "/9j/".into(), stored: None }
             ]
         );
         let other_json = r#"[{"type":"user","name":"alice"}]"#;

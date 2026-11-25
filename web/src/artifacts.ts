@@ -52,6 +52,7 @@ const KINDS: Record<string, string> = {
   markdown: 'Document',
   mermaid: 'Diagram',
   image: 'Image',
+  video: 'Video',
   slides: 'Slides',
   canvas: 'Canvas',
   data: 'Data',

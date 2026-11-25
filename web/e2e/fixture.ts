@@ -72,12 +72,12 @@ export function silt(...args: string[]): string {
   return execFileSync(SILT, args, { encoding: 'utf8', env: { ...process.env, SILT_HOME: siltHome } })
 }
 
-/** Stops the thread's agent, from the composer's agent settings where it is offered. Their panel opens over the
- * whole page, outside a part of it the test may look in. */
+/** Stops the thread's agent, from the bottom of the composer's agent menu. Its panel opens over the whole page,
+ * outside a part of it the test may look in. */
 export async function stopAgent(on: Page | Locator): Promise<void> {
-  await on.getByRole('button', { name: 'agent settings' }).click()
+  await on.getByRole('button', { name: 'agent to start' }).click()
   const page = 'page' in on ? on.page() : on
-  await page.getByRole('dialog', { name: 'agent settings' }).getByRole('button', { name: 'Stop agent' }).click()
+  await page.getByRole('dialog', { name: 'agent to start' }).getByRole('menuitem', { name: 'Stop agent' }).click()
 }
 
 /** Opens All threads from the sidebar: `/` is a new thread (ADR 0044). */

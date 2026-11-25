@@ -190,10 +190,23 @@ const BACKGROUND_CHECK: Duration = Duration::from_secs(3);
 struct First {
     prompt: String,
     plan: bool,
-    attachments: Vec<Attachment>,
+    attachments: Given,
     /// Who the prompt is from when it isn't the person: the agent that
     /// asked this one (ADR 0120).
     author: Option<String>,
+}
+
+/// The files a prompt came with: sent in it, or uploaded first (ADR 0121).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Given {
+    pub(crate) sent: Vec<Attachment>,
+    pub(crate) uploaded: Vec<crate::media::Uploaded>,
+}
+
+impl Given {
+    fn is_empty(&self) -> bool {
+        self.sent.is_empty() && self.uploaded.is_empty()
+    }
 }
 
 /// What the fork's agent is asked for a change guide.
@@ -640,7 +653,7 @@ impl Core {
         if allowed != asked {
             options.preset = allowed;
         }
-        let attachments = decode(std::mem::take(&mut options.attachments))?;
+        let attachments = decode(std::mem::take(&mut options.attachments), &self.data_dir)?;
         let continues = options.continues.as_deref().map(|selector| self.find_thread(selector)).transpose()?;
         if continues.is_some_and(|chat| !self.is_chat(chat)) {
             return Err(CoreError::Invalid("only a chat continues in a project".into()));
@@ -900,7 +913,7 @@ impl Core {
     /// queues it otherwise (ADR 0022). An agent awaiting input takes it as
     /// the answer to its plan.
     pub(crate) async fn acp_prompt(&mut self, selector: &str, text: &str, plan: bool) -> Result<&'static str, CoreError> {
-        self.acp_prompt_with(selector, text, plan, Vec::new()).await
+        self.acp_prompt_with(selector, text, plan, Given::default()).await
     }
 
     /// [`Self::acp_prompt`] with files attached, which only go with a prompt
@@ -910,7 +923,7 @@ impl Core {
         selector: &str,
         text: &str,
         plan: bool,
-        attachments: Vec<Attachment>,
+        attachments: Given,
     ) -> Result<&'static str, CoreError> {
         let thread = self.find_thread(selector)?;
         if text.trim().is_empty() {
@@ -1036,23 +1049,23 @@ impl Core {
         };
         if let Some(note) = run.resume_note.take() {
             let me = self.own_user(thread);
-            return self.send_prompt(thread, &me, &note, Vec::new()).await;
+            return self.send_prompt(thread, &me, &note, Given::default()).await;
         }
         if let Some(steer) = run.steering.take() {
             let me = self.own_user(thread);
             let said = format!("I interrupted your last turn to say: {steer}");
-            return self.send_prompt(thread, &me, &said, Vec::new()).await;
+            return self.send_prompt(thread, &me, &said, Given::default()).await;
         }
         if !run.steered.is_empty() {
             let steer = run.steered.remove(0);
             let me = self.own_user(thread);
-            return self.send_prompt(thread, &me, &steer, Vec::new()).await;
+            return self.send_prompt(thread, &me, &steer, Given::default()).await;
         }
         let Some(next) = self.store.take_next(thread).await? else {
             return Ok(());
         };
         self.announce(crate::protocol::BusEvent::Queue { thread: thread.to_string() });
-        self.send_prompt(thread, &next.author, &next.text, Vec::new()).await
+        self.send_prompt(thread, &next.author, &next.text, Given::default()).await
     }
 
     /// Records and sends a prompt by `author`, with teammates' drafts, the
@@ -1062,7 +1075,7 @@ impl Core {
         thread: ThreadId,
         author: &str,
         text: &str,
-        attachments: Vec<Attachment>,
+        attachments: Given,
     ) -> Result<(), CoreError> {
         let mut authors = vec![author.to_owned()];
         let mut said = text.trim().to_owned();
@@ -1095,19 +1108,31 @@ impl Core {
         run.stopped = false;
         run.hush = None;
         run.woke_by.clear();
-        let attached = self.record_attachments(thread, &attachments).await?;
-        let images: Vec<(String, String)> = attachments
+        let Given { mut sent, uploaded } = attachments;
+        let session = self.acp.get(&thread).and_then(|run| run.session.clone());
+        let reference = session.and_then(|id| self.session_mut(&id).map(|session| session.reference()));
+        let taken = self.take_uploads(thread, reference, uploaded).await?;
+        sent.extend(taken.read);
+        let mut attached = self.record_attachments(thread, &sent).await?;
+        attached.extend(taken.names);
+        let mut media: Vec<silt_proto::view::ImageView> = sent
             .iter()
             .filter(|attachment| attachment.mime.starts_with("image/"))
-            .map(|attachment| (attachment.mime.clone(), BASE64.encode(&attachment.data)))
+            .map(|attachment| silt_proto::view::ImageView {
+                media_type: attachment.mime.clone(),
+                data: BASE64.encode(&attachment.data),
+                stored: None,
+            })
             .collect();
-        self.record_acp(thread, &acp::prompt(&said, &authors.join(", "), &attached, &images)).await?;
+        media.extend(taken.media);
+        self.record_acp(thread, &acp::prompt(&said, &authors.join(", "), &attached, &media)).await?;
         let accepts = self.running(thread)?.accepts;
-        let (attachments, as_files): (Vec<_>, Vec<_>) =
-            attachments.into_iter().partition(|attachment| accepts.inline(attachment));
-        let mut saved = Vec::new();
+        sent.extend(taken.for_agent);
+        let (attachments, as_files): (Vec<_>, Vec<_>) = sent.into_iter().partition(|attachment| accepts.inline(attachment));
+        let mut saved = taken.saved;
         for attachment in &as_files {
-            saved.push((attachment, save_attachment(&self.data_dir, thread, attachment).await?));
+            let path = save_attachment(&self.data_dir, thread, attachment).await?;
+            saved.push((attachment.name.clone(), attachment.mime.clone(), path));
         }
         if !saved.is_empty() {
             prompt = format!("{prompt}\n\n{}", saved_note(&saved));
@@ -2262,7 +2287,7 @@ impl Core {
         }
         self.acp.get_mut(&request.fork).expect("checked above").guiding = Some((request.id, String::new()));
         let me = self.own_user(request.fork);
-        self.send_prompt(request.fork, &me, GUIDE_PROMPT, Vec::new()).await?;
+        self.send_prompt(request.fork, &me, GUIDE_PROMPT, Given::default()).await?;
         Ok("asked")
     }
 
@@ -2407,7 +2432,21 @@ const ATTACHMENT_BYTES: usize = 10 << 20;
 const ATTACHMENTS_BYTES: usize = 25 << 20;
 
 /// The prompt's files from the web UI's base64.
-pub(crate) fn decode(attachments: Vec<PromptAttachment>) -> Result<Vec<Attachment>, CoreError> {
+/// The prompt's files: those sent in it, from the web UI's base64, and
+/// those uploaded first, which have no limit (ADR 0121).
+pub(crate) fn decode(attachments: Vec<PromptAttachment>, data_dir: &Path) -> Result<Given, CoreError> {
+    let (uploads, sent): (Vec<_>, Vec<_>) = attachments.into_iter().partition(|attachment| attachment.upload.is_some());
+    let uploaded = uploads
+        .into_iter()
+        .map(|attachment| {
+            let path = crate::media::uploaded(data_dir, attachment.upload.as_deref().unwrap_or_default())?;
+            Ok(crate::media::Uploaded { name: attachment.name, mime: attachment.mime, path })
+        })
+        .collect::<Result<_, CoreError>>()?;
+    Ok(Given { sent: decode_sent(sent)?, uploaded })
+}
+
+fn decode_sent(attachments: Vec<PromptAttachment>) -> Result<Vec<Attachment>, CoreError> {
     let mut total = 0;
     attachments
         .into_iter()
@@ -2446,10 +2485,10 @@ async fn save_attachment(data_dir: &Path, thread: ThreadId, attachment: &Attachm
 }
 
 /// What the prompt says of the files given as files.
-fn saved_note(saved: &[(&Attachment, PathBuf)]) -> String {
+fn saved_note(saved: &[(String, String, PathBuf)]) -> String {
     let mut note = String::from("Files attached to this prompt, saved where you can read them:");
-    for (attachment, path) in saved {
-        note.push_str(&format!("\n- {} ({}): {}", attachment.name, attachment.mime, path.display()));
+    for (name, mime, path) in saved {
+        note.push_str(&format!("\n- {name} ({mime}): {}", path.display()));
     }
     note
 }
@@ -2457,7 +2496,7 @@ fn saved_note(saved: &[(&Attachment, PathBuf)]) -> String {
 /// Where a prompt's file is kept beside its session: under its content's
 /// hash, so names can repeat, and as one plain path segment whatever the
 /// browser called it.
-fn attachment_name(hash: &str, name: &str) -> String {
+pub(crate) fn attachment_name(hash: &str, name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
     let safe: String = base.chars().map(|c| if c.is_control() || c == ':' { '_' } else { c }).collect();
     let safe = if safe.is_empty() || safe == "." || safe == ".." { "file".to_owned() } else { safe };
@@ -3203,13 +3242,23 @@ mod tests {
 
     #[test]
     fn files_arrive_whole_and_within_bounds() {
-        let file = |data: String| PromptAttachment { name: "f".into(), mime: "text/plain".into(), data };
-        let decoded = decode(vec![file(BASE64.encode("hi"))]).expect("decodes");
-        assert_eq!(decoded[0].data, b"hi");
-        assert!(decode(vec![file("not base64!".into())]).is_err());
-        assert!(decode(vec![file(BASE64.encode(vec![0; ATTACHMENT_BYTES + 1]))]).is_err());
+        let data = tempfile::tempdir().expect("temp dir");
+        let file = |data: String| PromptAttachment { name: "f".into(), mime: "text/plain".into(), data, upload: None };
+        let decoded = decode(vec![file(BASE64.encode("hi"))], data.path()).expect("decodes");
+        assert_eq!(decoded.sent[0].data, b"hi");
+        assert!(decode(vec![file("not base64!".into())], data.path()).is_err());
+        assert!(decode(vec![file(BASE64.encode(vec![0; ATTACHMENT_BYTES + 1]))], data.path()).is_err());
         let large = BASE64.encode(vec![0; ATTACHMENT_BYTES]);
-        assert!(decode(vec![file(large.clone()), file(large.clone()), file(large)]).is_err());
+        assert!(decode(vec![file(large.clone()), file(large.clone()), file(large)], data.path()).is_err());
+        // An upload has no limit, but must be one this machine received.
+        let hash = "ab".repeat(32);
+        let upload = |hash: &str| PromptAttachment { upload: Some(hash.to_owned()), ..file(String::new()) };
+        assert!(decode(vec![upload(&hash)], data.path()).is_err(), "not uploaded");
+        assert!(decode(vec![upload("../../etc/passwd")], data.path()).is_err());
+        std::fs::create_dir_all(crate::media::uploads_dir(data.path())).expect("dir");
+        std::fs::write(crate::media::uploads_dir(data.path()).join(&hash), vec![0; ATTACHMENTS_BYTES + 1]).expect("write");
+        let decoded = decode(vec![upload(&hash)], data.path()).expect("an upload");
+        assert_eq!(decoded.uploaded[0].path, crate::media::uploads_dir(data.path()).join(&hash));
     }
 
     #[tokio::test]
@@ -3249,7 +3298,12 @@ mod tests {
         let store = Store::open(data.path()).await.expect("opens");
         let (events, _inbox) = mpsc::unbounded_channel();
         let mut core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
-        let shot = PromptAttachment { name: "shot.png".into(), mime: "image/png".into(), data: BASE64.encode([0x89, 0x50]) };
+        let shot = PromptAttachment {
+            name: "shot.png".into(),
+            mime: "image/png".into(),
+            data: BASE64.encode([0x89, 0x50]),
+            upload: None,
+        };
         let start = |prompt: Option<&str>| StartOptions {
             prompt: prompt.map(str::to_owned),
             attachments: vec![shot.clone()],
@@ -3272,7 +3326,7 @@ mod tests {
         assert!(path.starts_with(attachments_dir(data.path(), thread)), "{}", path.display());
         assert_eq!(path.file_name().and_then(|name| name.to_str()), Some("book.xls"));
         assert_eq!(std::fs::read(&path).expect("reads"), sheet.data);
-        let note = saved_note(&[(&sheet, path.clone())]);
+        let note = saved_note(&[(sheet.name.clone(), sheet.mime.clone(), path.clone())]);
         assert!(note.ends_with(&format!("- ../book.xls (application/vnd.ms-excel): {}", path.display())), "{note}");
     }
 }

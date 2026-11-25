@@ -776,7 +776,9 @@ export function NewThread() {
   const own = ownModes(seen?.modes)
   const inOwn = own.find((mode) => mode.id === chosenMode)?.id
   const refusedOwn = (mode: string) => modeRefused(workspace, agent, mode)
-  const { attached, add, remove, clear } = useAttachments()
+  const { attached, add, remove, clear, busy, failure } = useAttachments()
+  // A start asked for while files upload, which goes once they're there (ADR 0121).
+  const startOnceUploaded = useRef<boolean | null>(null)
   const attach = (files: File[], pasted = false) => {
     setError(undefined)
     add(files, pasted).catch((failure: unknown) => setError(message(failure)))
@@ -810,6 +812,14 @@ export function NewThread() {
 
   const start = (background: boolean) => {
     setError(undefined)
+    if (failure) {
+      setError(failure)
+      return
+    }
+    if (busy) {
+      startOnceUploaded.current = background
+      return
+    }
     if (chosenWhere === 'cloud') {
       if (!prompt.trim()) return setError('Describe the task for the cloud session.')
       setStarting(true)
@@ -871,6 +881,12 @@ export function NewThread() {
       )
       .finally(() => setStarting(false))
   }
+  useEffect(() => {
+    if (busy || startOnceUploaded.current === null) return
+    const background = startOnceUploaded.current
+    startOnceUploaded.current = null
+    start(background)
+  })
 
   const ready = !starting && Boolean(project) && (chosenWhere === 'cloud' ? Boolean(prompt.trim()) : Boolean(agent))
   const send = useHeldSend(choices.isPending, ready, () => start(false))

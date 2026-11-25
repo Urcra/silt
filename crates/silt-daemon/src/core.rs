@@ -305,6 +305,10 @@ pub struct Core {
     /// Blobs this daemon already sent the server, so a retried push doesn't
     /// send them again.
     pub(crate) uploaded: std::sync::Arc<std::sync::Mutex<HashSet<BlobHash>>>,
+    /// Large files a conversation names, sent after their deltas (ADR 0121).
+    pub(crate) deferred: crate::sync::DeferredUploads,
+    /// The blobs file pages showed, which their pages then read.
+    pub(crate) media_files: crate::media::MediaFiles,
     pub(crate) registry_checked: bool,
     /// The program this daemon started from, and that file as it was then,
     /// to tell when an install replaced it.
@@ -623,6 +627,8 @@ impl Core {
             recoveries: Vec::new(),
             recovered: Vec::new(),
             uploaded: std::sync::Arc::default(),
+            deferred: Default::default(),
+            media_files: Default::default(),
             registry_checked: false,
             asked: HashMap::new(),
             probes: tokio::task::JoinSet::new(),
@@ -1183,6 +1189,8 @@ impl Core {
             }
             Request::ArtifactRead { .. } => Response::error("only an agent's run reads its artifacts back, with its token"),
             Request::ArtifactContent { thread, blob } => to_response(self.artifact_content(&thread, &blob).await),
+            Request::BlobSource { thread, blob } => to_response(self.blob_source(&thread, &blob)),
+            Request::MayUpload => to_response(Ok::<_, CoreError>(crate::media::uploads_dir(&self.data_dir))),
             Request::ArtifactVersion { thread, id, version } => {
                 to_response(self.artifact_version_of(&thread, &id, version).await)
             }
@@ -1515,7 +1523,7 @@ impl Core {
                 Ok(workspace) => to_response(self.assign_project(&repo, workspace).await),
                 Err(error) => Response::error(error),
             },
-            Request::AcpPrompt { thread, text, plan, attachments } => match crate::acp::decode(attachments) {
+            Request::AcpPrompt { thread, text, plan, attachments } => match crate::acp::decode(attachments, &self.data_dir) {
                 Ok(attachments) => to_response(self.acp_prompt_with(&thread, &text, plan, attachments).await),
                 Err(error) => Response::error(error),
             },
@@ -2734,6 +2742,8 @@ impl Core {
     /// The web UI, started if it isn't yet.
     async fn web(&mut self) -> Result<&crate::web::WebInfo, CoreError> {
         if self.web.is_none() {
+            crate::media::drop_stale_uploads(&self.data_dir);
+            crate::media::prune_previews(&self.data_dir, self.store.blobs());
             self.web = Some(crate::web::start(self.events.clone(), self.bus.clone()).await?);
         }
         Ok(self.web.as_ref().expect("started above"))

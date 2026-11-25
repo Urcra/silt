@@ -60,6 +60,37 @@ impl Core {
         }
     }
 
+    /// Starts sending the large files waiting since their deltas went, unless
+    /// that's under way or failed a short while ago (ADR 0121).
+    fn drive_deferred_uploads(&mut self) {
+        use std::sync::atomic::Ordering;
+        let failed_lately = self.deferred.failed.lock().expect("lock").is_some_and(|at| at.elapsed() < DEFERRED_RETRY);
+        if self.deferred.running.load(Ordering::Acquire) || failed_lately {
+            return;
+        }
+        let waiting: Vec<(BlobHash, Remote)> = self
+            .store
+            .blobs()
+            .deferred_uploads()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(hash, family)| Some((hash, self.remote_of(family.parse().ok()?)?.clone())))
+            .collect();
+        if waiting.is_empty() {
+            return;
+        }
+        self.deferred.running.store(true, Ordering::Release);
+        let (store, running, failed) = (self.store.clone(), self.deferred.running.clone(), self.deferred.failed.clone());
+        tokio::spawn(async move {
+            let outcome = upload_deferred(&store, waiting).await;
+            if let Err(error) = &outcome {
+                warn!(%error, "large files wait for the next try");
+            }
+            *failed.lock().expect("lock") = outcome.err().map(|_| Instant::now());
+            running.store(false, Ordering::Release);
+        });
+    }
+
     pub(crate) fn family_ids(&self) -> Vec<FamilyId> {
         self.families.ids()
     }
@@ -70,6 +101,7 @@ impl Core {
             return;
         }
         self.drive_thread_states();
+        self.drive_deferred_uploads();
         for remote in self.remotes.clone() {
             let server = remote.config.url.clone();
             if self.last_listings.get(&server).is_none_or(|last| last.elapsed() >= LISTING_INTERVAL) {
@@ -143,7 +175,8 @@ impl Core {
             })
             .collect();
         self.learn_secrets(found);
-        Some(PushBatch { family, epoch: self.sync_epoch(family), blobs: referenced_blobs(&deltas), deltas })
+        let (blobs, deferred) = referenced_blobs(&deltas, self.store.blobs());
+        Some(PushBatch { family, epoch: self.sync_epoch(family), blobs, deferred, deltas })
     }
 
     /// Starts the family's sync over from `sync`. Answers to requests sent
@@ -636,11 +669,25 @@ pub(crate) fn origin_url(thread: &ThreadRecord) -> Option<String> {
     Some(silt_proto::shareable_url(&url))
 }
 
+/// How long after a try at the large files waiting to upload the next starts.
+const DEFERRED_RETRY: Duration = Duration::from_secs(60);
+
+/// The large files uploaded after their deltas (ADR 0121).
+#[derive(Debug, Default)]
+pub(crate) struct DeferredUploads {
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// When the last try failed, to wait a while before the next.
+    failed: std::sync::Arc<Mutex<Option<Instant>>>,
+}
+
 pub(crate) struct PushBatch {
     family: FamilyId,
     epoch: u64,
     deltas: Vec<Delta>,
+    /// Uploaded before the deltas.
     blobs: Vec<BlobHash>,
+    /// Large files a conversation names, uploaded after them (ADR 0121).
+    deferred: Vec<BlobHash>,
 }
 
 impl PushBatch {
@@ -671,9 +718,15 @@ pub(crate) async fn send_push(
     uploaded: &Mutex<HashSet<BlobHash>>,
     batch: PushBatch,
 ) -> PushAnswer {
-    let PushBatch { family, epoch, deltas, blobs } = batch;
+    let PushBatch { family, epoch, deltas, blobs, deferred } = batch;
     // Deltas go only after their blobs, or others would get deltas whose
-    // content they can't fetch.
+    // content they can't fetch; but a large file a conversation names goes
+    // after, noted first so a restart still sends it.
+    for hash in deferred {
+        if let Err(error) = store.blobs().defer_upload(hash, &family.to_string()).await {
+            tracing::warn!(%hash, %error, "could not note a file to upload");
+        }
+    }
     if let Err(error) = upload_blobs(remote, store, uploaded, blobs).await {
         return PushAnswer {
             family,
@@ -687,8 +740,51 @@ pub(crate) async fn send_push(
     PushAnswer { family, epoch, generation, outcome, error: error.map(|error| error.to_string()) }
 }
 
-fn referenced_blobs(deltas: &[Delta]) -> Vec<BlobHash> {
-    deltas.iter().filter_map(Delta::blob).collect()
+/// The blobs the deltas name: those to upload before them, and the large
+/// ones only a conversation's attachments name, to upload after.
+fn referenced_blobs(deltas: &[Delta], blobs: &silt_store::BlobStore) -> (Vec<BlobHash>, Vec<BlobHash>) {
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    for delta in deltas {
+        let Some(hash) = delta.blob() else {
+            continue;
+        };
+        let attachment = matches!(delta.op, silt_log::Op::Conv(silt_log::ConvOp::Attachment { .. }));
+        let large = || {
+            blobs.file(hash).and_then(|path| std::fs::metadata(path).ok()).is_some_and(|meta| meta.len() > silt_proto::BLOB_CHUNK)
+        };
+        if attachment && large() { after.push(hash) } else { before.push(hash) }
+    }
+    after.retain(|hash| !before.contains(hash));
+    after.dedup();
+    (before, after)
+}
+
+/// Sends the large files waiting since their deltas went, one at a time,
+/// each going on from what the server has (ADR 0121). One that fails stays
+/// noted for the next try.
+pub(crate) async fn upload_deferred(store: &Store, waiting: Vec<(BlobHash, Remote)>) -> Result<(), String> {
+    for (hash, remote) in waiting {
+        let Some(path) = store.blobs().file(hash) else {
+            // Erased since: nothing to send.
+            let _ = store.blobs().uploaded(hash).await;
+            continue;
+        };
+        match remote.upload_blob(hash, &path).await {
+            Ok(()) => {
+                let _ = store.blobs().uploaded(hash).await;
+            }
+            // Too large for this server: it stays on this machine, and isn't
+            // tried again until the daemon starts again.
+            Err(RemoteError::TooLarge(message)) => {
+                tracing::warn!(%hash, %message, "the server won't keep this file");
+                let _ = store.blobs().note_refused(hash, &message).await;
+                let _ = store.blobs().uploaded(hash).await;
+            }
+            Err(error) => return Err(format!("could not upload file {hash}: {error}")),
+        }
+    }
+    Ok(())
 }
 
 /// Sends the server the blobs it hasn't had from here yet. A blob missing
@@ -703,10 +799,18 @@ async fn upload_blobs(
         if uploaded.lock().expect("lock").contains(&hash) {
             continue;
         }
-        let Ok(bytes) = store.blobs().get(hash).await else {
+        let Some(path) = store.blobs().file(hash) else {
             continue;
         };
-        remote.put_blob(hash, bytes).await?;
+        match remote.upload_blob(hash, &path).await {
+            // Over the server's cap: it stays here, and the deltas go, rather
+            // than hold up everything after them (ADR 0121).
+            Err(RemoteError::TooLarge(message)) => {
+                warn!(%hash, %message, "the server won't keep this file");
+                let _ = store.blobs().note_refused(hash, &message).await;
+            }
+            outcome => outcome?,
+        }
         uploaded.lock().expect("lock").insert(hash);
     }
     Ok(())

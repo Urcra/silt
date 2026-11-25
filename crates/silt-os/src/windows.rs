@@ -1,13 +1,13 @@
-use std::ffi::{OsStr, c_void};
+use std::ffi::{OsStr, OsString, c_void};
 use std::fs;
 use std::io::{self, Write as _};
-use std::os::windows::ffi::OsStrExt as _;
+use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::windows::fs::MetadataExt as _;
 use std::os::windows::process::CommandExt as _;
-use std::path::{Component, Path, Prefix};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, HANDLE, LocalFree};
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, ERROR_MORE_DATA, ERROR_SUCCESS, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
@@ -17,6 +17,7 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, GetDriveTypeW};
 use windows_sys::Win32::System::Diagnostics::Debug::{DebugActiveProcess, DebugActiveProcessStop, DebugSetProcessKillOnExit};
+use windows_sys::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
 use windows_sys::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_INFORMATION, PROCESS_TERMINATE, STARTUPINFOW, TerminateProcess,
@@ -140,6 +141,43 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 pub fn is_executable(_metadata: &fs::Metadata) -> bool {
     false
+}
+
+/// The directories the machine's and the user's `Path` list now, expanded,
+/// as a process Explorer started after the last change would get them.
+pub fn configured_path_dirs() -> Vec<PathBuf> {
+    const MACHINE: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
+    [(HKEY_LOCAL_MACHINE, MACHINE), (HKEY_CURRENT_USER, "Environment")]
+        .into_iter()
+        .filter_map(|(key, subkey)| registry_string(key, subkey, "Path"))
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .collect()
+}
+
+/// A string value, `REG_EXPAND_SZ` ones expanded.
+fn registry_string(key: HKEY, subkey: &str, value: &str) -> Option<OsString> {
+    let subkey = wide(OsStr::new(subkey));
+    let value = wide(OsStr::new(value));
+    let mut buffer: Vec<u16> = Vec::new();
+    // An expanded value can outgrow the size asked for, so this asks again.
+    for _ in 0..4 {
+        let mut bytes = u32::try_from(buffer.len() * 2).ok()?;
+        let data = if buffer.is_empty() { ptr::null_mut() } else { buffer.as_mut_ptr().cast() };
+        // SAFETY: the names are NUL-terminated, and `data` is null or holds
+        // `bytes` bytes.
+        let status =
+            unsafe { RegGetValueW(key, subkey.as_ptr(), value.as_ptr(), RRF_RT_REG_SZ, ptr::null_mut(), data, &mut bytes) };
+        match status {
+            ERROR_SUCCESS if !buffer.is_empty() => {
+                let len = buffer.iter().position(|&unit| unit == 0).unwrap_or(buffer.len());
+                return Some(OsString::from_wide(&buffer[..len]));
+            }
+            ERROR_SUCCESS | ERROR_MORE_DATA => buffer = vec![0; usize::try_from(bytes).ok()?.div_ceil(2).max(1)],
+            _ => return None,
+        }
+    }
+    None
 }
 
 pub fn make_executable(_path: &Path) -> io::Result<()> {

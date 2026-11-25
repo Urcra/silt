@@ -389,6 +389,7 @@ pub(crate) fn agent_folders(data_dir: &Path, workspace: &str, thread: &str) -> V
 
 /// Whether GitHub's plugin is on in `workspace`, so nothing else of the
 /// person's reaches GitHub from its sandboxes.
+#[cfg(unix)]
 pub(crate) fn github_on(data_dir: &Path, workspace: &str) -> bool {
     installed::find(data_dir, "silt.github").is_some_and(|installed| installed.on_in(workspace))
 }

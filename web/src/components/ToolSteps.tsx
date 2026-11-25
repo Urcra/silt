@@ -1,46 +1,62 @@
 import { useContext, useEffect, useMemo, useState } from 'react'
 import { api, type HistoryEntry, type QuestionAsked, type QuestionView } from '../api'
+import { ArtifactActions } from '../artifactActions'
+import { entryMedia, formatOf, sizeOf, thumbSrc } from '../mediaInfo'
+import { KeptHereOnly, MediaViewer } from './Media'
 import { LiveQuestions } from '../liveQuestions'
 import { message } from '../query'
 import { duration, imageSize, kindOf, proposedPlan, shortCommand, tailOf, testsOf, toolOf, type ToolStep } from '../transcript'
 import { LiveTool, TranscriptDetail } from '../detail'
 import { useNow } from '../now'
-import { Button, Dialog, Icon, Kbd, Spinner, cx } from '../ui'
+import { Button, Icon, Kbd, Spinner, cx } from '../ui'
 import { changeOf } from '../edits'
 import { EditCard } from './EditCard'
 import { Markdown } from './Markdown'
 import { linesOf, useWhole } from '../wholeEntry'
 
-/** A picture a prompt or a tool carried, small, opening at full size. */
+/** A picture or a video a prompt or a tool carried, small, opening in the viewer (ADR 0121). */
 export function ImageThumb({ entry: given, from }: { entry: HistoryEntry; from: string }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState<{ at?: number } | null>(null)
+  const thread = useContext(ArtifactActions)?.thread
   // A page of history leaves the picture out; it's read once its row is drawn.
   const entry = useWhole(given, true)
   const image = entry.image
   if (!image) return null
-  if (!image.data && entry.cut)
+  if (!image.data && !image.stored && entry.cut)
     return (
       <span aria-busy="true" aria-label={`an image ${from}`} className="block h-24 w-40 animate-pulse rounded-md bg-surface-2" />
     )
-  if (!image.data) return <span className="text-2xs text-fg-2">An image too large to show here ({image.media_type})</span>
-  const src = `data:${image.media_type};base64,${image.data}`
-  const kind = image.media_type.replace(/^image\//, '').toUpperCase()
+  const media = entryMedia(thread, image, image.stored?.name ?? `An image ${from}`)
+  if (!media) return <span className="text-2xs text-fg-2">An image too large to show here ({image.media_type})</span>
+  const size = image.stored ? image.stored.size : (image.data.length * 3) / 4
+  const facts = `${formatOf(image.media_type)} · ${image.stored ? sizeOf(size) : imageSize(image.data)} · ${from}`
+  const video = media.kind === 'video'
   return (
     <figure className="flex w-fit flex-col gap-1">
       <button
         type="button"
-        aria-label={`open the image ${from}`}
-        onClick={() => setOpen(true)}
-        className="w-fit overflow-hidden rounded-md border border-line bg-surface-1 hover:border-line-strong"
+        aria-label={`open the ${video ? 'video' : 'image'} ${from}`}
+        onClick={() => setOpen({})}
+        className="relative w-fit cursor-zoom-in overflow-hidden rounded-md border border-line bg-surface-1 hover:border-line-strong"
       >
-        <img src={src} alt={`An image ${from}`} className="block max-h-44 max-w-[320px] object-contain" />
+        {video ? (
+          <>
+            <video src={media.src} preload="metadata" muted playsInline className="block max-h-44 max-w-[320px]" />
+            <span className="absolute inset-0 m-auto grid h-10 w-10 place-items-center rounded-full border border-white/20 bg-[#140e08]/60 text-[#f4ecdd]">
+              <Icon name="playSolid" className="ml-0.5 h-4.5 w-4.5" />
+            </span>
+          </>
+        ) : (
+          <img
+            src={image.stored && thread ? thumbSrc(thread, image.stored.blob, image.stored.previews) : media.src}
+            alt={media.title}
+            className="block max-h-44 max-w-[320px] object-contain"
+          />
+        )}
       </button>
-      <figcaption className="text-2xs text-fg-2">
-        {kind} · {imageSize(image.data)} · {from}
-      </figcaption>
-      <Dialog open={open} onClose={() => setOpen(false)} title={`An image ${from}`} wide>
-        <img src={src} alt={`An image ${from}`} className="max-h-[75vh] w-full object-contain" />
-      </Dialog>
+      <figcaption className="text-2xs text-fg-2">{facts}</figcaption>
+      <KeptHereOnly state={media.state} />
+      {open && <MediaViewer media={media} onClose={() => setOpen(null)} />}
     </figure>
   )
 }

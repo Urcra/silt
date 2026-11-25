@@ -643,7 +643,7 @@ export function AgentDock({
   const inOwn = ownChosen?.id
   const refusedOwn = (mode: string) => modeRefused(workspace, ownAgent, mode)
   const startValue = (setting: AgentSetting) => restart.value(setting, chosenSettings[setting.id])
-  const { attached, add, remove, clear, restore } = useAttachments()
+  const { attached, add, remove, clear, restore, busy, failure } = useAttachments()
   const chooseAgent = (chosen: string) => {
     setAgent(chosen)
     setChosenSettings({})
@@ -740,6 +740,15 @@ export function AgentDock({
       held.current = { now }
       return
     }
+    if (failure) {
+      setError(failure)
+      return
+    }
+    // A prompt waits for its files to reach the machine, and goes once they have (ADR 0121).
+    if (busy) {
+      held.current = { now }
+      return
+    }
     if (starting.current) return queueAfter(starting.current)
     if (startable) return start()
     if (now && turning && draft.trim()) return steer()
@@ -753,7 +762,7 @@ export function AgentDock({
     optimistic((text, files) => api.prompt(thread, text, false, files))
   }
   useEffect(() => {
-    if (!known || !held.current) return
+    if (!known || !held.current || busy) return
     const { now } = held.current
     held.current = undefined
     send(now)
@@ -842,18 +851,29 @@ export function AgentDock({
   const attach = (files: File[], pasted = false) => act(add(files, pasted))
 
   const refusedPreset = (id: Preset) => presetRefused(workspace, id) ?? presetUnavailable(id, agentModes, agentCalled)
+  // Running, the chip stops the agent wherever it is; another agent takes over only where this daemon can start one.
+  const switchable = live && !hosted() && status.agent_id !== '' && agents.length > 0
+  // A server before it relayed the agent's id leaves it out; its name still finds its mark.
+  const runningId = (live && (status.agent_id || status.agent)) || ''
   const tools = (
     <>
       {/* The same row as New thread's: which agent, the permissions with its own modes, then its model and settings
           (ADR 0118). Another agent here takes the thread over. */}
-      {(live ? !hosted() && status.agent_id !== '' : !elsewhere && !hosted()) && agents.length > 0 && (
+      {live ? (
         <AgentChip
-          value={live ? status.agent_id : agent}
-          agents={agents}
-          onChange={(chosen) => (live ? switchAgent(chosen) : chooseAgent(chosen))}
+          value={runningId}
+          agents={switchable ? agents : [{ id: runningId, name: status.agent }]}
+          onChange={(chosen) => switchable && switchAgent(chosen)}
           refused={(id) => agentRefused(workspace, id)}
-          footer={live ? 'Another agent here takes the thread over' : undefined}
+          footer={switchable ? 'Another agent here takes the thread over' : undefined}
+          onStop={() => act(api.stopAgent(thread))}
         />
+      ) : (
+        !elsewhere &&
+        !hosted() &&
+        agents.length > 0 && (
+          <AgentChip value={agent} agents={agents} onChange={chooseAgent} refused={(id) => agentRefused(workspace, id)} />
+        )
       )}
       {(live || !hosted()) && (live || startable || elsewhere || agents.length > 0) && (
         <PermissionChip
@@ -875,19 +895,8 @@ export function AgentDock({
       {!live && !elsewhere && hosted() && <ContinueOn thread={thread} act={act} />}
       {live ? (
         <AgentSettings
-          modal={Boolean(status.modes?.available.length)}
           settings={status.settings}
           onSetting={(id, value) => act(api.setSetting(thread, id, value))}
-          more={
-            <Button
-              variant="ghost"
-              size="sm"
-              title="Stops the agent; the thread keeps everything it did"
-              onClick={() => act(api.stopAgent(thread))}
-            >
-              Stop agent
-            </Button>
-          }
           narrow={narrow}
         />
       ) : (

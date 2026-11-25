@@ -61,8 +61,8 @@ A message Silt hands you from another agent comes from that agent, not from your
 harness or model do part of your work, such as a review, silt_askable lists them and silt_ask asks one.";
 
 /// Added to [`INSTRUCTIONS`] when the run is watched in the web UI.
-pub const SHOW_INSTRUCTIONS: &str = " The person follows this session in Silt's web UI: to show them an image, call \
-silt_show; to give them a page, chart, diagram, mockup or document they can open beside the conversation, call \
+pub const SHOW_INSTRUCTIONS: &str = " The person follows this session in Silt's web UI: to show them an image or a \
+video, call silt_show; to give them a page, chart, diagram, mockup or document they can open beside the conversation, call \
 silt_artifact_guide first, follow what it says, then call silt_artifact, and call it again with the same id for a new \
 version. silt_artifact_read gives back a version's source, to revise it after a handoff or a fork.";
 
@@ -102,12 +102,12 @@ fn show_tools() -> Vec<Value> {
     vec![
         json!({
             "name": "silt_show",
-            "description": "Show the person an image (PNG, JPEG, GIF, WebP or SVG) in the conversation, such as a screenshot or a chart you rendered. Write the file first, then pass its path.",
+            "description": "Show the person an image (PNG, JPEG, GIF, WebP or SVG) or a video (MP4, MOV, WebM or Matroska) in the conversation, such as a screenshot, a chart you rendered or a screen recording of a bug. Write the file first, then pass its path. There is no size limit; for a video, H.264 MP4 or WebM plays in every browser.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "The image file, absolute or relative to the working directory"},
-                    "caption": {"type": "string", "description": "A few words under the image"}
+                    "path": {"type": "string", "description": "The image or video file, absolute or relative to the working directory"},
+                    "caption": {"type": "string", "description": "A few words under it"}
                 },
                 "required": ["path"]
             }
@@ -118,7 +118,7 @@ fn show_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "slides", "canvas", "data", "doc", "sheet", "whiteboard"], "description": "What the artifact will be: slides a deck, canvas boards of mockups, data a page of numbers with their sources, doc a document people edit with you, sheet a grid with formulas, whiteboard notes and arrows people arrange together live"},
+                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "video", "slides", "canvas", "data", "doc", "sheet", "whiteboard"], "description": "What the artifact will be: video an MP4, MOV, WebM or Matroska file, slides a deck, canvas boards of mockups, data a page of numbers with their sources, doc a document people edit with you, sheet a grid with formulas, whiteboard notes and arrows people arrange together live"},
                     "design_system": {"type": "string", "description": "A design system to read instead of the one that applies, by the name the guide lists"}
                 },
                 "required": ["kind"]
@@ -165,7 +165,7 @@ fn show_tools() -> Vec<Value> {
                     "value": {"description": "The document, for set"},
                     "fields": {"type": "object", "description": "Fields to merge in, for update; a null field removes it"},
                     "query": {"type": "object", "description": "For query: where (a list of {field, op, value}), order_by, descending, limit"},
-                    "writes": {"type": "array", "description": "For batch: each {op: set|update|delete, path, value|fields}, all or none"},
+                    "writes": {"type": "array", "items": {"type": "object"}, "description": "For batch: each {op: set|update|delete, path, value|fields}, all or none"},
                     "as_level": {"type": "string", "enum": ["read", "comment", "collaborator"], "description": "For get, list and query: read as another person at this level, to check that the rules hide from them what they should; writes refuse it"}
                 },
                 "required": ["id", "op"]
@@ -223,9 +223,9 @@ fn show_tools() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "A short name, such as \"Rescan benchmark\""},
-                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "slides", "canvas", "data", "doc", "sheet", "whiteboard"], "description": "What the content is; slides, canvas and data are JSON that silt_artifact_guide describes; doc (Markdown) and sheet ({\"rows\": [[...]]}) are edited in place afterwards with silt_artifact_doc and silt_artifact_sheet"},
+                    "kind": {"type": "string", "enum": ["html", "svg", "markdown", "mermaid", "image", "video", "slides", "canvas", "data", "doc", "sheet", "whiteboard"], "description": "What the content is; an image or a video comes from path, with no size limit; slides, canvas and data are JSON that silt_artifact_guide describes; doc (Markdown) and sheet ({\"rows\": [[...]]}) are edited in place afterwards with silt_artifact_doc and silt_artifact_sheet"},
                     "content": {"type": "string", "description": "The text of an html, svg, markdown or mermaid artifact; give this or path"},
-                    "path": {"type": "string", "description": "A file holding the content, absolute or relative to the working directory; needed for an image"},
+                    "path": {"type": "string", "description": "A file holding the content, absolute or relative to the working directory; needed for an image or a video"},
                     "id": {"type": "string", "description": "The id silt_artifact returned, to add a version of that artifact; title and kind then default to its last version's"},
                     "edits": {
                         "type": "array",
@@ -530,6 +530,35 @@ fn error_response(id: &Value, code: i64, message: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Gemini refuses every tool of a session when one array's schema has no
+    /// `items`, so Antigravity couldn't start with Silt's tools at all.
+    #[test]
+    fn every_array_in_a_tool_says_what_it_holds() {
+        fn arrays_without_items(schema: &Value, at: String, found: &mut Vec<String>) {
+            match schema {
+                Value::Object(fields) => {
+                    if fields.get("type") == Some(&json!("array")) && !fields.contains_key("items") {
+                        found.push(at.clone());
+                    }
+                    for (name, value) in fields {
+                        arrays_without_items(value, format!("{at}.{name}"), found);
+                    }
+                }
+                Value::Array(values) => {
+                    for (index, value) in values.iter().enumerate() {
+                        arrays_without_items(value, format!("{at}[{index}]"), found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        for tool in tools(true).as_array().expect("a list") {
+            arrays_without_items(&tool["inputSchema"], tool["name"].as_str().expect("a name").to_owned(), &mut found);
+        }
+        assert!(found.is_empty(), "arrays without items: {found:?}");
+    }
 
     #[test]
     fn every_tool_only_reads_but_messages_and_asks_to_other_agents() {
