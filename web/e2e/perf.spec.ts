@@ -7,14 +7,25 @@ import { SILT, allThreads, fixture } from './fixture'
 // `web.thread` of ADR 0034: a 2,000-message thread shows in under 100 ms
 // and keeps the page under 200 MB. Timed on the optimized build the gate
 // passes in `$SILT`; a debug build only reports. A cloud session's machine
-// has its own limit, chosen as silt-bench chooses it (ADR 0037).
+// and a GitHub Actions runner have their own limits, chosen as silt-bench
+// chooses them, and the dev limit stays the target (ADRs 0037 and 0126).
 const ENFORCED = process.env.SILT !== undefined && process.env.SILT_BENCH_ENFORCE !== '0'
-const CLOUD = (process.env.SILT_BENCH_MACHINE ?? (process.env.CLAUDE_CODE_REMOTE === 'true' ? 'cloud' : 'dev')) === 'cloud'
-const SHOWN_BUDGET_MS = CLOUD ? 210 : 100
+const ACTIONS = process.env.GITHUB_ACTIONS === 'true'
+const MACHINE = process.env.SILT_BENCH_MACHINE ?? (ACTIONS ? 'ci' : process.env.CLAUDE_CODE_REMOTE === 'true' ? 'cloud' : 'dev')
+const DEV = MACHINE === 'dev'
+const SHOWN_TARGET_MS = 100
+const SHOWN_BUDGET_MS = DEV ? SHOWN_TARGET_MS : 210
 const HEAP_BUDGET_MB = 200
 const ROUNDS = 1000
 
 let thread = ''
+
+/** Notes a measurement over the dev target on a machine held to its own limit, as silt-bench does. */
+function offTarget(name: string, ms: number, target: number) {
+  if (DEV || ms < target) return
+  const line = `off target: ${name} measured ${ms.toFixed(0)} ms, dev target < ${target} ms`
+  console.log(ACTIONS ? `::warning title=off target::${line}` : line)
+}
 
 /** When the thread's link was clicked and its first entry drawn, in the page's clock. */
 interface Timed {
@@ -70,9 +81,37 @@ function transcript(cwd: string, session: string): string {
 /** The thread's last entry, which it opens at. */
 const LAST_REPLY = `reply ${ROUNDS - 1}: changed it`
 
-test.beforeAll(() => {
+/** A few turns of a dozen commands each, their replies of very different lengths: an earlier page adds only a few rows. */
+function fewLongTurns(cwd: string, session: string): string {
+  const line = (message: object) => JSON.stringify({ type: 'user', sessionId: session, cwd, ...message })
+  const lines: string[] = []
+  FEW_LONG_TURNS.forEach((paragraphs, turn) => {
+    lines.push(line({ message: { role: 'user', content: `step ${turn}: run the checks` } }))
+    for (let command = 0; command < 12; command++) {
+      const tool = `toolu_${turn}_${command}`
+      const input = { command: `check ${command}` }
+      lines.push(
+        line({
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'tool_use', id: tool, name: 'Bash', input }] },
+        }),
+      )
+      lines.push(line({ message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: tool, content: 'ok' }] } }))
+    }
+    const reply = Array.from({ length: paragraphs }, (_, at) => `Finding ${at} of step ${turn}.`).join('\n\n')
+    lines.push(line({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply }] } }))
+  })
+  return lines.join('\n') + '\n'
+}
+
+const FEW_LONG_TURNS = [30, 2, 24, 1, 2, 28, 3]
+
+let fewTurns = ''
+
+/** Tracks the Claude Code session `lines` as a thread of a repository of its own, and gives the thread. */
+function track(name: string, session: string, lines: (cwd: string, session: string) => string): string {
   const { work, siltHome } = fixture()
-  const repo = join(work, 'long')
+  const repo = join(work, name)
   mkdirSync(join(repo, 'src'), { recursive: true })
   writeFileSync(join(repo, 'src', 'main.rs'), 'fn main() {}\n')
   const git = (...args: string[]) => execFileSync('git', args, { cwd: repo })
@@ -80,13 +119,17 @@ test.beforeAll(() => {
   git('add', '.')
   git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '-m', 'init')
   const claude = join(work, 'claude')
-  const session = '22222222-3333-4444-8555-666666666666'
   const project = join(claude, 'projects', repo.replace(/[^a-zA-Z0-9]/g, '-'))
   mkdirSync(project, { recursive: true })
-  writeFileSync(join(project, `${session}.jsonl`), transcript(repo, session))
+  writeFileSync(join(project, `${session}.jsonl`), lines(repo, session))
   const env = { ...process.env, SILT_HOME: siltHome, CLAUDE_CONFIG_DIR: claude }
   const tracked = execFileSync(SILT, ['track'], { cwd: repo, encoding: 'utf8', env })
-  thread = tracked.trim().split(/\s+/).pop() ?? ''
+  return tracked.trim().split(/\s+/).pop() ?? ''
+}
+
+test.beforeAll(() => {
+  thread = track('long', '22222222-3333-4444-8555-666666666666', transcript)
+  fewTurns = track('few', '33333333-4444-4555-8666-777777777777', fewLongTurns)
 })
 
 test('a 2,000-message thread shows quickly and stays small', async ({ page }) => {
@@ -131,6 +174,7 @@ test('a 2,000-message thread shows quickly and stays small', async ({ page }) =>
   console.log(
     `web.thread: shown in ${shown.toFixed(0)} ms (budget ${SHOWN_BUDGET_MS}), heap ${heapMb.toFixed(0)} MB (budget ${HEAP_BUDGET_MB})`,
   )
+  offTarget('web.thread', shown, SHOWN_TARGET_MS)
   if (ENFORCED) {
     expect(shown, 'web.thread: shown').toBeLessThan(SHOWN_BUDGET_MS)
     expect(heapMb, 'web.thread: heap').toBeLessThan(HEAP_BUDGET_MB)
@@ -161,7 +205,8 @@ async function watchLongTasks(page: import('@playwright/test').Page) {
 // `web.scroll` (ADR 0101): scrolling the 2,000-message thread draws only the rows coming into view, so the page
 // keeps answering. Each scroll drew the whole page and parsed every row's Markdown again: 13 s blocked over 150
 // wheel notches on a long session.
-const SCROLL_BLOCKED_MS = CLOUD ? 1000 : 500
+const SCROLL_TARGET_MS = 500
+const SCROLL_BLOCKED_MS = DEV ? SCROLL_TARGET_MS : 1000
 
 test('a long thread scrolls without holding the page', async ({ page }) => {
   test.setTimeout(180_000)
@@ -177,7 +222,42 @@ test('a long thread scrolls without holding the page', async ({ page }) => {
   await page.waitForTimeout(300)
   const blocked = (await longTasks()).reduce((total, duration) => total + duration, 0)
   console.log(`web.scroll: ${blocked.toFixed(0)} ms blocked over 100 notches (budget ${SCROLL_BLOCKED_MS})`)
+  offTarget('web.scroll', blocked, SCROLL_TARGET_MS)
   if (ENFORCED) expect(blocked, 'web.scroll: blocked').toBeLessThan(SCROLL_BLOCKED_MS)
+})
+
+// Sizes kept by a row's place gave the rows shown, moved along by the earlier turns put before them, the sizes of
+// the rows that had been there before, or none: each was drawn over the next until it scrolled away.
+test('turns put before the rows shown leave them apart', async ({ page }) => {
+  test.setTimeout(180_000)
+  const { url } = fixture()
+  await page.goto(url)
+  await allThreads(page)
+  await page.getByRole('link', { name: fewTurns }).click()
+  const history = page.getByTestId('history')
+  const last = FEW_LONG_TURNS.length - 1
+  await expect(history.getByText(`Finding 0 of step ${last}.`)).toBeVisible({ timeout: 60_000 })
+  const box = await history.boundingBox()
+  await page.mouse.move((box?.x ?? 0) + (box?.width ?? 0) / 2, 400)
+  // Scrolled only until the earlier turns come in: scrolling on would draw the rows shown again, measured.
+  for (let notch = 0; notch < 40 && (await history.getByText('step 0: run the checks').count()) === 0; notch++) {
+    await page.mouse.wheel(0, -200)
+    await page.waitForTimeout(50)
+  }
+  await expect(history.getByText('step 0: run the checks')).toBeAttached()
+  await page.waitForTimeout(500)
+  const overlaps = await history.evaluate((list) =>
+    [...list.querySelectorAll<HTMLElement>(':scope > [data-index]')]
+      .map((row) => ({ index: Number(row.dataset.index), box: row.getBoundingClientRect() }))
+      .sort((a, b) => a.index - b.index)
+      .flatMap((row, at, rows) => {
+        const next = rows[at + 1]
+        return next && next.index === row.index + 1 && next.box.top < row.box.bottom - 1
+          ? [`row ${row.index} ends at ${row.box.bottom}, row ${next.index} starts at ${next.box.top}`]
+          : []
+      }),
+  )
+  expect(overlaps).toEqual([])
 })
 
 // `web.change` (ADR 0101): a change to an open thread reads only what changed, not its whole history again, and a

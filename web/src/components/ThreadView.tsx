@@ -2159,9 +2159,13 @@ const HistoryList = memo(function HistoryList({
   controls: RefObject<HistoryControls | null>
 }) {
   const list = useRef<HTMLDivElement>(null)
+  // Sizes are kept by row rather than by place: an earlier page put before the rows shown moves them to new places
+  // without measuring them again, and by place each took the size of whichever row was there before, drawn over the next.
+  const keyOf = useCallback((index: number) => rows[index]?.key ?? index, [rows])
   const virtual = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroll.current,
+    getItemKey: keyOf,
     estimateSize: () => 96,
     overscan: 6,
     scrollMargin: list.current?.offsetTop ?? 0,

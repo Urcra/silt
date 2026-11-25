@@ -1,0 +1,720 @@
+# Claude on issues and pull requests, from a comment by someone with write
+# access, run here with claude-code-action so what Claude writes comes from
+# claude[bot]. The notes after a command steer it.
+#
+# On a pull request:
+#   /claude fix [notes]           merge the base in if it conflicts, make the changes
+#                                 open reviews and comments ask for, and push
+#   /claude merge [notes]         full gate on the head merged with its base, up to
+#                                 two rounds of fixes, CI, then a merge commit
+#   /claude gate [notes]          the same without the merge
+#   /claude review [fix] [notes]  a review, and with `fix` the fixes pushed
+# On an issue:
+#   /claude fix [notes]           a pull request that fixes it, or questions
+#   /claude plan [notes]          a plan as a comment, no code
+#   /claude triage [notes]        labels, milestone, duplicates, what's missing
+# On either:
+#   /claude ask <question>        an answer from the code, no changes; any other
+#                                 text after /claude is a question too
+#   /claude cancel                stop this issue's or PR's running Claude jobs
+#
+# merge and gate run the gate's three parts (scripts/gate.sh --part) as
+# parallel jobs, each on its own runner, with Claude's fix rounds between
+# them; the other commands are one job. Comments are weighed by their
+# author's association: owner, then members, collaborators and contributors;
+# anyone else's only inform. Claude never decides to merge:
+# .github/scripts/claude.sh, taken from the default branch so a PR can't
+# change it, merges only a head that passed every part of the gate and CI
+# with no review left open. Needs the Claude GitHub App on the repository and
+# the CLAUDE_CODE_OAUTH_TOKEN secret (`claude setup-token`).
+name: Claude
+run-name: "Claude on #${{ github.event.issue.number }}"
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Smaller builds, to fit the runner's disk, as scripts/cloud-setup.sh does.
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  NUMBER: ${{ github.event.issue.number }}
+  KIND: ${{ github.event.issue.pull_request && 'pr' || 'issue' }}
+  REQUESTER: ${{ github.event.comment.user.login }}
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+
+jobs:
+  cancel:
+    if: >-
+      github.event.comment.user.type != 'Bot' &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+      startsWith(github.event.comment.body, '/claude cancel')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Cancel
+        env:
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content=eyes >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/claude.sh?ref=$DEFAULT_BRANCH" \
+            -H 'Accept: application/vnd.github.raw' >"$RUNNER_TEMP/claude.sh"
+          bash "$RUNNER_TEMP/claude.sh" cancel
+
+  # Reads the command and checks the issue or PR. Every command but merge
+  # and gate then runs here to its end.
+  start:
+    name: Start
+    if: >-
+      github.event.comment.user.type != 'Bot' &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+      startsWith(github.event.comment.body, '/claude ') &&
+      !startsWith(github.event.comment.body, '/claude cancel')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    concurrency:
+      group: claude-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+      checks: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      command: ${{ steps.command.outputs.command }}
+      gated: ${{ steps.command.outputs.gated }}
+      ok: ${{ steps.target.outputs.ok }}
+      head: ${{ steps.target.outputs.head }}
+      base: ${{ steps.target.outputs.base }}
+      sha: ${{ steps.target.outputs.sha }}
+      base_sha: ${{ steps.target.outputs.base_sha }}
+      status_id: ${{ steps.command.outputs.status_id }}
+      status_start: ${{ steps.command.outputs.status_start }}
+    steps:
+      - name: The command
+        id: command
+        env:
+          BODY: ${{ github.event.comment.body }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          # The checks and prompts come from the default branch, not the PR.
+          HELPER="$RUNNER_TEMP/claude.sh"
+          echo "HELPER=$HELPER" >>"$GITHUB_ENV"
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/claude.sh?ref=$DEFAULT_BRANCH" \
+            -H 'Accept: application/vnd.github.raw' >"$HELPER"
+          chmod +x "$HELPER"
+          "$HELPER" parse
+          if grep -q '^command=$' "$GITHUB_OUTPUT"; then
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content=confused >/dev/null
+          else
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content=eyes >/dev/null
+          fi
+
+      - name: The issue or pull request
+        id: target
+        if: steps.command.outputs.command != ''
+        run: '"$HELPER" check "${{ steps.command.outputs.command }}" "${{ steps.command.outputs.mode }}"'
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true'
+        with:
+          ref: ${{ steps.target.outputs.ref }}
+          fetch-depth: 0
+          # Claude pushes with the Claude app's token, whose pushes start CI.
+          persist-credentials: false
+      - name: Setting up
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        run: '"$HELPER" status set setup active'
+      - name: Free disk space
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: The sandbox's tools
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap passt
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Builds on the larger disk
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        run: |
+          if [ -d /mnt ] && [ ! -e target ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+          fi
+      - name: Rust
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        with:
+          key: claude
+          workspaces: |
+            .
+            plugins -> ../target/plugins
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Web dependencies and Playwright's browser
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium
+      - name: Set up
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true' && steps.command.outputs.build == 'true'
+        run: '"$HELPER" status set setup ''done'''
+      - name: What to do
+        id: prompt
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true'
+        env:
+          REVIEW_MODE: ${{ steps.command.outputs.mode }}
+        run: '"$HELPER" prompt "${{ steps.command.outputs.command }}"'
+      - name: Claude
+        if: steps.prompt.outcome == 'success'
+        uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1.0.290
+        env:
+          BASH_DEFAULT_TIMEOUT_MS: "1800000"
+          BASH_MAX_TIMEOUT_MS: "3600000"
+          SILT_SKIP_VOICE: "1"
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          claude_args: >-
+            --max-turns ${{ steps.command.outputs.build == 'true' && '250' || '80' }}
+            --permission-mode acceptEdits
+            --allowedTools "${{ steps.command.outputs.build == 'true' && 'Bash,Read,Edit,Write,Glob,Grep,TodoWrite' || 'Read,Glob,Grep,TodoWrite,Bash(gh api:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git fetch:*),Bash(git grep:*)' }}"
+            --disallowedTools "Bash(gh pr merge:*),Bash(gh pr close:*),Bash(gh pr review:*),Bash(gh issue close:*),Bash(gh issue delete:*),Bash(gh repo:*),Bash(gh release:*),Bash(gh secret:*),Bash(gh variable:*),Bash(gh workflow:*),Bash(gh run:*),Bash(gh label delete:*)"
+      - name: The status comment
+        if: always() && steps.command.outputs.command != ''
+        run: '"$HELPER" status final "${{ job.status }}"'
+
+  # merge and gate: the gate's three parts at once, then up to two rounds of
+  # Claude's fixes, each gated again.
+  gate1:
+    name: Gate (${{ matrix.part }})
+    needs: start
+    if: needs.start.outputs.ok == 'true' && needs.start.outputs.gated == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [checks, tests, perf]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      actions: read
+      checks: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATUS_ID: ${{ needs.start.outputs.status_id }}
+      STATUS_START: ${{ needs.start.outputs.status_start }}
+      STATUS_COMMAND: ${{ needs.start.outputs.command }}
+    steps:
+      - name: Helper
+        run: |
+          echo "HELPER=$RUNNER_TEMP/claude.sh" >>"$GITHUB_ENV"
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/claude.sh?ref=$DEFAULT_BRANCH" \
+            -H 'Accept: application/vnd.github.raw' >"$RUNNER_TEMP/claude.sh"
+          chmod +x "$RUNNER_TEMP/claude.sh"
+          "$RUNNER_TEMP/claude.sh" status attach
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.start.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: The sandbox's tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap passt
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Builds on the larger disk
+        run: |
+          if [ -d /mnt ] && [ ! -e target ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+          fi
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: gate-${{ matrix.part }}
+          workspaces: |
+            .
+            plugins -> ../target/plugins
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Web dependencies and Playwright's browser
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium
+      - name: Gate
+        run: '"$HELPER" gate-part 1 "${{ matrix.part }}" "${{ needs.start.outputs.sha }}" "${{ needs.start.outputs.base_sha }}"'
+      - name: The failure, for the fixes
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gate-1-${{ matrix.part }}
+          path: ${{ runner.temp }}/gate-failure/
+      - name: The status comment
+        if: always()
+        run: '"$HELPER" status push "${{ job.status }}"'
+
+  fix1:
+    name: Fix round 1
+    needs: [start, gate1]
+    if: ${{ !cancelled() && needs.start.outputs.ok == 'true' && needs.start.outputs.gated == 'true' && needs.gate1.result == 'failure' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+      checks: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATUS_ID: ${{ needs.start.outputs.status_id }}
+      STATUS_START: ${{ needs.start.outputs.status_start }}
+      STATUS_COMMAND: ${{ needs.start.outputs.command }}
+    outputs:
+      ok: ${{ steps.guard.outputs.ok }}
+      moved: ${{ steps.guard.outputs.moved }}
+      sha: ${{ steps.guard.outputs.sha }}
+      base_sha: ${{ steps.guard.outputs.base_sha }}
+    steps:
+      - name: Helper
+        run: |
+          echo "HELPER=$RUNNER_TEMP/claude.sh" >>"$GITHUB_ENV"
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/claude.sh?ref=$DEFAULT_BRANCH" \
+            -H 'Accept: application/vnd.github.raw' >"$RUNNER_TEMP/claude.sh"
+          chmod +x "$RUNNER_TEMP/claude.sh"
+          "$RUNNER_TEMP/claude.sh" status attach
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.start.outputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: The sandbox's tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap passt
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Builds on the larger disk
+        run: |
+          if [ -d /mnt ] && [ ! -e target ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+          fi
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: claude
+          workspaces: |
+            .
+            plugins -> ../target/plugins
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Web dependencies and Playwright's browser
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: gate-1-*
+          path: ${{ runner.temp }}/failures
+          merge-multiple: true
+      - name: What to fix
+        id: prompt
+        run: '"$HELPER" prompt "${{ needs.start.outputs.command }}" 1'
+      - name: Claude
+        uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1.0.290
+        env:
+          BASH_DEFAULT_TIMEOUT_MS: "1800000"
+          BASH_MAX_TIMEOUT_MS: "3600000"
+          SILT_SKIP_VOICE: "1"
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          claude_args: >-
+            --max-turns 250 --permission-mode acceptEdits
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,TodoWrite"
+            --disallowedTools "Bash(gh pr merge:*),Bash(gh pr close:*),Bash(gh pr review:*),Bash(gh issue close:*),Bash(gh repo:*),Bash(gh release:*),Bash(gh secret:*),Bash(gh variable:*),Bash(gh workflow:*),Bash(gh run:*)"
+      - name: What it changed
+        id: guard
+        run: '"$HELPER" guard "${{ needs.start.outputs.sha }}" "${{ needs.start.outputs.head }}" "${{ needs.start.outputs.base }}"'
+      - name: The status comment
+        if: always()
+        run: '"$HELPER" status push "${{ job.status }}"'
+
+  gate2:
+    name: Gate again 1 (${{ matrix.part }})
+    needs: [start, fix1]
+    if: ${{ !cancelled() && needs.fix1.outputs.ok == 'true' && needs.fix1.outputs.moved == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [checks, tests, perf]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      actions: read
+      checks: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATUS_ID: ${{ needs.start.outputs.status_id }}
+      STATUS_START: ${{ needs.start.outputs.status_start }}
+      STATUS_COMMAND: ${{ needs.start.outputs.command }}
+    steps:
+      - name: Helper
+        run: |
+          echo "HELPER=$RUNNER_TEMP/claude.sh" >>"$GITHUB_ENV"
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/claude.sh?ref=$DEFAULT_BRANCH" \
+            -H 'Accept: application/vnd.github.raw' >"$RUNNER_TEMP/claude.sh"
+          chmod +x "$RUNNER_TEMP/claude.sh"
+          "$RUNNER_TEMP/claude.sh" status attach
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.fix1.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: The sandbox's tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap passt
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Builds on the larger disk
+        run: |
+          if [ -d /mnt ] && [ ! -e target ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+          fi
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: gate-${{ matrix.part }}
+          workspaces: |
+            .
+            plugins -> ../target/plugins
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Web dependencies and Playwright's browser
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium
+      - name: Gate
+        run: '"$HELPER" gate-part 2 "${{ matrix.part }}" "${{ needs.fix1.outputs.sha }}" "${{ needs.fix1.outputs.base_sha }}"'
+      - name: The failure, for the fixes
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gate-2-${{ matrix.part }}
+          path: ${{ runner.temp }}/gate-failure/
+      - name: The status comment
+        if: always()
+        run: '"$HELPER" status push "${{ job.status }}"'
+
+  fix2:
+    name: Fix round 2
+    needs: [start, fix1, gate2]
+    if: ${{ !cancelled() && needs.gate2.result == 'failure' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+      checks: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATUS_ID: ${{ needs.start.outputs.status_id }}
+      STATUS_START: ${{ needs.start.outputs.status_start }}
+      STATUS_COMMAND: ${{ needs.start.outputs.command }}
+    outputs:
+      ok: ${{ steps.guard.outputs.ok }}
+      moved: ${{ steps.guard.outputs.moved }}
+      sha: ${{ steps.guard.outputs.sha }}
+      base_sha: ${{ steps.guard.outputs.base_sha }}
+    steps:
+      - name: Helper
+        run: |
+          echo "HELPER=$RUNNER_TEMP/claude.sh" >>"$GITHUB_ENV"
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/claude.sh?ref=$DEFAULT_BRANCH" \
+            -H 'Accept: application/vnd.github.raw' >"$RUNNER_TEMP/claude.sh"
+          chmod +x "$RUNNER_TEMP/claude.sh"
+          "$RUNNER_TEMP/claude.sh" status attach
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.start.outputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: The sandbox's tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap passt
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Builds on the larger disk
+        run: |
+          if [ -d /mnt ] && [ ! -e target ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+          fi
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: claude
+          workspaces: |
+            .
+            plugins -> ../target/plugins
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Web dependencies and Playwright's browser
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: gate-2-*
+          path: ${{ runner.temp }}/failures
+          merge-multiple: true
+      - name: What to fix
+        id: prompt
+        run: '"$HELPER" prompt "${{ needs.start.outputs.command }}" 2'
+      - name: Claude
+        uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c # v1.0.290
+        env:
+          BASH_DEFAULT_TIMEOUT_MS: "1800000"
+          BASH_MAX_TIMEOUT_MS: "3600000"
+          SILT_SKIP_VOICE: "1"
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          claude_args: >-
+            --max-turns 250 --permission-mode acceptEdits
+            --allowedTools "Bash,Read,Edit,Write,Glob,Grep,TodoWrite"
+            --disallowedTools "Bash(gh pr merge:*),Bash(gh pr close:*),Bash(gh pr review:*),Bash(gh issue close:*),Bash(gh repo:*),Bash(gh release:*),Bash(gh secret:*),Bash(gh variable:*),Bash(gh workflow:*),Bash(gh run:*)"
+      - name: What it changed
+        id: guard
+        run: '"$HELPER" guard "${{ needs.fix1.outputs.sha }}" "${{ needs.start.outputs.head }}" "${{ needs.start.outputs.base }}"'
+      - name: The status comment
+        if: always()
+        run: '"$HELPER" status push "${{ job.status }}"'
+
+  gate3:
+    name: Gate again 2 (${{ matrix.part }})
+    needs: [start, fix2]
+    if: ${{ !cancelled() && needs.fix2.outputs.ok == 'true' && needs.fix2.outputs.moved == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [checks, tests, perf]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      actions: read
+      checks: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATUS_ID: ${{ needs.start.outputs.status_id }}
+      STATUS_START: ${{ needs.start.outputs.status_start }}
+      STATUS_COMMAND: ${{ needs.start.outputs.command }}
+    steps:
+      - name: Helper
+        run: |
+          echo "HELPER=$RUNNER_TEMP/claude.sh" >>"$GITHUB_ENV"
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/claude.sh?ref=$DEFAULT_BRANCH" \
+            -H 'Accept: application/vnd.github.raw' >"$RUNNER_TEMP/claude.sh"
+          chmod +x "$RUNNER_TEMP/claude.sh"
+          "$RUNNER_TEMP/claude.sh" status attach
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.fix2.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: The sandbox's tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap passt
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs without an AppArmor profile.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Builds on the larger disk
+        run: |
+          if [ -d /mnt ] && [ ! -e target ]; then
+            sudo mkdir -p /mnt/target && sudo chown "$USER" /mnt/target && ln -s /mnt/target target
+          fi
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: gate-${{ matrix.part }}
+          workspaces: |
+            .
+            plugins -> ../target/plugins
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Web dependencies and Playwright's browser
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web exec playwright install --with-deps chromium
+      - name: Gate
+        run: '"$HELPER" gate-part 3 "${{ matrix.part }}" "${{ needs.fix2.outputs.sha }}" "${{ needs.fix2.outputs.base_sha }}"'
+      - name: The status comment
+        if: always()
+        run: '"$HELPER" status push "${{ job.status }}"'
+
+  # The head a gate passed on, CI on it, and for merge, the merge.
+  finish:
+    name: Finish
+    needs: [start, gate1, fix1, gate2, fix2, gate3]
+    if: ${{ !cancelled() && needs.start.outputs.ok == 'true' && needs.start.outputs.gated == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+      checks: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATUS_ID: ${{ needs.start.outputs.status_id }}
+      STATUS_START: ${{ needs.start.outputs.status_start }}
+      STATUS_COMMAND: ${{ needs.start.outputs.command }}
+    steps:
+      - name: Helper
+        run: |
+          echo "HELPER=$RUNNER_TEMP/claude.sh" >>"$GITHUB_ENV"
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/claude.sh?ref=$DEFAULT_BRANCH" \
+            -H 'Accept: application/vnd.github.raw' >"$RUNNER_TEMP/claude.sh"
+          chmod +x "$RUNNER_TEMP/claude.sh"
+          "$RUNNER_TEMP/claude.sh" status attach
+      - name: The head the gate passed on
+        id: passed
+        env:
+          R1: ${{ needs.gate1.result }}
+          R2: ${{ needs.gate2.result }}
+          R3: ${{ needs.gate3.result }}
+          S1: ${{ needs.start.outputs.sha }}
+          B1: ${{ needs.start.outputs.base_sha }}
+          S2: ${{ needs.fix1.outputs.sha }}
+          B2: ${{ needs.fix1.outputs.base_sha }}
+          S3: ${{ needs.fix2.outputs.sha }}
+          B3: ${{ needs.fix2.outputs.base_sha }}
+          GUARD1: ${{ needs.fix1.outputs.ok }}
+          GUARD2: ${{ needs.fix2.outputs.ok }}
+        run: '"$HELPER" passed'
+      - name: CI
+        id: ci
+        if: needs.start.outputs.command == 'merge' && steps.passed.outputs.sha != ''
+        run: '"$HELPER" ci "${{ steps.passed.outputs.sha }}"'
+      - name: Merge
+        if: steps.ci.outputs.ci == 'passed'
+        run: '"$HELPER" merge "${{ steps.passed.outputs.sha }}" "${{ steps.passed.outputs.base_sha }}"'
+      - name: Why it wasn't merged
+        if: needs.start.outputs.command == 'merge' && steps.passed.outputs.sha != '' && steps.ci.outputs.ci != 'passed'
+        env:
+          CI_RESULT: ${{ steps.ci.outputs.ci }}
+          CI_FAILED: ${{ steps.ci.outputs.ci_failed }}
+          SHA: ${{ steps.passed.outputs.sha }}
+        run: |
+          case "$CI_RESULT" in
+            failed) "$HELPER" status result "Not merged: CI failed on \`${SHA:0:8}\`: $CI_FAILED" ;;
+            none) "$HELPER" status result "Not merged: no CI checks started on \`${SHA:0:8}\` within 15 min." ;;
+            *) "$HELPER" status result "Not merged: CI on \`${SHA:0:8}\` timed out after 2h." ;;
+          esac
+      - name: The status comment
+        if: always()
+        run: '"$HELPER" status final "${{ job.status }}"'

@@ -39,10 +39,10 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0031](0031-permalinks.md) | Permalinks | accepted; amended by 0075 |
 | [0032](0032-several-servers-and-local-projects.md) | Several servers per daemon, and projects kept on this machine | accepted; amended by 0043, 0065, 0115 |
 | [0033](0033-landing-page-and-site.md) | The landing page and the site | accepted |
-| [0034](0034-performance-budgets.md) | Performance budgets, their fixtures, and the gate | accepted; amended by 0052, 0036, 0037, 0091 |
+| [0034](0034-performance-budgets.md) | Performance budgets, their fixtures, and the gate | accepted; amended by 0052, 0036, 0037, 0091, 0126 |
 | [0035](0035-deltas-stored-once-compressed.md) | A family's deltas stored once, compressed in chunks | accepted |
 | [0036](0036-a-hook-starts-the-daemon.md) | A hook that finds no daemon starts one | accepted |
-| [0037](0037-cloud-machine-budgets.md) | Budgets for a cloud session's machine | accepted |
+| [0037](0037-cloud-machine-budgets.md) | Budgets for a cloud session's machine | accepted; amended by 0126 |
 | [0038](0038-cloud-sessions.md) | Recording Claude Code cloud sessions | proposed |
 | [0039](0039-the-web-ui-as-designed.md) | The web UI as designed | accepted; amended by 0054, 0044, 0098 |
 | [0040](0040-cloud-sessions-from-the-web-ui.md) | Starting and steering Claude Code cloud sessions from the web UI | proposed |
@@ -131,3 +131,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0123](0123-redaction-ids-keyed-per-machine.md) | Redaction ids keyed per machine | accepted |
 | [0124](0124-an-agents-own-allow-all-follows-the-preset.md) | An agent's own allow-all follows the preset | accepted; amended by 0118 |
 | [0125](0125-antigravity-resumes-from-its-own-store.md) | Antigravity CLI resumes from its own store, and starts primed elsewhere | accepted |
+| [0126](0126-budgets-for-a-github-actions-runner.md) | Budgets for a GitHub Actions runner | accepted |
