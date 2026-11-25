@@ -242,6 +242,12 @@ fi
 # Playwright drives the built UI against a real daemon, the optimized one,
 # as `web.thread` is timed there.
 if $has_web; then
+    # The fixtures run the debug build and the fake agents, which the tests
+    # part builds; on its own runner, the perf part builds them itself.
+    if [ "$part" = perf ]; then
+        step "debug build for the end-to-end fixtures"
+        cargo build -p silt-cli -p silt-fake-agent
+    fi
     step "end-to-end tests"
     SILT="$PWD/target/perf/silt" pnpm -C web e2e
 fi

@@ -320,6 +320,7 @@ jobs:
       moved: ${{ steps.guard.outputs.moved }}
       sha: ${{ steps.guard.outputs.sha }}
       base_sha: ${{ steps.guard.outputs.base_sha }}
+      touched: ${{ steps.guard.outputs.touched }}
     steps:
       - name: Helper
         run: |
@@ -502,6 +503,7 @@ jobs:
       moved: ${{ steps.guard.outputs.moved }}
       sha: ${{ steps.guard.outputs.sha }}
       base_sha: ${{ steps.guard.outputs.base_sha }}
+      touched: ${{ steps.guard.outputs.touched }}
     steps:
       - name: Helper
         run: |
@@ -695,6 +697,8 @@ jobs:
           B3: ${{ needs.fix2.outputs.base_sha }}
           GUARD1: ${{ needs.fix1.outputs.ok }}
           GUARD2: ${{ needs.fix2.outputs.ok }}
+          TOUCHED1: ${{ needs.fix1.outputs.touched }}
+          TOUCHED2: ${{ needs.fix2.outputs.touched }}
         run: '"$HELPER" passed'
       - name: CI
         id: ci
