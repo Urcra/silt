@@ -87,7 +87,14 @@ job_line() {
             ;;
         completed:cancelled) printf -- '%s- ⏹ %s%s\n' "$indent" "$label" "$time" ;;
         completed:skipped) printf -- '%s- ➖ ~~%s~~\n' "$indent" "$label" ;;
-        in_progress:*) printf -- '%s- ⏳ **%s**%s\n' "$indent" "$label" "$time" ;;
+        in_progress:*)
+            # GitHub still reports a job that's being cancelled as running.
+            if [ -e "$temp/status-cancelled" ]; then
+                printf -- '%s- ⏹ %s%s\n' "$indent" "$label" "$time"
+            else
+                printf -- '%s- ⏳ **%s**%s\n' "$indent" "$label" "$time"
+            fi
+            ;;
         *) printf -- '%s- ⬜ %s\n' "$indent" "$label" ;;
     esac
 }
@@ -174,7 +181,7 @@ status_push() {
 }
 
 # status init <command> <mode> | set <key> <state> [label] | result <text>
-#        | watch | final <job status>
+#        | handoff | attach | push [job status] | watch | final <job status>
 cmd_status() {
     local what=$1
     shift
@@ -237,6 +244,7 @@ cmd_status() {
         push)
             [ -s "$temp/status-id" ] || return 0
             kill "$(cat "$temp/status-watch" 2>/dev/null)" 2>/dev/null || true
+            [ "${1:-}" = cancelled ] && status_cancelled
             status_push
             ;;
         watch)
@@ -258,13 +266,10 @@ cmd_status() {
             kill "$(cat "$temp/status-watch" 2>/dev/null)" 2>/dev/null || true
             if [ -e "$temp/status-jobs" ]; then
                 # The other jobs carry on; the result is Finish's to say.
-                if [ ! -s "$temp/status-result" ]; then
-                    if gh api "repos/$repo/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
-                        --jq '.jobs[].conclusion' 2>/dev/null | grep -qx cancelled; then
-                        echo "⏹ Cancelled" >"$temp/status-result"
-                    elif [ "$1" = failure ]; then
-                        echo "❌ Failed. See the [log](${RUN_URL:-})." >"$temp/status-result"
-                    fi
+                if [ "$1" = cancelled ]; then
+                    status_cancelled
+                elif [ ! -s "$temp/status-result" ] && [ "$1" = failure ]; then
+                    echo "❌ Failed. See the [log](${RUN_URL:-})." >"$temp/status-result"
                 fi
                 status_push
                 return 0
@@ -289,6 +294,13 @@ cmd_status() {
             status_push
             ;;
     esac
+}
+
+# A cancelled job's own status is the one sure sign: the run's other jobs
+# aren't marked cancelled until they stop.
+status_cancelled() {
+    touch "$temp/status-cancelled"
+    echo "⏹ Cancelled" >"$temp/status-result"
 }
 
 pr_field() {
@@ -587,13 +599,30 @@ cmd_cancel() {
         --jq ".[] | select(.displayTitle == \"Claude on #$number\" and .status != \"completed\") | .databaseId")
     for id in $runs; do
         [ "$id" = "${GITHUB_RUN_ID:-}" ] && continue
-        gh run cancel "$id" --repo "$repo" >/dev/null && stopped=$((stopped + 1))
+        gh run cancel "$id" --repo "$repo" >/dev/null || continue
+        stopped=$((stopped + 1))
+        mark_cancelled "$id" || true
     done
     if [ "$stopped" -eq 0 ]; then
         say "Nothing to cancel on #$number."
     else
         say "⏹ Cancelled $stopped run(s) on #$number. Pushed commits stay."
     fi
+}
+
+# The status comment of a run that was cancelled between two jobs has no
+# job left to say so.
+mark_cancelled() {
+    local id=$1 comment body
+    comment=$(gh api --paginate "repos/$repo/issues/$number/comments?per_page=100" \
+        --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"actions/runs/$id)\"))) | .id" | tail -n 1)
+    [ -n "$comment" ] || return 0
+    body=$(gh api "repos/$repo/issues/comments/$comment" --jq .body)
+    case "$body" in *"⏹ Cancelled"*) return 0 ;; esac
+    # shellcheck disable=SC2001 # a pattern with a group
+    body=$(printf '%s\n\n⏹ Cancelled by @%s' "$(sed 's/⏳ \*\*\(.*\)\*\*/⏹ \1/' <<<"$body")" "${REQUESTER:-}")
+    jq -n --arg body "$body" '{body: $body}' |
+        gh api -X PATCH "repos/$repo/issues/comments/$comment" --input - >/dev/null
 }
 
 # The weighting and rules every prompt shares.
