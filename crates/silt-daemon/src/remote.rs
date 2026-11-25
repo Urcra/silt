@@ -34,6 +34,9 @@ pub enum RemoteError {
     ProtocolMismatch { supported: Vec<u32> },
     #[error("the server refused: {0}")]
     Refused(ErrorReply),
+    /// Over the server's `max_file_mib` (ADR 0121).
+    #[error("{0}")]
+    TooLarge(String),
     #[error("could not save the server settings")]
     Io(#[from] io::Error),
     #[error("invalid server settings")]
@@ -524,6 +527,86 @@ impl Remote {
         Ok(checked(response).await?.bytes().await?.to_vec())
     }
 
+    /// How much of a blob the server has (ADR 0121).
+    pub async fn blob_state(&self, hash: BlobHash) -> Result<silt_proto::BlobState, RemoteError> {
+        let response = self.request(reqwest::Method::GET, &format!("/v1/blobs/{hash}/state")).send().await?;
+        Ok(checked(response).await?.json().await?)
+    }
+
+    /// Sends the stored blob at `path`: whole when small, else in chunks,
+    /// going on from what the server has (ADR 0121). Nothing holds it whole.
+    pub async fn upload_blob(&self, hash: BlobHash, path: &Path) -> Result<(), RemoteError> {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+        let size = tokio::fs::metadata(path).await?.len();
+        if size <= silt_proto::BLOB_CHUNK {
+            return self.put_blob(hash, tokio::fs::read(path).await?).await;
+        }
+        let mut state = self.blob_state(hash).await?;
+        let mut restarted = false;
+        let mut file = tokio::fs::File::open(path).await?;
+        let mut chunk = Vec::with_capacity(silt_proto::BLOB_CHUNK as usize);
+        while !state.stored {
+            let offset = state.received;
+            file.seek(std::io::SeekFrom::Start(offset)).await?;
+            chunk.clear();
+            (&mut file).take(silt_proto::BLOB_CHUNK).read_to_end(&mut chunk).await?;
+            let query = silt_proto::ChunkQuery { offset, size };
+            let response = self
+                .request(reqwest::Method::PUT, &format!("/v1/blobs/{hash}/chunks"))
+                .query(&query)
+                .timeout(BLOB_TIMEOUT)
+                .body(chunk.clone())
+                .send()
+                .await?;
+            match response.status() {
+                // Another upload of ours got further, or the server lost some.
+                reqwest::StatusCode::CONFLICT => state = self.blob_state(hash).await?,
+                // A whole that didn't check out is sent again, once.
+                reqwest::StatusCode::UNPROCESSABLE_ENTITY if !restarted => {
+                    restarted = true;
+                    state = silt_proto::BlobState::default();
+                }
+                _ => state = checked(response).await?.json().await?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes blob `hash` from the server to `to`, going on from what an
+    /// earlier try left there, without holding it whole.
+    pub async fn download_blob(&self, hash: BlobHash, to: &Path) -> Result<(), RemoteError> {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+        let have = tokio::fs::metadata(to).await.map_or(0, |meta| meta.len());
+        let mut request = self.request(reqwest::Method::GET, &format!("/v1/blobs/{hash}")).timeout(BLOB_TIMEOUT);
+        if have > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={have}-"));
+        }
+        let response = checked(request.send().await?).await?;
+        let resumed = response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+        let mut file = tokio::fs::OpenOptions::new().create(true).write(true).append(resumed).truncate(!resumed).open(to).await?;
+        let mut body = response.bytes_stream();
+        while let Some(bytes) = body.next().await {
+            file.write_all(&bytes?).await?;
+        }
+        file.flush().await?;
+        Ok(())
+    }
+
+    /// The server's answer to a browser's request for a blob, by range,
+    /// passed on rather than fetched whole first (ADR 0121).
+    pub async fn blob_range(&self, hash: BlobHash, range: Option<&str>) -> Result<reqwest::Response, RemoteError> {
+        let mut request = self.request(reqwest::Method::GET, &format!("/v1/blobs/{hash}")).timeout(BLOB_TIMEOUT);
+        if let Some(range) = range {
+            request = request.header(reqwest::header::RANGE, range);
+        }
+        let response = request.send().await?;
+        if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            return Ok(response);
+        }
+        checked(response).await
+    }
+
     /// Pushes a batch; returns the server's generation and how it answered.
     pub async fn push(&self, family: FamilyId, deltas: Vec<Delta>) -> (Option<u64>, Outcome, Option<RemoteError>) {
         let response = self
@@ -600,6 +683,7 @@ async fn checked(response: reqwest::Response) -> Result<reqwest::Response, Remot
         serde_json::from_str(&body).unwrap_or_else(|_| ErrorReply::Invalid { message: format!("{status}: {}", body.trim()) });
     Err(match reply {
         ErrorReply::ProtocolMismatch { supported } => RemoteError::ProtocolMismatch { supported },
+        ErrorReply::Invalid { message } if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE => RemoteError::TooLarge(message),
         other => RemoteError::Refused(other),
     })
 }

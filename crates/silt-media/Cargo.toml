@@ -1,0 +1,26 @@
+[package]
+name = "silt-media"
+description = "What an image or a video is, from its first bytes, and images' previews"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Serving a blob by range over HTTP, for the daemon and the server.
+serve = ["dep:axum", "dep:tokio", "dep:tokio-util"]
+
+[dependencies]
+axum = { version = "0.8.9", default-features = false, optional = true }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.0", features = ["fs", "io-util", "rt"], optional = true }
+tokio-util = { version = "0.7.20", features = ["io"], optional = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }

@@ -876,6 +876,83 @@ test('what an agent shows opens beside the thread: an artifact in a sandbox, its
   await expect(list.getByTestId('shown-image')).toBeVisible()
 })
 
+test('an agent shows a video that plays in place and in the viewer, and an image that opens on its preview, zooms and loads its original', async ({
+  page,
+}) => {
+  await startInNewThread(page, 'Fake agent')
+  await page.getByLabel('draft').fill('Show me the video')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Show me the video')).toBeVisible()
+  const video = page.getByTestId('shown-video')
+  await expect(video).toContainText('Login flow after the redirect')
+  // Its length and pixels come from the video itself, read by range (ADR 0121).
+  await expect(video).toContainText(/WebM · 0:06 · 960×540/)
+  const src = await video.locator('video').getAttribute('src')
+  const part = await page.evaluate(async (url) => {
+    const answer = await fetch(url!, { headers: { Range: 'bytes=0-99' } })
+    return [answer.status, answer.headers.get('content-range'), answer.headers.get('content-type')]
+  }, src)
+  expect(part).toEqual([206, expect.stringMatching(/^bytes 0-99\/\d+$/), 'video/webm'])
+  await video.getByRole('button', { name: /^play Login flow/ }).click()
+  await expect(video.getByTestId('video-time')).not.toHaveText(/^0:00 \//, { timeout: 10_000 })
+  await video.getByRole('button', { name: 'open in the viewer' }).click()
+  const viewer = page.getByTestId('media-viewer')
+  await expect(viewer.getByTestId('video-player')).toBeFocused()
+  await page.keyboard.press('?')
+  await expect(viewer.getByRole('dialog', { name: 'keys' })).toContainText('A frame back or on, while paused')
+  await page.keyboard.press('Escape')
+  await expect(viewer.getByRole('dialog', { name: 'keys' })).toBeHidden()
+  await page.keyboard.press('Escape')
+  await expect(viewer).toBeHidden()
+
+  await page.getByLabel('draft').fill('Show me the chart')
+  await page.getByLabel('draft').press('Enter')
+  const image = page.getByTestId('shown-image')
+  // Its previews are made as it's kept, which takes a debug build a few seconds.
+  await expect(image).toContainText('PNG · 3200×1800', { timeout: 30_000 })
+  // The conversation shows its smallest preview, not the original.
+  await expect(image.locator('img')).toHaveJSProperty('naturalWidth', 960)
+  await image.getByRole('button', { name: /^open the image/ }).click()
+  await expect(viewer.getByTestId('viewer-resolution')).toContainText('Preview · 2048×1152')
+  const stage = viewer.getByTestId('zoom-stage')
+  await expect(stage).toBeFocused()
+  await stage.press('1')
+  await expect(viewer.getByTestId('zoom-level')).toHaveText('100%')
+  await expect(viewer.getByText('Zoomed past the preview’s detail.')).toBeVisible()
+  await stage.press('f')
+  await expect(viewer.getByTestId('viewer-resolution')).toContainText(/^3200×1800/)
+  await expect(viewer.getByTestId('full-resolution')).toHaveText('Full resolution')
+  await stage.press('0')
+  await expect(viewer.getByTestId('zoom-level')).not.toHaveText('100%')
+  await page.keyboard.press('Escape')
+  await expect(viewer).toBeHidden()
+
+  // A video can be an artifact of its own, beside the conversation.
+  await page.getByLabel('draft').fill('Artifact video')
+  await page.getByLabel('draft').press('Enter')
+  await expect(page.getByText('Done: Artifact video')).toBeVisible()
+  await page.getByTestId('artifact-card').click()
+  await expect(page.getByTestId('artifact-viewer').getByTestId('video-player')).toBeVisible()
+})
+
+test('a video attached to a prompt uploads first, goes to the agent as a file, and plays from the conversation', async ({
+  page,
+}) => {
+  await startInNewThread(page, 'Fake agent')
+  const clip = readFileSync(join(import.meta.dirname, '..', '..', 'crates', 'silt-fake-agent', 'fixtures', 'login.webm'))
+  await page.getByLabel('attach files').setInputFiles([{ name: 'checkout.webm', mimeType: 'video/webm', buffer: clip }])
+  const attached = page.getByRole('list', { name: 'attached files' })
+  await expect(attached).toContainText('checkout.webm')
+  await expect(page.getByText('The agent gets a video’s path')).toBeVisible()
+  await page.getByLabel('draft').fill('watch this')
+  await page.getByLabel('draft').press('Enter')
+  await expect(
+    page.getByText(/^Done: watch this[\s\S]*checkout\.webm \(video\/webm\): \S+\/attachments\/\S+checkout\.webm/),
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'open the video in the prompt' }).click()
+  await expect(page.getByTestId('media-viewer').getByTestId('video-player')).toBeVisible()
+})
+
 test("an artifact's page keeps what it stores for the viewer, and gets null for a capability it didn't declare", async ({
   page,
 }) => {

@@ -507,6 +507,7 @@ impl Core {
             None => family.thread_head(thread),
         };
         let missing = || CoreError::Invalid(format!("the thread had no {} at that version", query.path));
+        let mut media = None;
         let text = match family.file_in_thread_at(thread, &query.path, &at).ok_or_else(missing)? {
             FileView::Text(text) => Some(text),
             FileView::GitText(oid) => Some(
@@ -515,9 +516,29 @@ impl Core {
                     .find_map(|repo| RepoBases(repo).text(oid))
                     .ok_or_else(|| CoreError::Invalid(format!("this machine lacks the git blob {oid}")))?,
             ),
-            FileView::Blob(_) => None,
+            FileView::Blob(hash) => {
+                // An image or a video plays on the page, by its blob (ADR 0121).
+                media = self.file_media(hash, &query.path);
+                if media.is_some() {
+                    self.shows_file(thread, hash);
+                }
+                None
+            }
         };
-        Ok(FileAt { path: query.path.clone(), at: at.to_string(), text })
+        Ok(FileAt { path: query.path.clone(), at: at.to_string(), text, media })
+    }
+
+    /// What a binary file is when it's an image or a video: by its first
+    /// bytes when it's here, else by its name, as the server has it.
+    fn file_media(&self, hash: silt_types::BlobHash, path: &str) -> Option<silt_proto::view::FileMedia> {
+        let (media_type, size) = match self.store.blobs().file(hash) {
+            Some(file) => {
+                let (media_type, _) = silt_media::sniff(&crate::artifacts::head_of(&file).ok()?)?;
+                (media_type, std::fs::metadata(&file).ok()?.len())
+            }
+            None => (media_type_by_name(path)?, 0),
+        };
+        Some(silt_proto::view::FileMedia { blob: hash.to_string(), media_type: media_type.to_owned(), size })
     }
 
     /// How the family's files differ between two versions.
@@ -1182,6 +1203,22 @@ pub(crate) fn prompt_marks(family: &Family, thread: ThreadId) -> Vec<Frontier> {
         .filter(|delta| matches!(&delta.op, Op::Conv(ConvOp::Turn { mark: TurnMark::PromptSubmitted, .. })))
         .map(|delta| Frontier::single(delta.span.first()))
         .collect()
+}
+
+/// An image's or a video's media type by its file's extension.
+fn media_type_by_name(path: &str) -> Option<&'static str> {
+    let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "mkv" => "video/x-matroska",
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

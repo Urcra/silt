@@ -29,6 +29,7 @@ silt-sheet = { path = "../silt-sheet" }
 silt-crdt = { path = "../silt-crdt" }
 silt-design = { path = "../silt-design" }
 silt-log = { path = "../silt-log" }
+silt-media = { path = "../silt-media", features = ["serve"] }
 silt-os = { path = "../silt-os" }
 silt-proto = { path = "../silt-proto", features = ["xlsx"] }
 silt-redact = { path = "../silt-redact" }

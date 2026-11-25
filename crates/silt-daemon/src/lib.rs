@@ -38,6 +38,7 @@ mod lifecycle;
 mod live;
 mod load;
 mod loading;
+mod media;
 mod memory;
 pub mod models;
 mod notes;

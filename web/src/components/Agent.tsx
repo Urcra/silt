@@ -643,7 +643,7 @@ export function AgentDock({
   const inOwn = ownChosen?.id
   const refusedOwn = (mode: string) => modeRefused(workspace, ownAgent, mode)
   const startValue = (setting: AgentSetting) => restart.value(setting, chosenSettings[setting.id])
-  const { attached, add, remove, clear, restore } = useAttachments()
+  const { attached, add, remove, clear, restore, busy, failure } = useAttachments()
   const chooseAgent = (chosen: string) => {
     setAgent(chosen)
     setChosenSettings({})
@@ -740,6 +740,15 @@ export function AgentDock({
       held.current = { now }
       return
     }
+    if (failure) {
+      setError(failure)
+      return
+    }
+    // A prompt waits for its files to reach the machine, and goes once they have (ADR 0121).
+    if (busy) {
+      held.current = { now }
+      return
+    }
     if (starting.current) return queueAfter(starting.current)
     if (startable) return start()
     if (now && turning && draft.trim()) return steer()
@@ -753,7 +762,7 @@ export function AgentDock({
     optimistic((text, files) => api.prompt(thread, text, false, files))
   }
   useEffect(() => {
-    if (!known || !held.current) return
+    if (!known || !held.current || busy) return
     const { now } = held.current
     held.current = undefined
     send(now)

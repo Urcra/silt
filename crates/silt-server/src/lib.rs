@@ -33,6 +33,7 @@ use tokio::sync::{Mutex, Notify, OwnedMutexGuard, RwLock};
 pub mod accounts;
 mod app;
 pub mod backup;
+mod blob_notes;
 mod bridge;
 mod browse;
 mod collab;
@@ -82,6 +83,10 @@ const SMALL_BODY: usize = 1 << 20;
 const DELTAS_BODY: usize = 256 << 20;
 /// Largest blob or git pack one request may send.
 const LARGE_BODY: usize = 512 << 20;
+/// Largest chunk of a blob's upload, with room to spare (ADR 0121).
+const CHUNK_BODY: usize = (silt_proto::BLOB_CHUNK as usize) + (1 << 20);
+/// How long an unfinished upload is kept for its device to go on with.
+pub(crate) const UPLOAD_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
@@ -338,6 +343,8 @@ impl Server {
             .route("/v1/threads/{id}/lease", post(take_lease))
             .route("/v1/families/{id}/deltas", post(push).get(pull).layer(DefaultBodyLimit::max(DELTAS_BODY)))
             .route("/v1/blobs/{hash}", put(put_blob).get(get_blob).layer(DefaultBodyLimit::max(LARGE_BODY)))
+            .route("/v1/blobs/{hash}/chunks", put(put_blob_chunk).layer(DefaultBodyLimit::max(CHUNK_BODY)))
+            .route("/v1/blobs/{hash}/state", get(blob_state))
             .route("/v1/visibility", put(set_visibility))
             .route("/v1/search", get(search))
             .route("/v1/rooms", get(rooms::device_socket))
@@ -899,6 +906,7 @@ async fn push(
         if let Some(bridge) = server.shared.bridge.as_ref().filter(|_| bridge::touches(&stored)) {
             let _ = bridge.send(family);
         }
+        server.note_attachments(&stored, caller).await;
         if let Err(error) = server.notify(&stored, caller).await {
             tracing::warn!(%error, "could not write notifications");
         }
@@ -1165,37 +1173,124 @@ fn fts_query(text: &str) -> String {
 }
 
 async fn put_blob(State(server): State<Server>, UrlPath(hash_hex): UrlPath<String>, body: Bytes) -> Result<StatusCode, ApiError> {
-    if BlobStore::hash(&body).to_string() != hash_hex {
+    let hash = BlobStore::hash(&body);
+    if hash.to_string() != hash_hex {
         return Err(bad_request("blob content does not match its hash"));
     }
+    server.refuse_if_large(hash, body.len() as u64).await?;
     server.shared.blobs.put(&body).await.map_err(ServerError::from)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// A blob, for someone who may read a delta that refers to it. Knowing a
-/// blob's hash is not enough: it could be a guess at a file's content, or
-/// left over from access since taken away.
+fn too_large(message: String) -> ApiError {
+    ApiError(StatusCode::PAYLOAD_TOO_LARGE, ErrorReply::Invalid { message })
+}
+
+/// One chunk of a large blob, in order; the blob is stored once it's whole
+/// and its hash checks out (ADR 0121). An upload is its account's own.
+async fn put_blob_chunk(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    UrlPath(hash_hex): UrlPath<String>,
+    Query(at): Query<silt_proto::ChunkQuery>,
+    body: Bytes,
+) -> Result<Json<silt_proto::BlobState>, ApiError> {
+    let hash = BlobHash::from_str(&hash_hex).map_err(|_| bad_request("invalid blob hash"))?;
+    server.refuse_if_large(hash, at.size).await?;
+    let owner = caller.user.to_string();
+    match server.shared.blobs.append(&owner, hash, at.offset, &body, at.size).await {
+        Ok(silt_store::Chunked::Received(received)) => {
+            Ok(Json(server.blob_note(hash).await.state(false, received, Some(at.size))))
+        }
+        Ok(silt_store::Chunked::Stored) => {
+            server.change_blob_note(hash, |note| note.damaged = false).await;
+            Ok(Json(server.blob_note(hash).await.state(true, at.size, Some(at.size))))
+        }
+        Err(silt_store::ChunkError::Offset { received }) => Err(ApiError(
+            StatusCode::CONFLICT,
+            ErrorReply::Invalid { message: format!("the upload has {received} bytes so far") },
+        )),
+        Err(silt_store::ChunkError::Exceeds) => Err(bad_request("the chunk runs past the blob's size")),
+        Err(silt_store::ChunkError::Damaged) => {
+            server.change_blob_note(hash, |note| note.damaged = true).await;
+            Err(ApiError(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                ErrorReply::Invalid { message: "the blob's content doesn't match its hash; send it again".into() },
+            ))
+        }
+        Err(silt_store::ChunkError::Io(error)) => Err(ServerError::from(error).into()),
+    }
+}
+
+/// How much of a blob this server has: whole, for someone who may read it,
+/// and how much of the caller's own upload of it has arrived.
+async fn blob_state(
+    State(server): State<Server>,
+    Extension(caller): Extension<Caller>,
+    UrlPath(hash_hex): UrlPath<String>,
+) -> Result<Json<silt_proto::BlobState>, ApiError> {
+    let hash = BlobHash::from_str(&hash_hex).map_err(|_| bad_request("invalid blob hash"))?;
+    let received = server.shared.blobs.received(&caller.user.to_string(), hash).await.map_err(ServerError::from)?;
+    let readable = server.readable_blob(caller.user, hash).await?;
+    if server.shared.blobs.contains(hash) && readable {
+        let size = server.shared.blobs.file(hash).and_then(|path| std::fs::metadata(path).ok()).map(|meta| meta.len());
+        return Ok(Json(server.blob_note(hash).await.state(true, size.unwrap_or_default(), size)));
+    }
+    // What's known of it only for someone who may read it, or its uploader.
+    let note = if readable { server.blob_note(hash).await } else { blob_notes::BlobNote::default() };
+    Ok(Json(note.state(false, received, None)))
+}
+
+/// A blob, whole or by range, for someone who may read a delta that refers
+/// to it. Knowing a blob's hash is not enough: it could be a guess at a
+/// file's content, or left over from access since taken away.
 async fn get_blob(
     State(server): State<Server>,
     Extension(caller): Extension<Caller>,
     UrlPath(hash_hex): UrlPath<String>,
-) -> Result<Vec<u8>, ApiError> {
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
     let hash = BlobHash::from_str(&hash_hex).map_err(|_| bad_request("invalid blob hash"))?;
-    let references = server.shared.index.lock().await.blob_references(hash);
-    let viewer = server.viewer(caller.user).await?;
-    let mut readable = false;
-    for (family, id) in references {
-        if let Some(slot) = server.room(family).await
-            && viewer.readable_history(family.0, &slot.room).contains(id)
-        {
-            readable = true;
-            break;
-        }
-    }
-    if !readable {
+    if !server.readable_blob(caller.user, hash).await? {
         return Err(ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound));
     }
-    server.shared.blobs.get(hash).await.map_err(|_| ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound))
+    let path = server.shared.blobs.file(hash).ok_or(ApiError(StatusCode::NOT_FOUND, ErrorReply::NotFound))?;
+    let range = headers.get(axum::http::header::RANGE).and_then(|value| value.to_str().ok());
+    Ok(silt_media::serve::file(&path, &hash_hex, range, None).await)
+}
+
+impl Server {
+    /// Refuses a blob over `max_file_mib`, noting why for whoever reads it.
+    async fn refuse_if_large(&self, hash: BlobHash, size: u64) -> Result<(), ApiError> {
+        if let Err(message) = self.config().file_fits(size) {
+            self.change_blob_note(hash, |note| note.refused = Some(message.clone())).await;
+            return Err(too_large(message));
+        }
+        Ok(())
+    }
+
+    /// Whether `user` may read a delta that refers to blob `hash`.
+    pub(crate) async fn readable_blob(&self, user: UserId, hash: BlobHash) -> Result<bool, ApiError> {
+        let references = self.shared.index.lock().await.blob_references(hash);
+        let viewer = self.viewer(user).await?;
+        for (family, id) in references {
+            if let Some(slot) = self.room(family).await
+                && viewer.readable_history(family.0, &slot.room).contains(id)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// The blobs a thread's page reads (ADR 0121).
+    pub(crate) fn blobs(&self) -> &BlobStore {
+        &self.shared.blobs
+    }
+
+    pub(crate) fn previews_dir(&self) -> std::path::PathBuf {
+        self.shared.data_dir.join("previews")
+    }
 }
 
 impl Server {

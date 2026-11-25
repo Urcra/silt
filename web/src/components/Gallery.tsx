@@ -4,7 +4,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useMemo, useState } from 'react'
-import { api, short, type ArtifactListed } from '../api'
+import { api, blobUrl, short, type ArtifactListed } from '../api'
+import { thumbSrc } from '../mediaInfo'
 import { artifactPath, kindLabel, listingMatches } from '../artifacts'
 import { useTopic } from '../bus'
 import { useNow } from '../now'
@@ -131,19 +132,48 @@ export function Gallery() {
   )
 }
 
-/** A version's thumbnail where one has been drawn, else its kind's icon; an image shows itself. */
+/**
+ * A version's thumbnail where one has been drawn, else its kind's icon; an image shows its smallest preview, and a
+ * video its first frame (ADR 0121).
+ */
 function Thumbnail({ row }: { row: ArtifactListed }) {
+  const { artifact } = row
+  const picture = (artifact.kind === 'image' && artifact.media_type !== 'image/svg+xml') || artifact.kind === 'video'
   const drawn = useQuery({
-    queryKey: ['artifact-thumbnail', row.thread, row.artifact.id, row.artifact.version],
+    queryKey: ['artifact-thumbnail', row.thread, artifact.id, artifact.version],
     queryFn: () =>
-      row.artifact.kind === 'image' || row.artifact.kind === 'svg'
-        ? api.artifact(row.thread, row.artifact.blob)
-        : api.artifactThumbnail(row.thread, row.artifact.id),
-    enabled: ['html', 'image', 'svg'].includes(row.artifact.kind),
+      artifact.kind === 'image' || artifact.kind === 'svg'
+        ? api.artifact(row.thread, artifact.blob)
+        : api.artifactThumbnail(row.thread, artifact.id),
+    enabled: !picture && ['html', 'image', 'svg'].includes(artifact.kind),
     staleTime: Infinity,
     retry: false,
   })
   const box = 'flex h-24 items-center justify-center overflow-hidden rounded-sm bg-surface-1 text-fg-2'
+  if (artifact.kind === 'video')
+    return (
+      <span className={box}>
+        <video
+          src={blobUrl(row.thread, artifact.blob)}
+          preload="metadata"
+          muted
+          playsInline
+          className="h-full w-full object-cover"
+          data-testid="gallery-thumbnail"
+        />
+      </span>
+    )
+  if (picture)
+    return (
+      <span className={box}>
+        <img
+          src={thumbSrc(row.thread, artifact.blob, artifact.previews)}
+          alt=""
+          className="h-full w-full object-cover object-top"
+          data-testid="gallery-thumbnail"
+        />
+      </span>
+    )
   if (drawn.data)
     return (
       <span className={box}>

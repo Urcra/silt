@@ -7,6 +7,7 @@ import { message } from '../query'
 import { type Draft, type Lines, type ReviewState, type Side, linesOf, quoteOf, sideOf } from '../review'
 import { useTextSettings } from '../text'
 import { Button, Counts, DiffBlock, Icon, Textarea, cx } from '../ui'
+import { binaryKind } from '../mediaInfo'
 import { CommentThread } from './CommentThread'
 
 export type DiffLayout = 'unified' | 'split'
@@ -738,7 +739,7 @@ export function DiffView({
             }
             actions={
               <>
-                <Counts added={file.added} removed={file.removed} binary={file.binary} />
+                <Counts added={file.added} removed={file.removed} binary={file.binary && binaryKind(file.path)} />
                 {viewFiles && (
                   <a
                     aria-label="view file"

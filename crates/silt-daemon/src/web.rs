@@ -195,6 +195,10 @@ fn api_routes() -> Router<Web> {
         .route("/api/threads/{id}/replica", get(replica).post(browser_deltas))
         .route("/api/threads/{id}/git/{oid}", get(git_text))
         .route("/api/threads/{id}/artifacts/{blob}", get(artifact_content))
+        .route("/api/threads/{id}/blobs/{blob}", get(thread_blob))
+        .route("/api/threads/{id}/blobs/{blob}/state", get(thread_blob_state))
+        // A prompt's file, streamed to disk with no limit (ADR 0121).
+        .route("/api/uploads", post(upload).layer(DefaultBodyLimit::disable()))
         .route("/api/threads/{id}/artifacts/{artifact}/frame", post(make_frame))
         .route("/api/threads/{id}/artifacts/{artifact}/grants", get(artifact_grants).put(set_artifact_grant))
         .route("/api/threads/{id}/artifacts/{artifact}/data", post(page_data))
@@ -995,6 +999,156 @@ async fn git_text(State(web): State<Web>, Path((thread, oid)): Path<(String, Str
 
 async fn artifact_content(State(web): State<Web>, Path((thread, blob)): Path<(String, String)>) -> HttpResponse {
     ask(&web, Request::ArtifactContent { thread, blob }).await
+}
+
+#[derive(Debug, Deserialize)]
+struct BlobQuery {
+    /// One of `silt_media::PREVIEW_EDGES`: the image's preview of that size.
+    preview: Option<u32>,
+    /// Saved as a file of this name rather than shown.
+    download: Option<String>,
+}
+
+/// Where the thread's blob is, as Core says, when the thread names it.
+async fn blob_source(web: &Web, thread: String, blob: String) -> Result<crate::media::BlobSource, Failed> {
+    let data = answer(web, Request::BlobSource { thread, blob }).await?;
+    serde_json::from_value(data).map_err(|error| Failed { status: StatusCode::INTERNAL_SERVER_ERROR, message: error.to_string() })
+}
+
+/// A blob of the thread's, whole or by range, raw: this machine's copy, or
+/// the server's passed on as it comes, so a video plays before it's all
+/// here (ADR 0121).
+async fn thread_blob(
+    State(web): State<Web>,
+    Path((thread, blob)): Path<(String, String)>,
+    Query(query): Query<BlobQuery>,
+    request: HttpRequest,
+) -> HttpResponse {
+    let source = match blob_source(&web, thread, blob.clone()).await {
+        Ok(source) => source,
+        Err(failed) => return failed.into_response(),
+    };
+    let range = request.headers().get(header::RANGE).and_then(|value| value.to_str().ok()).map(str::to_owned);
+    if let Some(path) = source.path {
+        let (path, etag) = match query.preview {
+            Some(edge) if silt_media::PREVIEW_EDGES.contains(&edge) => {
+                let previews = crate::paths::data_dir().join("previews");
+                (silt_media::serve::preview(&path, &previews, &blob, edge).await, format!("{blob}-{edge}"))
+            }
+            Some(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error": "a preview is 960 or 2048 px"}))).into_response(),
+            None => (path, blob),
+        };
+        return silt_media::serve::file(&path, &etag, range.as_deref(), query.download.as_deref()).await;
+    }
+    let Some(remote) = source.remote.map(crate::remote::Remote::new) else {
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "this file isn't on this machine"}))).into_response();
+    };
+    let Ok(hash) = blob.parse() else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    match remote.blob_range(hash, range.as_deref()).await {
+        Ok(answer) => passed_on(answer, &blob, query.download.as_deref()),
+        Err(error) => (StatusCode::NOT_FOUND, Json(json!({"error": error.to_string()}))).into_response(),
+    }
+}
+
+/// The server's answer for a blob as the browser gets it, with this
+/// daemon's own rules for how it's shown.
+fn passed_on(answer: reqwest::Response, blob: &str, download: Option<&str>) -> HttpResponse {
+    let status = StatusCode::from_u16(answer.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut builder = HttpResponse::builder().status(status);
+    for name in [
+        header::CONTENT_TYPE,
+        header::CONTENT_LENGTH,
+        header::CONTENT_RANGE,
+        header::ACCEPT_RANGES,
+        header::CONTENT_SECURITY_POLICY,
+    ] {
+        if let Some(value) =
+            answer.headers().get(name.as_str()).and_then(|value| header::HeaderValue::from_bytes(value.as_bytes()).ok())
+        {
+            builder = builder.header(name, value);
+        }
+    }
+    builder = builder
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(header::CACHE_CONTROL, "private, max-age=31536000, immutable")
+        .header(header::ETAG, format!("\"{blob}\""));
+    if let Some(name) = download {
+        let name: String = name.chars().filter(|char| !char.is_control() && !matches!(char, '"' | '\\' | '/')).collect();
+        if let Ok(value) = header::HeaderValue::from_str(&format!("attachment; filename=\"{name}\"")) {
+            builder = builder.header(header::CONTENT_DISPOSITION, value);
+        }
+    }
+    builder.body(Body::from_stream(answer.bytes_stream())).unwrap_or_default()
+}
+
+/// How much of a blob of the thread's has arrived: whole here, or how much
+/// its server has while another machine uploads it (ADR 0121).
+async fn thread_blob_state(State(web): State<Web>, Path((thread, blob)): Path<(String, String)>) -> HttpResponse {
+    let source = match blob_source(&web, thread, blob.clone()).await {
+        Ok(source) => source,
+        Err(failed) => return failed.into_response(),
+    };
+    if let Some(path) = source.path {
+        let size = tokio::fs::metadata(path).await.ok().map(|meta| meta.len());
+        let state = silt_proto::BlobState {
+            stored: true,
+            received: size.unwrap_or_default(),
+            size,
+            refused: source.refused,
+            ..Default::default()
+        };
+        return Json(state).into_response();
+    }
+    let (Some(remote), Ok(hash)) = (source.remote.map(crate::remote::Remote::new), blob.parse()) else {
+        return Json(silt_proto::BlobState::default()).into_response();
+    };
+    match remote.blob_state(hash).await {
+        Ok(state) => Json(state).into_response(),
+        Err(error) => (StatusCode::BAD_GATEWAY, Json(json!({"error": error.to_string()}))).into_response(),
+    }
+}
+
+/// A file a prompt will name, written to disk as it comes, under its hash.
+async fn upload(State(web): State<Web>, request: HttpRequest) -> HttpResponse {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    let dir = match answer(&web, Request::MayUpload).await {
+        Ok(dir) => PathBuf::from(dir.as_str().unwrap_or_default()),
+        Err(failed) => return failed.into_response(),
+    };
+    let failed = |error: std::io::Error| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("could not keep the file: {error}")}))).into_response()
+    };
+    if let Err(error) = tokio::fs::create_dir_all(&dir).await {
+        return failed(error);
+    }
+    let temporary = dir.join(format!(".{}.part", uuid::Uuid::new_v4().simple()));
+    let written = async {
+        let mut file = tokio::fs::File::create(&temporary).await?;
+        let mut hasher = blake3::Hasher::new();
+        let mut size = 0u64;
+        let mut body = request.into_body().into_data_stream();
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk.map_err(std::io::Error::other)?;
+            hasher.update(&chunk);
+            size += chunk.len() as u64;
+            file.write_all(&chunk).await?;
+        }
+        file.flush().await?;
+        let hash = hasher.finalize().to_hex().to_string();
+        tokio::fs::rename(&temporary, dir.join(&hash)).await?;
+        Ok::<_, std::io::Error>((hash, size))
+    }
+    .await;
+    match written {
+        Ok((upload, size)) => Json(json!({"upload": upload, "size": size})).into_response(),
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            failed(error)
+        }
+    }
 }
 
 async fn themes(State(web): State<Web>) -> HttpResponse {
