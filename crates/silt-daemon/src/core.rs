@@ -34,6 +34,15 @@ pub enum Event {
         family: FamilyId,
         result: Box<Result<crate::load::Loaded, CoreError>>,
         size: Option<u64>,
+        histories: Vec<crate::history::WholeRead>,
+    },
+    /// A thread's history read whole off the core, or nothing if that
+    /// failed (ADR 0127); `copy` if read in a copy of its family the loader
+    /// loaded.
+    HistoryRead {
+        thread: ThreadId,
+        whole: Option<Box<crate::history::WholeRead>>,
+        copy: bool,
     },
     /// Paths in a checkout may have changed, as the watcher noticed at
     /// `noticed`; `settled` once the agents' transcripts have had time to

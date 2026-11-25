@@ -1,9 +1,10 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use silt_store::Store;
 use silt_types::ActorId;
@@ -21,6 +22,9 @@ const TAIL_INTERVAL: Duration = Duration::from_millis(300);
 /// cost nothing.
 const IDLE_TICK: Duration = Duration::from_secs(2);
 const SHUTDOWN_REPLY_WAIT: Duration = Duration::from_secs(2);
+/// How long one event may hold the core before it's logged: every other
+/// event waits behind it, a thread being opened in the web UI too.
+const SLOW_EVENT: Duration = Duration::from_millis(250);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -120,6 +124,8 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     });
 
     while let Some(event) = inbox.recv().await {
+        let began = Instant::now();
+        let what = label(&event);
         idle.store(core.idle(), Ordering::Relaxed);
         let _turn = capture_lock.turn().await?;
         if let Err(error) = core.catch_up_with_store().await {
@@ -147,7 +153,8 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
             }
             Event::Request(request, reply) => core.request(request, reply).await,
             Event::Changed { checkout, paths, noticed, settled } => core.changed(checkout, paths, noticed, settled).await,
-            Event::Loaded { family, result, size } => core.loaded(family, *result, size),
+            Event::Loaded { family, result, size, histories } => core.loaded(family, *result, size, histories),
+            Event::HistoryRead { thread, whole, copy } => core.history_read(thread, whole.map(|whole| *whole), copy),
             Event::Digests => core.take_stale_digest().await,
             Event::Tick => {
                 core.tick().await;
@@ -183,10 +190,59 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         if let Err(error) = core.end_turn().await {
             warn!(%error, "could not note what the store holds");
         }
+        let took = began.elapsed();
+        if took >= SLOW_EVENT {
+            warn!(event = %what, ms = took.as_millis(), "an event held the daemon; everything else waited");
+        }
     }
     remove_sockets(socket, data_dir);
     hold_until_exit(lock);
     Ok(())
+}
+
+/// What kind of event it is, to log. Only a request's name: its fields
+/// may hold a secret, or a hook's whole payload.
+fn label(event: &Event) -> String {
+    let name = match event {
+        Event::Request(request, _) => {
+            let mut name = Name(String::new());
+            let _ = write!(name, "{request:?}");
+            return name.0;
+        }
+        Event::Digests => "Digests",
+        Event::Loaded { .. } => "Loaded",
+        Event::HistoryRead { .. } => "HistoryRead (whole)",
+        Event::Changed { paths, .. } => return format!("Changed ({} paths)", paths.len()),
+        Event::Tick => "Tick",
+        Event::Pushed { .. } => "Pushed",
+        Event::Pulled { .. } => "Pulled",
+        Event::Listed { .. } => "Listed",
+        Event::OrgPolicies { .. } => "OrgPolicies",
+        Event::Personal(_) => "Personal",
+        Event::Discovered { .. } => "Discovered",
+        Event::Importing { .. } => "Importing",
+        Event::Snapshotted { .. } => "Snapshotted",
+        Event::Drain { .. } => "Drain",
+        Event::Compact => "Compact",
+        Event::IndexPending => "IndexPending",
+        Event::Acp { .. } => "Acp",
+        Event::AgentProbed { .. } => "AgentProbed",
+        Event::Control(_) => "Control",
+        Event::NotesSettings { .. } => "NotesSettings",
+    };
+    name.to_owned()
+}
+
+/// A value's `Debug` up to its variant's name, and no further: formatting
+/// stops there, so a large request costs nothing to name.
+struct Name(String);
+
+impl std::fmt::Write for Name {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        let end = text.find(|char: char| !char.is_alphanumeric() && char != '_').unwrap_or(text.len());
+        self.0.push_str(&text[..end]);
+        if end < text.len() { Err(std::fmt::Error) } else { Ok(()) }
+    }
 }
 
 /// Keeps the daemon's lock until the process exits. A free lock tells

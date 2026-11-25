@@ -487,6 +487,78 @@ mod tests {
         assert!(core.unless_loading(Event::Request(page(false), reply)).is_none(), "read whole, it waits");
     }
 
+    fn page_asked(cut: bool) -> Request {
+        Request::HistoryRead {
+            thread: THREAD.to_string(),
+            offset: 0,
+            limit: usize::MAX,
+            known: None,
+            cut,
+            tail: Some(50),
+            before: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_history_whose_family_isnt_held_is_read_by_the_loader_with_it() {
+        let (data, _repo, store) = store_with_thread().await;
+        let (mut core, mut inbox) = loaded_core(store, data.path()).await;
+        while inbox.try_recv().is_ok() {}
+        let (reply, _answer) = oneshot::channel();
+        assert!(core.unless_loading(Event::Request(page_asked(true), reply)).is_none(), "it waits for the load");
+        let Some(Event::Loaded { family, result, size, histories }) = inbox.recv().await else {
+            panic!("the loader answers");
+        };
+        assert_eq!(histories.len(), 1, "with the history asked for");
+        core.loaded(family, *result, size, histories);
+        assert!(core.history_kept_now(THREAD), "kept without the core reading it");
+        assert!(matches!(inbox.try_recv(), Ok(Event::Request(Request::HistoryRead { .. }, _))), "the page goes on");
+    }
+
+    #[tokio::test]
+    async fn a_history_not_kept_in_a_family_held_is_read_off_the_core() {
+        let (data, _repo, store) = store_with_thread().await;
+        let (mut core, mut inbox) = loaded_core(store, data.path()).await;
+        core.families.get_mut(&FAMILY).expect("loads").log();
+        while inbox.try_recv().is_ok() {}
+        assert!(core.history_unkept(THREAD));
+        let (reply, _answer) = oneshot::channel();
+        assert!(core.unless_loading(Event::Request(page_asked(true), reply)).is_none(), "it waits for the read");
+        let (reply, _answer) = oneshot::channel();
+        let turns = Event::Request(Request::Turns { thread: THREAD.to_string() }, reply);
+        assert!(core.unless_loading(turns).is_none(), "and so do its turns, read with it");
+        let Some(Event::HistoryRead { thread, whole, copy }) = inbox.recv().await else {
+            panic!("the history is read off the core");
+        };
+        assert!(whole.is_some() && !copy, "on a blocking thread, from its log as held");
+        core.history_read(thread, whole.map(|whole| *whole), copy);
+        assert!(core.history_kept_now(THREAD));
+        let sent = std::iter::from_fn(|| inbox.try_recv().ok()).count();
+        assert_eq!(sent, 2, "both go on");
+        let read_off = core.history_entries(THREAD);
+        core.history_cache.lock().expect("lock").clear();
+        assert_eq!(*core.history_entries(THREAD), *read_off, "as the core reads it");
+    }
+
+    #[tokio::test]
+    async fn a_history_whose_familys_log_was_let_go_of_is_read_by_the_loader_in_a_copy() {
+        let (data, _repo, store) = store_with_thread().await;
+        let (mut core, mut inbox) = loaded_core(store, data.path()).await;
+        core.families.get_mut(&FAMILY).expect("loads").log();
+        core.release_log(FAMILY).await;
+        while inbox.try_recv().is_ok() {}
+        let (reply, _answer) = oneshot::channel();
+        assert!(core.unless_loading(Event::Request(page_asked(true), reply)).is_none(), "it waits for the read");
+        let Some(Event::HistoryRead { thread, whole, copy }) = inbox.recv().await else {
+            panic!("the history is read off the core");
+        };
+        assert!(copy && whole.is_some(), "by the loader");
+        core.history_read(thread, whole.map(|whole| *whole), copy);
+        assert!(core.history_kept_now(THREAD));
+        assert!(!core.families.loaded(&FAMILY).expect("held").log_decoded(), "the log stays let go of");
+        assert!(matches!(inbox.try_recv(), Ok(Event::Request(Request::HistoryRead { .. }, _))), "the page goes on");
+    }
+
     #[tokio::test]
     async fn families_are_let_go_of_over_budget_unless_in_use() {
         let (data, _repo, store) = store_with_thread().await;
@@ -515,10 +587,10 @@ mod tests {
         let again = Event::Request(Request::Show { thread: THREAD.to_string()[..12].to_owned() }, reply);
         assert!(core.unless_loading(again).is_none(), "and so does what comes after for the family");
         assert!(!core.families.is_loaded(&FAMILY));
-        let Some(Event::Loaded { family, result, size }) = inbox.recv().await else {
+        let Some(Event::Loaded { family, result, size, histories }) = inbox.recv().await else {
             panic!("the loader answers");
         };
-        core.loaded(family, *result, size);
+        core.loaded(family, *result, size, histories);
         assert!(core.families.is_loaded(&FAMILY));
         let stored = core.store.family_size(FAMILY).await.expect("sized");
         assert_eq!(core.families.size(&FAMILY), Some(stored), "its size came with it, for the tick not to ask");

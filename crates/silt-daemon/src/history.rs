@@ -89,6 +89,8 @@ impl KeptHistory {
 pub(crate) struct Kept {
     history: KeptHistory,
     reading: Reading,
+    /// When it was last read, so the least recently read goes first.
+    used: std::time::Instant,
 }
 
 #[derive(Default)]
@@ -180,6 +182,78 @@ pub(crate) struct PageAsked {
     pub(crate) before: Option<usize>,
 }
 
+/// A thread's history read whole off the core, at `version` of its family's
+/// log: by the loader, with the family it loaded, or on a blocking thread.
+pub(crate) struct WholeRead {
+    pub(crate) thread: ThreadId,
+    version: usize,
+    read: Read,
+    reading: Reading,
+}
+
+impl WholeRead {
+    /// The length of the family's log it was read at.
+    pub(crate) fn version(&self) -> usize {
+        self.version
+    }
+}
+
+impl std::fmt::Debug for WholeRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WholeRead").field("thread", &self.thread).field("version", &self.version).finish_non_exhaustive()
+    }
+}
+
+/// A history's items, each delta with where it came from and whether a rewind
+/// left it behind.
+type Items<'a> = Vec<(&'a Delta, HistorySource, bool)>;
+
+fn read_items<'a>(items: impl IntoIterator<Item = (&'a Delta, HistorySource, bool)>) -> (Read, Reading) {
+    let mut read = Read::default();
+    let mut reading = Reading::default();
+    for (delta, source, rewound) in items {
+        read.push(&mut reading, delta, source, rewound);
+    }
+    (read, reading)
+}
+
+/// `thread`'s history in `family`, read whole, as the loader reads it in a
+/// family it just loaded, before the core holds it.
+pub(crate) fn read_whole(family: &Family, thread: ThreadId) -> WholeRead {
+    let items = family.history(thread).into_iter().map(|item| (item.delta, item.source, item.rewound));
+    let (read, reading) = read_items(items);
+    WholeRead { thread, version: family.log_len(), read, reading }
+}
+
+/// A history's items, cloned off the family, to read whole on a blocking
+/// thread.
+pub(crate) struct ToRead {
+    thread: ThreadId,
+    version: usize,
+    items: Vec<(Delta, HistorySource, bool)>,
+}
+
+impl ToRead {
+    pub(crate) fn read(self) -> WholeRead {
+        let (read, reading) = read_items(self.items.iter().map(|(delta, source, rewound)| (delta, *source, *rewound)));
+        WholeRead { thread: self.thread, version: self.version, read, reading }
+    }
+}
+
+/// Keeps `history`, letting go of the least recently read when too many are
+/// kept: clearing them all made switching back to any thread read its whole
+/// history again.
+fn keep(cache: &mut HashMap<ThreadId, Kept>, thread: ThreadId, history: KeptHistory, reading: Reading) {
+    cache.remove(&thread);
+    while cache.len() >= HISTORIES_KEPT {
+        let Some(oldest) = cache.iter().min_by_key(|(_, kept)| kept.used).map(|(thread, _)| *thread) else {
+            break;
+        };
+        cache.remove(&oldest);
+    }
+    cache.insert(thread, Kept { history, reading, used: std::time::Instant::now() });
+}
+
 impl Core {
     /// The thread's history as numbered entries, with the delta each came
     /// from. Works for threads only known from the server too. Kept until
@@ -198,6 +272,7 @@ impl Core {
         let length = self.local_log_len(family);
         let mut cache = self.history_cache.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(kept) = cache.get_mut(&thread) {
+            kept.used = std::time::Instant::now();
             if kept.history.version == length {
                 return kept.history.clone();
             }
@@ -223,16 +298,53 @@ impl Core {
                 return history.clone();
             }
         }
-        let (read, reading) = self.read_history(thread);
+        let (read, reading) = read_items(self.history_items(thread));
         let history = match cache.remove(&thread) {
             Some(before) => before.history.grown(length, read),
             None => KeptHistory::new(length, read),
         };
-        if cache.len() >= HISTORIES_KEPT {
-            cache.clear();
-        }
-        cache.insert(thread, Kept { history: history.clone(), reading });
+        keep(&mut cache, thread, history.clone(), reading);
         history
+    }
+
+    /// Whether reading the thread's history now would read it whole: it
+    /// isn't kept, or what its family's log added since changed what came
+    /// before. Only for a family held, whose log is read here.
+    pub(crate) fn history_unkept(&self, thread: ThreadId) -> bool {
+        let family = self.threads[&thread].family;
+        let length = self.local_log_len(family);
+        let cache = self.history_cache.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(kept) = cache.get(&thread) else {
+            return true;
+        };
+        let version = kept.history.version;
+        version != length
+            && (length < version || self.log_since(family, version).and_then(|added| only_appended(added, thread)).is_none())
+    }
+
+    /// The thread's history, cloned as it is now, to read whole off the core.
+    pub(crate) fn history_to_read(&self, thread: ThreadId) -> ToRead {
+        let version = self.local_log_len(self.threads[&thread].family);
+        let items = self.history_items(thread).into_iter().map(|(delta, source, rewound)| (delta.clone(), source, rewound));
+        ToRead { thread, version, items: items.collect() }
+    }
+
+    /// Keeps a history read whole off the core, unless what's kept is as
+    /// new; what the log added since is read on from it when next asked.
+    pub(crate) fn take_whole(&self, whole: WholeRead) {
+        let WholeRead { thread, version, read, reading } = whole;
+        if !self.threads.contains_key(&thread) {
+            return;
+        }
+        let mut cache = self.history_cache.lock().unwrap_or_else(PoisonError::into_inner);
+        if cache.get(&thread).is_some_and(|kept| kept.history.version >= version) {
+            return;
+        }
+        let history = match cache.remove(&thread) {
+            Some(before) => before.history.grown(version, read),
+            None => KeptHistory::new(version, read),
+        };
+        keep(&mut cache, thread, history, reading);
     }
 
     /// Whether the thread's history is kept as its family's log is now.
@@ -282,10 +394,10 @@ impl Core {
         self.local_log(family).iter().find(|delta| delta.span.first() == id).cloned()
     }
 
-    /// The thread's history read whole, and what reading on from it needs.
-    fn read_history(&self, thread: ThreadId) -> (Read, Reading) {
+    /// What the thread's history is read from, whole.
+    fn history_items(&self, thread: ThreadId) -> Items<'_> {
         let family_id = self.threads[&thread].family;
-        let items: Vec<(&Delta, HistorySource, bool)> = match self.families.get(&family_id) {
+        match self.families.get(&family_id) {
             Some(family) => family.history(thread).into_iter().map(|item| (item.delta, item.source, item.rewound)).collect(),
             None => {
                 let log = self.local_log(family_id);
@@ -295,13 +407,7 @@ impl Core {
                     .map(|delta| (delta, HistorySource::Own, rewound.contains(&delta.span.first())))
                     .collect()
             }
-        };
-        let mut read = Read::default();
-        let mut reading = Reading::default();
-        for (delta, source, rewound) in items {
-            read.push(&mut reading, delta, source, rewound);
         }
-        (read, reading)
     }
 
     /// `entries` whole, as they were recorded, rather than cut: each read
@@ -944,6 +1050,21 @@ mod tests {
         assert_eq!(kept.same_before(5), 1, "the version before the oldest change kept");
     }
 
+    #[test]
+    fn the_least_recently_read_history_is_let_go_of_first() {
+        let mut cache = HashMap::new();
+        let threads: Vec<ThreadId> = (0..=HISTORIES_KEPT as u128).map(ThreadId).collect();
+        for thread in &threads[..HISTORIES_KEPT] {
+            keep(&mut cache, *thread, KeptHistory::new(1, entries(&["a"])), Reading::default());
+        }
+        cache.get_mut(&threads[0]).expect("kept").used = std::time::Instant::now();
+        keep(&mut cache, threads[HISTORIES_KEPT], KeptHistory::new(1, entries(&["a"])), Reading::default());
+        assert_eq!(cache.len(), HISTORIES_KEPT);
+        assert!(cache.contains_key(&threads[0]), "read again lately, it stays");
+        assert!(!cache.contains_key(&threads[1]), "read least lately, it goes");
+        assert!(threads[2..].iter().all(|thread| cache.contains_key(thread)), "the others stay");
+    }
+
     mod read_on {
         use std::process::Command;
 
@@ -1003,7 +1124,7 @@ mod tests {
         }
 
         fn read_again(core: &Core) -> Read {
-            core.read_history(THREAD).0
+            read_items(core.history_items(THREAD)).0
         }
 
         #[tokio::test]
