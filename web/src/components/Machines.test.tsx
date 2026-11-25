@@ -62,7 +62,7 @@ test('adding a machine checks the form, then shows each step of its test, and wh
   report({
     ...fields,
     steps: [
-      { state: 'done', text: 'Signed in to `vps.example.com` as `urcra`' },
+      { state: 'done', text: 'Signed in to `vps.example.com` as `me`' },
       { state: 'failed', text: '`silt` isn’t installed on `vps.example.com`.' },
     ],
     done: true,
@@ -108,14 +108,14 @@ test('the form refuses what the desktop app would', () => {
   expect(machineProblem({ ...ok, name: 'home gpü' }, [])).toBeUndefined()
   expect(machineProblem(ok, ['vps'])).toBe('Another machine has this name')
   expect(machineProblem({ ...ok, name: 'a/b' }, [])).toMatch(/letters, digits/)
-  expect(machineProblem({ ...ok, destination: 'urcra@-oProxyCommand=x' }, [])).toMatch(/user@host/)
+  expect(machineProblem({ ...ok, destination: 'me@-oProxyCommand=x' }, [])).toMatch(/user@host/)
   expect(machineProblem({ ...ok, destination: 'a b' }, [])).toMatch(/user@host/)
   expect(machineProblem({ ...ok, port: '0x16' }, [])).toMatch(/port/)
   expect(machineProblem({ ...ok, port: '2222' }, [])).toBeUndefined()
 })
 
 const fields = { name: 'vps', destination: 'me@vps.example.com', port: null }
-const signedIn = { state: 'done', text: 'Signed in to `vps.example.com` as `urcra`' } as const
+const signedIn = { state: 'done', text: 'Signed in to `vps.example.com` as `me`' } as const
 
 test('a machine without silt can have it installed while it’s added, and trying again repeats the install', () => {
   show([THIS], 'native')
