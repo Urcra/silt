@@ -268,7 +268,7 @@ interface SiltDb {
 }
 
 // ---------------------------------------------------------------------------
-// artifact: declare `{"artifact": {}}`. There's no `self` alias.
+// artifact: declare `{"artifact": {}}`.
 
 /**
  * A page that saves itself as the next version. Nothing a viewer does is

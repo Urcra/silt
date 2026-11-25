@@ -1,0 +1,201 @@
+# How Silt is built
+
+This is the system as it is built, for people working on Silt and for agents starting a session on it. Each part links the decision record (ADR) behind it; [docs/adr](https://github.com/Urcra/silt/tree/main/docs/adr) has them all. How to build, test and change it is in [Contributing](contributing.md).
+
+## The words
+- **Thread:** one line of work, its code and its conversation, usually one agent session.
+- **Family:** a thread and every fork of it. A family shares one log, one causal graph of deltas, so forks, pulls and merges are operations within it ([ADR 0008](adr/0008-local-capture-architecture.md), [ADR 0010](adr/0010-forks-pulls-and-merge-requests.md)).
+- **Delta:** one entry of the log: a span of ids, its parents, its author and time, and an operation. The operations cover the file tree, a file's text, binary content, the conversation, git commits, forks and merges, merge requests and comments.
+- **Checkout:** a thread's files on disk. It's either a managed checkout under `<repo>/.silt/checkouts/<thread>`, sharing the clone's objects, or the clone itself with `--here` ([ADR 0002](adr/0002-git-strategy.md)).
+- **Lease:** which device works in a thread right now. Only one does; the others fork ([ADR 0009](adr/0009-sync-and-handoff.md)).
+- **Home:** the one server a family syncs with, or this machine only ([ADR 0032](adr/0032-several-servers-and-local-projects.md)).
+- **Workspace:** a set of projects with one server (or none), defaults for new threads, and rules for agents started in it, some of them set by an org ([ADR 0065](adr/0065-workspaces.md)).
+- **Project:** what a clone belongs to: its `origin` as `silt_git::normalize_remote` reduces it, or without one the clone's own folder ([ADR 0023](adr/0023-projects.md), [ADR 0053](adr/0053-projects-without-a-remote.md)).
+- **Chat:** a thread of no project, in the reserved `silt:chats`. It works in a folder of its own, a repository whose first commit is the same on every machine, so it resumes and forks anywhere; no org holds it, so it's its person's alone ([ADR 0059](adr/0059-chats-without-a-project.md)).
+
+## The pieces
+One binary, `silt`, holds all of it ([ADR 0004](adr/0004-crate-boundaries.md)):
+- **The CLI.** It wraps agent CLIs (`silt claude`, `silt codex`…), resumes and forks threads, and asks the daemon for everything else over a Unix socket.
+- **The daemon** (`silt daemon run`, started on demand). It owns this machine's replica:
+  - the store;
+  - the checkout watchers and session tailers;
+  - sync with each server;
+  - the ACP agents started from the web UI;
+  - the local web UI on `127.0.0.1`;
+  - when the person turns it on, the same UI for paired phones on the local network (`lan/`, [ADR 0112](adr/0112-phones-on-the-local-network.md)). A second listener on every interface, HTTPS only, shows a certificate signed by a certificate authority of the machine's own, name-constrained to its own `silt-<host>-<suffix>.local` name and private addresses (`lan/certs.rs`); the name and port, kept in `lan/config.json`, stay once phones know them; a plain-HTTP port beside it serves only that authority, which a phone may also pair without, going on past its warning ([ADR 0113](adr/0113-pairing-a-phone-without-its-certificate.md)). Phones pair with a one-time code the person allows on the machine (`lan/phones.rs`), and each request of theirs carries a session cookie and is checked against the phone's capabilities before it reaches the core (`lan/needs.rs`, every `Request` placed); without a phone behind it, a request there is refused. mDNS answers for that name, and the daemon pushes to phones itself with a VAPID key of its own (`lan/push.rs`).
+  Recording doesn't need it ([ADR 0018](adr/0018-daemon-optional-capture.md)).
+  It holds a family only while it's used ([ADR 0116](adr/0116-memory-that-follows-the-work.md)):
+  - `Families` loads one when something reads it: ahead, on the loader's thread, for a request or a watcher's change that names it (`loading.rs`), and otherwise there while the reader waits;
+  - it lets go of one unused for 30 minutes, or the least recently used while those held take more than `SILT_FAMILY_BUDGET_MB` as the store holds them, unless an agent works in it or it has deltas its server lacks (`memory.rs`);
+  - the views across families read a family not held from its digest, taken from it by those views' own code just before it was let go of and kept in `family_digests` (`digest.rs`);
+  - inside a family held, a file's state is decoded when first read and let go of after 5 minutes unused, from `files/`, and so is its log;
+  - a viewed thread's history is read on from where it was, cut, with its turns (`history.rs`), and the thread list's summaries and the merge requests are folded on from what the log added (`views.rs`), so an agent working in a family doesn't read its log back ([ADR 0117](adr/0117-conversations-open-at-their-end.md));
+  - a page of history can ask for the last turns (`tail`, `before`), with the news of tasks before it, both here and on the server: the web UI opens a thread at its end and reads earlier pages as the person scrolls up (`web/src/historyLoad.ts`).
+- **The server** (`silt server run`), self-hosted. It's a full replica of every family it's sent. It holds:
+  - accounts, orgs and teams, and sign-in ([ADR 0013](adr/0013-accounts-orgs-and-self-hosting.md));
+  - search, the inbox and per-person state ([ADR 0024](adr/0024-per-person-state.md));
+  - a git mirror for commits origin doesn't have;
+  - the hosted web app at `/app/` ([ADR 0026](adr/0026-hosted-mode-and-remote-control.md)).
+- **The desktop app** (`crates/silt-desktop`, Tauri 2), its own workspace. It runs `silt open --no-browser`, which finds or starts the daemon, and shows its web UI in a window; closing the window leaves the daemon running ([ADR 0041](adr/0041-the-desktop-app.md)). In the sidebar's machine menu it also shows each WSL distribution's daemon ([ADR 0045](adr/0045-windows-natively-and-in-wsl.md)) and other computers' over SSH: `machines.rs` holds the pure part (a machine and its checks, the `ssh` command lines, the probe, a test's steps and what a failure says) and `ssh.rs` the registry, which runs the system's `ssh` and keeps each machine's tunnel forwarding its daemon's port to the same one here ([ADR 0108](adr/0108-machines-over-ssh.md)). It also puts this computer's `silt` on a machine that lacks it or runs another build: copied over `ssh`'s stdin when the OS and CPU match, and checked there before it's renamed into place; otherwise it says how to build Silt there ([ADR 0109](adr/0109-installing-and-updating-silt-over-ssh.md)).
+- **Plugins** (`plugins/`), its own workspace built for `wasm32-wasip2`: the plugins shipped with Silt and the probe its plugin host is tested with ([ADR 0104](adr/0104-one-plugin-model.md)). Each is a WebAssembly component run by `silt-plugin-host` in the daemon, with only the capabilities its manifest declares and the person granted. Folders (`plugins/folders`) lets an agent ask for a folder of this machine on the `reach` capability: the workspace's folder rules (`silt_workspace::FolderRule`) answer first, a grant is kept in `reach/<thread>.json` for the run or the thread, and the agent is restarted in a sandbox with it when its turn ends, its session resumed, by the daemon for an ACP run and by `silt claude`'s wrapper for a terminal's ([ADR 0102](adr/0102-agents-ask-for-folders.md)). GitHub (`plugins/github`) clones from mirrors Silt keeps and pushes exactly the approved commit with a lease ([ADR 0103](adr/0103-the-github-plugin.md)); GraphQL API, SSH commands, Local MCP and Remote MCP are the others. Other people's plugins come from git: `silt_daemon::plugins::install` clones one with the person's own sign-in, shows what it gets, and builds it offline in bubblewrap; `plugins::updates` offers a newer tag or branch commit, saying what it adds, and updates only with agreement. Until the marketplace ([ADR 0105](adr/0105-the-plugin-marketplace.md), M35), git is how they're shared.
+- **Templates** (`templates/plugin/`): a plugin to start one from, with its tests on `silt-plugin-test`; a test builds it against this repository's SDK so it keeps working.
+- **The speech helper** (`crates/silt-voice`), its own workspace as it links the speech engine's native library. The daemon runs it once per dictation, passing it audio from the web UI on stdin and the words it hears back over a WebSocket ([ADR 0061](adr/0061-dictation-on-this-machine.md)).
+- **Local models** (`crates/silt-llm`). The daemon runs llama.cpp's `llama-server` as a program, one model at a time, and downloads models only when the person asks for one, each file checked against a pinned SHA-256. Agents reach a model only through the daemon's model gateway on loopback, with their run's token; it loads the model a request names, swaps models between requests, and stops the server once idle. Silt's own agent, `local` (`crates/silt-local`), talks to it over ACP like any agent ([ADR 0092](adr/0092-local-models.md)).
+- **The web UI** (`web/`, React). It's embedded in the binary and served by both: the daemon at `/`, the server at `/app/`, with the same client code against either API. It holds a WASM replica of a thread's family for live editing ([ADR 0014](adr/0014-live-collaboration-and-silt-driven-agents.md)), and hears changes over one WebSocket ([ADR 0021](adr/0021-browser-event-bus.md)).
+- **Agents.**
+  - **Agent CLIs** run in the person's terminal, with Silt recording underneath through their hooks and session files ([ADR 0007](adr/0007-agent-session-capture.md), [ADR 0012](adr/0012-agent-adapters-and-repo-conventions.md)).
+  - **ACP agents** are started by the daemon from the web UI ([ADR 0017](adr/0017-acp-agents-only.md), [ADR 0022](adr/0022-agent-runtime.md)).
+  - Either kind gets Silt's history tools over MCP, from `silt mcp` ([ADR 0011](adr/0011-history-tools-search-and-web-ui.md)).
+  - **Silt's sandbox** ([ADR 0093](adr/0093-silt-sandboxes-the-agents-it-starts.md)). Where a workspace's rules turn it on (`Policy::silt_sandbox`, [ADR 0094](adr/0094-silt-s-sandbox-is-its-own-rule.md)), the CLI and the daemon refuse to start the agent if this machine can't make one (`silt_daemon::sandbox::unavailable`), and otherwise write a plan (`silt_daemon::sandbox::prepare`) and start the agent through `silt sandbox-run`, which runs bubblewrap, under pasta for full internet. Inside, hooks and `silt mcp` reach the daemon only through `agents.sock`, which answers only requests carrying the run's token (`SILT_RUN_SOCKET`, `SILT_RUN_TOKEN`). The run's gateway and the ports it's handed answer outside, and `silt sandbox-init` relays them to the sandbox's own `127.0.0.1`. The plan's mounts go in order, a later one over an earlier: the system and toolchains read-only, the checkout, git dir and agent's homes writable, then what stays read-only on top, `.git` itself as a mount point, its `config`, `hooks` and `commondir` (`git_protect`), `.silt`, and the agent's run-defining files (`Agent::read_only_home`); its sign-in is hidden (`Agent::sign_in`), and other projects' state hidden but for its own (`Agent::project_state`). Only an allowlist of the launching shell's variables goes in (`keeps`); what Silt, the adapter and the workspace set pass as `Run::given`. What it guards against, an eager agent rather than an adversary, is [ADR 0106](adr/0106-silt-s-sandbox-guards-against-an-eager-agent.md).
+  - An agent the daemon runs for the web UI also gets `silt_show` and `silt_artifact` (`silt mcp --ui`). The daemon keeps what they show as blobs beside the run's session, named by artifact records in its transcript, and serves them to both serving modes by blob ([ADR 0068](adr/0068-artifacts.md)).
+  - Such a run also gets `silt_artifact_guide` and Silt's built-in skills (`artifact-design`, `artifact-dataviz`, `artifact-diagramming`, `design-system`). They're kept in `silt-agents/skills/`, written once per content under `skills/builtin/` in the data dir, and found after the repository's and the person's. The guide gives the design guidance and the design system that applies, with its components' markup; with none, it says to match the project's product or choose a look. An HTML version's record names its design system and the blob of the CSS its tokens and `components.css` compiled to, kept beside the session too. The web UI and the server's link pages put that CSS in the frame ahead of the page ([ADR 0071](adr/0071-artifact-design-guidance-design-systems-and-libraries.md), [ADR 0086](adr/0086-design-systems-components.md)). Settings › Design systems lists every system with what picks it, and shows one with its components drawn in sealed frames from the same compiled CSS (`/api/design-systems/*`, `design_pages.rs`). New design system and Change it with an agent start a thread whose first prompt names what to build from and where, leaving the how to the `design-system` skill; the daemon keeps which thread makes which system in `design-system-threads.json`, and the thread's panel shows the system as it's written ([ADR 0088](adr/0088-design-systems-in-settings.md)). A thread that loads the `design-system` skill itself is noted in `design-skill-threads.json`, with the time, and its panel shows the system in its folder or the person's written last since then; a chat's shows the one its own folder holds. The catalog lists chats' folders' systems too, and Keep as mine copies one to the person's own, as a synced copy holds it ([ADR 0096](adr/0096-design-systems-made-in-a-thread-or-a-chat.md)).
+
+## The crates
+Arrows point at what a crate depends on. The pure crates do no I/O and build for `wasm32`; the gate checks it. They hold the logic, and the shell crates around them do the I/O ("functional core, imperative shell").
+
+| Crate | Job | Depends on |
+|---|---|---|
+| **Pure** | | |
+| `silt-types` | Ids and newtypes: actors, delta ids, frontiers | none |
+| `silt-sumtree` | The persistent B-tree with summaries, vendored from Zed | none |
+| `silt-crdt` | The Eg-walker-style text CRDT: fragments, anchors, attribution, the causal graph | sumtree, types |
+| `silt-log` | Deltas and their operations, and the family as a pure projection of its log: files, conversations, turns, commits, each line's origin, git notes, snapshots and purging | crdt, types |
+| `silt-checkout` | Between disk and a thread's tree: diffing, importing, which paths may be written ([ADR 0016](adr/0016-untrusted-peer-content.md)) | crdt, log, types |
+| `silt-sync` | Sans-I/O sync: `ClientSync` per family on a device, `Room` per family on the server | crdt, log, types |
+| `silt-proto` | The sync API's JSON bodies and its `PROTOCOL` version; the views both serving modes answer with | log, types |
+| `silt-wasm` | The browser's replica of one family | checkout, log, types |
+| `silt-workspace` | Workspaces: the projects each matches, its server, defaults and rules; the rules' stricter merge and the checks that refuse a start ([ADR 0065](adr/0065-workspaces.md)); what a sandbox reaches and the mounts that make it ([ADR 0093](adr/0093-silt-sandboxes-the-agents-it-starts.md)) | none |
+| `silt-design` | Design systems: `tokens.json` read and checked and `components.css` checked, compiled to the CSS an artifact's frame gets; components' examples within their limits. Silt ships no system; its own, Nous, is in this repository's `.silt/design-systems/` ([ADR 0071](adr/0071-artifact-design-guidance-design-systems-and-libraries.md), [ADR 0086](adr/0086-design-systems-components.md), [ADR 0087](adr/0087-no-built-in-design-systems.md)) | none |
+| `silt-theme` | Themes for Silt's UI: the format read leniently, what a theme leaves out derived in OKLab with text solved to 4.5:1, a light and a dark theme compiled to the CSS the page gets after `nous.css`, contrast checks, the JSON Schema, and VS Code and Zed themes imported; Nous and the bundled themes are in its `themes/` ([ADR 0098](adr/0098-themes-for-silts-ui.md)) | design |
+| `silt-sheet` | Sheets' formulas: parsing, references kept by rows' and columns' ids so they follow their cells, and evaluation with cycles as errors, alike on every surface ([ADR 0077](adr/0077-docs-and-sheets-edited-together.md)) | none |
+| `silt-access` | What reaches a sandboxed agent from a plugin: GraphQL documents classified as reads or changes, the canonical request an approval is bound to by its hash and shown with what hides meaning made visible, and the data rules' detectors, location first ([ADR 0093](adr/0093-silt-sandboxes-the-agents-it-starts.md)) | none |
+| `silt-plugin` | Plugins' rules of the game ([ADR 0104](adr/0104-one-plugin-model.md)): `silt-plugin.toml` and its validation, the cards plugins describe, the effects they declare and the ledger that lets only approved ones through, the prepared call an approval is bound to by its hash, and the rules (allowed, asked, never) that decide each call | none |
+| `silt-plugin-api` | The SDK for plugins written in Rust: the `silt:plugin@1` WIT world (`wit/world.wit`), typed, a `Plugin` trait and its `export!` | none (built for `wasm32-wasip2` by plugins) |
+| **Shell** | | |
+| `silt-vendor` | Fetches and keeps the pinned CDN files an artifact's frame loads through Silt, for the daemon's and the server's `/vendor/` ([ADR 0071](adr/0071-artifact-design-guidance-design-systems-and-libraries.md)) | design |
+| `silt-media` | What an image or a video is by its first bytes, images' 960 and 2048 px previews, and a blob served whole or by range, for the daemon and the server ([ADR 0121](adr/0121-videos-and-images-without-a-size-limit.md)) | none |
+| `silt-os` | What each operating system does its own way: private files, detached processes, links, finding programs, file systems to poll, WSL paths, the machine's processes, and Windows' control pipe ([ADR 0045](adr/0045-windows-natively-and-in-wsl.md)); Linux's sandbox: bubblewrap's arguments, pasta's, the routes full internet never takes, and the seccomp filter ([ADR 0093](adr/0093-silt-sandboxes-the-agents-it-starts.md)); the only crate allowed `unsafe`, for Win32 | workspace |
+| `silt-update` | Which build this is and whether a newer one is out ([ADR 0100](adr/0100-update-channels.md)): the commit, branch, clone and channel its build script bakes in (shared with `silt-desktop`'s), checking a nightly build's clone with `git` and a stable one's release, an update's steps as named from the lines `just` echoes, and the `state.json` its runner writes | os |
+| `silt-redact` | Secrets taken out of what leaves the machine ([ADR 0015](adr/0015-secret-overlay.md), [ADR 0019](adr/0019-redact-to-gits-threat-model.md)) | log |
+| `silt-git` | Repositories: reads with gix, writes with the `git` CLI, managed checkouts, `refs/notes/silt` and `git blame` | os, types |
+| `silt-agents` | One adapter per agent CLI: find, tail and normalize its session files, restore them elsewhere, translate between agents; an agent's own sign-in, run in a pseudo-terminal ([ADR 0056](adr/0056-signing-an-agent-in-from-the-web-ui.md)); what to ask for an agent's plan usage, and reading the answers (`usage`, [ADR 0095](adr/0095-an-agent-s-plan-usage-in-the-composer.md)); Qudiks, a Codex fork, through Codex's adapter with its own command and home; Antigravity's conversation index read with `rusqlite` ([ADR 0125](adr/0125-antigravity-resumes-from-its-own-store.md)) | os |
+| `silt-gateway` | The gateway a sandboxed agent's HTTP(S) leaves through: a proxy on the run's socket that refuses what its rules don't allow, passes the rest through unread, and reads requests to hosts it holds a credential for to add it, signing their certificates with an authority kept on the machine ([ADR 0093](adr/0093-silt-sandboxes-the-agents-it-starts.md)) | os, workspace |
+| `silt-forge` | The forges' APIs (GitHub, GitLab, Forgejo) as requests to make and answers to read, with no I/O: the forge bridge sends them, and GitHub's plugin builds its URLs with them ([ADR 0042](adr/0042-git-and-forge-interop.md), [ADR 0103](adr/0103-the-github-plugin.md)) | pure |
+| `silt-shipped` | The plugins shipped with Silt, built from `plugins/` by its build script and embedded: each one's manifest, README and component, put in place by the daemon as it starts ([ADR 0104](adr/0104-one-plugin-model.md)) | plugins |
+| `silt-plugin-test` | A stand-in for the plugin host, for a plugin's tests: it loads the component as Silt does, with what its manifest declares, answers its HTTP from the test and records every request ([ADR 0104](adr/0104-one-plugin-model.md)) | plugin host |
+| `silt-plugin-host` | Runs plugins ([ADR 0104](adr/0104-one-plugin-model.md)): WebAssembly components on wasmtime, each call in a fresh instance with its own data folder and nothing else of the machine, limits on memory, time and answers, only the `silt:plugin` interfaces it was granted, only looking while it prepares a call and only the approved effects while it runs one; the daemon does the capabilities' work behind `Capabilities` | plugin |
+| `silt-llm` | Local models: finding them on Hugging Face, a GGUF file's header, what fits this machine and the context that does, checked downloads that resume, the models on disk, fetching llama.cpp's release, which model `llama-server` holds, and running it ([ADR 0092](adr/0092-local-models.md)) | os |
+| `silt-local` | Silt's own agent, `local`, which `silt agent local` serves over ACP: a conversation with a local model through the daemon's gateway, kept in a session file of its own so it loads again, and compacted as it nears the model's context ([ADR 0092](adr/0092-local-models.md)) | none |
+| `silt-acp` | Hosting ACP agents: the registry, starting one, relaying its session in ACP v2 where the agent answers it and v1 otherwise, as the same events ([ADR 0050](adr/0050-acp-v2-and-turns-the-agent-opens.md)); the sign-in methods an agent lists, and its needing one ([ADR 0056](adr/0056-signing-an-agent-in-from-the-web-ui.md)); ending an agent's processes, or one background command among them ([ADR 0057](adr/0057-silt-ends-what-agents-leave-running.md)); adding a steer to the running turn over `_session/steering`, for an agent whose `initialize` advertises it ([ADR 0111](adr/0111-steering-without-stopping.md)) | os |
+| `silt-mcp` | The MCP server on stdio, behind a `Backend` trait | none |
+| `silt-store` | The local SQLite log, outbox, snapshots and search index, and the blob store; owns its migrations | log, types |
+| **Wiring** | | |
+| `silt-web` | The web UI from `web/dist`, embedded once for the daemon and the server; its `build.rs` builds it when a checkout has none, as under `cargo install` ([ADR 0043](adr/0043-history-from-day-one.md)) | none |
+| `silt-daemon` | Everything a machine does: capture, watchers, sync, the control channel, ACP agents, the local web API, agents' plan usage (`usage.rs`, [ADR 0095](adr/0095-an-agent-s-plan-usage-in-the-composer.md)), phones on the local network (`lan/`, [ADR 0112](adr/0112-phones-on-the-local-network.md)) | most of the above |
+| `silt-server` | The sync server, accounts, the git mirror, the hosted app's API, the forge bridge and the Agent SDK session store; never checkouts or agents | agents, crdt, log, os, proto, redact, store, sync, types |
+| `silt-cli` | The `silt` binary: daemon, server and CLI in one, and `silt update`'s runner | agents, daemon, git, mcp, os, proto, redact, server, update |
+| `silt-desktop` | The desktop app, its own workspace as it needs WebKitGTK ([ADR 0041](adr/0041-the-desktop-app.md)); runs `silt` rather than linking it, natively, in a WSL distribution through `wsl.exe` ([ADR 0045](adr/0045-windows-natively-and-in-wsl.md)), or on another computer through `ssh` ([ADR 0108](adr/0108-machines-over-ssh.md)) | none |
+| `silt-voice` | The speech helper, its own workspace as it links sherpa-onnx's native library: live dictation from audio on stdin, and the models' checked download ([ADR 0061](adr/0061-dictation-on-this-machine.md)) | none |
+| **Tools** | | |
+| `silt-fake-agent` | A scripted ACP agent for tests, and `silt-fake-claude`, the Claude Code stand-in of the multi-machine tests, and `silt-fake-voice`, the speech helper's | none |
+| `silt-bench` | The performance budgets ([ADR 0034](adr/0034-performance-budgets.md)) | agents, crdt, daemon, log, os, proto, store, types |
+| `silt-site` | This site, from `docs/` | none |
+| `xtask` | `cargo xtask wasm-bindgen`: `silt-wasm`'s JavaScript bindings, for `web/scripts/build-wasm.sh` (ADR 0097) | none |
+
+Libraries return `thiserror` errors; binaries use `exn`.
+
+## From capture to sync
+1. **Starting.** `silt claude` (or `silt run <agent>`) makes or attaches a thread and runs the agent. It gives the agent hooks that call `silt hook <event>`, Silt's MCP server, and the repository's skills and rules. `silt track` attaches to a session already running ([ADR 0007](adr/0007-agent-session-capture.md)).
+2. **Capturing.** Each hook runs one capture step:
+   - catch the family up with what other writers stored;
+   - tail the session's files from their stored offsets;
+   - compare the checkout with its recorded disk state;
+   - append the turn mark;
+   - commit it all in one transaction.
+
+   The hook boundary decides who an edit is credited to: the tool call, or the person. A tool call during which git moved HEAD, the stash or a merge's heads, or applied a stash, is recorded as git's (`GitOp::Rewrote`), and so are the person's edits between two rescans that found git moved (`GitOp::Made`), so a diff can leave them out ([ADR 0069](adr/0069-git-rewrites-can-be-left-out-of-a-diff.md)). A clone several agents work in has a checkout per thread, and each takes in every edit: the agent's own as `Author::Agent`, another thread's agent's as `Author::Others`, and one nobody can tell apart, while two tools are open, as `Author::Agents` ([ADR 0089](adr/0089-a-checkout-per-thread-in-a-shared-clone.md)). An agent without hooks is stepped every second by the wrapper ([ADR 0018](adr/0018-daemon-optional-capture.md)).
+
+   The same step keeps whether each session's agent is around (`sessions.seen_ms`, `ended_ms`, `idle`, `doing`) and the files it touched. From those, `silt_daemon::peers` tells a starting agent at `SessionStart` who else works in the project, and the others of its arrival. Messages between agents (`silt_message`) wait in `agent_messages` and are handed over at the next `PostToolUse` or prompt ([ADR 0090](adr/0090-agents-aware-of-each-other.md)). An agent asks one on another harness or model with `silt_ask` (`silt_daemon::asks`): the daemon forks the caller's thread, in the caller's working tree or a managed checkout of its own, starts the agent there over ACP with only its prompt, and keeps the ask in `asks.json`. The asked agent's last message is its report, the tool's answer within 50 s, else an `agent_messages` report that wakes an ACP caller ([ADR 0120](adr/0120-agents-ask-other-agents.md)).
+3. **Where it runs.** With a daemon running, `silt hook` forwards the step to it over the socket. Without one, or with `SILT_DAEMONLESS_CAPTURE=1`, it runs the same step in its own process (`silt_daemon::capture_here`). Writers take turns on `capture.lock`. A hook that can't get the lock in time is spooled to `spooled-hooks/`.
+4. **What's stored.** The agent's session lines are kept verbatim (`ConvOp::Native`), and the normalized conversation is computed from them when read. Restore therefore loses nothing, and normalizing can improve without migrating data ([ADR 0008](adr/0008-local-capture-architecture.md)). File edits become tree and text deltas. A subagent's transcript is a side file of the session (`SessionFile::Subagent`). `silt_agents::history::HistoryReader` reads both the daemon's and the server's histories from these lines: it marks a subagent's entries with `side` and ties each subagent to the call that started it. Each adapter turns its agent's news of subagents and background commands into `Entry::Task` ([ADR 0051](adr/0051-subagents-and-background-tasks.md)).
+5. **Pushing.** The daemon drives a `ClientSync` per family against the family's home server, redacting each delta on its way out. Without a daemon, `Stop` or the agent's exit starts `silt sync --once`, which only pushes ([ADR 0009](adr/0009-sync-and-handoff.md)).
+6. **On the server.** Each family is a `Room`. It checks each delta's shape and who may write it ([ADR 0016](adr/0016-untrusted-peer-content.md), [ADR 0014](adr/0014-live-collaboration-and-silt-driven-agents.md)), stores it with a per-family sequence number, and indexes it for search. Other devices pull by that number, filtered to what each person may see ([ADR 0010](adr/0010-forks-pulls-and-merge-requests.md)). Commits origin lacks go to the server's git mirror under `refs/silt/threads/<thread>`.
+7. **Elsewhere.** `silt resume` takes the lease, makes a checkout and restores the agent's own session there. `silt fork` does the same under a new session id. The web UI on any machine reads the same family.
+
+**Outside Silt** ([ADR 0042](adr/0042-git-and-forge-interop.md)), when a project turns it on:
+- **Notes:** the machine that records a commit writes `refs/notes/silt` on it in the checkout, from each line's origin in the text CRDT. It merges them into the clone and, with `push`, into origin. `silt blame` reads the log, or `git blame` and the notes.
+- **Pull requests:** a push that changes a thread's commits, forks, merges or merge requests wakes the server's forge bridge. A few seconds later it edits, or posts, one comment on the pull request from the thread's branch.
+- **Agent SDK sessions:** `/v1/session-store/*` keeps each session as a private thread, written as the person's server actor.
+**Importing** brings in sessions that ran before Silt ([ADR 0043](adr/0043-history-from-day-one.md)). Each adapter's `on_disk` lists the agent's sessions. `silt import` asks the daemon which aren't recorded or imported yet (`imports`), then imports each with a request of its own:
+- a thread in a new family, kept on this machine until `silt send`;
+- a genesis at the commit HEAD was at when the session started, and no files;
+- every line read once, with the times the records carry.
+
+The first resume or fork of such a thread imports the commit's tree before checking it out.
+
+**Remote control** goes the other way ([ADR 0026](adr/0026-hosted-mode-and-remote-control.md)). Each daemon long-polls the server's control channel and reports the agents it runs. The hosted app's prompts, permission answers and stops become commands for the machine running the agent, and that machine checks them again before acting. The inbox and Web Push come from those reports ([ADR 0028](adr/0028-notifications-and-phones.md)).
+
+## Where state lives
+**A machine's data dir** is `$SILT_HOME`, else `$XDG_DATA_HOME/silt`, else `~/.local/share/silt`; on Windows, `%LOCALAPPDATA%\silt\data`, as the desktop app's installer puts the app in `%LOCALAPPDATA%\Silt`, which Windows doesn't tell apart from `%LOCALAPPDATA%\silt`.
+
+| Path | What it is |
+|---|---|
+| `silt.sqlite`, `blobs/` | The store: families, deltas, threads, checkouts and their disk state, sessions and their offsets, the outbox, snapshots, families' digests, the search index, the prompt queue, personal state, homes, imported sessions. Blobs are addressed by BLAKE3 |
+| `files/` | Each file's state as a family's snapshot names it, by BLAKE3, read when the family first reads the file ([ADR 0116](adr/0116-memory-that-follows-the-work.md)). The daemon sweeps the states no snapshot names an hour after it starts, then every six hours, keeping those written in the last hour |
+| `daemon.sock`, `daemon.lock`, `daemon.log` | The resident daemon's socket, lock and log. On Windows the control channel is the named pipe `\\.\pipe\silt-<hash of the data dir>` instead of a socket |
+| `capture.lock`, `recording/`, `spooled-hooks/` | Taking turns at writing, and the hooks waiting for one |
+| `actor` | This replica's actor id |
+| `servers.json` | One sign-in per server, the first being the default |
+| `credentials.json`, `gateway/` | The credentials Silt's gateway adds for each workspace's sandboxed agents, their secrets in the keyring, and the gateway's certificate authority ([ADR 0093](adr/0093-silt-sandboxes-the-agents-it-starts.md)) |
+| `devices/` | The sockets of the adb relays the daemon holds for threads' sandboxes |
+| `access/<thread>.jsonl` | What the gateway let through and refused for a thread's sandboxes, which its Access tab reads |
+| `secrets`, `redaction-key`, `agents.json`, `agent-env` | Extra values to redact, the key their placeholders are made with, your own ACP agents, and the environment variables passed to agents |
+| `acp-registry.json`, `agents/` | The cached ACP registry and the agents downloaded from it |
+| `linked/`, `trusted-prepare` | Shared git-ignored paths per project, and the prepare scripts the person allowed ([ADR 0012](adr/0012-agent-adapters-and-repo-conventions.md)) |
+| `attachments/<thread>/` | Files attached to a thread's prompts that its agent reads from disk rather than in the prompt, such as spreadsheets; Silt's sandbox shows an agent only its own thread's, and erasing the thread removes them |
+| `local/sessions/` | `local`'s conversations, one file each, which it loads again ([ADR 0092](adr/0092-local-models.md)) |
+| `erasing/` | Erasures under way, one marker each listing what goes, finished at the next start if one stopped ([ADR 0092](adr/0092-local-models.md)) |
+| `runtimes/llama.cpp/` | llama.cpp's build, when Silt fetched one ([ADR 0092](adr/0092-local-models.md)) |
+| `models/llm/` | Local models, a directory each with its files and `model.json`; `<id>.partial/` while one downloads ([ADR 0092](adr/0092-local-models.md)) |
+| `plugins/`, `reach/` | Installed plugins, each its manifest, component, README, data and per-thread folders, with `installed.json`, `trusted.json` and `updates.json`, the updates last found for plugins from git; the folders granted to each thread's agents ([ADR 0102](adr/0102-agents-ask-for-folders.md), [ADR 0104](adr/0104-one-plugin-model.md)) |
+| `chats/`, `chats.json` | Chats' folders, each a repository of its own, and where they go and the permissions new ones start with ([ADR 0059](adr/0059-chats-without-a-project.md)) |
+| `design-systems/`, `design-systems.sync.json`, `design-system-threads.json`, `design-skill-threads.json`, `project-design-systems.json`, `artifacts.json`, `vendor/`, `skills/builtin/` | The person's own design systems and what each held when last synced, the thread making or changing each system, when each thread loaded the design-system skill, the one picked per project, whether frames load libraries through Silt and the files kept for that, and Silt's built-in skills, written once per content ([ADR 0071](adr/0071-artifact-design-guidance-design-systems-and-libraries.md)) |
+| `themes/`, `appearance.json` | Your themes for Silt's UI, one family a file, or a folder with `theme.json` and the `fonts/` it ships, and the light and dark theme picked; `themes.sync.json` is what each held when last synced through the servers ([ADR 0098](adr/0098-themes-for-silts-ui.md), [ADR 0099](adr/0099-themes-sync-ship-fonts-and-reach-the-window.md)) |
+| `update/` | The last update's `state.json`, which its runner writes as it goes and the daemon reads back through its restart, and its `output.log` ([ADR 0100](adr/0100-update-channels.md)) |
+| `server/` | The server's data, by default, when this machine runs one |
+
+**The server's data dir** holds four things:
+- `server.toml`, written by `silt server init`;
+- `server.sqlite`, with users, devices, orgs, families, deltas, threads, leases, search, the inbox, push subscriptions and control commands;
+- `blobs/`;
+- `git/`, the mirrors.
+
+**A clone** holds:
+- managed checkouts in `.silt/checkouts/`;
+- their git dirs in `.git/silt/clones/`;
+- the `refs/silt/threads/*` that keep thread commits from git's gc.
+
+**What stays on the machine.** Agent state, the queue and secrets are personal to the machine and never enter the family log. So does `redaction-key`, the key the placeholders of its redacted secrets are made with ([ADR 0123](adr/0123-redaction-ids-keyed-per-machine.md)); nothing puts a secret back into what arrives ([ADR 0019](adr/0019-redact-to-gits-threat-model.md)). A review not sent yet is the browser's own, in its `localStorage`; its comments enter the log once it's sent ([ADR 0055](adr/0055-reviewing-a-threads-changes.md)). Each pending comment holds the anchors the daemon took for it, without recording anything, so it follows its text ([ADR 0066](adr/0066-pending-comments-follow-their-text.md)). Seen marks on a thread's files and the turn it was reviewed through are the person's, kept in `thread_seen_marks` and `thread_state` and synced through the server's `thread_seen` and `thread_state` ([ADR 0067](adr/0067-the-expanded-review.md)).
+
+## Environment variables
+| Variable | Effect |
+|---|---|
+| `SILT_HOME` | The data dir |
+| `SILT_LOG` | The tracing filter |
+| `SILT_WEB_PORT` | The daemon's web UI port; a free one by default |
+| `SILT_LAN_PORT` | The port phones on the network reach the daemon on; else the one it remembered, else 7419 or the next free pair; the certificate's page is on the next one ([ADR 0112](adr/0112-phones-on-the-local-network.md)) |
+| `SILT_LAN_NAME` | The machine's name to phones, and in `silt-<name>-<suffix>.local` the first time; its host name by default |
+| `SILT_LAN_ADDRESSES` | The private addresses phones reach the machine at, comma-separated, in place of its interfaces', for tests and fixtures |
+| `SILT_VOICE_BIN` | The speech helper; else `silt-voice` beside `silt`, else on the `PATH` |
+| `SILT_LLAMA_SERVER` | llama.cpp's `llama-server` for local models; else the `PATH`'s |
+| `SILT_HUGGINGFACE_URL` | Where models are found and fetched, in place of Hugging Face, for tests |
+| `SILT_LLAMA_RELEASES_URL` | Where llama.cpp's latest release is read, in place of GitHub's API, for tests |
+| `SILT_DAEMONLESS_CAPTURE=1` | Capture in the hook's own process even when a daemon runs |
+| `SILT_FAMILY_BUDGET_MB` | How much the families the daemon holds may take, as the store holds them, before the least recently used are let go of before their 30 minutes; 1024 by default ([ADR 0116](adr/0116-memory-that-follows-the-work.md)) |
+| `SILT_CLAUDE_BIN`, `SILT_CODEX_BIN`, `SILT_GEMINI_BIN`, `SILT_AGY_BIN`, `SILT_OPENCODE_BIN`, `SILT_COPILOT_BIN` | The agent program to run, for tests and unusual installs |
+| `SILT_ALLOW_UNVERIFIED_AGENTS=1` | Run registry agents that have no checksum |
+| `SILT_ASK_AGENTS=0` | Don't ask installed agents what they offer in the background; New thread shows what was last seen or built in. The screen references set it, so a screen never depends on when an answer came |
+| `SILT_UPDATE_CHECK=never` | Don't check for a newer Silt by itself; Settings › Updates' Check now still does. The e2e tests and the benchmarks set it, as their daemons run a build of the clone they test ([ADR 0100](adr/0100-update-channels.md)) |
+| `SILT_BUILD_COMMIT`, `SILT_BUILD_BRANCH`, `SILT_BUILD_DIRTY`, `SILT_BUILD_SOURCE`, `SILT_BUILD_CHANNEL` | Set while building: what the build says of itself, over what git says. A debug build given `SILT_BUILD_SOURCE` when it runs takes them all from then, as an older build of that clone, for tests |
+| `SILT_UPDATE_JUST` | In a debug build, the program an update runs in place of `just`, for tests |
+| `SILT_THREAD`, `SILT_CHECKOUT`, `SILT_SOURCE` | Given to a project's `.agents/prepare` script |

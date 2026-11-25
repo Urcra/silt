@@ -1,0 +1,54 @@
+Silt
+Copyright (C) 2026 Silt contributors
+Licensed under the GNU Affero General Public License v3.0 only (see LICENSE),
+except the plugin SDK and the crates under it (crates/silt-plugin-api,
+crates/silt-plugin, crates/silt-access, crates/silt-plugin-test,
+crates/silt-plugin-host) and the plugin template (templates/plugin), which are
+under the MIT License (see the LICENSE-MIT or LICENSE file in each).
+
+This product includes software derived from the following projects:
+
+- sum_tree (crates/silt-sumtree, see crates/silt-sumtree/LICENSE-APACHE), from Zed (https://github.com/zed-industries/zed),
+  Copyright Zed Industries, Inc., licensed under the Apache License, Version 2.0.
+
+It embeds a snapshot of the Agent Client Protocol's agent registry
+(crates/silt-acp/registry-snapshot.json), from
+https://github.com/agentclientprotocol/registry, licensed under the Apache
+License, Version 2.0. Each agent it lists is under its own licence.
+
+The web UI bundles IBM Plex Sans and IBM Plex Mono, Copyright 2019 IBM Corp.,
+under the SIL Open Font License, Version 1.1, through Fontsource. Every
+package bundled into the web UI is listed with its licence text in
+THIRD-PARTY-NOTICES.txt, which the build writes beside it and Silt serves at
+/THIRD-PARTY-NOTICES.txt.
+
+Silt's bundled UI themes include colour palettes ported from these themes,
+each under the MIT License, with some colours moved in lightness to reach
+WCAG AA contrast (crates/silt-theme/themes):
+
+- Catppuccin (https://github.com/catppuccin/catppuccin), Copyright (c) 2021 Catppuccin.
+- Gruvbox (https://github.com/morhetz/gruvbox), Copyright (c) 2012 Pavel Pertsev.
+- Rosé Pine (https://github.com/rose-pine/rose-pine-theme), Copyright (c) 2023 Rosé Pine.
+- Tokyo Night (https://github.com/enkia/tokyo-night-vscode-theme), Copyright (c) 2018-present Enkia.
+- Solarized (https://github.com/altercation/solarized), Copyright (c) 2011 Ethan Schoonover.
+- Nord (https://github.com/nordtheme/nord), Copyright (c) 2016-present Sven Greb.
+
+The MIT License: Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including without
+limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom
+the Software is furnished to do so, subject to the following conditions: The
+above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS
+IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE
+AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The agents' marks in the web UI (web/src/agentLogos.ts) are from Lobe Icons
+(https://github.com/lobehub/lobe-icons), Copyright (c) 2023 LobeHub, under the
+MIT License above. The marks are their owners' trademarks, used only to name
+their tools.
