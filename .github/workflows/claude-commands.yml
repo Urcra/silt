@@ -2,8 +2,9 @@
 # trigger of a scheduled task on claude.ai:
 #   /claude gate [notes]          resolve conflicts, run the gate, push fixes
 #   /claude review [fix] [notes]  review the PR, and with `fix` fix the findings
-#   /claude watch [notes]         stay on the PR: fix conflicts, review comments
-#                                 and gate failures as they come, until merged
+#   /claude watch [merge] [notes] stay on the PR: fix conflicts, review comments
+#                                 and gate failures as they come, until merged;
+#                                 with `merge`, merge it once it's ready
 #   /claude unwatch               fires nothing: the watching session reads it
 # The watch task's prompt is in .github/claude-tasks/watch.md.
 # Only people with write access can start one, and only from a comment that
@@ -67,7 +68,11 @@ jobs:
               read -r word after <<<"$rest" || true
               if [ "${word:-}" = fix ]; then mode=fix rest=${after:-}; fi
               ;;
-            watch) url=$WATCH_URL token=$WATCH_TOKEN ;;
+            watch)
+              url=$WATCH_URL token=$WATCH_TOKEN
+              read -r word after <<<"$rest" || true
+              if [ "${word:-}" = merge ]; then mode=merge rest=${after:-}; fi
+              ;;
             unwatch) react +1; exit 0 ;;
             *) react confused; echo "unknown command: $command" >&2; exit 0 ;;
           esac

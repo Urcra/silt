@@ -65,7 +65,7 @@ Commit however you like; a pull request's CI runs the checks, and the full gate 
 On a pull request, people with write access can start a Claude Code cloud session from a comment (`.github/workflows/claude-commands.yml`):
 - `/claude gate` runs the gate, resolves conflicts and pushes fixes.
 - `/claude review`, or `/claude review fix`, reviews the PR, and with `fix` fixes what it found.
-- `/claude watch` stays on the PR until it's merged, fixing conflicts, review comments and gate failures as they come. `/claude unwatch` stops it.
+- `/claude watch` stays on the PR until it's merged, fixing conflicts, review comments and gate failures as they come. `/claude watch merge` also merges it once it's ready: CI and the full gate passed on its head, no conflicts, and no review threads or change requests left open. `/claude unwatch` stops it.
 
 Each command fires a scheduled task on claude.ai through its API trigger; the watch task's prompt is in `.github/claude-tasks/watch.md`.
 
