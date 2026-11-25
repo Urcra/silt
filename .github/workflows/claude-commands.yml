@@ -5,6 +5,7 @@
 #   /claude watch [notes]         stay on the PR: fix conflicts, review comments
 #                                 and gate failures as they come, until merged
 #   /claude unwatch               fires nothing: the watching session reads it
+# `/claude fix` and `/claude merge` run in claude-fix-merge.yml instead.
 # The watch task's prompt is in .github/claude-tasks/watch.md.
 # Only people with write access can start one, and only from a comment that
 # starts with the command, so the sessions' own comments never fire it.
@@ -69,6 +70,7 @@ jobs:
               ;;
             watch) url=$WATCH_URL token=$WATCH_TOKEN ;;
             unwatch) react +1; exit 0 ;;
+            fix | merge) exit 0 ;; # claude-fix-merge.yml runs these
             *) react confused; echo "unknown command: $command" >&2; exit 0 ;;
           esac
           notes=$(printf '%s\n%s' "$rest" "$(printf '%s\n' "$BODY" | tail -n +2)")
