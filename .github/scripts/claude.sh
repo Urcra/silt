@@ -336,7 +336,15 @@ cmd_parse() {
         echo "build=$build"
         echo "gated=$gated"
     } >>"$out"
-    cmd_status init "$command" "$mode"
+    if $build; then
+        cmd_status init "$command" "$mode"
+    else
+        # A quick command has no setup to show: the 👀 says it started, and
+        # Claude's own comment follows in seconds. The runner speaks only if
+        # Claude's step fails or is cancelled.
+        echo "$command${mode:+ $mode}" >"$temp/status-command"
+        touch "$temp/status-handed"
+    fi
 }
 
 # Open review threads and change requests, which `/claude fix` deals with.
