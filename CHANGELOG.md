@@ -13,3 +13,6 @@ Protocol version 24.
 - **History and search** across compaction, the history graph, forking from and reverting to a turn, and commits linked to turns.
 - **The web UI**, served by each machine's daemon and, as a hosted app for browsers and phones, by the server; phones on your own network without a server; the desktop app.
 - **Agents from the web UI** over ACP, agents asking other agents, artifacts, themes, workspaces with their own rules, Silt's sandbox on Linux, plugins, and local models.
+
+### Fixed
+- A thread just opened, or scrolled up until an earlier part of it loaded, sometimes drew its turns over each other until they scrolled away.
