@@ -308,9 +308,15 @@ cmd_parse() {
             read -r word after <<<"$rest" || true
             if [ "${word:-}" = fix ]; then mode=fix rest=${after:-}; fi
             ;;
-        *)
+        # Empty, or a command used where it doesn't apply (merge on an issue).
+        *: | *:fix | *:merge | *:gate | *:review | *:plan | *:triage | *:ask | *:cancel)
             echo "command=" >>"$out"
             return
+            ;;
+        *)
+            # Anything else is a question: "/claude how would you fix this?"
+            rest="$command${rest:+ $rest}"
+            command=ask
             ;;
     esac
     printf '%s\n%s\n' "$rest" "$(printf '%s\n' "$BODY" | tail -n +2)" >"$temp/notes.txt"
@@ -560,7 +566,7 @@ cmd_passed() {
             cmd_status result "✅ Gate passed (\`${sha:0:8}\` + base)"
         fi
     elif [ "${GUARD1:-}" != false ] && [ "${GUARD2:-}" != false ]; then
-        cmd_status result "❌ Gate still failing after 2 rounds, or conflicts unresolved. See Claude's comments and the [log](${RUN_URL:-})."
+        cmd_status result "❌ Gate didn't pass. See the jobs above and the [log](${RUN_URL:-})."
     fi
     return 0
 }

@@ -72,7 +72,7 @@ People with write access can have Claude work on an issue or pull request from a
   - `/claude fix` opens a pull request that fixes it, with screenshots of any screen it changes, or asks questions when the issue is unclear.
   - `/claude plan` comments a plan: the approach, the files, tests, risks and open questions.
   - `/claude triage` sets labels and a milestone, names likely duplicates, and asks for what the report lacks.
-- On either, `/claude ask <question>` answers from the code without changing anything, and `/claude cancel` stops that issue's or PR's running jobs.
+- On either, `/claude ask <question>`, or any question after `/claude`, answers from the code without changing anything, and `/claude cancel` stops that issue's or PR's running jobs.
 
 Claude weighs each comment by its author: the owner first, then members, collaborators and contributors; anyone else's comments only inform it. It never decides to merge: `.github/scripts/claude.sh`, taken from the default branch, merges only a head that passed the gate and CI. The gate runs there with the budgets reported rather than held, as on CI.
 
