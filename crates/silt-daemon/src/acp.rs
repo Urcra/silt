@@ -2744,7 +2744,7 @@ fn read_seen(data_dir: &Path) -> HashMap<String, Seen> {
 }
 
 /// What a mode means for the workspace's cap on what an agent does without
-/// asking (ADR 0065): Copilot's say how it works, except Autopilot (ADR 0049),
+/// asking (ADR 0065): Copilot's say how it works, except Autopilot (ADR 0124),
 /// as does any agent's default (ADR 0118).
 pub(crate) fn mode_meaning(agent: &str, mode: &str, planning: bool, default: bool) -> silt_workspace::ModeMeaning {
     use silt_workspace::ModeMeaning;

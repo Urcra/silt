@@ -139,7 +139,7 @@ export function modeForPreset(preset: Preset, modes: AgentChoiceItem[] | null | 
   return wanted[preset].map((id) => modes?.find((mode) => modeKey(mode.id) === id)?.id).find(Boolean)
 }
 
-/** An agent's own switch for asking nothing, such as Copilot's Allow All, which the daemon sets from the preset (ADR 0049). */
+/** An agent's own switch for asking nothing, such as Copilot's Allow All, which the daemon sets from the preset (ADR 0124). */
 export function presetDriven(setting: AgentSetting): boolean {
   const ids = new Set(setting.choices.map((choice) => choice.id.toLowerCase()))
   return (
@@ -154,7 +154,7 @@ export function presetDriven(setting: AgentSetting): boolean {
 
 /**
  * The settings to offer before the agent runs, and start it with: not its mode where it also lists that as a
- * setting, which its modes or the preset say, nor what the preset sets (ADR 0049).
+ * setting, which its modes or the preset say, nor what the preset sets (ADR 0124).
  */
 export function startSettings(settings: AgentSetting[], modes: AgentChoiceItem[] | null | undefined): AgentSetting[] {
   return settings.filter((setting) => !(modes?.length && setting.category === 'mode') && !presetDriven(setting))

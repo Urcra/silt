@@ -3,7 +3,7 @@
 //! `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript_full.jsonl`.
 //! agy resumes only from its own store, a SQLite database of protobuf steps
 //! per conversation, which Silt can't write; it reads agy's index of
-//! conversations for where each ran (docs/research/agents.md, ADR 0063).
+//! conversations for where each ran (docs/research/agents.md, ADR 0125).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
