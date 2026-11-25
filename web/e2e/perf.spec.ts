@@ -8,7 +8,7 @@ import { SILT, allThreads, fixture } from './fixture'
 // and keeps the page under 200 MB. Timed on the optimized build the gate
 // passes in `$SILT`; a debug build only reports. A cloud session's machine
 // has its own limit, chosen as silt-bench chooses it (ADR 0037).
-const ENFORCED = process.env.SILT !== undefined
+const ENFORCED = process.env.SILT !== undefined && process.env.SILT_BENCH_ENFORCE !== '0'
 const CLOUD = (process.env.SILT_BENCH_MACHINE ?? (process.env.CLAUDE_CODE_REMOTE === 'true' ? 'cloud' : 'dev')) === 'cloud'
 const SHOWN_BUDGET_MS = CLOUD ? 210 : 100
 const HEAP_BUDGET_MB = 200

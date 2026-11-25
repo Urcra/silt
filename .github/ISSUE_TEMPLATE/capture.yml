@@ -1,0 +1,31 @@
+name: An agent's session isn't recorded right
+description: A message, tool call, edit or subagent missing or wrong after an agent CLI changed.
+labels: [bug, agents]
+body:
+  - type: input
+    id: agent
+    attributes:
+      label: The agent and its version
+      description: Such as Claude Code 2.3.1, Codex 0.130.0 or Gemini CLI 0.40.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What's missing or wrong
+      description: What the agent did, and what `silt show <thread>` or the web UI shows instead.
+    validations:
+      required: true
+  - type: textarea
+    id: transcript
+    attributes:
+      label: The lines of the agent's own transcript
+      description: The few lines of its session file that Silt reads wrong, with secrets and private code taken out.
+      render: json
+  - type: input
+    id: version
+    attributes:
+      label: Silt's version
+      description: The output of `silt --version`, or the commit you built.
+    validations:
+      required: true
