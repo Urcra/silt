@@ -15,6 +15,7 @@ Protocol version 24.
 - **Agents from the web UI** over ACP, agents asking other agents, artifacts, themes, workspaces with their own rules, Silt's sandbox on Linux, plugins, and local models.
 
 ### Added
+- The sidebar's Chats section folds by its name, as a project does, showing how many chats it holds or how many are working while folded. It stays folded after a reload, in the browser or the desktop app.
 - December decorations in the desktop app: lights under each page's header, a hat on the workspace's tile, snow resting on the composer, and on the New thread screen a tree drawn as a branch graph with snow falling behind it. The desktop app's starting page lights the tree while it connects. They take their colours from your theme, which stays as it is, and keep still when you ask for less motion. On by default from 1 December to 6 January; Settings › Appearance › Seasonal touches turns them off, keeps them all year, or stops the snow.
 - Yule, a bundled Christmas theme in light and dark: snow on pine and a forest at night. It shows only when you pick it.
 - Nightly releases: `main` is built each night for Linux, macOS and Windows, as `silt` archives and the desktop app's packages, into the rolling [nightly release](https://github.com/Urcra/silt/releases/tag/nightly). Nothing in it is signed yet.
