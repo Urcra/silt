@@ -37,3 +37,8 @@ test('a thread elsewhere names the machine holding it, when the server said whic
   expect(threadWhere(thread({ location: 'remote', machine: null })).label).toBe('On the server')
   expect(threadWhere(thread({ location: 'moved', machine: 'home' })).label).toBe('Moved to home')
 })
+
+test('an agent working in a terminal says so, as its terminal answers it rather than the page', () => {
+  expect(threadDoing(thread({ agent_state: 'working', terminal: true }))).toBe('working in a terminal')
+  expect(threadDoing(thread({ agent_state: 'working', terminal: false }))).toBe('working')
+})

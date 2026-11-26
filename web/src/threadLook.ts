@@ -30,7 +30,8 @@ export function threadDoing(thread: ThreadSummary): string | null {
     case 'error':
       return 'stopped with an error'
     case 'working':
-      return 'working'
+      // Its terminal answers it, not this page.
+      return thread.terminal ? 'working in a terminal' : 'working'
     case 'starting':
       return 'starting'
   }

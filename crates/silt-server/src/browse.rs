@@ -399,6 +399,7 @@ fn summary(
         workspace: None,
         cloud: silt_proto::view::cloud_session(own.iter().copied()),
         machine: row.holder.and_then(|holder| machines.get(&holder).cloned()),
+        terminal: running.get(&row.id).is_some_and(|(_, agent)| agent.terminal),
         agent_settings: None,
     }
 }

@@ -30,4 +30,7 @@ One binary runs both the sync server and your machine's daemon. A team gets:
 
 Work for several groups from one machine, or keep a project off every server. [Several servers](guide/servers.md).
 
+## Your data stays yours
+Silt sends no telemetry, now or in the future, and has no service of its own to send anything to. Your threads go to the servers you run and nowhere else. Turn on Offline and Silt connects only to those servers. What leaves is what your agent sends its own model provider, and with a local model, the conversation stays on your machine. [What Silt sends over the network](guide/network.md).
+
 Silt is licensed under the AGPL-3.0.

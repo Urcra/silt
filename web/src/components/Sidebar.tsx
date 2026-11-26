@@ -21,6 +21,7 @@ import {
   useMachinesView,
 } from '../desktop'
 import { type MachineMarked, backendOf, countsOf, machineName, useAllMachines, useMachineMark } from '../elsewhere'
+import { useFold } from '../folds'
 import { useNow } from '../now'
 import { openPalette } from '../palette'
 import { projectName, projects } from '../projects'
@@ -372,45 +373,62 @@ function ProjectGroup({
   )
 }
 
-/** The chats, in a project's order, with what's old, settled or snoozed behind a count, as a project's threads are (ADR 0059). */
+/**
+ * The chats, in a project's order, with what's old, settled or snoozed behind a count, as a project's threads are (ADR 0059).
+ * The section folds away by its name, and stays folded in this browser.
+ */
 function ChatGroup({ threads, now }: { threads: ThreadSummary[]; now: number }) {
+  const [open, setOpen] = useFold('chats', true)
   const [showRest, setShowRest] = useState(false)
   const ordered = [...threads].sort(inListOrder(now))
   const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
   const shown = ordered.filter((thread) => !held(thread))
   const rest = ordered.filter(held)
+  const working = threads.filter(inProgress).length
   return (
     <section aria-label="chats" className="mt-2">
-      <SectionLabel
-        className="px-2"
-        aside={
-          !hosted() && (
-            <Link
-              to="/chat"
-              aria-label="New chat"
-              className="inline-flex items-center rounded-sm p-0.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 max-md:px-2"
-            >
-              <Icon name="plus" className="h-3.5 w-3.5" />
-            </Link>
-          )
-        }
-      >
-        Chats
-      </SectionLabel>
-      <ul>
-        {(showRest ? [...shown, ...rest] : shown).map((thread) => (
-          <ThreadItem key={thread.id} thread={thread} />
-        ))}
-      </ul>
-      {rest.length > 0 && (
+      {/* SectionLabel's look, with its name as the fold's toggle. */}
+      <div className="flex items-center gap-2 pt-1.5 pr-3 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">
         <button
           type="button"
-          aria-expanded={showRest}
-          onClick={() => setShowRest(!showRest)}
-          className="block py-1 pr-2 pl-2 text-left text-2xs text-fg-2 hover:text-fg-1 max-md:min-h-11"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-2 py-1 text-left uppercase hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11"
         >
-          {showRest ? 'Show fewer' : `Show ${rest.length} more`}
+          <Icon name={open ? 'chevronDown' : 'chevronRight'} className="h-3 w-3 shrink-0" />
+          <span className="truncate">Chats</span>
+          <span className="ml-auto shrink-0 tracking-normal text-fg-3 normal-case">
+            {working > 0 ? `${working} working` : !open ? threads.length : ''}
+          </span>
         </button>
+        {!hosted() && (
+          <Link
+            to="/chat"
+            aria-label="New chat"
+            className="inline-flex items-center rounded-sm p-0.5 text-fg-2 hover:text-fg-1 max-md:min-h-11 max-md:px-2"
+          >
+            <Icon name="plus" className="h-3.5 w-3.5" />
+          </Link>
+        )}
+      </div>
+      {open && (
+        <>
+          <ul>
+            {(showRest ? [...shown, ...rest] : shown).map((thread) => (
+              <ThreadItem key={thread.id} thread={thread} />
+            ))}
+          </ul>
+          {rest.length > 0 && (
+            <button
+              type="button"
+              aria-expanded={showRest}
+              onClick={() => setShowRest(!showRest)}
+              className="block py-1 pr-2 pl-2 text-left text-2xs text-fg-2 hover:text-fg-1 max-md:min-h-11"
+            >
+              {showRest ? 'Show fewer' : `Show ${rest.length} more`}
+            </button>
+          )}
+        </>
       )}
     </section>
   )
