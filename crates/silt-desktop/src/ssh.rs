@@ -100,6 +100,13 @@ struct Local {
     version: String,
 }
 
+/// How a machine's connection stands, for asking its daemon (ADR 0132).
+pub enum Connection {
+    Up(Url),
+    Connecting,
+    Down,
+}
+
 pub struct Machines {
     file: Option<PathBuf>,
     local: OnceLock<Local>,
@@ -300,6 +307,16 @@ impl Machines {
         if let Some(machine) = inner.list.iter_mut().find(|machine| machine.name == name) {
             machine.last_shown = Some(now());
             self.save(&inner.list);
+        }
+    }
+
+    /// How the machine's connection stands, without connecting it.
+    pub fn connection(&self, name: &str) -> Connection {
+        let inner = self.inner.lock().expect("lock");
+        match inner.live.get(name) {
+            Some(Live { state: State::Connected, url: Some(url), .. }) => Connection::Up(url.clone()),
+            Some(Live { state: State::Connecting(_), .. }) => Connection::Connecting,
+            _ => Connection::Down,
         }
     }
 

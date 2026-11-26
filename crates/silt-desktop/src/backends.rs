@@ -59,12 +59,52 @@ impl Backend {
     }
 }
 
-/// What the window shows: a backend, and the directory there whose project
-/// `silt open` picks.
+/// What the window shows: a backend, the directory there whose project
+/// `silt open` picks, and the page to open on it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Target {
     pub backend: Backend,
     pub project: Option<String>,
+    pub page: Option<Page>,
+}
+
+/// A page on another machine the window opens once it shows it (ADR 0132).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Page {
+    /// A thread there, by its id.
+    Thread(String),
+    /// New thread there, with what was typed and the project's origin.
+    New { draft: Option<String>, origin: Option<String> },
+}
+
+impl Page {
+    /// The page's path and query on the backend's UI.
+    pub fn path(&self) -> (String, Option<String>) {
+        match self {
+            Self::Thread(id) => (format!("/t/{id}"), None),
+            Self::New { draft, origin } => {
+                let mut query = url::form_urlencoded::Serializer::new(String::new());
+                if let Some(origin) = origin {
+                    query.append_pair("origin", origin);
+                }
+                if let Some(draft) = draft {
+                    query.append_pair("draft", draft);
+                }
+                let query = query.finish();
+                ("/new".to_owned(), (!query.is_empty()).then_some(query))
+            }
+        }
+    }
+}
+
+/// A draft carried to another machine's New thread: text, kept short enough for a link.
+fn is_draft(text: &str) -> bool {
+    text.len() <= 16 * 1024 && !text.chars().any(|char| char.is_control() && !matches!(char, '\n' | '\t'))
+}
+
+/// A project's origin, as `silt` normalizes it.
+fn is_origin(text: &str) -> bool {
+    !text.is_empty() && text.len() <= 1024 && !text.chars().any(char::is_control)
 }
 
 /// What a `silt://open/?project=<dir>&backend=<backend>` link asks for, as
@@ -81,6 +121,11 @@ pub fn target_of(link: &Url, known: &[Backend]) -> Option<Target> {
         match &*key {
             "backend" => target.backend = Backend::parse(&value).filter(|backend| known.contains(backend))?,
             "project" => target.project = Some(value.into_owned()),
+            "thread" => target.page = Some(Page::Thread(value.into_owned())),
+            "new" if value == "1" => {
+                let field = |key: &str| link.query_pairs().find(|(name, _)| name == key).map(|(_, value)| value.into_owned());
+                target.page = Some(Page::New { draft: field("draft"), origin: field("origin") });
+            }
             _ => {}
         }
     }
@@ -88,6 +133,14 @@ pub fn target_of(link: &Url, known: &[Backend]) -> Option<Target> {
         project.len() <= 4096 && !project.chars().any(char::is_control) && !project.split(['/', '\\']).any(|part| part == "..")
     };
     if !target.project.as_ref().is_none_or(plain) || matches!(target.backend, Backend::Ssh(_)) && target.project.is_some() {
+        return None;
+    }
+    let fine = match &target.page {
+        None => true,
+        Some(Page::Thread(id)) => crate::elsewhere::is_thread_id(id),
+        Some(Page::New { draft, origin }) => draft.as_deref().is_none_or(is_draft) && origin.as_deref().is_none_or(is_origin),
+    };
+    if !fine || target.page.is_some() && target.project.is_some() {
         return None;
     }
     Some(target)
@@ -174,7 +227,7 @@ pub fn open_web(target: &Target, native: &Path, wsl_silt: &str) -> Option<Comman
 /// The command that starts the backend's daemon unless one runs, outside
 /// any repository, so its watchers and sync run before it's shown.
 pub fn start_daemon(backend: &Backend, native: &Path, wsl_silt: &str) -> Option<Command> {
-    let mut command = silt_in(&Target { backend: backend.clone(), project: None }, native, wsl_silt)?;
+    let mut command = silt_in(&Target { backend: backend.clone(), ..Target::default() }, native, wsl_silt)?;
     command.args(["daemon", "start"]);
     Some(command)
 }
@@ -182,7 +235,7 @@ pub fn start_daemon(backend: &Backend, native: &Path, wsl_silt: &str) -> Option<
 /// The command that restarts the backend's daemon on the build installed
 /// since it started, if one was, once no agent works in it.
 pub fn restart_replaced_daemon(backend: &Backend, native: &Path, wsl_silt: &str) -> Option<Command> {
-    let mut command = silt_in(&Target { backend: backend.clone(), project: None }, native, wsl_silt)?;
+    let mut command = silt_in(&Target { backend: backend.clone(), ..Target::default() }, native, wsl_silt)?;
     command.args(["daemon", "restart", "--if-replaced"]);
     Some(command)
 }
@@ -218,7 +271,7 @@ mod tests {
         let known = [Backend::Native, Backend::Wsl("Ubuntu".into()), Backend::Ssh("home gpu".into())];
         assert_eq!(
             target_of(&link("silt://open/?project=/home/me/a%20b&backend=wsl:Ubuntu"), &known),
-            Some(Target { backend: Backend::Wsl("Ubuntu".into()), project: Some("/home/me/a b".into()) })
+            Some(Target { backend: Backend::Wsl("Ubuntu".into()), project: Some("/home/me/a b".into()), page: None })
         );
         assert_eq!(target_of(&link("silt://open/"), &known), Some(Target::default()));
         assert_eq!(target_of(&link("silt://open/?backend=wsl:Debian"), &known), None, "not a distribution here");
@@ -230,10 +283,34 @@ mod tests {
         assert_eq!(target_of(&link("silt://open/t/abc"), &known), None, "permalinks are for later");
         assert_eq!(
             target_of(&link("silt://open/?backend=ssh:home%20gpu"), &known),
-            Some(Target { backend: Backend::Ssh("home gpu".into()), project: None })
+            Some(Target { backend: Backend::Ssh("home gpu".into()), project: None, page: None })
         );
         assert_eq!(target_of(&link("silt://open/?backend=ssh:vps"), &known), None, "not a machine here");
         assert_eq!(target_of(&link("silt://open/?project=/srv&backend=ssh:home%20gpu"), &known), None, "no project there");
+    }
+
+    #[test]
+    fn links_open_a_thread_or_new_thread_on_a_known_machine() {
+        let known = [Backend::Native, Backend::Ssh("nuc".into())];
+        let thread = target_of(&link("silt://open/?backend=ssh:nuc&thread=a81cee7abcb7"), &known).expect("a target");
+        assert_eq!(thread.page, Some(Page::Thread("a81cee7abcb7".into())));
+        assert_eq!(thread.page.expect("a page").path(), ("/t/a81cee7abcb7".to_owned(), None));
+        let new = target_of(&link("silt://open/?backend=ssh:nuc&new=1&origin=github.com/u/silt&draft=fix%20it%0Aplease"), &known)
+            .expect("a target");
+        assert_eq!(new.page, Some(Page::New { draft: Some("fix it\nplease".into()), origin: Some("github.com/u/silt".into()) }));
+        assert_eq!(
+            new.page.expect("a page").path(),
+            ("/new".to_owned(), Some("origin=github.com%2Fu%2Fsilt&draft=fix+it%0Aplease".to_owned()))
+        );
+        for wrong in [
+            "silt://open/?backend=ssh:nuc&thread=..%2F..%2Fapi",
+            "silt://open/?backend=ssh:nuc&thread=ABC",
+            "silt://open/?backend=ssh:far&thread=a81cee7abcb7",
+            "silt://open/?backend=native&project=/x&thread=a81cee7abcb7",
+            "silt://open/?backend=native&new=1&draft=%1B%5B2J",
+        ] {
+            assert_eq!(target_of(&link(wrong), &known), None, "{wrong}");
+        }
     }
 
     #[test]
@@ -284,7 +361,7 @@ mod tests {
 
     #[test]
     fn a_distribution_s_silt_runs_in_the_project_in_the_person_s_shell() {
-        let target = Target { backend: Backend::Wsl("Ubuntu".into()), project: Some("/home/me/repo".into()) };
+        let target = Target { backend: Backend::Wsl("Ubuntu".into()), project: Some("/home/me/repo".into()), page: None };
         let command = open_web(&target, Path::new("silt"), "/usr/local/bin/silt").expect("a command");
         let args: Vec<_> = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
         assert_eq!(command.get_program(), "wsl.exe");

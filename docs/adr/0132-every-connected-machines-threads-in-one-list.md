@@ -1,6 +1,6 @@
 # 0132: Every connected machine's threads in one list
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-26
 - Amends: [ADR 0108](0108-machines-over-ssh.md) (what the app gives a machine's page, and what `silt://open/` picks), [ADR 0115](0115-the-sidebar-names-the-workspace-and-the-machine.md) (the machine menu)
 - Builds on: [ADR 0026](0026-hosted-mode-and-remote-control.md) (agents running on the person's other devices), [ADR 0090](0090-agents-aware-of-each-other.md) (a terminal session's turn)
