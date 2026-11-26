@@ -67,8 +67,9 @@ silt_artifact_guide first, follow what it says, then call silt_artifact, and cal
 version. silt_artifact_read gives back a version's source, to revise it after a handoff or a fork.";
 
 /// The tools that change something beyond the session: a message another
-/// agent then hears (ADR 0090), and asking another agent (ADR 0120).
-pub const WRITING_TOOLS: &[&str] = &["silt_message", "silt_ask", "silt_ask_stop", "silt_ask_take"];
+/// agent then hears (ADR 0090), asking another agent (ADR 0120), and asking
+/// the person to allow a call Auto refused (ADR 0132).
+pub const WRITING_TOOLS: &[&str] = &["silt_message", "silt_ask", "silt_ask_stop", "silt_ask_take", "silt_escalate"];
 
 /// The tools only a run watched in the web UI gets.
 pub const SHOW_TOOLS: &[&str] = &[
@@ -81,6 +82,7 @@ pub const SHOW_TOOLS: &[&str] = &[
     "silt_artifact_doc",
     "silt_artifact_sheet",
     "silt_artifact_room",
+    "silt_escalate",
 ];
 
 /// What the server says it's for, with the showing tools when offered.
@@ -100,6 +102,19 @@ pub fn tools(shows: bool) -> Value {
 
 fn show_tools() -> Vec<Value> {
     vec![
+        json!({
+            "name": "silt_escalate",
+            "description": "Ask the person to allow a call Silt's Auto check refused, when it's needed for what they asked. Name the call exactly as the refusal named it, and say why it's needed; they see both with Auto's reason, and answer. Allowed, the same call goes through once when you make it again. This waits up to 50 seconds; after that their answer comes to you later as a message from Silt.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "call": {"type": "string", "description": "The refused call, exactly as Silt's refusal named it"},
+                    "why": {"type": "string", "description": "Why it's needed for what the person asked, in a sentence or two"}
+                },
+                "required": ["call", "why"]
+            },
+            "annotations": {"readOnlyHint": false}
+        }),
         json!({
             "name": "silt_show",
             "description": "Show the person an image (PNG, JPEG, GIF, WebP or SVG) or a video (MP4, MOV, WebM or Matroska) in the conversation, such as a screenshot, a chart you rendered or a screen recording of a bug. Write the file first, then pass its path. There is no size limit; for a video, H.264 MP4 or WebM plays in every browser.",

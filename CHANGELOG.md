@@ -16,6 +16,12 @@ Protocol version 25.
 
 ### Added
 - An agent you run in a terminal, with `silt claude` and the like, shows as working while it's in a turn: in this machine's thread list, which says **Working in a terminal**, and on your other devices and in the hosted app, through the server. A page passes nothing on to it: its terminal answers it. **Protocol 25: update every machine and the server together.**
+- Auto for every agent the web UI runs (ADR 0132). An agent without an auto mode of its own, such as GitHub Copilot, Codex or OpenCode, no longer greys Auto out: Silt checks each of its commands first, with a judge. See [Auto for every agent](docs/guide/auto.md).
+  - The judge is by default the thread's own agent on its model, in a session of its own and in the thread's sandbox. It's given the call and your last prompts, never the agent's own words.
+  - An allowed call goes through, and goes through again without a check while the thread stays on Auto. A refused one goes back to the agent with why. With no verdict within 60 seconds the call waits for you, saying why.
+  - Each call shows its verdict: **Auto allowed**, **Auto refused** with its reason, **allowed before** or **allowed by you**, and **Auto is checking** while it's checked.
+  - The agent can ask you to allow a refused call with `silt_escalate`; a card shows the call, Auto's reason and the agent's, and **Allow once** lets that exact call through once.
+  - **Settings › Auto** sets who checks in each workspace, from the agents it allows, and an org can set it for its workspaces. A thread can choose another under Auto in its permissions menu, as **Checked by**.
 - December decorations in the desktop app: lights under each page's header, a hat on the workspace's tile, snow resting on the composer, and on the New thread screen a tree drawn as a branch graph with snow falling behind it. The desktop app's starting page lights the tree while it connects. They take their colours from your theme, which stays as it is, and keep still when you ask for less motion. On by default from 1 December to 6 January; Settings › Appearance › Seasonal touches turns them off, keeps them all year, or stops the snow.
 - Yule, a bundled Christmas theme in light and dark: snow on pine and a forest at night. It shows only when you pick it.
 - Nightly releases: `main` is built each night for Linux, macOS and Windows, as `silt` archives and the desktop app's packages, into the rolling [nightly release](https://github.com/Urcra/silt/releases/tag/nightly). Nothing in it is signed yet.

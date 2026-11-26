@@ -468,6 +468,7 @@ impl Core {
                     options: asked.options.clone(),
                     plan: None,
                     tool_call: None,
+                    unchecked: None,
                 })
                 .collect(),
             questions: running.agent.questions.clone(),
@@ -482,6 +483,9 @@ impl Core {
             suggestion: None,
             stoppable: Vec::new(),
             sandbox: None,
+            auto_check: None,
+            checking: Vec::new(),
+            escalations: Vec::new(),
         })
     }
 
