@@ -359,3 +359,35 @@ test('in All machines, New thread asks which machine to start on, and picking an
     delete window.__siltDesktop
   }
 })
+
+test('a machine that stops answering leaves the list, and the foot says it’s lost while the app reconnects', async () => {
+  window.__siltBackends = [
+    { id: 'native', label: 'This computer', kind: 'native', colour: 'ink' },
+    { id: 'ssh:nuc', label: 'nuc', kind: 'ssh', state: 'connecting', colour: 'teal' },
+  ]
+  window.__siltBackend = 'native'
+  window.__siltDesktop = { commit: 'abc', key: 'k', view: { list: 'all', mark: 'chip', markHere: false } }
+  window.__siltThreads = [{ id: 'ssh:nuc', state: 'lost', threads: [] }]
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) =>
+      path.startsWith('/api/status')
+        ? new Response(JSON.stringify({ servers: [], sync_error: null }), { status: 200 })
+        : new Response('[]', { status: 200 }),
+    ),
+  )
+  try {
+    render(<App />)
+    const machine = await screen.findByRole('button', { name: 'machine: All machines' })
+    expect(machine).toHaveTextContent('1 connected · lost nuc')
+    fireEvent.click(machine)
+    expect(
+      within(screen.getByRole('dialog', { name: 'Switch machine' })).getByRole('button', { name: /^nuc/ }),
+    ).toHaveTextContent('over SSH · lost')
+  } finally {
+    delete window.__siltBackends
+    delete window.__siltBackend
+    delete window.__siltDesktop
+    delete window.__siltThreads
+  }
+})

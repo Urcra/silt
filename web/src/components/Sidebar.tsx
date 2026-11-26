@@ -633,7 +633,11 @@ function MachineMenu({
       panelClassName="w-[332px] max-w-[calc(100vw-20px)] p-1.5"
       trigger={
         <>
-          <MachineTile all={all} ssh={shown?.kind === 'ssh'} tone={failing ? 'danger' : server || all ? 'ok' : 'idle'} />
+          <MachineTile
+            all={all}
+            ssh={shown?.kind === 'ssh'}
+            tone={failing || allSaid?.includes(' · lost ') ? 'danger' : server || all ? 'ok' : 'idle'}
+          />
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="truncate font-medium">{name}</span>
             <span className={cx('truncate text-2xs', failing || allSaid?.includes('lost') ? 'text-danger' : 'text-fg-2')}>
@@ -759,12 +763,13 @@ function MachineFooter({
   const { backends, current } = useBackends()
   const switching = backends.find((backend) => backend.switching)
   const shownName = backends.find((backend) => backend.id === current)?.label ?? 'This computer'
+  const isLost = new Set(lost.map((backend) => backend.id))
   const connected = backends.filter(
-    (backend) => backend.id === current || backend.kind !== 'ssh' || backend.state === 'connected',
+    (backend) => (backend.id === current || backend.kind !== 'ssh' || backend.state === 'connected') && !isLost.has(backend.id),
   ).length
   const allSaid = all
     ? lost.length > 0
-      ? `${connected - lost.length} connected · lost ${lost.map(machineName).join(', ')}`
+      ? `${connected} connected · lost ${lost.map(machineName).join(', ')}`
       : `${connected} connected · showing ${shownName}`
     : null
   const said = [
