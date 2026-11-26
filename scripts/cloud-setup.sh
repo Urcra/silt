@@ -105,7 +105,7 @@ cargo fetch --locked --manifest-path crates/silt-voice/Cargo.toml
 # silt-voice's first build downloads the speech engine with webpki's roots,
 # which don't trust a cloud container's proxy; curl does, and the build takes
 # the archive from where it would have saved it (ADR 0061).
-SHERPA=2.0.1
+SHERPA=2.0.2
 archive="sherpa-onnx-v$SHERPA-linux-x64-static-lib.tar.bz2"
 prebuilt=crates/silt-voice/target/sherpa-onnx-prebuilt
 if [ "$(uname -sm)" = "Linux x86_64" ] && [ ! -f "$prebuilt/$archive" ]; then
