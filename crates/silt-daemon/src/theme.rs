@@ -377,6 +377,7 @@ mod tests {
             light: "mine".into(),
             dark: "nous-dark".into(),
             text: silt_theme::TextSettings::default(),
+            seasonal: silt_proto::view::SeasonalSettings { show: silt_proto::view::SeasonalShow::Off, snow: false },
         };
         set_appearance(data.path(), &picked).expect("saved");
         assert_eq!(appearance(data.path()), picked);
@@ -414,6 +415,20 @@ mod tests {
         assert_eq!(read.text.chat_size.map(silt_theme::text::ChatSize::get), Some(15));
         fs::write(data.path().join(APPEARANCE), r#"{ "dark": "fjord-dark", "text": 7 }"#).expect("written by hand");
         assert_eq!(appearance(data.path()).dark, "fjord-dark");
+    }
+
+    #[test]
+    fn the_december_decorations_default_to_auto_and_a_slip_keeps_the_pick() {
+        use silt_proto::view::{SeasonalSettings, SeasonalShow};
+        let data = tempfile::tempdir().expect("temp dir");
+        assert_eq!(appearance(data.path()).seasonal, SeasonalSettings { show: SeasonalShow::Auto, snow: true });
+        fs::write(data.path().join(APPEARANCE), r#"{ "dark": "yule-dark", "seasonal": { "show": "always", "snow": false } }"#)
+            .expect("written by hand");
+        assert_eq!(appearance(data.path()).seasonal, SeasonalSettings { show: SeasonalShow::Always, snow: false });
+        fs::write(data.path().join(APPEARANCE), r#"{ "dark": "yule-dark", "seasonal": { "show": "sometimes" } }"#)
+            .expect("written by hand");
+        let read = appearance(data.path());
+        assert_eq!((read.dark.as_str(), read.seasonal), ("yule-dark", SeasonalSettings::default()));
     }
 
     #[test]

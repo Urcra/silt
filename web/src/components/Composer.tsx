@@ -17,6 +17,7 @@ import { ComposerFolded } from './composerFolded'
 import { RoundButton } from './RoundButton'
 import { useComposerHistory } from './useComposerHistory'
 import { Keys, VoiceBar, VoiceButton, VoiceNote, VoiceOffer } from './VoiceButton'
+import { SnowDrift } from './Seasonal'
 
 export { RoundButton }
 
@@ -542,6 +543,7 @@ export function ComposerBox({
           dragging ? 'border-accent' : waiting ? 'border-warn' : 'border-line-strong',
         )}
       >
+        <SnowDrift />
         {offered.length > 0 && <CommandMenu id={id} offered={offered} active={active} onPick={pick} />}
         {!inline && dictation.available && <VoiceOffer dictation={dictation} side="right" />}
         {above}
