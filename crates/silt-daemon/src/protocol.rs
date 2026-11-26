@@ -2887,6 +2887,8 @@ mod tests {
             ArtifactSettings::decl(&config),
             silt_proto::view::AppearanceMode::decl(&config),
             silt_proto::view::AppearanceSettings::decl(&config),
+            silt_proto::view::SeasonalSettings::decl(&config),
+            silt_proto::view::SeasonalShow::decl(&config),
             silt_theme::text::TextSettings::decl(&config),
             silt_theme::text::Zoom::decl(&config),
             silt_theme::text::UiSize::decl(&config),

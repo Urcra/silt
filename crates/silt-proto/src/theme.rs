@@ -40,6 +40,49 @@ pub struct AppearanceSettings {
     /// Sizes, fonts and spacing over the theme (ADR 0107).
     #[serde(default, deserialize_with = "silt_theme::text::lenient_settings")]
     pub text: TextSettings,
+    /// December's decorations in the desktop app (ADR 0133).
+    #[serde(default, deserialize_with = "lenient_seasonal")]
+    pub seasonal: SeasonalSettings,
+}
+
+/// When the desktop app shows its December decorations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum SeasonalShow {
+    /// From 1 December to 6 January.
+    #[default]
+    Auto,
+    Always,
+    Off,
+}
+
+/// The desktop app's December decorations (ADR 0133): when they show, and
+/// whether snow falls on the screens with nothing to read yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SeasonalSettings {
+    #[serde(default)]
+    pub show: SeasonalShow,
+    #[serde(default = "snow_falls")]
+    pub snow: bool,
+}
+
+fn snow_falls() -> bool {
+    true
+}
+
+impl Default for SeasonalSettings {
+    fn default() -> Self {
+        Self { show: SeasonalShow::Auto, snow: snow_falls() }
+    }
+}
+
+/// `SeasonalSettings`, or the defaults where they can't be read, so a slip
+/// in a hand-edited file keeps the theme pick.
+fn lenient_seasonal<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<SeasonalSettings, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 fn default_light() -> String {
@@ -52,7 +95,13 @@ fn default_dark() -> String {
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
-        Self { mode: AppearanceMode::System, light: default_light(), dark: default_dark(), text: TextSettings::default() }
+        Self {
+            mode: AppearanceMode::System,
+            light: default_light(),
+            dark: default_dark(),
+            text: TextSettings::default(),
+            seasonal: SeasonalSettings::default(),
+        }
     }
 }
 

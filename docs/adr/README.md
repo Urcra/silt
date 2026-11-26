@@ -137,3 +137,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0129](0129-nightly-releases-and-three-channels.md) | Nightly releases, and three channels: stable, nightly and dev | accepted |
 | [0130](0130-the-whole-gate-on-every-pull-request.md) | The whole gate on every pull request | accepted |
 | [0131](0131-the-gate-runs-on-the-pull-request.md) | The gate runs on the pull request | accepted |
+| [0133](0133-december-decorations-in-the-desktop-app.md) | December decorations in the desktop app | accepted |
