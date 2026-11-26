@@ -11,7 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-gix = { version = "0.89.0", default-features = false, features = ["attributes", "sha1"] }
+gix = { version = "0.90.0", default-features = false, features = ["attributes", "sha1"] }
 silt-os = { path = "../silt-os" }
 silt-types = { path = "../silt-types" }
 tempfile = "3.27.0"
