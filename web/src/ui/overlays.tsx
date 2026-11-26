@@ -114,6 +114,111 @@ export interface MenuItem {
   danger?: boolean
 }
 
+/** Arrow keys move between a menu's items, round from the last to the first. */
+function moveIn(list: HTMLElement | null, event: KeyboardEvent) {
+  const step = { ArrowDown: 1, ArrowUp: -1 }[event.key]
+  if (!step || !list) return
+  event.preventDefault()
+  const buttons = [...list.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+  const at = buttons.indexOf(document.activeElement as HTMLButtonElement)
+  buttons[(at + step + buttons.length) % buttons.length]?.focus()
+}
+
+/** A menu's items, the same in a button's menu and one opened by a right-click. */
+function MenuItems({ items, onPick }: { items: MenuItem[]; onPick: () => void }) {
+  return (
+    <>
+      {items.map((item) => (
+        <li key={item.label} role="none" className={cx(item.divided && 'mt-1 border-t border-line pt-1')}>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={item.disabled}
+            onClick={() => {
+              onPick()
+              item.onSelect()
+            }}
+            className={cx(
+              'flex w-full items-center gap-2.5 rounded-sm px-2.5 py-1 text-left text-sm whitespace-nowrap hover:bg-surface-2 focus:bg-surface-2 max-md:min-h-11',
+              item.danger ? 'text-danger' : 'text-fg-1',
+              // The chosen one is disabled, as picking it again does nothing, but reads in full.
+              !item.checked && 'disabled:opacity-40',
+            )}
+          >
+            {item.lead ?? (item.icon && <Icon name={item.icon} className="h-4 w-4 shrink-0 text-fg-2" />)}
+            <span className="flex-1">{item.label}</span>
+            {item.hint && <span className="ml-4 font-mono text-2xs text-fg-3">{item.hint}</span>}
+            {item.checked !== undefined &&
+              (item.checked ? (
+                <Icon name="check" label="shown here" className="h-3.5 w-3.5 shrink-0 text-accent-fg" />
+              ) : (
+                <span className="h-3.5 w-3.5 shrink-0" />
+              ))}
+          </button>
+        </li>
+      ))}
+    </>
+  )
+}
+
+/** Where a right-click opened a menu, in the window's pixels. */
+export interface MenuAt {
+  x: number
+  y: number
+}
+
+/**
+ * A menu opened by a right-click, in place of the browser's: at the pointer, kept inside the window, closed by Escape, a
+ * click elsewhere or a pick.
+ */
+export function ContextMenu({
+  label,
+  items,
+  at,
+  onClose,
+}: {
+  label: string
+  items: MenuItem[]
+  at: MenuAt
+  onClose: () => void
+}) {
+  const list = useRef<HTMLUListElement>(null)
+  const none = useRef<HTMLElement>(null)
+  const [place, setPlace] = useState(at)
+  useDismiss(true, onClose, list, none)
+  useLayoutEffect(() => {
+    const box = list.current?.getBoundingClientRect()
+    if (!box) return
+    setPlace({
+      x: Math.max(4, Math.min(at.x, window.innerWidth - box.width - 4)),
+      y: Math.max(4, Math.min(at.y, window.innerHeight - box.height - 4)),
+    })
+    list.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+  }, [at])
+  useEffect(() => {
+    window.addEventListener('blur', onClose)
+    window.addEventListener('resize', onClose)
+    return () => {
+      window.removeEventListener('blur', onClose)
+      window.removeEventListener('resize', onClose)
+    }
+  }, [onClose])
+  return createPortal(
+    <ul
+      ref={list}
+      role="menu"
+      aria-label={label}
+      onKeyDown={(event) => moveIn(list.current, event)}
+      onContextMenu={(event) => event.preventDefault()}
+      style={{ left: place.x, top: place.y }}
+      className="fixed z-50 min-w-40 rounded-md border border-line bg-elevated p-1 shadow-overlay"
+    >
+      <MenuItems items={items} onPick={onClose} />
+    </ul>,
+    document.body,
+  )
+}
+
 /** A button opening a list of actions; arrow keys move between them. */
 export function Menu({
   label,
@@ -141,14 +246,7 @@ export function Menu({
   useEffect(() => {
     if (open) list.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
   }, [open])
-  const move = (event: KeyboardEvent) => {
-    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key]
-    if (!step || !list.current) return
-    event.preventDefault()
-    const buttons = [...list.current.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
-    const at = buttons.indexOf(document.activeElement as HTMLButtonElement)
-    buttons[(at + step + buttons.length) % buttons.length]?.focus()
-  }
+  const move = (event: KeyboardEvent) => moveIn(list.current, event)
   return (
     <div className="relative inline-block">
       <button
@@ -170,36 +268,13 @@ export function Menu({
           onKeyDown={move}
           className={cx(PANEL, above ? 'bottom-full mb-1' : 'mt-1', align === 'left' ? 'left-0' : 'right-0', 'min-w-40 p-1')}
         >
-          {items.map((item) => (
-            <li key={item.label} role="none" className={cx(item.divided && 'mt-1 border-t border-line pt-1')}>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={item.disabled}
-                onClick={() => {
-                  close()
-                  button.current?.focus()
-                  item.onSelect()
-                }}
-                className={cx(
-                  'flex w-full items-center gap-2.5 rounded-sm px-2.5 py-1 text-left text-sm whitespace-nowrap hover:bg-surface-2 focus:bg-surface-2 max-md:min-h-11',
-                  item.danger ? 'text-danger' : 'text-fg-1',
-                  // The chosen one is disabled, as picking it again does nothing, but reads in full.
-                  !item.checked && 'disabled:opacity-40',
-                )}
-              >
-                {item.lead ?? (item.icon && <Icon name={item.icon} className="h-4 w-4 shrink-0 text-fg-2" />)}
-                <span className="flex-1">{item.label}</span>
-                {item.hint && <span className="ml-4 font-mono text-2xs text-fg-3">{item.hint}</span>}
-                {item.checked !== undefined &&
-                  (item.checked ? (
-                    <Icon name="check" label="shown here" className="h-3.5 w-3.5 shrink-0 text-accent-fg" />
-                  ) : (
-                    <span className="h-3.5 w-3.5 shrink-0" />
-                  ))}
-              </button>
-            </li>
-          ))}
+          <MenuItems
+            items={items}
+            onPick={() => {
+              close()
+              button.current?.focus()
+            }}
+          />
         </ul>
       )}
     </div>

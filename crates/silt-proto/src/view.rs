@@ -1114,6 +1114,9 @@ pub struct GraphQuery {
     pub project: Option<String>,
     /// Only this family's threads.
     pub family: Option<String>,
+    /// Only the threads of this thread's family, by its id; none when it
+    /// isn't one the reader may see.
+    pub thread: Option<String>,
     /// Only the person's own threads.
     pub mine: bool,
     /// Comma-separated kinds to show; all by default.

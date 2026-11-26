@@ -7,7 +7,6 @@ pub mod conventions;
 mod filters;
 mod moves;
 mod notes;
-mod pull;
 mod remote;
 mod untracked;
 
@@ -24,7 +23,6 @@ pub use checkout::ManagedCheckout;
 pub use filters::Filters;
 pub use moves::{BadGitState, GitState};
 pub use notes::{BlamedLine, NOTES_REF, changed_lines};
-pub use pull::compare_url;
 pub use remote::{is_folder_project, normalize_remote};
 
 #[derive(Debug, thiserror::Error)]

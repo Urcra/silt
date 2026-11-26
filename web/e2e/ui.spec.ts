@@ -77,6 +77,13 @@ test('lists threads and searches across compaction', async ({ page }) => {
   const threads = page.getByTestId('threads')
   await expect(threads).toContainText(thread)
   await expect(threads.getByRole('row').filter({ hasText: fork })).toContainText(`fork of ${thread}`)
+  // A thread's menu opens its history: its family in the graph, with its newest row chosen.
+  await threads.getByRole('row').filter({ hasText: fork }).click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'History of this thread' }).click()
+  await expect(page).toHaveURL(/\/graph\?thread=/)
+  await expect(page.getByRole('tab', { name: 'This thread’s family' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('complementary', { name: 'selected' }).getByRole('link', { name: `Thread ${fork}` })).toBeVisible()
+  await allThreads(page)
 
   await page.keyboard.press('ControlOrMeta+Shift+F')
   await page.getByLabel('search', { exact: true }).fill('farewell')
@@ -104,12 +111,15 @@ test('shows a thread with compaction, turn diffs and comments', async ({ page })
   await expect(page.getByTestId('compaction')).toBeVisible()
   await page.getByTestId('compaction').getByRole('button', { name: 'Show summary' }).click()
   await expect(page.getByText('Compaction summary: Summary: farewell was added to main.')).toBeVisible()
-  // The agent that recorded it, by its mark (ADR 0114).
-  await expect(page.getByRole('main').getByRole('img', { name: 'Claude Code' })).toBeVisible()
-  await page.getByRole('button', { name: 'More for this thread' }).click()
-  await page.getByLabel('agent', { exact: true }).selectOption('codex')
-  await expect(page.getByRole('button', { name: /^silt resume \w+ --agent codex$/ })).toBeVisible()
+  // A right-click on it in the sidebar offers its id, for `silt resume` and `silt fork` in a terminal.
+  await page
+    .getByRole('navigation', { name: 'projects' })
+    .getByRole('link', { name: /farewell/ })
+    .first()
+    .click({ button: 'right' })
+  await expect(page.getByRole('menuitem', { name: `Copy thread ID ${thread.slice(-12)}` })).toBeVisible()
   await page.keyboard.press('Escape')
+  await expect(page.getByRole('menu')).toHaveCount(0)
 
   await page.getByRole('button', { name: 'show what turn 1 changed' }).click()
   await expect(page.getByTestId('diff').first()).toContainText('+ fn farewell() {}')
@@ -120,9 +130,11 @@ test('shows a thread with compaction, turn diffs and comments', async ({ page })
   await expect(changes.getByTestId('diff')).toContainText('+ fn farewell() {}')
   // Hiding git's changes leaves them out of the Changes tab's counts too, whatever the panel compares.
   const counted = page.waitForRequest((request) => /\/diff\/stats\?git=hide$/.test(request.url()))
+  await page.getByRole('button', { name: 'How the diff shows' }).click()
   await page.getByRole('checkbox', { name: 'Hide git’s changes' }).check()
   await counted
   await page.getByRole('checkbox', { name: 'Hide git’s changes' }).uncheck()
+  await page.keyboard.press('Escape')
 
   await page.getByText('Please add a farewell line to main').hover()
   await page.getByRole('button', { name: 'comment on entry 0' }).click()

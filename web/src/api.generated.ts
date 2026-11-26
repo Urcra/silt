@@ -778,6 +778,11 @@ project: string | null,
  */
 family: string | null, 
 /**
+ * Only the threads of this thread's family, by its id; none when it
+ * isn't one the reader may see.
+ */
+thread: string | null, 
+/**
  * Only the person's own threads.
  */
 mine: boolean, 

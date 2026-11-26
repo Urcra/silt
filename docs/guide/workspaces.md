@@ -57,7 +57,7 @@ silt workspace policy Work --network full --ranges 10.20.0.0/16 --devices named 
 ```
 - `--network`: `none`; `gateway`, the HTTP(S) of tools through Silt only, to the hosts `--hosts` names (`*.github.com,registry.npmjs.org`), or any public one; `full` (the default), any public host but never this machine, its networks or cloud metadata; or `host`, this machine's own network, `127.0.0.1` and Silt's web UI included.
 - `--ranges`: address ranges full internet reaches past those always blocked, such as a VPN's.
-- `--devices`: `none`, `relayed`, `named` (the nodes `--device-nodes` lists) or `all_usb`. `relayed` is the one to start with: Silt opens each device `--device-nodes` lists on this machine and hands the sandbox a session of it, which outlives the agent's restarts and comes back when the thread is resumed here. A serial port, `/dev/ttyUSB0@115200`, shows up at its own path as a terminal; `adb:SERIAL` gives the sandbox's adb this machine's adb server, filtered so it sees and drives that one device only. The thread's Access tab, or `silt access show`, lists them, and releasing one ends its session.
+- `--devices`: `none`, `relayed`, `named` (the nodes `--device-nodes` lists) or `all_usb`. `relayed` is the one to start with: Silt opens each device `--device-nodes` lists on this machine and hands the sandbox a session of it, which outlives the agent's restarts and comes back when the thread is resumed here. A serial port, `/dev/ttyUSB0@115200`, shows up at its own path as a terminal; `adb:SERIAL` gives the sandbox's adb this machine's adb server, filtered so it sees and drives that one device only. The thread's Details, or `silt access show`, lists them, and releasing one ends its session.
 - `--ports`, `--paths` (`/path` read-only, `/path:rw` writable), `--gpu on`, `--docker on` and `--ssh-agent on` hand over more of this machine. Docker is root on this machine, and the SSH agent signs as you with every key it holds, anywhere.
 - `--nested off` keeps the agent's own sandbox from running inside Silt's.
 - A folder `--paths` names is judged where it really is, links followed. It's never handed over when it is, holds or sits in the home folder, Silt's data or a credential's folder (`~/.ssh`, `~/.config`, `~/.aws` and the like): name the project folders themselves. In a writable folder, every git repo keeps its `.git` in place and its git config, hooks and `.silt/` read-only, so nothing the agent does there runs when you next use git. A writable folder is otherwise yours as the checkout is: look at what the agent changed before you run things there. A writable folder too large to look through for repos is left out: name the repos in it, or give it read-only.
@@ -155,7 +155,7 @@ silt approve 3
 - Rules are yours to set per action: `silt plugin rule <id> <action> allow|ask|never`, with `--where field=pattern` for some calls only. A never from any rule wins.
 - A call that was sent but whose end Silt didn't see, the daemon stopping included, reads as *outcome unknown*, and isn't sent again by itself.
 - The agent waits on a call it was told is pending with `silt_plugin_wait`.
-- `silt access show <thread>`, or the thread's Access tab, lists every call, how it ended, the grants in force and what the gateway refused.
+- `silt access show <thread>`, or the thread's Details, lists every call, how it ended, the grants in force and what the gateway refused.
 
 An agent outside Silt's sandbox runs as you, and could answer its own approvals through Silt's socket: approvals hold only for sandboxed runs.
 

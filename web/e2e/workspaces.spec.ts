@@ -239,22 +239,19 @@ test("a workspace's sandbox reach and its plugins are set in its settings, and a
   await reach.scrollIntoViewIfNeeded()
   await shoot(page, '7-sandbox-settings', 1600)
 
-  // A thread's header says what its agent's sandbox reaches, to read rather than change.
+  // A thread's Access tab says what its agent's sandbox reaches, to read rather than change, what reached the thread
+  // through Silt, and the grants in force.
   await page
     .getByRole('navigation', { name: 'projects' })
     .getByRole('link', { name: /work on the app/ })
     .first()
     .click()
-  await page.getByRole('button', { name: 'Sandbox' }).click()
-  const shield = page.getByRole('dialog', { name: 'Sandbox' })
-  await expect(shield).toContainText('The next run is sandboxed')
-  await expect(shield).toContainText('None')
-  await expect(shield).toContainText('the GPU')
-  await shoot(page, '8-sandbox-shield')
-
-  // The Access tab lists what reached the thread through Silt, and the grants in force.
-  await page.keyboard.press('Escape')
-  await page.getByRole('tab', { name: 'Access' }).click()
+  await page.getByRole('tab', { name: 'Details' }).click()
+  const next = page.getByRole('region', { name: 'this run' })
+  await expect(next).toContainText('The next run')
+  await expect(next).toContainText('None')
+  await expect(next).toContainText('the GPU')
+  await shoot(page, '8-sandbox-access')
   await expect(page.getByRole('region', { name: 'granted' })).toContainText('Nothing beyond each call you approve')
   await expect(page.getByRole('region', { name: 'plugin calls' })).toContainText('None yet')
 })
@@ -392,7 +389,7 @@ test('an agent asks for a folder on a card, and goes on with it once approved (A
   // The agent is restarted in a sandbox with it, told what's there, and goes on.
   // The note it was sent comes first; its answer quotes it.
   await expect(page.getByText(/is now in your sandbox, read-only, at that path/).first()).toBeVisible({ timeout: 60_000 })
-  await page.getByRole('tab', { name: 'Access' }).click()
+  await page.getByRole('tab', { name: 'Details' }).click()
   const folders = page.getByRole('region', { name: 'folders' })
   await expect(folders).toContainText(shared)
   await shoot(page, '8-folder-granted')

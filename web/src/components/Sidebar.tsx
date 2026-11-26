@@ -30,13 +30,28 @@ import { type Section, inListOrder, needsYou, old, section, sections, unread } f
 import { hosted, serverName } from '../served'
 import { formatKeys } from '../shortcuts'
 import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
-import { useThreadState } from '../threadState'
 import { ago } from '../time'
-import { Button, Dot, type DotTone, Icon, type IconName, Kbd, Menu, Popover, SectionLabel, Skeleton, Spinner, cx } from '../ui'
+import {
+  Button,
+  ContextMenu,
+  Dot,
+  type DotTone,
+  Icon,
+  type IconName,
+  Kbd,
+  Menu,
+  useMenuAt,
+  Popover,
+  SectionLabel,
+  Skeleton,
+  Spinner,
+  cx,
+} from '../ui'
 import { pillOf, useUpdate } from '../updates'
 import { useInWorkspace } from '../workspaceFilter'
 import { AgentMark } from './AgentMark'
 import { MachineChip, MachineInitial, MachineStripe } from './MachineMark'
+import { useThreadMenu } from './ThreadMenu'
 import { ThreadMark } from './ThreadMark'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 import { SnowDrift } from './Seasonal'
@@ -169,7 +184,8 @@ function ThreadItem({
 }) {
   const now = useNow()
   const title = thread.title ?? 'Untitled thread'
-  const actions = useThreadState(thread)
+  const { items: actions, dialogs } = useThreadMenu(thread)
+  const menu = useMenuAt()
   const item = useRef<HTMLLIElement>(null)
   const marked = useMachineMark(thread)
   const elsewhere = backendOf(thread) !== undefined
@@ -179,7 +195,11 @@ function ThreadItem({
     if (open && current) item.current?.scrollIntoView?.({ block: 'nearest' })
   }, [open, current])
   return (
-    <li ref={item} className="group relative flex items-center">
+    <li
+      ref={item}
+      className="group relative flex items-center [-webkit-touch-callout:none] pointer-coarse:select-none"
+      {...menu.handlers}
+    >
       <Link
         to="/t/$id"
         params={{ id: thread.id }}
@@ -222,6 +242,8 @@ function ThreadItem({
       <span className="absolute right-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
         <Menu label={`actions for ${title}`} trigger={<Icon name="more" />} items={actions} />
       </span>
+      {menu.at && <ContextMenu label={`actions for ${title}`} items={actions} at={menu.at} onClose={menu.close} />}
+      {dialogs}
     </li>
   )
 }
@@ -293,6 +315,7 @@ function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
 /**
  * One project's threads, those busy in the last few minutes by title and then newest first, folded away
  * by its name, with what's old, settled or snoozed behind a count. An older project is one row until opened, and then has nothing to hold back.
+ * Once toggled, the fold stays as the person left it in this browser.
  */
 function ProjectGroup({
   repo,
@@ -309,7 +332,7 @@ function ProjectGroup({
   now: number
   older?: boolean
 }) {
-  const [open, setOpen] = useState(!older)
+  const [open, setOpen] = useFold(`project:${repo}`, !older)
   const [showRest, setShowRest] = useState(false)
   const ordered = [...threads].sort(inListOrder(now))
   const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
@@ -865,7 +888,7 @@ export function Sidebar() {
   // Chats have a section of their own above the projects (ADR 0059).
   const chats = listed.filter((thread) => isChat(thread.repo))
   const inProjects = listed.filter((thread) => !isChat(thread.repo))
-  const [showOlder, setShowOlder] = useState(false)
+  const [showOlder, setShowOlder] = useFold('older-projects', false)
   const byProject = projects(inProjects)
   const isOlder = ([, inRepo]: [string, ThreadSummary[]]) => inRepo.every((thread) => old(thread, now))
   const recentProjects = byProject.filter((project) => !isOlder(project))

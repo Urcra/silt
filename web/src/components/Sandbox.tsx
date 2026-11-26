@@ -21,7 +21,7 @@ import { BACKENDS, DEVICE_ORDER, DEVICES, HANDS_OVER, NETWORK_ORDER, NETWORKS, P
 import { useNow } from '../now'
 import { hosted } from '../served'
 import { useShortcut } from '../shortcuts'
-import { Button, Icon, Input, Kbd, Popover, Select, Tag, buttonClass, cx } from '../ui'
+import { Button, Icon, Input, Kbd, Select, Tag, cx } from '../ui'
 import { PluginCard } from './PluginCard'
 import { TONE_DOT, callSaid, clock } from '../calls'
 
@@ -53,97 +53,6 @@ function alsoLine(reach: Reach): string | null {
   if (reach.docker) parts.push('Docker')
   if (reach.ssh_agent) parts.push('ssh-agent')
   return parts.length ? parts.join(' · ') : null
-}
-
-function Fact({ name, children }: { name: string; children: ReactNode }) {
-  return (
-    <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-3 border-b border-line-subtle px-3 py-2 text-xs last:border-b-0">
-      <span className="text-fg-2">{name}</span>
-      <span>{children}</span>
-    </div>
-  )
-}
-
-/**
- * The header's shield (ADR 0093): what the thread's agent reaches, to read rather than change mid-run. A run Silt
- * sandboxed says what it was given; otherwise it says what the workspace's rules give the next one.
- */
-export function SandboxShield({
-  thread,
-  summary,
-  agent,
-}: {
-  thread: string
-  summary: ThreadSummary | undefined
-  agent: AgentStatus | null | undefined
-}) {
-  const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
-  const plugins = useQuery({ queryKey: keys.plugins, queryFn: api.plugins, enabled: !hosted() })
-  if (hosted() || !summary) return null
-  const view = workspaceOf(workspaces.data, summary.repo, summary.workspace)
-  const required = Boolean(view?.effective.silt_sandbox)
-  const live = agent && agent.state !== 'stopped' ? agent : null
-  const running = live?.sandbox ?? null
-  const reach = running ?? (!live && required && view ? reachOf(view.effective) : null)
-  const on = (plugins.data ?? []).map((plugin) => plugin.installed).filter((plugin) => view && onIn(plugin, view.workspace.id))
-  const heading = running
-    ? 'Sandboxed'
-    : live
-      ? "Not in Silt's sandbox"
-      : required
-        ? 'The next run is sandboxed'
-        : "Not in Silt's sandbox"
-  return (
-    <Popover
-      label="Sandbox"
-      triggerLabel={running ? 'Sandboxed' : 'Sandbox'}
-      align="right"
-      triggerClassName={cx(buttonClass('secondary'), running && 'text-ok')}
-      panelClassName="w-96 p-0"
-      trigger={<Icon name="shield" className="h-3.5 w-3.5" />}
-    >
-      {(close) => (
-        <div className="flex flex-col" data-thread={thread}>
-          <div className="flex items-center gap-2 border-b border-line-subtle px-3 py-2.5">
-            <Icon name="shield" className="h-3.5 w-3.5" />
-            <span className="flex-1 text-sm font-medium">{heading}</span>
-            {view && (
-              <span className="font-mono text-2xs text-fg-2">
-                {view.workspace.name}
-                {reach ? ` · ${view?.effective.backend ?? reach.backend}` : ''}
-              </span>
-            )}
-          </div>
-          {reach ? (
-            <>
-              <Fact name="Network">{networkLine(reach)}</Fact>
-              {alsoLine(reach) && <Fact name="Also allowed">{alsoLine(reach)}</Fact>}
-              <Fact name="Devices">{devicesLine(reach)}</Fact>
-              <Fact name="Plugins">{on.length ? on.map((plugin) => plugin.id).join(', ') : 'None'}</Fact>
-              <Fact name="Files">This checkout, your toolchains read-only</Fact>
-              <Fact name="Credentials">None inside; Silt adds the workspace's on the way out</Fact>
-            </>
-          ) : (
-            <p className="px-3 py-2.5 text-xs text-fg-2">
-              {live
-                ? 'This run is limited only by its own permissions and its agent’s own sandbox, if any.'
-                : `${view?.workspace.name ?? 'Its workspace'} doesn't run its agents in Silt's sandbox, so they run as you.`}
-            </p>
-          )}
-          <div className="flex items-center gap-2 border-t border-line-subtle px-3 py-2">
-            <span className="flex-1 text-2xs text-fg-2">
-              {running
-                ? `Set by ${view?.workspace.name ?? 'its workspace'}'s rules when the run started.`
-                : 'Set by its workspace’s rules.'}
-            </span>
-            <Link to="/settings/$section" params={{ section: 'workspaces' }} className="text-xs text-accent-fg" onClick={close}>
-              Workspace settings
-            </Link>
-          </div>
-        </div>
-      )}
-    </Popover>
-  )
 }
 
 /** What approving may also allow: nothing more, or calls like it for the run or the thread a while. */
@@ -860,7 +769,19 @@ function Heading({ children }: { children: ReactNode }) {
  * The thread's Access tab (ADR 0093): what its sandbox reaches, the grants in force, each plugin call and how it
  * ended, and what the gateway refused.
  */
-export function AccessPanel({ thread, agent }: { thread: string; agent: AgentStatus | null | undefined }) {
+export function AccessPanel({
+  thread,
+  summary,
+  agent,
+  embedded = false,
+}: {
+  thread: string
+  summary: ThreadSummary | undefined
+  agent: AgentStatus | null | undefined
+  /** Its sections only, in a list of others such as Details. */
+  embedded?: boolean
+}) {
+  const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
   const queries = useQueryClient()
   const access = useQuery({ queryKey: keys.access(thread), queryFn: () => api.access(thread), enabled: !hosted() })
   const [error, setError] = useState<string>()
@@ -885,12 +806,16 @@ export function AccessPanel({ thread, agent }: { thread: string; agent: AgentSta
       (failure: unknown) => setError(message(failure)),
     )
   }
-  const reach = agent && agent.state !== 'stopped' ? agent.sandbox : null
+  const live = agent && agent.state !== 'stopped' ? agent : null
+  const view = summary ? workspaceOf(workspaces.data, summary.repo, summary.workspace) : undefined
+  // With nothing running, what the workspace's rules give the next run, when they sandbox it.
+  const next = !live && view?.effective.silt_sandbox ? reachOf(view.effective) : null
+  const reach = live?.sandbox ?? next
   const grants = (access.data?.grants ?? []).filter((grant) => grant.active)
   return (
-    <div className="flex flex-col gap-6 px-5 py-5 text-sm">
+    <div className={cx('flex flex-col gap-6 text-sm', !embedded && 'px-5 py-5')}>
       <section aria-label="this run" className="flex flex-col gap-2">
-        <Heading>This run</Heading>
+        <Heading>{next ? 'The next run' : 'This run'}</Heading>
         {reach ? (
           <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs">
             <span className="text-fg-2">Sandbox</span>
@@ -908,7 +833,9 @@ export function AccessPanel({ thread, agent }: { thread: string; agent: AgentSta
           </div>
         ) : (
           <p className="text-xs text-fg-2">
-            {agent && agent.state !== 'stopped' ? "Not in Silt's sandbox." : 'No agent runs here now.'}
+            {live
+              ? "Not in Silt's sandbox."
+              : `No agent runs here now. ${view?.workspace.name ?? 'Its workspace'} doesn't run its agents in Silt's sandbox, so they run as you.`}
           </p>
         )}
       </section>

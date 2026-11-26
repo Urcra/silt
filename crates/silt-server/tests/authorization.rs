@@ -1269,6 +1269,9 @@ async fn the_graph_shows_turns_forks_and_requests_of_what_each_person_sees() {
     assert_eq!(turns.as_array().expect("rows").len(), 1);
     let (_, older) = alice.get("/graph?before=20").await;
     assert!(older.as_array().expect("rows").iter().all(|row| row["time_ms"].as_i64() < Some(20)));
+    let (_, of_fork) = alice.get(&format!("/graph?thread={FORK}")).await;
+    assert_eq!(of_fork, rows, "a thread's family is the whole of this one");
+    assert_eq!(alice.get("/graph?thread=nothing").await.1, serde_json::json!([]));
 
     let dave = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "dave").expect("dave").1, "dave").await;
     assert_eq!(dave.get("/graph").await.1, serde_json::json!([]), "dave isn't in the org");
