@@ -39,7 +39,7 @@ Silt is an open-source (AGPL-3.0), self-hostable workspace for coding with agent
   - `silt-shipped`: the plugins shipped with Silt (`plugins/`), built for `wasm32-wasip2` by its build script and embedded (`SILT_SKIP_PLUGIN_BUILD=1` skips them, ADR 0104);
   - `silt-vendor`: the CDN files artifacts load through Silt, fetched and kept (ADR 0071);
   - `silt-media`: what an image or a video is, images' previews, and a blob served by range (ADR 0121);
-  - `silt-update`: which build this is (commit, clone, stable or nightly channel), whether a newer one is out, and an update's steps and state (ADR 0100);
+  - `silt-update`: which build this is (commit, clone, and its channel: stable, nightly or dev), whether a newer one is out, and an update's steps and state (ADR 0100, ADR 0129);
   - `silt-os`: what each OS does its own way (Windows' pipe and DACLs, detaching, links, WSL paths). The only crate with `unsafe`; platform code goes here rather than as `cfg`s in the others (ADR 0045).
 - **Wiring:**
   - `silt-web`: the embedded web UI; its `build.rs` builds `web/dist` when missing (`SILT_SKIP_WEB_BUILD=1` skips it);
