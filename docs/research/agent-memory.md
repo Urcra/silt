@@ -132,6 +132,22 @@ Nothing does for memory what `AGENTS.md` does for rules or `.agents/skills` for 
 {"type":"relation","from":"Ada","to":"Silt","relationType":"works_on"}
 ```
 
+## Memory that isn't a project's
+Every agent has somewhere to keep what holds in every project, but only Codex and Gemini CLI have their agent write there by itself:
+
+| Agent | Person-wide | Written by |
+| --- | --- | --- |
+| Claude Code | `~/.claude/CLAUDE.md` and `~/.claude/rules/*.md`, which its binary calls "your user-level memory file"; `~/.claude/agent-memory/<name>/` for a subagent with `memory: user` | the person, or the agent when asked; the subagent itself |
+| Gemini CLI | `~/.gemini/GEMINI.md`, one of the four places its prompt routes a fact to (0.43 and older: `## Gemini Added Memories` in it); `experimental.autoMemory` writes patches for it to `.inbox/global/` | the agent, by itself |
+| Codex, Qudiks | the whole memory store, one per home; `memory_summary.md`'s `## User Profile` and `## User preferences` are about the person; `~/.codex/AGENTS.md` | the consolidation pass; the person |
+| Copilot CLI | user-level preferences on GitHub, which follow the person across repositories | `store_memory` |
+| OpenCode | `~/.config/opencode/AGENTS.md`; `home_memory`, only for sessions in `$HOME` | the person; a daily pass |
+| Antigravity CLI | `~/.gemini/{,config/}{AGENTS,GEMINI}.md`, `~/.gemini/config/rules/` | `/learn`, approved |
+
+**Claude Code's auto memory has no person-wide folder** (probed and read in the binary): its `user` kind, "the user's role, goals, responsibilities, and knowledge", goes in the project's folder like the rest. What it learns about you in one project is learned again in the next, and kept once per project.
+
+So person-wide memory is mostly in rules files the person also writes, where an agent's lines and the person's sit together: `~/.gemini/GEMINI.md` mixes them, and only Gemini CLI 0.43's heading marks which are the agent's.
+
 ## What this means for Silt
 Proposals for discussion, not decisions.
 
@@ -181,6 +197,13 @@ No agent reads another's memory, except Codex's import of Claude Code's (in deve
 - **Gemini CLI** might, if its private memory can be pointed at the same folder (to probe: does it read and keep Claude's frontmatter?).
 - **The others** get its index the way they get the skills and rules they don't read natively (`conventions.rs`), and MCP tools to read, search and add entries: `silt_memory_search`, `silt_memory_read`, `silt_memory_write`.
 - **Copilot:** optionally pushed with `copilot memories import`, which writes to GitHub, so only when asked.
+
+### 5. Memory about the person, everywhere
+Proposed, not yet decided: beside each project's store, Silt keeps one person-wide store of the same shape, synced as a family of its own, holding what applies in every project.
+- **Claude Code** gets its index with the project's, through `--append-system-prompt` (or the ACP session's system prompt), since it has no second memory folder to point at. Its `user`-kind memories, which it files per project, belong here; Silt can move them, or offer to.
+- **Gemini CLI, Codex and the rest** get it the way they get the project's store: injected, and through the MCP tools.
+- **The viewer** shows it as its own entry, "Everywhere", above the projects, with Codex's `## User Profile` and `## User preferences` and the person's own rules files (`~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`, `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md`) beside it.
+- A memory can move between a project and everywhere either way.
 
 ### Decided
 [ADR 0135](../adr/0135-agents-memory-follows-the-person.md): personal only; one store all agents share, which the person can turn off; synced as a family of its own; Copilot's GitHub memory written only when turned on.
