@@ -44,6 +44,8 @@ import { UsageRing } from './UsageRing'
 import { CloudLaunches } from './Cloud'
 import { ImportOffer } from './ImportOffer'
 import { hosted } from '../served'
+import { type Backend, newThreadOn, useBackends, useListings, useMachinesView } from '../desktop'
+import { countsOf, machineName } from '../elsewhere'
 import { ComposerBox } from './Composer'
 import { Page } from './Page'
 import { CloneHere } from './Projects'
@@ -713,7 +715,10 @@ export function NewThread() {
   const clones = choices.data?.clones ?? []
   const known = (path: string | undefined) => (path && clones.some((clone) => clone.path === path) ? path : undefined)
   const [picked, setPicked] = useState<string>()
-  const project = known(picked) ?? known(search.project) ?? known(stored<string>(LAST_PROJECT_KEY, '')) ?? clones[0]?.path ?? ''
+  // Another machine's New thread names its project by origin (ADR 0132).
+  const fromOrigin = search.origin ? clones.find((candidate) => candidate.repo === search.origin)?.path : undefined
+  const project =
+    known(picked) ?? known(search.project) ?? fromOrigin ?? known(stored<string>(LAST_PROJECT_KEY, '')) ?? clones[0]?.path ?? ''
   const clone = clones.find((candidate) => candidate.path === project)
   const repo = clone?.repo ?? ''
   const defaults = projectsQuery.data?.find((candidate) => candidate.clone === project)
@@ -734,6 +739,13 @@ export function NewThread() {
     setChosenMode(mode)
   }
   const [prompt, setPrompt] = useDraft(NEW_THREAD_DRAFT)
+  // What was typed on another machine's New thread comes along once, then leaves the address.
+  useEffect(() => {
+    if (search.draft === undefined) return
+    if (search.draft) setPrompt(search.draft)
+    void navigate({ to: '.', search: { ...search, draft: undefined }, replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.draft])
   const [drafts, setDrafts] = useState(() => stored<Draft[]>(DRAFTS_KEY, []))
   const [error, setError] = useState<string>()
   const [starting, setStarting] = useState(false)
@@ -912,9 +924,10 @@ export function NewThread() {
               projects={projectsQuery.data ?? []}
               value={project}
               onPick={pick}
-              opening={search.pick}
+              opening={search.pick ?? (search.origin && choices.isSuccess && !fromOrigin ? 'folder' : undefined)}
             />
           )}
+          <MachinePicker draft={prompt} origin={repo} />
           <span className="-ml-1.5">?</span>
         </h2>
         <form
@@ -1075,5 +1088,75 @@ export function NewThread() {
         <ImportOffer />
       </div>
     </Page>
+  )
+}
+
+/** "on [machine]" in New thread's headline, in All machines (ADR 0132): picking another machine starts the thread there. */
+function MachinePicker({ draft, origin }: { draft: string; origin: string }) {
+  const view = useMachinesView()
+  const { backends, current } = useBackends()
+  const listings = useListings()
+  const connected = backends.filter(
+    (backend) => backend.kind !== 'ssh' || backend.state === 'connected' || backend.id === current,
+  )
+  const shown = backends.find((backend) => backend.id === current)
+  if (view.list !== 'all' || connected.length < 2 || !shown) return null
+  const said = (backend: Backend) => {
+    const kind = backend.kind === 'ssh' ? 'over SSH' : backend.kind === 'wsl' ? 'WSL' : 'this computer'
+    const listing = listings.find((each) => each.id === backend.id)
+    const { running } = countsOf(listing)
+    return [kind, running > 0 && `${running} running`].filter(Boolean).join(' · ')
+  }
+  return (
+    <>
+      <span>on</span>
+      <Popover
+        label="Pick a machine"
+        triggerLabel={`machine: ${machineName(shown)}`}
+        triggerValue={shown.id}
+        triggerClassName="inline-flex items-center gap-1.5 rounded-sm border border-line px-2.5 py-0.5 text-display-sm font-medium text-fg-1 hover:bg-surface-2 aria-expanded:border-accent aria-expanded:bg-accent-tint"
+        panelClassName="w-[300px] max-w-[calc(100vw-20px)] p-1.5"
+        trigger={
+          <>
+            <Icon name={shown.kind === 'ssh' ? 'terminal' : 'laptop'} className="h-4 w-4" />
+            {machineName(shown)}
+            <Icon name="chevronDown" className="h-4 w-4 text-fg-2" />
+          </>
+        }
+      >
+        {(close) => (
+          <div className="flex flex-col gap-0.5 text-ui font-normal tracking-normal">
+            <p className="px-2.5 pt-1 pb-1.5 text-left text-2xs text-fg-2">
+              Starts the thread there. The window switches to it, and what you typed goes along.
+            </p>
+            {connected.map((backend) => {
+              const chosen = backend.id === current
+              return (
+                <button
+                  key={backend.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={chosen}
+                  onClick={() => {
+                    close()
+                    if (!chosen) newThreadOn(backend.id, draft, origin)
+                  }}
+                  className={cx(
+                    'grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-left text-fg-1 hover:bg-surface-2 max-md:min-h-11',
+                    chosen && 'bg-accent-tint',
+                  )}
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <b className="truncate font-medium">{machineName(backend)}</b>
+                    <span className="truncate font-mono text-2xs text-fg-2">{said(backend)}</span>
+                  </span>
+                  {chosen ? <Icon name="check" className="text-accent-fg" /> : <span />}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </Popover>
+    </>
   )
 }

@@ -313,3 +313,49 @@ test('All machines lists every connected machine’s threads, marked with their 
     delete window.__siltThreads
   }
 })
+
+test('in All machines, New thread asks which machine to start on, and picking another carries the draft and project there', async () => {
+  window.__siltBackends = [
+    { id: 'native', label: 'This computer', kind: 'native', colour: 'ink' },
+    { id: 'ssh:nuc', label: 'nuc', kind: 'ssh', state: 'connected', colour: 'teal' },
+  ]
+  window.__siltBackend = 'native'
+  window.__siltDesktop = { commit: 'abc', key: 'k', view: { list: 'all', mark: 'chip', markHere: false } }
+  const went: string[] = []
+  const location = window.location
+  vi.stubGlobal('location', {
+    ...location,
+    pathname: '/',
+    get href() {
+      return location.href
+    },
+    set href(to: string) {
+      went.push(to)
+    },
+  })
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) => {
+      const body = path.startsWith('/api/agents')
+        ? { agents: [], clones: [{ repo: 'github.com/u/silt', path: '/home/me/silt' }] }
+        : path.startsWith('/api/status')
+          ? { servers: [], sync_error: null }
+          : []
+      return new Response(JSON.stringify(body), { status: 200 })
+    }),
+  )
+  try {
+    render(<App />)
+    const picker = await screen.findByRole('button', { name: 'machine: This computer', hidden: false })
+    fireEvent.change(screen.getByLabelText('first prompt'), { target: { value: 'Fix the lexer' } })
+    fireEvent.click(picker)
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Pick a machine' })).getByRole('menuitemradio', { name: /nuc/ }))
+    await waitFor(() =>
+      expect(went).toContain('silt://open/?backend=ssh%3Anuc&new=1&origin=github.com%2Fu%2Fsilt&draft=Fix+the+lexer'),
+    )
+  } finally {
+    delete window.__siltBackends
+    delete window.__siltBackend
+    delete window.__siltDesktop
+  }
+})

@@ -1,7 +1,16 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { type Backend, type MachineTest, installSilt, switchBackend, testMachine } from '../desktop'
+import {
+  type Backend,
+  type MachineTest,
+  installSilt,
+  setMachineColour,
+  setMachinesList,
+  setMark,
+  switchBackend,
+  testMachine,
+} from '../desktop'
 import { machineProblem } from '../machines'
 import { MachinesSettings } from './Machines'
 
@@ -10,6 +19,9 @@ vi.mock('../desktop', async (original) => ({
   switchBackend: vi.fn(),
   testMachine: vi.fn(),
   installSilt: vi.fn(),
+  setMachinesList: vi.fn(),
+  setMark: vi.fn(),
+  setMachineColour: vi.fn(),
 }))
 
 const THIS: Backend = { id: 'native', label: 'This computer', kind: 'native' }
@@ -28,6 +40,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   delete window.__siltBackends
   delete window.__siltBackend
+  delete window.__siltDesktop
 })
 
 function show(backends: Backend[], current: string) {
@@ -223,4 +236,37 @@ test('a machine’s own page says it’s on another build, but leaves updating i
   const row = screen.getByRole('region', { name: 'vps' })
   expect(row).toHaveTextContent('This computer has silt 0.2.0. Update vps from This computer.')
   expect(within(row).queryByRole('button', { name: 'Update vps' })).toBeNull()
+})
+
+test('the list, how each thread’s machine is marked and each machine’s colour are picked here, for every machine’s page', () => {
+  window.__siltDesktop = { key: 'k', view: { list: 'all', mark: 'chip', markHere: false } }
+  show(
+    [
+      { ...THIS, colour: 'ink' },
+      { ...VPS, state: 'connected', colour: 'teal' },
+    ],
+    'native',
+  )
+  const threads = screen.getByRole('region', { name: 'Threads from other machines' })
+  expect(within(threads).getByRole('button', { name: 'All machines' })).toHaveAttribute('aria-pressed', 'true')
+  fireEvent.click(within(threads).getByRole('button', { name: 'One machine at a time' }))
+  expect(setMachinesList).toHaveBeenCalledWith('one')
+
+  expect(within(threads).getByRole('radio', { name: /Machine chip/ })).toBeChecked()
+  // Each option shows how a thread looks with it, with another machine's name.
+  expect(within(threads).getByText('Machine chip').closest('label')).toHaveTextContent('vpsWorking')
+  fireEvent.click(within(threads).getByRole('radio', { name: /Initial/ }))
+  expect(setMark).toHaveBeenCalledWith('initial', false)
+  fireEvent.click(within(threads).getByRole('checkbox', { name: /Mark the shown machine’s threads too/ }))
+  expect(setMark).toHaveBeenCalledWith('chip', true)
+
+  const vps = screen.getByRole('region', { name: 'vps' })
+  fireEvent.click(within(vps).getByRole('button', { name: 'vps’s colour: Teal' }))
+  fireEvent.click(screen.getByRole('radio', { name: 'Rose' }))
+  expect(setMachineColour).toHaveBeenCalledWith('ssh:vps', 'rose')
+})
+
+test('with one machine there’s nothing to list from others', () => {
+  show([THIS], 'native')
+  expect(screen.queryByRole('region', { name: 'Threads from other machines' })).toBeNull()
 })
