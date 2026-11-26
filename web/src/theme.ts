@@ -135,7 +135,7 @@ export function useAppearance() {
   // A daemon from before themes answers with no catalog; it shows Nous, and one from before text and layout no text.
   const kept = useSyncExternalStore(hearPick, keptPick)
   const given = hosted() ? hostedPick(kept) : (catalog.data?.appearance ?? DEFAULT_APPEARANCE)
-  // A daemon from before the December decorations answers without them (ADR 0131).
+  // A daemon from before the December decorations answers without them (ADR 0133).
   const settings = { ...given, text: given.text ?? {}, seasonal: given.seasonal ?? DEFAULT_APPEARANCE.seasonal }
   const save = async (next: AppearanceSettings) => {
     if (hosted()) {

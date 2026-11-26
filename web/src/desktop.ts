@@ -165,7 +165,7 @@ export function hexOf(computed: string): string | null {
 
 /**
  * The link that tells the desktop app's window which theme the page shows (ADR 0099), and for its
- * starting page's tree the theme's tones and when the December decorations show (ADR 0131).
+ * starting page's tree the theme's tones and when the December decorations show (ADR 0133).
  */
 export function themeLink(
   appearance: 'light' | 'dark',

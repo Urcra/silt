@@ -1232,7 +1232,7 @@ export type AppearanceSettings = { mode: AppearanceMode, light: string, dark: st
  */
 text: TextSettings, 
 /**
- * December's decorations in the desktop app (ADR 0131).
+ * December's decorations in the desktop app (ADR 0133).
  */
 seasonal: SeasonalSettings, };
 

@@ -51,7 +51,7 @@ const SEASONAL_SHOWS: { id: SeasonalShow; label: string }[] = [
   { id: 'off', label: 'Off' },
 ]
 
-/** The desktop app's December decorations (ADR 0131): when they show, and whether snow falls. */
+/** The desktop app's December decorations (ADR 0133): when they show, and whether snow falls. */
 function SeasonalSettingsRow({
   settings,
   choose,

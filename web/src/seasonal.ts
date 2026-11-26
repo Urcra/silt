@@ -1,4 +1,4 @@
-// December's decorations in the desktop app (ADR 0131): when they show, and
+// December's decorations in the desktop app (ADR 0133): when they show, and
 // whether anything in them may move.
 
 import { useSyncExternalStore } from 'react'

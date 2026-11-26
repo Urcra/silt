@@ -134,7 +134,7 @@ In December the desktop app decorates itself: lights under each page's header, a
 
 They take their colours from the theme you use, so the theme stays as it is, and nothing under them moves or stops working. Snow falls only on screens with nothing to read yet, and with less motion the lights stay lit and the snow lies still.
 
-**Settings › Appearance › Seasonal touches** chooses when they show: **Auto**, the default, from 1 December to 6 January; **Always**; or **Off**. **Falling snow** keeps the rest without the snow. The browser and the hosted app don't show them. See [ADR 0131](https://github.com/Urcra/silt/blob/main/docs/adr/0131-december-decorations-in-the-desktop-app.md).
+**Settings › Appearance › Seasonal touches** chooses when they show: **Auto**, the default, from 1 December to 6 January; **Always**; or **Off**. **Falling snow** keeps the rest without the snow. The browser and the hosted app don't show them. See [ADR 0133](https://github.com/Urcra/silt/blob/main/docs/adr/0133-december-decorations-in-the-desktop-app.md).
 
 The choice is kept in `appearance.json` beside the theme you picked:
 

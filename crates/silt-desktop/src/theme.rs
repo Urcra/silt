@@ -2,7 +2,7 @@
 //! it as a `silt://theme/` link the window catches, and the app keeps it for
 //! its next start, so the window and its starting page open in it. With it
 //! come the theme's tones and when the December decorations show, for the
-//! starting page's tree (ADR 0131).
+//! starting page's tree (ADR 0133).
 
 use std::fs;
 use std::path::Path;

@@ -902,7 +902,7 @@ export function NewThread() {
 
   return (
     <Page title="New thread" flush label="new thread">
-      {/* Snow falls behind the screen, so what's on it is drawn after, over it (ADR 0131). */}
+      {/* Snow falls behind the screen, so what's on it is drawn after, over it (ADR 0133). */}
       <Snowfall />
       <div className="relative mx-auto flex w-full max-w-[760px] flex-1 flex-col justify-center gap-[18px] px-4 pt-10 pb-16 md:px-6 md:pt-14">
         <h2 className="relative flex flex-wrap items-center justify-center gap-2.5 text-center text-display font-medium tracking-[-0.015em] max-md:text-xl">

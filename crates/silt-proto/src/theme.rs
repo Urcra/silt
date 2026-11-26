@@ -40,7 +40,7 @@ pub struct AppearanceSettings {
     /// Sizes, fonts and spacing over the theme (ADR 0107).
     #[serde(default, deserialize_with = "silt_theme::text::lenient_settings")]
     pub text: TextSettings,
-    /// December's decorations in the desktop app (ADR 0131).
+    /// December's decorations in the desktop app (ADR 0133).
     #[serde(default, deserialize_with = "lenient_seasonal")]
     pub seasonal: SeasonalSettings,
 }
@@ -57,7 +57,7 @@ pub enum SeasonalShow {
     Off,
 }
 
-/// The desktop app's December decorations (ADR 0131): when they show, and
+/// The desktop app's December decorations (ADR 0133): when they show, and
 /// whether snow falls on the screens with nothing to read yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

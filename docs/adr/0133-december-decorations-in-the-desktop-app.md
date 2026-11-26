@@ -1,4 +1,4 @@
-# 0131: December decorations in the desktop app
+# 0133: December decorations in the desktop app
 
 - Status: accepted
 - Date: 2026-11-26

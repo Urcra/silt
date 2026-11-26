@@ -73,7 +73,7 @@
         root.setProperty('--muted', `color-mix(in oklab, ${theme.fg} 70%, ${theme.bg})`)
       }
 
-      // December's tree (ADR 0131): a branch graph whose baubles light one
+      // December's tree (ADR 0133): a branch graph whose baubles light one
       // after another while the app connects, and go dark if it can't.
       const tree = document.getElementById('tree')
       const inSeason = (date) => date.getMonth() === 11 || (date.getMonth() === 0 && date.getDate() <= 6)

@@ -241,7 +241,7 @@
   background-color: var(--color-accent-tint);
 }
 
-/* The desktop app's December lights (ADR 0131): each bulb fades in and out,
+/* The desktop app's December lights (ADR 0133): each bulb fades in and out,
    out of step; with less motion they stay lit rather than flicker at the
    0.01ms nous.css sets. */
 @keyframes silt-twinkle {

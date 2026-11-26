@@ -1,4 +1,4 @@
-// December's decorations in the desktop app (ADR 0131). Each one is drawn over
+// December's decorations in the desktop app (ADR 0133). Each one is drawn over
 // the page, takes no pointer events and is hidden from screen readers, and
 // takes its colours from the theme's tokens, so the theme stays as it is.
 
