@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
-import { nextPermission, ownModes, presetForOwnMode, presetUnavailable, startSettings, startingValue } from '../agentState'
+import { checkedBySilt, nextPermission, ownModes, presetForOwnMode, startSettings, startingValue } from '../agentState'
 import { type AgentSetting, api, type Preset } from '../api'
 import { agentRefused, modeRefused, presetRefused, within } from '../rules'
 import { useWorkspace } from '../workspace'
@@ -63,7 +63,7 @@ export function NewChat() {
   const capped: Preset = within(wanted, workspace?.effective.max_preset) ? wanted : workspace!.effective.max_preset!
   const modes = seen?.modes?.available
   // The preset is the one control for every agent; the agent starts in the mode that does what it says (ADR 0114).
-  const refusedPreset = (id: Preset) => presetRefused(workspace, id) ?? presetUnavailable(id, modes, agentName)
+  const refusedPreset = (id: Preset) => presetRefused(workspace, id)
   const preset: Preset = refusedPreset(capped) && capped === 'auto' ? 'ask_before_commands' : capped
   const own = ownModes(seen?.modes)
   const inOwn = own.find((mode) => mode.id === chosenMode)?.id
@@ -190,6 +190,7 @@ export function NewChat() {
                   <span className="px-2 text-xs text-fg-2">No agent found</span>
                 )}
                 <PermissionChip
+                  checked={checkedBySilt(modes)}
                   value={preset}
                   onChange={setPreset}
                   refused={refusedPreset}

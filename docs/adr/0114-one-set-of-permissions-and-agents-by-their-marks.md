@@ -4,6 +4,7 @@
 - Date: 2026-11-22
 - Reverses: [ADR 0048](0048-an-agents-modes-are-its-permissions.md) (an agent's modes stand in for the preset). Amends [ADR 0044](0044-the-standard-agent-workspace.md) (the composer's row) and [ADR 0065](0065-workspaces.md) (a cap's steps).
 - Amended by: [ADR 0118](0118-an-agents-own-modes-in-the-permissions-menu.md): An agent's own modes in the permissions menu
+- Amended by: [ADR 0129](0129-auto-for-agents-without-an-auto-mode.md): an agent without an auto mode gets Auto too, with Silt checking its commands
 
 ## Context
 The row under the composer read `Claude Agent ˅  Mode Auto ˅  Opus 5.5 ˅  Effort High ˅  ···  ◔`. It said the agent's name in full, labelled each chip, and gave every chip a chevron. Its permissions control changed with the agent: Claude showed its own five modes (Manual, Accept edits, Plan, Auto, Bypass) as a Mode chip, while Codex, Copilot and the rest showed Silt's four presets. Moving between agents moved the control and its words, and a workspace's cap had to be explained in both.

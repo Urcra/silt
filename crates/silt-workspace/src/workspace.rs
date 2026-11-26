@@ -190,6 +190,10 @@ pub struct Defaults {
     /// none (ADR 0071).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design_system: Option<String>,
+    /// Who checks commands on Auto for an agent without an auto mode; the
+    /// thread's own agent when unset (ADR 0129).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_judge: Option<crate::Judge>,
 }
 
 /// An agent's mode and settings (its model, effort, …) by the ids the

@@ -1,5 +1,6 @@
+import type { ReactNode } from 'react'
 import type { AgentChoiceItem, Preset } from '../api'
-import { PRESETS, ownModeSays } from '../agentState'
+import { PRESETS, SILT_AUTO_SAYS, ownModeSays } from '../agentState'
 import { Icon } from '../ui'
 import { AgentMark } from './AgentMark'
 import { ChipMenu } from './ChipMenu'
@@ -20,6 +21,8 @@ export function PermissionChip({
   presets = PRESETS,
   ghost = true,
   label = 'permissions',
+  checked = false,
+  judge,
   own,
 }: {
   value: Preset
@@ -29,6 +32,10 @@ export function PermissionChip({
   presets?: typeof PRESETS
   ghost?: boolean
   label?: string
+  /** Silt checks the agent's commands on Auto, as it has no auto mode of its own (ADR 0129). */
+  checked?: boolean
+  /** Under Auto, who checks for it, for a running thread's agent (ADR 0129). */
+  judge?: ReactNode
   /** The agent's own modes, from `ownModes`, and the one it's in, if any. */
   own?: {
     agent: string
@@ -63,7 +70,7 @@ export function PermissionChip({
         ...presets.map((preset) => ({
           id: preset.id,
           name: preset.label,
-          description: sentence(preset.says),
+          description: sentence(preset.id === 'auto' && checked ? SILT_AUTO_SAYS : preset.says),
           refused: refused?.(preset.id),
         })),
         ...(own?.modes.map((mode) => ({
@@ -76,6 +83,7 @@ export function PermissionChip({
       ]}
       onChange={(id) => (id.startsWith(MODE) ? own?.onMode(id.slice(MODE.length)) : onChange(id as Preset))}
       footer={ghost ? 'Shift+Tab steps through them' : undefined}
+      extra={judge ? { after: 'auto', node: judge } : undefined}
     />
   )
 }

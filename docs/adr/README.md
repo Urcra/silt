@@ -119,7 +119,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0111](0111-steering-without-stopping.md) | Steering without stopping | accepted |
 | [0112](0112-phones-on-the-local-network.md) | Phones on the local network | accepted; amended by 0113 |
 | [0113](0113-pairing-a-phone-without-its-certificate.md) | Pairing a phone without its certificate | accepted |
-| [0114](0114-one-set-of-permissions-and-agents-by-their-marks.md) | One set of permissions, and agents shown by their marks | accepted; amended by 0118 |
+| [0114](0114-one-set-of-permissions-and-agents-by-their-marks.md) | One set of permissions, and agents shown by their marks | accepted; amended by 0118, 0129 |
 | [0115](0115-the-sidebar-names-the-workspace-and-the-machine.md) | The sidebar names the workspace at its top and the machine at its bottom | accepted |
 | [0116](0116-memory-that-follows-the-work.md) | Memory that follows the work | accepted |
 | [0117](0117-conversations-open-at-their-end.md) | Conversations open at their end | accepted; amended by 0127 |
@@ -134,3 +134,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0126](0126-budgets-for-a-github-actions-runner.md) | Budgets for a GitHub Actions runner | accepted |
 | [0127](0127-switching-threads-waits-for-nothing-else.md) | Switching threads waits for nothing else | accepted; amended by 0128 |
 | [0128](0128-a-pages-views-go-ahead-of-an-agents-capture.md) | A page's views go ahead of an agent's capture | accepted |
+| [0129](0129-auto-for-agents-without-an-auto-mode.md) | Auto for agents without an auto mode | accepted |

@@ -14,6 +14,14 @@ Protocol version 24.
 - **The web UI**, served by each machine's daemon and, as a hosted app for browsers and phones, by the server; phones on your own network without a server; the desktop app.
 - **Agents from the web UI** over ACP, agents asking other agents, artifacts, themes, workspaces with their own rules, Silt's sandbox on Linux, plugins, and local models.
 
+### Added
+- Auto for every agent the web UI runs (ADR 0129). An agent without an auto mode of its own, such as GitHub Copilot, Codex or OpenCode, no longer greys Auto out: Silt checks each of its commands first, with a judge. See [Auto for every agent](docs/guide/auto.md).
+  - The judge is by default the thread's own agent on its model, in a session of its own and in the thread's sandbox. It's given the call and your last prompts, never the agent's own words.
+  - An allowed call goes through, and goes through again without a check while the thread stays on Auto. A refused one goes back to the agent with why. With no verdict within 60 seconds the call waits for you, saying why.
+  - Each call shows its verdict: **Auto allowed**, **Auto refused** with its reason, **allowed before** or **allowed by you**, and **Auto is checking** while it's checked.
+  - The agent can ask you to allow a refused call with `silt_escalate`; a card shows the call, Auto's reason and the agent's, and **Allow once** lets that exact call through once.
+  - **Settings › Auto** sets who checks in each workspace, from the agents it allows, and an org can set it for its workspaces. A thread can choose another under Auto in its permissions menu, as **Checked by**.
+
 ### Fixed
 - An agent writing many files, as an asset import does, no longer holds up the web UI: recording each new file listed every path of its thread, so 500 files in a large checkout took 20 s, now about 1 s, and pages are answered between files and while a checkout is listed, waiting at most for one file. A long thread opens for the first time in about half the time.
 - Switching threads no longer waits behind a long thread being read: the daemon reads a history it doesn't keep away from everything else, keeps the 16 read most recently rather than forgetting all of them at the 17th, and logs any event that holds it for 250 ms or more. Going back to one of the last 8 threads left shows it as it is now, never as it was when left.

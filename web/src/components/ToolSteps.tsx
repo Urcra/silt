@@ -1,5 +1,5 @@
 import { useContext, useEffect, useMemo, useState } from 'react'
-import { api, type HistoryEntry, type QuestionAsked, type QuestionView } from '../api'
+import { api, type AutoView, type HistoryEntry, type QuestionAsked, type QuestionView } from '../api'
 import { ArtifactActions } from '../artifactActions'
 import { entryMedia, formatOf, sizeOf, thumbSrc } from '../mediaInfo'
 import { KeptHereOnly, MediaViewer } from './Media'
@@ -8,7 +8,7 @@ import { message } from '../query'
 import { duration, imageSize, kindOf, proposedPlan, shortCommand, tailOf, testsOf, toolOf, type ToolStep } from '../transcript'
 import { LiveTool, TranscriptDetail } from '../detail'
 import { useNow } from '../now'
-import { Button, Icon, Kbd, Spinner, cx } from '../ui'
+import { Button, Icon, Kbd, Spinner, Tag, type Tone, cx } from '../ui'
 import { changeOf } from '../edits'
 import { EditCard } from './EditCard'
 import { Markdown } from './Markdown'
@@ -61,8 +61,82 @@ export function ImageThumb({ entry: given, from }: { entry: HistoryEntry; from: 
   )
 }
 
-/** A step's icon: done, failed, or still waiting for its result. */
+/** Auto's verdicts as a row's tag says them (ADR 0129). */
+const VERDICT: Record<string, { label: string; tone: Tone; said: string }> = {
+  allow: { label: 'Auto allowed', tone: 'ok', said: 'Auto allowed' },
+  refuse: { label: 'Auto refused', tone: 'danger', said: 'Auto refused' },
+  unchecked: { label: 'left to you', tone: 'warn', said: 'Auto left it to you' },
+  before: { label: 'allowed before', tone: 'neutral', said: 'Allowed before' },
+  granted: { label: 'allowed by you', tone: 'neutral', said: 'Allowed by you' },
+}
+
+/** Whether Auto refused the call, which then never ran. */
+function refused(step: ToolStep): boolean {
+  return step.auto?.verdict === 'refuse'
+}
+
+/** Auto's verdict on a step's call, or that it's checking it now. */
+function AutoTag({ step }: { step: ToolStep }) {
+  const checking = useContext(LiveQuestions)?.checking.includes(step.call?.tool?.id ?? '') ?? false
+  if (checking)
+    return (
+      <span className="flex shrink-0 items-center gap-1.5 text-fg-2">
+        <Spinner />
+        Auto is checking
+      </span>
+    )
+  const verdict = step.auto && VERDICT[step.auto.verdict]
+  if (!step.auto || !verdict) return null
+  return (
+    <span className="flex shrink-0" title={step.auto.reason}>
+      <Tag tone={verdict.tone}>{verdict.label}</Tag>
+    </span>
+  )
+}
+
+/** What Auto said of a call and who checked it: `Auto allowed: … Checked by Codex on GPT-6.2 in 2.1 s.` */
+function verdictText(auto: AutoView): string {
+  const said = VERDICT[auto.verdict]?.said ?? 'Auto'
+  const reason = auto.reason.trim()
+  const checked =
+    auto.judge && auto.ms !== null
+      ? ` Checked by ${auto.judge} in ${(auto.ms / 1000).toFixed(1)} s.`
+      : auto.judge
+        ? ` Checked by ${auto.judge}.`
+        : ''
+  return `${said}: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}${checked}`
+}
+
+/** Why Auto refused a call, under its row: what the agent was told. */
+function RefusedReason({ step }: { step: ToolStep }) {
+  if (!step.auto || !refused(step)) return null
+  return (
+    <p data-testid="refused" className="ml-5 flex items-start gap-1.5 text-2xs text-fg-2">
+      <Icon name="shield" className="mt-px h-3 w-3 shrink-0 text-fg-3" />
+      <span>{step.auto.reason} Sent back to the agent.</span>
+    </p>
+  )
+}
+
+/** Auto's verdict in an opened row. */
+function VerdictLine({ auto }: { auto: AutoView | null | undefined }) {
+  if (!auto) return null
+  return (
+    <p className="flex items-start gap-1.5 border-t border-line-subtle pt-1.5 text-2xs text-fg-2">
+      <Icon name="shield" className="mt-px h-3 w-3 shrink-0 text-fg-3" />
+      <span>{verdictText(auto)}</span>
+    </p>
+  )
+}
+
+/** A step's icon: done, failed, refused by Auto, or still waiting for its result. */
 function Mark({ step }: { step: ToolStep }) {
+  if (refused(step))
+    return (
+      <span role="img" aria-label="refused" className="mt-0.5 shrink-0 text-danger">
+        <Icon name="x" className="h-3.5 w-3.5" />
+      </span>
+    )
   if (step.result?.outcome?.failed)
     return (
       <span role="img" aria-label="failed" className="mt-0.5 shrink-0 text-danger">
@@ -181,14 +255,16 @@ export function StepRow({ step, open: opened = false, running = false }: { step:
             <span className="text-fg-2">A tool&apos;s output</span>
           )}
         </span>
+        <AutoTag step={step} />
         {change ? (
           <span className="shrink-0 font-mono text-2xs">
             <span className="text-ok">+{change.added.length}</span> <span className="text-danger">−{change.removed.length}</span>
           </span>
         ) : (
-          <Measure step={step} />
+          !refused(step) && <Measure step={step} />
         )}
       </button>
+      <RefusedReason step={step} />
       {open && change && (
         <div className="ml-5">
           <EditCard change={change} bare />
@@ -203,6 +279,11 @@ export function StepRow({ step, open: opened = false, running = false }: { step:
         <pre className="ml-5 max-h-64 overflow-auto rounded-sm bg-bg px-2.5 py-2 font-mono text-output whitespace-pre-wrap text-fg-2">
           {output}
         </pre>
+      )}
+      {open && step.auto && !refused(step) && (
+        <div className="ml-5">
+          <VerdictLine auto={step.auto} />
+        </div>
       )}
       {step.images.map((image) => (
         <span key={image.index} className="ml-5">
@@ -250,7 +331,9 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
   const tail = result?.cut ? { ...shortened, hidden: result.cut.lines - shortened.lines.length } : shortened
   const command = call.tool?.subject ?? toolOf(call.text).name
   const action = call.tool?.detail?.trim()
-  const waiting = useContext(LiveQuestions)?.awaiting.includes(call.tool?.id ?? '') ?? false
+  const asked = useContext(LiveQuestions)
+  const waiting = asked?.awaiting.includes(call.tool?.id ?? '') ?? false
+  const checking = asked?.checking.includes(call.tool?.id ?? '') ?? false
   const openable = under || Boolean(output.trim()) || step.images.length > 0 || command.length > 80 || command.includes('\n')
   return (
     <div data-testid="command" className={cx('text-xs', card && 'overflow-hidden rounded-md border border-line bg-elevated')}>
@@ -274,7 +357,7 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
         <span
           className={cx(
             'min-w-0 shrink truncate group-enabled/row:group-hover/row:text-accent-fg',
-            outcome?.failed ? 'text-danger' : 'text-fg-1',
+            outcome?.failed && !refused(step) ? 'text-danger' : 'text-fg-1',
             running && 'font-medium',
           )}
         >
@@ -285,15 +368,21 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
             {shortCommand(command.trim().split('\n')[0]!)}
           </span>
         )}
-        <span
-          className={cx(
-            'ml-auto min-w-0 shrink truncate tabular-nums',
-            outcome?.failed ? 'text-danger' : waiting ? 'text-warn-fg' : 'text-fg-2',
-          )}
-        >
-          {waiting ? 'waiting for you' : under ? <Running since={call.time_ms} /> : commandStatus(step)}
+        <span className="ml-auto flex shrink-0">
+          <AutoTag step={step} />
         </span>
+        {!refused(step) && !checking && (
+          <span
+            className={cx(
+              'min-w-0 shrink truncate tabular-nums',
+              outcome?.failed ? 'text-danger' : waiting ? 'text-warn-fg' : 'text-fg-2',
+            )}
+          >
+            {waiting ? 'waiting for you' : under ? <Running since={call.time_ms} /> : commandStatus(step)}
+          </span>
+        )}
       </button>
+      {!card && <RefusedReason step={step} />}
       {open && (
         <div className={cx('flex flex-col gap-1.5', card ? 'px-3 py-2' : 'mt-1 ml-5 rounded-sm bg-bg px-2.5 py-2')}>
           <pre className="font-mono text-output whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
@@ -328,6 +417,12 @@ export function CommandCard({ step, card = false, running = false }: { step: Too
               ))}
             </div>
           )}
+          <VerdictLine auto={step.auto} />
+        </div>
+      )}
+      {card && refused(step) && (
+        <div className="px-3 pb-1.5">
+          <RefusedReason step={step} />
         </div>
       )}
     </div>

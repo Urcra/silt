@@ -183,6 +183,12 @@ pub fn tool_result(id: &str, status: &str, output: Option<&str>) -> String {
     json!({"t": "tool_result", "id": id, "status": status, "output": output}).to_string()
 }
 
+/// Auto's verdict on the call `call` (ADR 0129): see
+/// [`silt_proto::view::AutoView`].
+pub fn auto(call: &str, verdict: &str, reason: &str, judge: Option<&str>, ms: Option<i64>) -> String {
+    json!({"t": "auto", "call": call, "verdict": verdict, "reason": reason, "judge": judge, "ms": ms}).to_string()
+}
+
 /// The agent's plan: each step and its status.
 pub fn plan(steps: &[(String, String)]) -> String {
     let entries: Vec<Value> = steps.iter().map(|(step, status)| json!({"content": step, "status": status})).collect();
@@ -335,6 +341,13 @@ pub fn read_line(line: &str) -> Read {
             input: record["input"].as_u64().unwrap_or(0),
             output: record["output"].as_u64().unwrap_or(0),
         }),
+        "auto" => read.entries.push(Entry::Auto(silt_proto::view::AutoView {
+            call: field("call"),
+            verdict: field("verdict"),
+            reason: field("reason"),
+            judge: record["judge"].as_str().map(str::to_owned),
+            ms: record["ms"].as_i64(),
+        })),
         "stop" => {
             read.marks.push(Mark::Stopped);
             read.entries.push(Entry::Other { kind: "stop".into() });
@@ -414,6 +427,23 @@ impl Agent for Acp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_s_verdict_reads_back_on_its_call() {
+        let line = auto("run-1", "refuse", "Deletes a shared cache.", Some("Codex on GPT"), Some(2100));
+        let read = read_line(&line);
+        let silt_proto::view::AutoView { call, verdict, reason, judge, ms } = match &read.entries[..] {
+            [Entry::Auto(auto)] => auto.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!((call.as_str(), verdict.as_str(), reason.as_str()), ("run-1", "refuse", "Deletes a shared cache."));
+        assert_eq!((judge.as_deref(), ms), (Some("Codex on GPT"), Some(2100)));
+        let shown = crate::tool::shown(read.entries[0].clone()).expect("shown");
+        assert_eq!(shown.kind, "auto");
+        assert_eq!(shown.auto.map(|auto| auto.call), Some("run-1".to_owned()));
+        let unjudged = read_line(&auto("run-2", "before", "Allowed earlier.", None, None));
+        assert!(matches!(&unjudged.entries[0], Entry::Auto(auto) if auto.judge.is_none() && auto.ms.is_none()));
+    }
 
     #[test]
     fn work_left_running_is_stopped_where_its_news_was_recorded() {

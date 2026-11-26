@@ -35,6 +35,7 @@ export function ChipMenu({
   heading,
   footer,
   action,
+  extra,
   ghost = true,
   className,
 }: {
@@ -51,6 +52,8 @@ export function ChipMenu({
   footer?: ReactNode
   /** Under everything, something to do rather than pick, such as stopping the agent. */
   action?: ChipAction
+  /** A row of its own under one choice, by its id, such as who checks for Auto (ADR 0129). */
+  extra?: { after: string; node: ReactNode }
   /** Borderless until hovered, in the composer's row; else bordered, as in a form. */
   ghost?: boolean
   className?: string
@@ -78,6 +81,7 @@ export function ChipMenu({
           options={options}
           heading={heading}
           footer={footer}
+          extra={extra}
           action={
             action && {
               ...action,
@@ -104,6 +108,7 @@ function ChoiceList({
   heading,
   footer,
   action,
+  extra,
   onPick,
 }: {
   label: string
@@ -112,6 +117,7 @@ function ChoiceList({
   heading?: string
   footer?: ReactNode
   action?: ChipAction
+  extra?: { after: string; node: ReactNode }
   onPick: (id: string) => void
 }) {
   const list = useRef<HTMLDivElement>(null)
@@ -176,6 +182,7 @@ function ChoiceList({
                 <span className="h-3.5 w-3.5 shrink-0" />
               )}
             </button>
+            {extra?.after === option.id && extra.node}
           </Fragment>
         )
       })}

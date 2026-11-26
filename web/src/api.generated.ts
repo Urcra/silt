@@ -273,7 +273,20 @@ stoppable: Array<string>,
 /**
  * What Silt's sandbox lets it reach, when it runs in one (ADR 0093).
  */
-sandbox: Reach | null, };
+sandbox: Reach | null, 
+/**
+ * Who checks its commands on Auto, for an agent without an auto mode of
+ * its own (ADR 0129).
+ */
+auto_check: AutoCheck | null, 
+/**
+ * The calls Auto's check is judging now, by their tool call ids.
+ */
+checking: Array<string>, 
+/**
+ * Calls Auto refused that the agent asks the person to allow.
+ */
+escalations: Array<EscalationAsked>, };
 
 export type QuestionAsked = { id: number, message: string, fields: Array<QuestionFieldAsked>, };
 
@@ -997,6 +1010,10 @@ side: string | null,
  */
 task: TaskView | null, 
 /**
+ * On an `auto`: Auto's verdict on a call (ADR 0129).
+ */
+auto: AutoView | null, 
+/**
  * What a page of history left out of the entry, read whole with `whole`:
  * an image's data, or a long output's start.
  */
@@ -1161,6 +1178,25 @@ width?: number | null, height?: number | null,
  * the first, the viewer opens on the last (ADR 0121).
  */
 previews?: Array<PreviewView>, };
+
+export type AutoView = { 
+/**
+ * The tool call it's on.
+ */
+call: string, 
+/**
+ * `allow`, `refuse`, `unchecked` (left to the person), `before` (the
+ * same call was allowed earlier) or `granted` (the person allowed it).
+ */
+verdict: string, reason: string, 
+/**
+ * The agent and model that judged, where one did.
+ */
+judge: string | null, 
+/**
+ * How long the check took.
+ */
+ms: number | null, };
 
 export type ArtifactFile = { blob: string, size: number, media_type: string, };
 
@@ -1670,7 +1706,44 @@ plan: string | null,
 /**
  * The tool call it asks about, whose card shows it waiting rather than running.
  */
-tool_call: string | null, };
+tool_call: string | null, 
+/**
+ * Why Auto's check couldn't judge it, which leaves it to the person
+ * (ADR 0129).
+ */
+unchecked: string | null, };
+
+export type AutoCheck = { 
+/**
+ * The judge that holds: the rules', the thread's, or the workspace's.
+ */
+judge: Judge, 
+/**
+ * The thread's own choice, when it made one.
+ */
+chosen: Judge | null, 
+/**
+ * Whose rule fixes the judge, when one does.
+ */
+fixed_by: string | null, 
+/**
+ * The judge as the person knows it: its agent and model.
+ */
+name: string, };
+
+export type EscalationAsked = { id: number, 
+/**
+ * The call, as Auto's check refused it.
+ */
+call: string, 
+/**
+ * Why Auto refused it.
+ */
+refused: string, 
+/**
+ * Why the agent says it's needed.
+ */
+why: string, };
 
 export type Preset = "ask_before_commands" | "ask_for_everything" | "auto" | "full_access" | "plan";
 
@@ -1954,6 +2027,8 @@ at_once?: number | null,
  */
 further?: boolean | null, };
 
+export type Judge = { "kind": "thread" } | { "kind": "agent", agent: string, model?: string | null, };
+
 export type OrgPlugin = { id: string, git: string, 
 /**
  * The commit it's built from, and no other.
@@ -1991,7 +2066,12 @@ agents?: { [key in string]: AgentDefaults },
  * The design system artifacts are styled with when the project names
  * none (ADR 0071).
  */
-design_system?: string | null, };
+design_system?: string | null, 
+/**
+ * Who checks commands on Auto for an agent without an auto mode; the
+ * thread's own agent when unset (ADR 0129).
+ */
+auto_judge?: Judge | null, };
 
 export type AgentDefaults = { mode?: string | null, settings?: { [key in string]: string }, };
 
@@ -2103,7 +2183,12 @@ plugins?: PluginPolicy,
 /**
  * What agents may ask of other agents (ADR 0120).
  */
-asks?: AskPolicy, };
+asks?: AskPolicy, 
+/**
+ * Who checks commands on Auto for an agent without an auto mode,
+ * whatever a thread or the workspace's defaults choose (ADR 0129).
+ */
+auto_judge?: Judge | null, };
 
 export type Network = "none" | "gateway" | "full" | "host";
 

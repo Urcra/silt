@@ -180,6 +180,7 @@ pub struct Shown {
     /// The subagent transcript it is from; none for the session's own.
     pub side: Option<String>,
     pub task: Option<TaskView>,
+    pub auto: Option<silt_proto::view::AutoView>,
 }
 
 impl Shown {
@@ -195,6 +196,7 @@ impl Shown {
             plan: None,
             side: None,
             task: None,
+            auto: None,
         }
     }
 
@@ -216,6 +218,7 @@ impl Shown {
             plan: self.plan,
             side: self.side,
             task: self.task,
+            auto: self.auto,
             cut: None,
         }
     }
@@ -277,6 +280,10 @@ pub fn shown(entry: crate::Entry) -> Option<Shown> {
             };
             let text = view.summary.clone().unwrap_or_else(|| format!("{} {}", view.id, view.status));
             Shown { task: Some(view), ..Shown::plain("task", text) }
+        }
+        Entry::Auto(auto) => {
+            let text = auto.reason.clone();
+            Shown { auto: Some(auto), ..Shown::plain("auto", text) }
         }
         other => {
             let kind = other.kind().to_owned();

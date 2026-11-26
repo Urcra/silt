@@ -17,7 +17,7 @@ import { WAIT_KINDS, type WaitKind, waitKind } from '../threadLook'
 import { ago } from '../time'
 import { Button, Dot, type DotTone, EmptyState, Icon, Kbd, SectionLabel, Skeleton, buttonClass, cx, toast } from '../ui'
 import { useInWorkspace } from '../workspaceFilter'
-import { PermissionCard, SignInCard } from './Agent'
+import { EscalationCard, PermissionCard, SignInCard } from './Agent'
 import { Markdown } from './Markdown'
 import { Page } from './Page'
 import { PendingApprovals } from './Sandbox'
@@ -325,6 +325,9 @@ function QueueDetail({
       {kind === 'question' && question && <AnswerForm key={question.id} thread={thread.id} asked={question} />}
       {(kind === 'permission' || kind === 'plan') && asked && (
         <PermissionCard key={asked.id} thread={thread.id} asked={asked} agent={agent} first />
+      )}
+      {kind === 'permission' && !asked && status?.escalations?.[0] && (
+        <EscalationCard key={status.escalations[0].id} thread={thread.id} asked={status.escalations[0]} agent={agent} first />
       )}
       {kind === 'plan' && !asked && (
         <span className="flex flex-wrap gap-1.5">

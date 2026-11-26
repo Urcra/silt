@@ -176,6 +176,10 @@ pub struct Policy {
     /// What agents may ask of other agents (ADR 0120).
     #[serde(default, skip_serializing_if = "crate::AskPolicy::is_empty")]
     pub asks: crate::AskPolicy,
+    /// Who checks commands on Auto for an agent without an auto mode,
+    /// whatever a thread or the workspace's defaults choose (ADR 0129).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_judge: Option<crate::Judge>,
 }
 
 /// Which of a workspace's sandbox rules Silt can hold an agent to.
@@ -259,6 +263,8 @@ impl Policy {
             folder_layers,
             plugins: self.plugins.stricter(&other.plugins),
             asks: self.asks.stricter(&other.asks),
+            // An org's choice holds on its members' machines.
+            auto_judge: other.auto_judge.clone().or_else(|| self.auto_judge.clone()),
         }
     }
 

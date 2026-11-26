@@ -300,6 +300,8 @@ fn api_routes() -> Router<Web> {
         .route("/api/threads/{id}/agent/tasks/{call}/stop", post(agent_stop_task))
         .route("/api/threads/{id}/agent/answer", post(agent_answer))
         .route("/api/threads/{id}/agent/reply", post(agent_reply))
+        .route("/api/threads/{id}/agent/escalation", post(agent_escalation))
+        .route("/api/threads/{id}/agent/judge", post(agent_judge))
         .route("/api/threads/{id}/agent/sign-in", post(agent_sign_in))
         .route("/api/threads/{id}/agent/sign-in/code", post(agent_sign_in_code))
         .route("/api/threads/{id}/agent/sign-in/cancel", post(agent_sign_in_cancel))
@@ -2141,6 +2143,36 @@ struct AgentAnswer {
 async fn agent_answer(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentAnswer>) -> HttpResponse {
     let request = Request::AcpAnswer { thread, id: body.id, option: body.option };
     ask(&web, request).await
+}
+
+#[derive(Deserialize)]
+struct EscalationAnswer {
+    id: u64,
+    allow: bool,
+    #[serde(default)]
+    words: Option<String>,
+}
+
+/// The person's answer to a call Auto refused that the agent asks them to
+/// allow (ADR 0129).
+async fn agent_escalation(
+    State(web): State<Web>,
+    Path(thread): Path<String>,
+    Json(body): Json<EscalationAnswer>,
+) -> HttpResponse {
+    ask(&web, Request::EscalationAnswer { thread, id: body.id, allow: body.allow, words: body.words }).await
+}
+
+#[derive(Deserialize)]
+struct JudgeChoice {
+    #[serde(default)]
+    judge: Option<silt_workspace::Judge>,
+}
+
+/// Who checks the thread's commands on Auto; the workspace's default when
+/// none (ADR 0129).
+async fn agent_judge(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<JudgeChoice>) -> HttpResponse {
+    ask(&web, Request::SetJudge { thread, judge: body.judge }).await
 }
 
 #[derive(Deserialize)]

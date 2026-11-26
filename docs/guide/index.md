@@ -29,6 +29,7 @@ To share threads between machines and people, set up a server: see [Self-hosting
 - [History and search](history-and-search.md)
 - [Your agents](agents.md)
 - [Agents asking other agents](asking-agents.md)
+- [Auto for every agent](auto.md)
 - [Windows and WSL](windows.md)
 - [Machines over SSH](machines.md)
 - [What Silt sends over the network](network.md)
