@@ -4,6 +4,17 @@ Research for a memory viewer, and for sharing what agents remember across agents
 
 "Memory" here is what an agent writes down by itself to read in a later session. Rules files a person writes (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`) are where several agents put it, so they're covered where they are its store.
 
+## At a glance
+| Agent | Where | Format | Written by | Keyed by | In a managed checkout |
+| --- | --- | --- | --- | --- | --- |
+| Claude Code | `~/.claude/projects/<slug>/memory/` | `MEMORY.md` index + a file a memory, YAML frontmatter | the agent's Write/Edit, plus background extract and consolidate passes | git root, worktrees joined | **its own folder: lost after the thread** |
+| Gemini CLI | `~/.gemini/tmp/<slug>/memory/`, `GEMINI.md`s | `MEMORY.md` index + sibling `*.md`, free-form | the agent's file tools; opt-in extraction to an inbox | cwd | **its own folder: lost after the thread** |
+| Codex, Qudiks | `$CODEX_HOME/memories{,_v2}/` + SQLite | markdown with `key: value` headers | background passes only, when enabled | one per home | shared, but names local paths |
+| Copilot CLI | GitHub's servers | JSON facts with citations | `store_memory` | repository, person | shared (server-side) |
+| OpenCode | rules files only | `AGENTS.md` | the person | — | — |
+| Antigravity CLI | rules files only | `AGENTS.md`, `.agents/rules/*.md` | `/learn`, approved | — | — |
+| Silt's `local` | none | — | — | — | — |
+
 ## Claude Code 2.1.332 (probed)
 - **Auto memory:** `<config dir>/projects/<slug>/memory/` (`<config dir>` is `$CLAUDE_CONFIG_DIR`, else `~/.claude`), where the agent writes with its ordinary Write and Edit tools. Nothing else writes it.
   - `MEMORY.md` is an index, one line a memory: `- [Title](file.md) — one-line hook`, no frontmatter. Its first 200 lines are put in the first user message as a `<system-reminder>`: `Contents of <dir>/MEMORY.md (user's auto-memory, persists across conversations):`. Not in the system prompt.
@@ -60,6 +71,37 @@ Research for a memory viewer, and for sharing what agents remember across agents
 - **Rules it reads** ([docs](https://antigravity.google/docs/rules.md)): `AGENTS.md`, `GEMINI.md`, `.agents/{AGENTS,GEMINI}.md` and `.agents/rules/*.md` (frontmatter with a `trigger`) from the cwd up to the repository root; `~/.gemini/{,config/}{AGENTS,GEMINI}.md` and `~/.gemini/config/rules/*.md`. Each is cut at 24,000 bytes, and always-on rules share 20k tokens, past which the largest become pointers read on demand.
 - The Antigravity IDE has "Knowledge Items" (`~/.gemini/antigravity/knowledge/<name>/` with `metadata.json`, `timestamps.json` and `artifacts/*.md`, distilled after conversations), according to community write-ups only; whether the CLI makes them is unverified, and `/context` lists a "Knowledge files" section. Not probed.
 
+## Codex CLI 0.172.0 (source, openai/codex@rust-v0.172.0)
+- **Memories are a feature, off by default:** `[features] memories = true` (`Feature::MemoryTool`, stable). Settings in `[memories]`: `generate_memories`, `use_memories`, `dedicated_tools`, `max_unused_days` (30), `max_rollout_age_days` (10), `min_rollout_idle_hours` (6), `extract_model`, `consolidation_model` and others (`config/src/types.rs`).
+- **One store per `CODEX_HOME`, for every project.** Projects appear only as `cwd:` and `applies_to:` text inside the files, so it doesn't split by checkout, but what it says about a project names that machine's paths.
+- **Two layouts.** A home with `memories/` keeps v1; one without gets v2 in `memories_v2/` (`core/src/config/mod.rs`).
+  - v1, `$CODEX_HOME/memories/`: `memory_summary.md`, `MEMORY.md`, `raw_memories.md`, `rollout_summaries/<ts>-<hash4>[-slug].md`, `skills/<name>/SKILL.md`, `extensions/<ext>/instructions.md`, `extensions/ad_hoc/notes/*.md`, and a `.git/` that is the consolidation's baseline; `memories.lock` beside it.
+  - v2, `memories_v2/`: `memory_summary.md` (under 10,000 bytes), `rollout_summaries/`, `extensions/`.
+  - Markdown with `key: value` header lines, not YAML:
+    ```
+    thread_id: 019c…
+    updated_at: 2026-11-20T10:30:00+00:00
+    rollout_path: /home/u/.codex/sessions/…jsonl
+    cwd: /home/u/repo
+    git_branch: main
+
+    <what the session did and learned>
+    ```
+    `memory_summary.md` starts with a line `v1`, then `## User Profile`, `## User preferences`, `## General Tips`, `## What's in Memory`. `MEMORY.md` is `# Task Group:` blocks with `scope:`, `applies_to: cwd=…; reuse_rule=…` and `## Task n`.
+  - SQLite apart from the threads': `memories_1.sqlite` or `memories_v2_1.sqlite` (`stage1_outputs`, `jobs`, `consolidation_progress`), under `$CODEX_SQLITE_HOME`, else `$CODEX_HOME`. `state_5.sqlite`'s `threads.memory_mode` is `enabled`, `disabled` or `polluted`.
+- **No agent writes them directly.** On the first turn of a root, non-ephemeral session, a background pass (`memories/write/src/`):
+  1. extracts each idle rollout of an interactive session (not `exec`'s) into `stage1_outputs`, secrets redacted;
+  2. has a sandboxed subagent, writing only the memory folder, consolidate them into the files, from a git diff against its baseline.
+  "Remember" and "forget" become `extensions/ad_hoc/notes/*.md`, applied at the next consolidation.
+- **Read back:** `memory_summary.md` goes in the developer instructions, cut at 2,500 tokens; the agent greps the rest with its own tools, or with `dedicated_tools`, `memories.list`, `memories.read`, `memories.search` and `memories.add_ad_hoc_note`. A reply may cite what it used in an `<oai-mem-citation>` block.
+- **It already imports Claude Code's:** with `external_agent_memory_import` (in development) it copies `~/.claude/projects/<key>/memory/*.md` to `memories_v2/extensions/external_agent_import/resources/<key>/` with a `scope.json` (`external-agent-migration/src/`).
+- **Concurrency:** jobs are leased in the memory database and consolidation holds `memories.lock`, both per machine; files are written in place. **A folder synced between machines would race**: two baselines, two leases, and summaries naming the other's `rollout_path`s.
+- `/memories` toggles using and generating and resets them; `codex debug clear-memories`. The app server has experimental `thread/memory/read`, `memory/status`, `memory/reset`. codex-acp (pinned at 0.137) never starts the pass.
+- **Rules files,** apart from memories: `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md`, then every `AGENTS.md` (or `AGENTS.override.md`, or `project_doc_fallback_filenames`) from the project root down to the cwd, 32 KiB in all (`project_doc_max_bytes`).
+
+## Qudiks 0.0.12 (source, `fork-off`@975a0f9)
+Codex's memory code unchanged, under its home (`$QUDIKS_HOME`, `$CODEX_HOME`, `~/.qudiks`). Its own providers don't set the memory passes' models, so those still ask for OpenAI's unless `extract_model` and `consolidation_model` are set.
+
 ## GitHub Copilot CLI 1.0.116 (docs; the CLI is closed source)
 - **Copilot Memory lives on GitHub, not on the machine.** Two stores: repository facts, shared with the repository's collaborators, not copied to forks, each cited to code that Copilot checks against the current branch; and the person's own preferences, which follow them across repositories ([concepts](https://docs.github.com/en/copilot/concepts/agents/copilot-memory)).
   - A memory expires 90 days after it was made or last upvoted (7 to 180 for repository facts, set by an org). Asking Copilot to forget one only downvotes it. "Copilot Dreaming" merges duplicates in the background and proposes changes to checked-in instructions as pull requests.
@@ -89,3 +131,59 @@ Nothing does for memory what `AGENTS.md` does for rules or `.agents/skills` for 
 {"type":"entity","name":"Ada","entityType":"person","observations":["prefers tabs"]}
 {"type":"relation","from":"Ada","to":"Silt","relationType":"works_on"}
 ```
+
+## What this means for Silt
+Proposals for discussion, not decisions.
+
+### 1. Keep a project's memory across its threads (a bug today)
+A thread in a managed checkout loses what Claude Code and Gemini CLI remember. Silt can give every thread of a project the clone's own folder:
+- **Claude Code:** add `autoMemoryDirectory` to the `--settings` Silt already passes, set to the folder the clone itself gets (`<config dir>/projects/<slug of the clone>/memory/`), so a thread, a `--here` thread and a plain `claude` in the clone share one memory. Silt's sandbox has to let the run write that folder. Probed to work.
+- **Gemini CLI:** no setting moves private memory. Candidates, not probed: register the checkout's path under the clone's slug in `projects.json`, or link `tmp/<checkout slug>/memory` to the clone's.
+- Threads already ended keep theirs in their own folders; a one-time merge into the clone's folder can bring them back.
+
+### 2. A memory viewer
+One reader per agent in `silt-agents`, a pure parse of each store into one shape, read by the daemon and served through `silt_proto::view` so the hosted app shows it too:
+```rust
+struct MemoryEntry {
+    agent: AgentId,
+    scope: MemoryScope,        // Person, Project(ProjectId), Subagent(String)
+    path: RelativePath,        // within its store
+    name: String,
+    description: String,
+    kind: Option<String>,      // Claude's user | feedback | project | reference
+    body: String,
+    modified: Option<Timestamp>,
+    origin: Option<SessionId>, // Claude's originSessionId: links to the thread that wrote it
+}
+```
+What each agent allows:
+- **Claude Code, Gemini CLI:** read, edit and delete their files. Claude's `originSessionId` names the session, and so the Silt thread, that wrote a memory.
+- **Codex, Qudiks:** read `memory_summary.md`, `MEMORY.md` and the rollout summaries. Edits go in as `extensions/ad_hoc/notes/`, since the consolidation pass rewrites the rest.
+- **Copilot CLI:** only what threads captured, from their `store_memory` calls; the rest is on GitHub with no API to read it.
+- **OpenCode, Antigravity CLI:** nothing beyond rules files. The viewer can list the rules files every agent reads (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.agents/rules/`, `.github/copilot-instructions.md`) beside memory, since they're where those agents keep what they know.
+
+A memory write is already in the transcript as a tool call, so the viewer can also show, in a thread, what it remembered.
+
+### 3. Across machines
+Each agent's memory is a folder on one machine. Two ways to carry it:
+- **As themes and design systems sync** ([ADR 0099](../adr/0099-themes-sync-ship-fonts-and-reach-the-window.md)): a file a row on the person's server, the newer copy winning, tombstones for removals. Simple, but two machines adding a line to `MEMORY.md` at once lose one.
+- **As a family of its own:** one per person and project, its files the memory files, bridged to each agent's folder as a checkout is to disk. Concurrent edits merge as text, and history and search come with it. More work, and it fits Silt's focus on history (ADR 0006).
+
+Either way:
+- **A project is matched by its Silt project, not its path,** which differs between machines.
+- **It's the person's own:** memory goes into prompts, so another person's is untrusted input (ADR 0016). Forking someone's thread doesn't bring their memories. What a team shares belongs in committed rules files, which go through review.
+- **Redacted before it leaves** (ADR 0032), and file names from a server are checked before they're written.
+- **Codex's store shouldn't be synced as files:** its locks and baseline are per machine. Show the other machines' read-only, or carry only ad hoc notes.
+
+### 4. Across agents
+No agent reads another's memory, except Codex's import of Claude Code's (in development). Claude Code's format, an index plus a file a memory with frontmatter, is the most complete, and Gemini CLI's is nearly the same, so Silt could keep one store of that shape per person and project:
+- **Claude Code** writes it natively through `autoMemoryDirectory`.
+- **Gemini CLI** might, if its private memory can be pointed at the same folder (to probe: does it read and keep Claude's frontmatter?).
+- **The others** get its index the way they get the skills and rules they don't read natively (`conventions.rs`), and MCP tools to read, search and add entries: `silt_memory_search`, `silt_memory_read`, `silt_memory_write`.
+- **Copilot:** optionally pushed with `copilot memories import`, which writes to GitHub, so only when asked.
+
+### Open questions
+- Personal only, or also a project's memory shared within a team?
+- One shared pool all agents read and write, or each agent's own, with sharing an explicit step?
+- File sync like themes, or a family of its own?
+- Should Silt ever write to GitHub's Copilot Memory?
