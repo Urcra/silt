@@ -1239,6 +1239,13 @@ fn an_agent_started_again_keeps_the_threads_model() {
     };
     assert!(eventually(|| answers().len() == 2), "{:?}", answers());
     assert_eq!(answers(), ["Model: smart", "Model: smart"]);
+
+    // The web UI starts it again with the thread's model once the daemon restarted too.
+    env.silt(&["daemon", "stop"]);
+    let api = Api::open(&env);
+    let threads = api.ok("GET", "/api/threads", None);
+    let listed = threads.as_array().expect("a list").iter().find(|listed| listed["id"] == thread.as_str()).expect("listed");
+    assert_eq!(listed["agent_settings"], serde_json::json!({"agent": "Fake v1", "settings": {"model": "smart"}}), "{listed}");
 }
 
 /// What the agent left running goes with it, whether the person stops the

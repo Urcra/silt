@@ -1424,7 +1424,9 @@ impl Core {
             record.agent = agent;
             record.settings = settings;
         })
-        .await
+        .await?;
+        self.announce(crate::protocol::BusEvent::Threads);
+        Ok(())
     }
 
     /// Stores a choice the person made for the thread's agent.
