@@ -21,15 +21,15 @@ jobs:
   web:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Toolchain
         run: rustup show
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.28.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -40,7 +40,7 @@ jobs:
           pnpm -C web install --frozen-lockfile
           pnpm -C web build
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: web-dist
           path: web/dist/
@@ -56,9 +56,9 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: web-dist
           path: web/dist
@@ -93,7 +93,7 @@ jobs:
           cargo about generate --locked --target ${{ matrix.target }} -m crates/silt-cli/Cargo.toml about.hbs -o package/THIRD-PARTY-NOTICES-rust.txt
           tar -czf dist/silt-${{ matrix.target }}.tar.gz -C package .
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: silt-${{ matrix.target }}
           path: dist/
@@ -104,7 +104,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: silt-*
           path: dist
