@@ -316,7 +316,9 @@ fn a_read_only_link_shows_one_artifact_sandboxed() {
     assert!(headers[0].starts_with("sandbox allow-scripts;") && headers[0].contains("default-src 'none'"), "{headers:?}");
     // Libraries come through the server, so a viewer contacts no CDN (ADR 0132).
     assert!(
-        headers[0].contains("/vendor/") && !headers[0].contains("https://cdnjs.cloudflare.com") && !headers[0].contains("connect-src"),
+        headers[0].contains("/vendor/")
+            && !headers[0].contains("https://cdnjs.cloudflare.com")
+            && !headers[0].contains("connect-src"),
         "{headers:?}"
     );
     assert_eq!((headers[1].as_str(), headers[2].as_str()), ("text/html; charset=utf-8", "nosniff"));

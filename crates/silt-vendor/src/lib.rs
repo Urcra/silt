@@ -126,7 +126,10 @@ mod tests {
         let kept = vendor.get(Reach::Cdn, "cdnjs.cloudflare.com", "/ajax/libs/d3/7.9.0/d3.min.js", None).await.expect("kept");
         assert_eq!((kept.content_type.as_str(), kept.bytes.as_slice()), ("text/javascript", b"window.d3={}".as_slice()));
         assert!(matches!(vendor.get(Reach::Cdn, "esm.sh", "/react@18.3.1", None).await, Err(VendorError::Refused(_))));
-        assert!(matches!(vendor.get(Reach::Cdn, "unpkg.com", "/react@latest/index.js", None).await, Err(VendorError::Refused(_))));
+        assert!(matches!(
+            vendor.get(Reach::Cdn, "unpkg.com", "/react@latest/index.js", None).await,
+            Err(VendorError::Refused(_))
+        ));
     }
 
     #[tokio::test]

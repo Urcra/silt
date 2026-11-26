@@ -28,7 +28,12 @@ pub(crate) fn save(data_dir: &Path, settings: NetworkSettings) -> Result<(), Cor
 pub(crate) fn view(data_dir: &Path) -> Result<NetworkView, CoreError> {
     let settings = saved(data_dir).map_err(CoreError::Invalid)?;
     let offline_env = env_offline();
-    Ok(NetworkView { settings, offline_env, no_update_checks_env: env_no_update_checks(), offline: offline_env || settings.offline })
+    Ok(NetworkView {
+        settings,
+        offline_env,
+        no_update_checks_env: env_no_update_checks(),
+        offline: offline_env || settings.offline,
+    })
 }
 
 /// What applies now.
@@ -105,10 +110,7 @@ mod tests {
     fn offline_turns_every_switch_off_and_keeps_their_values() {
         let settings = NetworkSettings { offline: true, update_checks: true, plan_usage: false, agent_registry: true };
         let allowed = resolve(true, settings, false);
-        assert_eq!(
-            allowed,
-            Allowed { offline: true, update_checks: false, plan_usage: false, agent_registry: false }
-        );
+        assert_eq!(allowed, Allowed { offline: true, update_checks: false, plan_usage: false, agent_registry: false });
         assert_eq!(allowed.no_plan_usage(), Some("this machine is offline"));
         assert_eq!(allowed.vendor_reach(), silt_vendor::Reach::KeptOnly);
         let online = resolve(false, settings, true);

@@ -50,10 +50,8 @@ fn an_offline_machine_connects_nowhere_on_its_own() {
     )
     .expect("credentials");
     laptop.run(&["daemon", "stop"]);
-    laptop.silt_with(
-        &["open", "--no-browser"],
-        &[("SILT_OFFLINE", "1"), ("SILT_CLAUDE_USAGE_URL", &format!("{provider}/claude"))],
-    );
+    laptop
+        .silt_with(&["open", "--no-browser"], &[("SILT_OFFLINE", "1"), ("SILT_CLAUDE_USAGE_URL", &format!("{provider}/claude"))]);
 
     let usage = laptop.web("GET", "/api/agents/claude-code/usage", None);
     assert!(usage["unavailable"].as_str().is_some_and(|why| why.contains("offline")), "{usage}");
