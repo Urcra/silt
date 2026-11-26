@@ -199,11 +199,11 @@ No agent reads another's memory, except Codex's import of Claude Code's (in deve
 - **Copilot:** optionally pushed with `copilot memories import`, which writes to GitHub, so only when asked.
 
 ### 5. Memory about the person, everywhere
-Proposed, not yet decided: beside each project's store, Silt keeps one person-wide store of the same shape, synced as a family of its own, holding what applies in every project.
-- **Claude Code** gets its index with the project's, through `--append-system-prompt` (or the ACP session's system prompt), since it has no second memory folder to point at. Its `user`-kind memories, which it files per project, belong here; Silt can move them, or offer to.
+Beside each project's store, Silt keeps one person-wide store of the same shape, synced as a family of its own, holding what applies in every project.
+- **Claude Code** gets its index with the project's, through `--append-system-prompt` (or the ACP session's system prompt), since it has no second memory folder to point at. Its `user`-kind memories, which it files per project, move here as they're written.
 - **Gemini CLI, Codex and the rest** get it the way they get the project's store: injected, and through the MCP tools.
 - **The viewer** shows it as its own entry, "Everywhere", above the projects, with Codex's `## User Profile` and `## User preferences` and the person's own rules files (`~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`, `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md`) beside it.
 - A memory can move between a project and everywhere either way.
 
 ### Decided
-[ADR 0135](../adr/0135-agents-memory-follows-the-person.md): personal only; one store all agents share, which the person can turn off; synced as a family of its own; Copilot's GitHub memory written only when turned on.
+[ADR 0135](../adr/0135-agents-memory-follows-the-person.md): personal only; one store all agents share, which the person can turn off; synced as a family of its own; Copilot's GitHub memory written only when turned on; a person-wide store beside the projects', where Claude Code's `user`-kind memories move as they're written.
