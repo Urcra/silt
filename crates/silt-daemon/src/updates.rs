@@ -55,7 +55,7 @@ impl Updates {
     /// offline or `SILT_UPDATE_CHECK` is `never`, which leave checks to
     /// Check now.
     pub(crate) fn check_if_due(self: &Arc<Self>) {
-        if !crate::network::checks_for_updates() {
+        if !crate::network::allowed(&self.data_dir).update_checks {
             return;
         }
         let due = {

@@ -76,6 +76,7 @@ impl Request {
             | Self::ThemeFont { .. }
             | Self::ThemeCss { .. }
             | Self::ArtifactSettings { .. }
+            | Self::NetworkSettings { .. }
             | Self::DesignSystems { .. }
             | Self::DesignCatalog { .. }
             | Self::DesignSystem { .. }
@@ -218,6 +219,7 @@ impl Request {
             | Self::ImportTheme { .. }
             | Self::DuplicateTheme { .. }
             | Self::SetArtifactSettings { .. }
+            | Self::SetNetworkSettings { .. }
             | Self::PageAssets { .. }
             | Self::PageConnectors { .. }
             | Self::SetPageConnectors { .. }

@@ -309,7 +309,7 @@ impl Server {
                 viewer_serial: std::sync::atomic::AtomicU64::new(0),
                 data_dir: data_dir.to_owned(),
                 redaction_key,
-                vendor: silt_vendor::Vendor::new(&data_dir.join("vendor"), silt_vendor::Reach::Cdn),
+                vendor: silt_vendor::Vendor::new(&data_dir.join("vendor")),
                 purged: Mutex::new(purged),
                 presence: Mutex::new(presence::Board::default()),
                 control: control::Control::default(),

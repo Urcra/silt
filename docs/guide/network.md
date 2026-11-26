@@ -9,7 +9,9 @@ Turn on **Offline** in Settings › Network, or set `SILT_OFFLINE=1` in the daem
 - it lists the agents built into Silt, without fetching the registry;
 - artifacts get only the libraries and fonts Silt already kept, so a page you opened before still works, and a new one renders without what's missing.
 
-What you ask for still happens: downloading a model, installing a plugin or an agent, or **Check now** on the Updates page. `SILT_OFFLINE=1` overrides the setting, and Settings › Network says so.
+What you ask for still happens: downloading a model, installing a plugin or an agent, or **Check now** on the Updates page.
+
+The switches are kept in `network.json` in Silt's data folder, and take effect at once. `SILT_OFFLINE=1` overrides the setting, and Settings › Network says so. If `network.json` can't be read, Silt stays offline until it's fixed or you change a switch, which writes it again.
 
 ## Your servers
 A machine talks to the servers you sign in to, and only those. A thread syncs with its home server alone, and a project kept on this machine syncs nowhere ([Several servers](servers.md)). Before a conversation leaves the machine, secret-looking values in it are replaced ([Live collaboration and agents](live-and-agents.md)).

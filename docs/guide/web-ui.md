@@ -148,6 +148,6 @@ On a phone, the list of threads is the home page and New thread opens from it; t
 [History and search](history-and-search.md) and [forks and merge requests](forks-and-merge-requests.md) have the details.
 
 ## Settings
-Settings, the cog at the sidebar's bottom right, holds **Projects** (with their defaults and adding one), **Devices**, **Sync**, **Orgs**, **Chats**, **Notifications**, **Appearance** and **Text and layout**. Appearance picks a light and a dark theme from Silt's own and yours, imported from VS Code or Zed or written yourself; Text and layout sets the zoom, text sizes, fonts and spacing over it; see [Themes](themes.md).
+Settings, the cog at the sidebar's bottom right, holds **Projects** (with their defaults and adding one), **Devices**, **Sync**, **Orgs**, **Chats**, **Notifications**, **Appearance**, **Text and layout**, **Updates** and **Network**. Appearance picks a light and a dark theme from Silt's own and yours, imported from VS Code or Zed or written yourself; Text and layout sets the zoom, text sizes, fonts and spacing over it; see [Themes](themes.md). Network has a switch for each thing Silt connects to on its own, and **Offline** for all of them; see [What Silt sends over the network](network.md).
 
 The design is in [ADR 0044](../adr/0044-the-standard-agent-workspace.md), [ADR 0022](../adr/0022-agent-runtime.md) and [ADR 0024](../adr/0024-per-person-state.md).

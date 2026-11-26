@@ -1,6 +1,6 @@
 # 0132: No telemetry, an offline switch, and artifacts' libraries through Silt by default
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-26
 - Amends: [ADR 0071](0071-artifact-design-guidance-design-systems-and-libraries.md) (libraries load through Silt by default), [ADR 0100](0100-update-channels.md) (update checks can be turned off in Settings and are off offline), [ADR 0095](0095-an-agent-s-plan-usage-in-the-composer.md) (plan usage can be turned off), [ADR 0005](0005-acp-registry.md) (the registry fetch can be turned off)
 
@@ -27,7 +27,7 @@ Only `SILT_UPDATE_CHECK=never` turned any of them off, and `network.md` said art
 
 What the person asks for still happens offline: a model or an agent downloaded, a plugin installed, Check now. Those are their choice, made each time.
 
-**The settings live in `$SILT_HOME/network.json`,** read where each connection is about to start, so a change applies at once. The environment wins over the file: `SILT_OFFLINE=1` turns Offline on and `SILT_UPDATE_CHECK=never` turns update checks off, and Settings › Network shows the switch locked, naming the variable.
+**The settings live in `$SILT_HOME/network.json`,** read where each connection is about to start, so a change applies at once. A file that can't be read counts as offline, so damage never turns a switch back on; Settings › Network says why, and changing a switch writes the file again. The environment wins over the file: `SILT_OFFLINE=1` turns Offline on and `SILT_UPDATE_CHECK=never` turns update checks off, and Settings › Network shows the switch locked, naming the variable.
 
 **Artifacts' libraries load through Silt by default,** on the daemon and on the server (`artifact_proxy` defaults to `true`). A viewer's browser then contacts no CDN; the machine or the server fetches each pinned file once.
 
