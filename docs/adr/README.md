@@ -139,3 +139,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0131](0131-the-gate-runs-on-the-pull-request.md) | The gate runs on the pull request | accepted |
 | [0132](0132-auto-for-agents-without-an-auto-mode.md) | Auto for agents without an auto mode | accepted |
 | [0133](0133-december-decorations-in-the-desktop-app.md) | December decorations in the desktop app | accepted |
+| [0134](0134-no-telemetry-and-an-offline-switch.md) | No telemetry, an offline switch, and artifacts' libraries through Silt by default | accepted |

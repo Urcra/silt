@@ -593,6 +593,11 @@ pub enum Request {
         #[serde(default)]
         text: Option<silt_theme::TextSettings>,
     },
+    /// What this machine connects to on its own (ADR 0134).
+    NetworkSettings,
+    SetNetworkSettings {
+        settings: NetworkSettings,
+    },
     /// How this machine's web UI loads artifacts' libraries and fonts.
     ArtifactSettings,
     SetArtifactSettings {
@@ -1484,14 +1489,60 @@ pub struct ArtifactPut {
     pub missing: Option<String>,
 }
 
-/// How artifacts' frames load libraries and fonts (ADR 0071).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// How artifacts' frames load libraries and fonts (ADR 0071, ADR 0134).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ArtifactSettings {
     /// Through Silt's vendor route, which fetches and keeps each file, so
-    /// the viewer's browser never contacts a CDN; else from the CDNs.
-    #[serde(default)]
+    /// the viewer's browser never contacts a CDN, as by default; else from
+    /// the CDNs.
+    #[serde(default = "through_silt")]
     pub proxy: bool,
+}
+
+impl Default for ArtifactSettings {
+    fn default() -> Self {
+        Self { proxy: through_silt() }
+    }
+}
+
+fn through_silt() -> bool {
+    true
+}
+
+/// The switches for what this machine connects to on its own, kept in
+/// `network.json` (ADR 0134). Offline turns the others off without
+/// changing them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(default)]
+pub struct NetworkSettings {
+    pub offline: bool,
+    /// Silt's and plugins' checks for a newer version.
+    pub update_checks: bool,
+    /// Asking agents' providers how much of the plan is left.
+    pub plan_usage: bool,
+    /// Fetching the ACP registry's list of agents.
+    pub agent_registry: bool,
+}
+
+impl Default for NetworkSettings {
+    fn default() -> Self {
+        Self { offline: false, update_checks: true, plan_usage: true, agent_registry: true }
+    }
+}
+
+/// [`NetworkSettings`] with what the daemon's environment sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct NetworkView {
+    pub settings: NetworkSettings,
+    /// `SILT_OFFLINE` is set, so this machine is offline whatever the setting says.
+    pub offline_env: bool,
+    /// `SILT_UPDATE_CHECK=never` is set, so nothing checks for updates by itself.
+    pub no_update_checks_env: bool,
+    /// Offline now, by the setting or the environment.
+    pub offline: bool,
 }
 
 /// What [`Request::ArtifactRead`] answers.
@@ -2951,6 +3002,8 @@ mod tests {
             crate::connectors::ConnectorTool::decl(&config),
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
+            NetworkSettings::decl(&config),
+            NetworkView::decl(&config),
             silt_proto::view::AppearanceMode::decl(&config),
             silt_proto::view::AppearanceSettings::decl(&config),
             silt_proto::view::SeasonalSettings::decl(&config),
