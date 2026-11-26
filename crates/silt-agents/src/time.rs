@@ -33,8 +33,16 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// stamp their lines (Claude Code, Codex): a line is captured after it's
 /// written, and an imported one long after.
 pub fn line_time(line: &str) -> Option<i64> {
-    let record: serde_json::Value = serde_json::from_str(line).ok()?;
-    parse_timestamp(record.get("timestamp")?.as_str()?)
+    /// Only the stamp: the rest of a line, a screenshot's base64 among it,
+    /// is skipped over rather than read into values. Reading every line
+    /// whole for it took longer than reading the history itself.
+    #[derive(serde::Deserialize)]
+    struct Stamped<'a> {
+        #[serde(borrow)]
+        timestamp: Option<std::borrow::Cow<'a, str>>,
+    }
+    let stamped: Stamped<'_> = serde_json::from_str(line).ok()?;
+    parse_timestamp(&stamped.timestamp?)
 }
 
 /// Milliseconds since the epoch of an RFC 3339 time in UTC, such as
@@ -80,6 +88,9 @@ mod tests {
         assert_eq!(line_time(line), parse_timestamp("2026-01-02T03:04:05.250Z"));
         assert_eq!(line_time(r#"{"t":"message","text":"hi"}"#), None);
         assert_eq!(line_time("not json"), None);
+        assert_eq!(line_time(r#"{"timestamp":7}"#), None, "a stamp that isn't text");
+        let escaped = r#"{"message":{"timestamp":"no"},"timestamp":"2026-01-02T03:04:05.250Z","t":"a \"quoted\" word"}"#;
+        assert_eq!(line_time(escaped), parse_timestamp("2026-01-02T03:04:05.250Z"), "only the line's own stamp");
     }
 
     use super::*;

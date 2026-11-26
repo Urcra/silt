@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use silt_crdt::{InodeId, InodeKind, Parent};
-use silt_log::{Author, BaseText, Content, Delta, Family, FileView, LogError, Op};
+use silt_log::{Author, BaseText, Content, Delta, Family, FileView, LogError, Op, ViewKey};
 use silt_types::{ActorId, BlobHash, Frontier, GitOid, ThreadId};
 
 use crate::diff::text_edits;
@@ -90,11 +91,61 @@ pub struct Bridge {
     actor: ActorId,
     thread: ThreadId,
     entries: BTreeMap<String, DiskEntry>,
+    /// The thread's paths as last listed, and the view they were listed in.
+    /// Listing them walks the whole tree, so recording a batch of new files
+    /// listed them again for each: in a checkout of 50,000 files, 35 ms a
+    /// file. What this bridge itself adds or removes is patched in instead.
+    paths: Option<(ViewKey, Arc<BTreeMap<String, InodeId>>)>,
 }
 
 impl Bridge {
     pub fn new(actor: ActorId, thread: ThreadId, entries: BTreeMap<String, DiskEntry>) -> Self {
-        Self { actor, thread, entries }
+        Self { actor, thread, entries, paths: None }
+    }
+
+    /// The thread's paths in `family` now.
+    fn thread_paths(&mut self, family: &Family) -> Arc<BTreeMap<String, InodeId>> {
+        let key = family.view_key(self.thread);
+        if let Some((listed, paths)) = &self.paths
+            && *listed == key
+        {
+            return Arc::clone(paths);
+        }
+        let paths = family.thread_view(self.thread).paths();
+        self.paths = Some((key, Arc::clone(&paths)));
+        paths
+    }
+
+    /// Keeps the paths listed up to date with what one `ingest` changed in
+    /// the tree, if that's all that changed since they were listed and none
+    /// of it can rename another path; else they're listed again when next
+    /// asked for.
+    fn patch_paths(&mut self, family: &Family, changes_before: u64, tree_ops: u64, listed: Vec<Listed>) {
+        let Some((_, mut paths)) = self.paths.take() else {
+            return;
+        };
+        if family.tree_changes() != changes_before + tree_ops {
+            return;
+        }
+        let map = Arc::make_mut(&mut paths);
+        for change in listed {
+            match change {
+                Listed::Added(path, inode) => {
+                    if map.insert(path, inode).is_some() {
+                        return;
+                    }
+                }
+                // A name another inode shares goes to it once this one's gone.
+                Listed::Removed(path) => {
+                    let shared = format!("{path} (conflict ");
+                    if map.range(shared.clone()..).next().is_some_and(|(other, _)| other.starts_with(&shared)) {
+                        return;
+                    }
+                    map.remove(&path);
+                }
+            }
+        }
+        self.paths = Some((family.view_key(self.thread), paths));
     }
 
     pub fn actor(&self) -> ActorId {
@@ -124,9 +175,10 @@ impl Bridge {
         author: &Author,
         time_ms: i64,
     ) -> Result<Ingested, BridgeError> {
-        let mut writer = Writer { family, bases, thread: self.thread, author, time_ms, deltas: Vec::new() };
+        let paths = self.thread_paths(family);
+        let changes_before = family.tree_changes();
+        let mut writer = Writer::new(family, bases, self.thread, author, time_ms);
         let view = writer.family.thread_view(self.thread);
-        let paths = view.paths();
         // A file moved elsewhere since this checkout last saw it is still the
         // same file here until the move reaches the disk.
         let existing = paths.get(path).copied().or_else(|| {
@@ -141,9 +193,13 @@ impl Bridge {
             let had = |inode: &InodeId| self.entries.get(path).is_some_and(|entry| entry.inode == *inode);
             if let Some(inode) = existing.filter(had) {
                 writer.tree_op(self.actor, Op::Delete { inode })?;
+                writer.listed.push(Listed::Removed(path.to_owned()));
             }
             self.entries.remove(path);
-            return Ok(Ingested { deltas: writer.deltas, actions: Vec::new() });
+            let Writer { deltas, tree_ops, listed, .. } = writer;
+            drop(paths);
+            self.patch_paths(family, changes_before, tree_ops, listed);
+            return Ok(Ingested { deltas, actions: Vec::new() });
         };
 
         let inode = match existing {
@@ -164,7 +220,9 @@ impl Bridge {
             }
             None => writer.create(self.actor, &paths, path, &disk)?,
         };
-        let deltas = writer.deltas;
+        let Writer { deltas, tree_ops, listed, .. } = writer;
+        drop(paths);
+        self.patch_paths(family, changes_before, tree_ops, listed);
 
         let version = family.thread_head(self.thread);
         let mut actions = Vec::new();
@@ -255,7 +313,7 @@ impl Bridge {
         let Some(entry) = self.entries.get(from).cloned() else {
             return Ok(None);
         };
-        let mut writer = Writer { family, bases, thread: self.thread, author, time_ms, deltas: Vec::new() };
+        let mut writer = Writer::new(family, bases, self.thread, author, time_ms);
         let (parent, name) = writer.parent_for(self.actor, &paths, to)?;
         writer.tree_op(self.actor, Op::Move { inode, parent, name })?;
         self.entries.remove(from);
@@ -284,7 +342,7 @@ impl Bridge {
             .filter_map(|path| Some((path.clone(), *thread_paths.get(path)?)))
             .filter(|(_, inode)| inode.0.actor == self.actor && view.tree().kind(*inode) == Some(InodeKind::File))
             .collect();
-        let mut writer = Writer { family, bases, thread: self.thread, author, time_ms, deltas: Vec::new() };
+        let mut writer = Writer::new(family, bases, self.thread, author, time_ms);
         let mut forgotten = Vec::with_capacity(ours.len());
         for (path, inode) in ours {
             writer.tree_op(self.actor, Op::Delete { inode })?;
@@ -323,9 +381,23 @@ struct Writer<'a> {
     author: &'a Author,
     time_ms: i64,
     deltas: Vec<Delta>,
+    /// Creates, moves and deletes applied.
+    tree_ops: u64,
+    /// The paths those added and removed.
+    listed: Vec<Listed>,
 }
 
-impl Writer<'_> {
+/// A path a `Writer` added to the thread's tree, or removed from it.
+enum Listed {
+    Added(String, InodeId),
+    Removed(String),
+}
+
+impl<'a> Writer<'a> {
+    fn new(family: &'a mut Family, bases: &'a mut dyn BaseText, thread: ThreadId, author: &'a Author, time_ms: i64) -> Self {
+        Self { family, bases, thread, author, time_ms, deltas: Vec::new(), tree_ops: 0, listed: Vec::new() }
+    }
+
     fn apply(&mut self, actor: ActorId, parents: Frontier, op: Op) -> Result<Frontier, BridgeError> {
         let delta = self.family.delta(actor, self.thread, self.author.clone(), self.time_ms, parents, op);
         let last = delta.span.last();
@@ -335,6 +407,9 @@ impl Writer<'_> {
     }
 
     fn tree_op(&mut self, actor: ActorId, op: Op) -> Result<Frontier, BridgeError> {
+        if matches!(op, Op::Create { .. } | Op::Move { .. } | Op::Delete { .. }) {
+            self.tree_ops += 1;
+        }
         let head = self.family.thread_head(self.thread);
         self.apply(actor, head, op)
     }
@@ -355,6 +430,7 @@ impl Writer<'_> {
         let created =
             self.tree_op(actor, Op::Create { kind: InodeKind::File, parent, name, content, executable: disk.executable })?;
         let inode = InodeId(created.ids()[0]);
+        self.listed.push(Listed::Added(path.to_owned(), inode));
         if let DiskContent::Text(text) = &disk.content {
             self.edit_text(actor, inode, "", text, created)?;
         }
@@ -385,6 +461,7 @@ impl Writer<'_> {
                     // by it.
                     if let Some(file) = existing {
                         self.tree_op(actor, Op::Delete { inode: file })?;
+                        self.listed.push(Listed::Removed(prefix.clone()));
                     }
                     let created = self.tree_op(
                         actor,
@@ -396,7 +473,9 @@ impl Writer<'_> {
                             executable: false,
                         },
                     )?;
-                    Parent::Dir(InodeId(created.ids()[0]))
+                    let dir = InodeId(created.ids()[0]);
+                    self.listed.push(Listed::Added(prefix.clone(), dir));
+                    Parent::Dir(dir)
                 }
             };
         }
@@ -455,5 +534,89 @@ impl Writer<'_> {
             parents = self.apply(actor, parents, Op::Text { inode, op })?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const THREAD: ThreadId = ThreadId(1);
+
+    fn text(text: &str) -> DiskFile {
+        let mut hash = [0u8; 32];
+        for (index, byte) in text.bytes().enumerate() {
+            hash[index % 32] = hash[index % 32].wrapping_mul(31).wrapping_add(byte);
+        }
+        DiskFile {
+            content: DiskContent::Text(text.to_owned()),
+            executable: false,
+            hash: BlobHash(hash),
+            size: text.len() as u64,
+            mtime_ns: 0,
+        }
+    }
+
+    /// Records `path` and checks the paths the bridge keeps are those the
+    /// thread lists.
+    fn ingest(bridge: &mut Bridge, family: &mut Family, path: &str, disk: Option<DiskFile>) {
+        bridge.ingest(family, &mut HashMap::new(), path, disk, &Author::User, 0).expect("ingests");
+        if let Some((key, paths)) = &bridge.paths
+            && *key == family.view_key(THREAD)
+        {
+            assert_eq!(**paths, *family.thread_view(THREAD).paths(), "after {path}");
+        }
+    }
+
+    #[test]
+    fn the_paths_kept_across_a_batch_are_those_the_thread_lists() {
+        let mut family = Family::new();
+        let mut bridge = Bridge::new(ActorId(1), THREAD, BTreeMap::new());
+        let mut other = Bridge::new(ActorId(2), THREAD, BTreeMap::new());
+        for at in 0..20 {
+            ingest(&mut bridge, &mut family, &format!("content/{}/asset{at}.txt", at % 3), Some(text("a")));
+        }
+        assert!(bridge.paths.as_ref().is_some_and(|(key, _)| *key == family.view_key(THREAD)), "kept, not listed again");
+        ingest(&mut bridge, &mut family, "content/0/asset0.txt", None);
+        ingest(&mut bridge, &mut family, "top.txt", Some(text("t")));
+        other.ingest(&mut family, &mut HashMap::new(), "elsewhere.txt", Some(text("e")), &Author::User, 0).expect("ingests");
+        ingest(&mut bridge, &mut family, "after-another.txt", Some(text("x")));
+        assert_eq!(bridge.paths.as_ref().expect("listed again").1, family.thread_view(THREAD).paths());
+        ingest(&mut bridge, &mut family, "file", Some(text("f")));
+        ingest(&mut bridge, &mut family, "file/now-a-dir.txt", Some(text("d")));
+        ingest(&mut bridge, &mut family, "content/1/edited.txt", Some(text("one")));
+        ingest(&mut bridge, &mut family, "content/1/edited.txt", Some(text("two")));
+        assert!(bridge.paths.as_ref().is_some_and(|(key, _)| *key == family.view_key(THREAD)), "kept through all of it");
+    }
+
+    #[test]
+    fn a_name_another_file_shares_is_listed_again_once_one_goes() {
+        let mut family = Family::new();
+        let mut bridge = Bridge::new(ActorId(1), THREAD, BTreeMap::new());
+        ingest(&mut bridge, &mut family, "notes.md", Some(text("mine")));
+        let head = family.thread_head(THREAD);
+        let theirs = family.delta(
+            ActorId(9),
+            THREAD,
+            Author::User,
+            0,
+            head,
+            Op::Create {
+                kind: InodeKind::File,
+                parent: Parent::Root,
+                name: "notes.md".into(),
+                content: Content::Empty,
+                executable: false,
+            },
+        );
+        family.apply(theirs, &mut HashMap::new()).expect("applies");
+        ingest(&mut bridge, &mut family, "other.md", Some(text("o")));
+        assert!(family.thread_view(THREAD).paths().keys().any(|path| path.starts_with("notes.md (conflict ")));
+        ingest(&mut bridge, &mut family, "notes.md", None);
+        assert_eq!(
+            bridge.thread_paths(&family).as_ref(),
+            family.thread_view(THREAD).paths().as_ref(),
+            "the conflict name became the plain one"
+        );
     }
 }

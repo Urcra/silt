@@ -134,14 +134,37 @@ impl Core {
             self.history_entries(thread);
         }
         for event in waiting {
-            let _ = self.events.send(event);
+            self.send_on(event);
+        }
+    }
+
+    /// Sends on an event that waited, a page's view ahead of the rest again.
+    fn send_on(&self, event: Event) {
+        let to = match &event {
+            Event::Request(request, _) if request.is_view() => &self.views.sender,
+            _ => &self.events,
+        };
+        let _ = to.send(event);
+    }
+
+    /// Answers the views of pages waiting now, between the steps of long
+    /// work such as recording what an agent wrote (ADR 0127). Each step
+    /// leaves the family as it would be between events.
+    pub(crate) async fn answer_views(&mut self) {
+        while let Ok(event) = self.views.receiver.try_recv() {
+            let Some(event) = self.unless_loading(event) else {
+                continue;
+            };
+            if let Event::Request(request, reply) = event {
+                Box::pin(self.request(request, reply)).await;
+            }
         }
     }
 
     /// Lets the requests that waited for the stale digests go on.
     pub(crate) fn digests_taken(&mut self) {
         for event in std::mem::take(&mut self.waiting.1) {
-            let _ = self.events.send(event);
+            self.send_on(event);
         }
     }
 
@@ -200,7 +223,7 @@ impl Core {
             Err(error) => warn!(%error, %family, "could not load the family; what needs it loads it again"),
         }
         for event in self.waiting.0.remove(&family).unwrap_or_default() {
-            let _ = self.events.send(event);
+            self.send_on(event);
         }
     }
 

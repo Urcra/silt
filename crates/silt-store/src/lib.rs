@@ -318,6 +318,12 @@ pub struct Compacted {
     pub recompressed: usize,
 }
 
+/// At most how many threads decode a family's chunks at once.
+const DECODE_THREADS: usize = 8;
+
+/// Compressed chunks below this size decode on the caller's thread alone.
+const PARALLEL_DECODE_BYTES: usize = 4 << 20;
+
 /// A family's deltas as the store holds them: chunks still compressed, and
 /// the rows after them (ADR 0035). Decoding is what takes the time, so a
 /// caller decodes only the positions it needs.
@@ -354,27 +360,57 @@ impl StoredDeltas {
     }
 
     /// The deltas at `positions`, in order, decoding only the chunks that
-    /// hold them.
+    /// hold them. Many of them are decoded on several threads: decoding a
+    /// long family's log is most of what loading it takes.
     pub fn decode(&self, positions: std::ops::Range<usize>) -> Result<Vec<Delta>, StoreError> {
-        let mut deltas = Vec::with_capacity(positions.len());
+        let mut wanted = Vec::new();
         let mut at = 0;
         for chunk in &self.chunks {
             let held = chunk.held(self.after);
             let span = at..at + held;
             at += held;
-            if span.end <= positions.start || positions.end <= span.start {
-                continue;
+            if span.end > positions.start && positions.end > span.start {
+                wanted.push((chunk, span));
             }
+        }
+        let decode = |(chunk, span): &(&StoredChunk, std::ops::Range<usize>)| -> Result<Vec<Delta>, StoreError> {
             let packed = chunks::decode(chunk.codec, &chunk.data)?;
             let rows = chunks::unpack(&packed)?;
             if i64::try_from(rows.len()).ok() != Some(chunk.last - chunk.first + 1) {
                 return Err(StoreError::Corrupt { what: "delta chunk" });
             }
-            let skipped = rows.len() - held;
+            let skipped = rows.len() - span.len();
+            let mut deltas = Vec::new();
             for (position, (format, data)) in (span.start..).zip(&rows[skipped..]) {
                 if positions.contains(&position) {
                     deltas.push(silt_log::decode_stored(*format, data)?);
                 }
+            }
+            Ok(deltas)
+        };
+        let bytes: usize = wanted.iter().map(|(chunk, _)| chunk.data.len()).sum();
+        let threads =
+            std::thread::available_parallelism().map_or(1, std::num::NonZero::get).min(DECODE_THREADS).min(wanted.len());
+        let mut deltas = Vec::with_capacity(positions.len());
+        if threads > 1 && bytes >= PARALLEL_DECODE_BYTES {
+            let per = wanted.len().div_ceil(threads);
+            let decoded = std::thread::scope(|scope| {
+                let decode = &decode;
+                let parts: Vec<_> = wanted
+                    .chunks(per)
+                    .map(|group| scope.spawn(move || group.iter().map(decode).collect::<Result<Vec<_>, _>>()))
+                    .collect();
+                parts
+                    .into_iter()
+                    .map(|part| part.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+                    .collect::<Vec<_>>()
+            });
+            for part in decoded {
+                deltas.extend(part?.into_iter().flatten());
+            }
+        } else {
+            for chunk in &wanted {
+                deltas.extend(decode(chunk)?);
             }
         }
         for (position, (format, data)) in (at..).zip(&self.rows) {

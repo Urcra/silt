@@ -91,9 +91,10 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
 
     // Taking requests before everything is loaded: they wait in the queue
     // for the load, and come before the rescans it queues (ADR 0034).
-    let accept_events = events.clone();
+    let views = crate::core::Views::default();
+    let queues = Queues { events: events.clone(), views: views.sender.clone() };
     let (answered, mut answered_rx) = mpsc::unbounded_channel();
-    listen(socket, accept_events, answered)?;
+    listen(socket, queues, answered)?;
     #[cfg(unix)]
     listen_for_agents(&crate::paths::agents_socket_in(data_dir), events.clone())?;
     // Without a turn, so hooks capturing meanwhile don't wait on a long
@@ -107,6 +108,7 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
     };
     // After the requests that came during the load: rows a crash left
     // unwritten, then a store from an older Silt compacted.
+    core.views = views;
     core.queue_index_pending();
     core.start_lan_if_wanted().await;
     let _ = events.send(Event::Compact);
@@ -123,7 +125,17 @@ pub async fn run(data_dir: &Path, socket: &Path) -> Result<(), RunError> {
         }
     });
 
-    while let Some(event) = inbox.recv().await {
+    loop {
+        // What a page shows comes first: a thread switched to waits for no
+        // capture queued before it.
+        let event = tokio::select! {
+            biased;
+            Some(event) = core.views.receiver.recv() => event,
+            event = inbox.recv() => match event {
+                Some(event) => event,
+                None => break,
+            },
+        };
         let began = Instant::now();
         let what = label(&event);
         idle.store(core.idle(), Ordering::Relaxed);
@@ -265,7 +277,7 @@ fn hold_until_exit(lock: fs::File) {
 /// Takes connections on the socket, from this user's own processes only:
 /// whoever reaches it controls the daemon.
 #[cfg(unix)]
-fn listen(socket: &Path, events: mpsc::UnboundedSender<Event>, answered: mpsc::UnboundedSender<()>) -> Result<(), RunError> {
+fn listen(socket: &Path, queues: Queues, answered: mpsc::UnboundedSender<()>) -> Result<(), RunError> {
     use std::os::unix::fs::PermissionsExt as _;
     if socket.exists() {
         fs::remove_file(socket)?;
@@ -277,7 +289,7 @@ fn listen(socket: &Path, events: mpsc::UnboundedSender<Event>, answered: mpsc::U
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
             if stream.peer_cred().is_ok_and(|peer| peer.uid() == me) {
-                tokio::spawn(serve(stream, events.clone(), answered.clone()));
+                tokio::spawn(serve(stream, queues.clone(), answered.clone()));
             }
         }
     });
@@ -301,7 +313,9 @@ fn listen_for_agents(socket: &Path, events: mpsc::UnboundedSender<Event>) -> Res
         while let Ok((stream, _)) = listener.accept().await {
             if stream.peer_cred().is_ok_and(|peer| peer.uid() == me) {
                 let (answered, _) = mpsc::unbounded_channel();
-                tokio::spawn(serve_as(stream, events.clone(), answered, Authority::Run));
+                // A sandboxed run's requests get no place ahead of the rest.
+                let queues = Queues { events: events.clone(), views: events.clone() };
+                tokio::spawn(serve_as(stream, queues, answered, Authority::Run));
             }
         }
     });
@@ -311,7 +325,7 @@ fn listen_for_agents(socket: &Path, events: mpsc::UnboundedSender<Event>) -> Res
 /// Takes connections on the pipe, which only this user can open. Each
 /// client gets the waiting instance, and a new one waits for the next.
 #[cfg(windows)]
-fn listen(socket: &Path, events: mpsc::UnboundedSender<Event>, answered: mpsc::UnboundedSender<()>) -> Result<(), RunError> {
+fn listen(socket: &Path, queues: Queues, answered: mpsc::UnboundedSender<()>) -> Result<(), RunError> {
     let listen_error = |source| RunError::Listen { path: socket.display().to_string(), source };
     let name = socket.as_os_str().to_owned();
     let mut waiting = silt_os::pipe::serve(&name, true).map_err(listen_error)?;
@@ -324,7 +338,7 @@ fn listen(socket: &Path, events: mpsc::UnboundedSender<Event>, answered: mpsc::U
                     break;
                 }
             };
-            tokio::spawn(serve(std::mem::replace(&mut waiting, next), events.clone(), answered.clone()));
+            tokio::spawn(serve(std::mem::replace(&mut waiting, next), queues.clone(), answered.clone()));
         }
     });
     Ok(())
@@ -341,17 +355,21 @@ enum Authority {
 
 /// Serves one connection. `answered` hears when a shutdown request has been
 /// answered, since the daemon exits, and drops this task, right after.
-async fn serve(
-    stream: impl AsyncRead + AsyncWrite + Send + 'static,
+async fn serve(stream: impl AsyncRead + AsyncWrite + Send + 'static, queues: Queues, answered: mpsc::UnboundedSender<()>) {
+    serve_as(stream, queues, answered, Authority::Person).await;
+}
+
+/// Where a connection's requests go: those that only read what a page shows
+/// ahead of the rest (ADR 0127).
+#[derive(Clone)]
+struct Queues {
     events: mpsc::UnboundedSender<Event>,
-    answered: mpsc::UnboundedSender<()>,
-) {
-    serve_as(stream, events, answered, Authority::Person).await;
+    views: mpsc::UnboundedSender<Event>,
 }
 
 async fn serve_as(
     stream: impl AsyncRead + AsyncWrite + Send + 'static,
-    events: mpsc::UnboundedSender<Event>,
+    queues: Queues,
     answered: mpsc::UnboundedSender<()>,
     authority: Authority,
 ) {
@@ -370,7 +388,8 @@ async fn serve_as(
             Ok(request) => {
                 let hook = matches!(request, Request::Hook { .. });
                 let (reply, response) = oneshot::channel();
-                if events.send(Event::Request(request, reply)).is_err() {
+                let to = if request.is_view() { &queues.views } else { &queues.events };
+                if to.send(Event::Request(request, reply)).is_err() {
                     break;
                 }
                 let answer = if hook {

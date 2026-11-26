@@ -512,7 +512,8 @@ mod tests {
         assert_eq!(histories.len(), 1, "with the history asked for");
         core.loaded(family, *result, size, histories);
         assert!(core.history_kept_now(THREAD), "kept without the core reading it");
-        assert!(matches!(inbox.try_recv(), Ok(Event::Request(Request::HistoryRead { .. }, _))), "the page goes on");
+        let next = core.views.receiver.try_recv();
+        assert!(matches!(next, Ok(Event::Request(Request::HistoryRead { .. }, _))), "the page goes on, ahead of other events");
     }
 
     #[tokio::test]
@@ -533,7 +534,7 @@ mod tests {
         assert!(whole.is_some() && !copy, "on a blocking thread, from its log as held");
         core.history_read(thread, whole.map(|whole| *whole), copy);
         assert!(core.history_kept_now(THREAD));
-        let sent = std::iter::from_fn(|| inbox.try_recv().ok()).count();
+        let sent = std::iter::from_fn(|| core.views.receiver.try_recv().ok()).count();
         assert_eq!(sent, 2, "both go on");
         let read_off = core.history_entries(THREAD);
         core.history_cache.lock().expect("lock").clear();
@@ -556,7 +557,19 @@ mod tests {
         core.history_read(thread, whole.map(|whole| *whole), copy);
         assert!(core.history_kept_now(THREAD));
         assert!(!core.families.loaded(&FAMILY).expect("held").log_decoded(), "the log stays let go of");
-        assert!(matches!(inbox.try_recv(), Ok(Event::Request(Request::HistoryRead { .. }, _))), "the page goes on");
+        let next = core.views.receiver.try_recv();
+        assert!(matches!(next, Ok(Event::Request(Request::HistoryRead { .. }, _))), "the page goes on, ahead of other events");
+    }
+
+    #[tokio::test]
+    async fn a_pages_view_is_answered_while_long_work_is_waited_for() {
+        let (data, _repo, store) = store_with_thread().await;
+        let (mut core, _inbox) = loaded_core(store, data.path()).await;
+        let (reply, answer) = oneshot::channel();
+        core.views.sender.send(Event::Request(Request::Threads, reply)).expect("sends");
+        // Work that ends only once the view is answered.
+        let work = tokio::spawn(async move { answer.await.is_ok() });
+        assert!(core.answering_views(work).await.expect("joins"), "the view was answered meanwhile");
     }
 
     #[tokio::test]
@@ -594,7 +607,7 @@ mod tests {
         assert!(core.families.is_loaded(&FAMILY));
         let stored = core.store.family_size(FAMILY).await.expect("sized");
         assert_eq!(core.families.size(&FAMILY), Some(stored), "its size came with it, for the tick not to ask");
-        let shown: Vec<String> = std::iter::from_fn(|| match inbox.try_recv() {
+        let shown: Vec<String> = std::iter::from_fn(|| match core.views.receiver.try_recv() {
             Ok(Event::Request(Request::Show { thread }, _)) => Some(thread),
             _ => None,
         })

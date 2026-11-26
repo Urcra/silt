@@ -27,6 +27,8 @@ use crate::voice::{self, Voice};
 #[derive(Clone)]
 pub(crate) struct Web {
     events: mpsc::UnboundedSender<Event>,
+    /// Where requests that only read what a page shows go, ahead of the rest.
+    views: mpsc::UnboundedSender<Event>,
     /// Set on the network listener's copy: requests come from paired
     /// phones, each checked against what it may do (ADR 0112).
     lan: Option<Arc<crate::lan::Shared>>,
@@ -104,7 +106,11 @@ fn project_query(project: Option<&std::path::Path>) -> String {
 }
 
 /// Starts the web server on 127.0.0.1 (`SILT_WEB_PORT`, or any free port).
-pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::Sender<BusEvent>) -> std::io::Result<WebInfo> {
+pub(crate) async fn start(
+    events: mpsc::UnboundedSender<Event>,
+    views: mpsc::UnboundedSender<Event>,
+    bus: broadcast::Sender<BusEvent>,
+) -> std::io::Result<WebInfo> {
     let port = std::env::var("SILT_WEB_PORT").ok().and_then(|port| port.parse().ok()).unwrap_or(0);
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await?;
     let port = listener.local_addr()?.port();
@@ -112,6 +118,7 @@ pub(crate) async fn start(events: mpsc::UnboundedSender<Event>, bus: broadcast::
     let codes = OneTimeCodes::default();
     let web = Web {
         events,
+        views,
         lan: None,
         bus,
         token: token.clone(),
@@ -498,7 +505,8 @@ async fn answer(web: &Web, request: Request) -> Result<serde_json::Value, Failed
     }
     let unavailable = |message: &str| Failed { status: StatusCode::SERVICE_UNAVAILABLE, message: message.to_owned() };
     let (reply, answer) = oneshot::channel();
-    if web.events.send(Event::Request(request, reply)).is_err() {
+    let to = if request.is_view() { &web.views } else { &web.events };
+    if to.send(Event::Request(request, reply)).is_err() {
         return Err(unavailable("the daemon is stopping"));
     }
     match answer.await {
@@ -2658,6 +2666,7 @@ mod tests {
         let codes = OneTimeCodes::default();
         let bus = broadcast::channel(1).0;
         let web = Web {
+            views: events.clone(),
             events,
             lan: None,
             bus,

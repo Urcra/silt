@@ -23,7 +23,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0015](0015-secret-overlay.md) | Secret redaction with a local overlay | accepted; amended by 0016, 0017, 0019, 0123 |
 | [0016](0016-untrusted-peer-content.md) | Content from other people is untrusted input | accepted; amended by 0017, 0019, 0045 |
 | [0017](0017-acp-agents-only.md) | ACP agents only, no native harness | accepted; amended by 0092, 0093 |
-| [0018](0018-daemon-optional-capture.md) | Capture works without the daemon | accepted; amended by 0034, 0036, 0089 |
+| [0018](0018-daemon-optional-capture.md) | Capture works without the daemon | accepted; amended by 0034, 0036, 0089, 0128 |
 | [0019](0019-redact-to-gits-threat-model.md) | Redact to git's threat model | accepted; amended by 0060 |
 | [0020](0020-next-generation-web-ui.md) | The next-generation web UI | accepted; amended by 0039, 0041 |
 | [0021](0021-browser-event-bus.md) | The browser event bus | accepted; amended by 0101, 0127 |
@@ -132,4 +132,5 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0124](0124-an-agents-own-allow-all-follows-the-preset.md) | An agent's own allow-all follows the preset | accepted; amended by 0118 |
 | [0125](0125-antigravity-resumes-from-its-own-store.md) | Antigravity CLI resumes from its own store, and starts primed elsewhere | accepted |
 | [0126](0126-budgets-for-a-github-actions-runner.md) | Budgets for a GitHub Actions runner | accepted |
-| [0127](0127-switching-threads-waits-for-nothing-else.md) | Switching threads waits for nothing else | accepted |
+| [0127](0127-switching-threads-waits-for-nothing-else.md) | Switching threads waits for nothing else | accepted; amended by 0128 |
+| [0128](0128-a-pages-views-go-ahead-of-an-agents-capture.md) | A page's views go ahead of an agent's capture | accepted |

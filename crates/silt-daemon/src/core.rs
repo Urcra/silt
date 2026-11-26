@@ -25,6 +25,21 @@ use crate::sessions::{self, PendingSession, Session};
 use crate::views::{Only, TurnRange};
 use crate::watch::{Watched, Watchers};
 
+/// The web UI's requests that only read what a page shows
+/// ([`Request::is_view`]), apart from every other event: the core takes them
+/// first, and answers those waiting between the steps of long work.
+pub(crate) struct Views {
+    pub(crate) sender: mpsc::UnboundedSender<Event>,
+    pub(crate) receiver: mpsc::UnboundedReceiver<Event>,
+}
+
+impl Default for Views {
+    fn default() -> Self {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        Self { sender, receiver }
+    }
+}
+
 pub enum Event {
     Request(Request, oneshot::Sender<Response>),
     /// Time to take the next stale family digest (ADR 0116).
@@ -254,6 +269,8 @@ pub struct Core {
     /// Agents the web UI started, by thread.
     pub(crate) acp: HashMap<ThreadId, crate::acp::AcpRun>,
     pub(crate) events: mpsc::UnboundedSender<Event>,
+    /// The web UI's requests that only read what a page shows.
+    pub(crate) views: Views,
     pub(crate) data_dir: PathBuf,
     /// The servers this machine is signed in to, the default first (ADR 0032).
     pub(crate) remotes: Vec<Remote>,
@@ -661,6 +678,7 @@ impl Core {
             rename_waits: HashMap::new(),
             draining: HashSet::new(),
             history_cache: Mutex::default(),
+            views: Views::default(),
             watchers: Watchers::new(),
             themes_watch: None,
             prelisted: None,
@@ -1833,7 +1851,7 @@ impl Core {
             };
             let relative = relative.to_string_lossy().replace('\\', "/");
             probes.push(if path.is_dir() {
-                let files = self.files_under(checkout_id, &relative)?;
+                let files = self.files_under(checkout_id, &relative).await?;
                 if relative.is_empty() { Probe::Root(files) } else { Probe::Dir(files) }
             } else if relative.is_empty() {
                 continue;
@@ -1888,6 +1906,7 @@ impl Core {
                     Ok(again) => retry.extend(again),
                     Err(error) => warn!(%error, path, "could not record a change to a file"),
                 }
+                self.answer_views().await;
             }
             worklist = self.trackable(checkout_id, retry, &HashSet::new())?;
         }
@@ -2007,17 +2026,55 @@ impl Core {
         held
     }
 
-    fn files_under(&mut self, checkout: CheckoutId, relative: &str) -> Result<Vec<ListedFile>, CoreError> {
+    /// The files under `relative`, listed on a blocking thread: walking a
+    /// large worktree and looking at each file takes long, longer on Windows
+    /// or a drive WSL reaches through Windows. The core answers pages' views
+    /// meanwhile, and the walks the checkout keeps go with the listing.
+    async fn files_under(&mut self, checkout: CheckoutId, relative: &str) -> Result<Vec<ListedFile>, CoreError> {
         let prelisted = self.prelisted.take_if(|(listed, _)| *listed == checkout && relative.is_empty());
         if let Some(Ok(files)) = prelisted.map(|(_, listing)| listing.join()) {
             return Ok(files?);
         }
-        let files = self.checkout(checkout)?.repo.worktree_listing_under(relative)?;
+        let held = self.checkout(checkout)?;
+        let (root, walks) = (held.record.path.clone(), held.repo.take_walks());
+        let dir = relative.to_owned();
+        let listing = tokio::task::spawn_blocking(move || match Repo::discover(&root) {
+            Ok(repo) => {
+                repo.give_walks(walks);
+                let files = repo.worktree_listing_under(&dir);
+                (Some(files), repo.take_walks())
+            }
+            Err(_) => (None, walks),
+        });
+        let listed = self.answering_views(listing).await;
+        let (files, walks) = listed.unwrap_or((None, silt_git::Walks::default()));
+        let held = self.checkout(checkout)?;
+        held.repo.give_walks(walks);
+        let files = match files {
+            Some(files) => files?,
+            None => held.repo.worktree_listing_under(relative)?,
+        };
         let prefix = format!("{relative}/");
         Ok(files
             .into_iter()
             .filter(|file| relative.is_empty() || file.path.starts_with(&prefix) || file.path == relative)
             .collect())
+    }
+
+    /// Waits for `work`, answering pages' views meanwhile.
+    pub(crate) async fn answering_views<T>(&mut self, work: tokio::task::JoinHandle<T>) -> Result<T, tokio::task::JoinError> {
+        let mut work = work;
+        loop {
+            tokio::select! {
+                biased;
+                done = &mut work => return done,
+                Some(event) = self.views.receiver.recv() => {
+                    if let Some(Event::Request(request, reply)) = self.unless_loading(event) {
+                        Box::pin(self.request(request, reply)).await;
+                    }
+                }
+            }
+        }
     }
 
     /// Records one file's disk state. Returns paths that changed again
@@ -2753,7 +2810,7 @@ impl Core {
         if self.web.is_none() {
             crate::media::drop_stale_uploads(&self.data_dir);
             crate::media::prune_previews(&self.data_dir, self.store.blobs());
-            self.web = Some(crate::web::start(self.events.clone(), self.bus.clone()).await?);
+            self.web = Some(crate::web::start(self.events.clone(), self.views.sender.clone(), self.bus.clone()).await?);
         }
         Ok(self.web.as_ref().expect("started above"))
     }
