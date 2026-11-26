@@ -38,6 +38,7 @@ function thread(id: string, overrides: Partial<ThreadSummary> = {}, mine: Partia
     workspace: null,
     cloud: null,
     machine: null,
+    agent_settings: null,
     ...overrides,
   }
 }

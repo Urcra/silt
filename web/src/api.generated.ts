@@ -2229,7 +2229,22 @@ cloud: string | null,
  * Which of the person's own machines holds it, by name, when it isn't
  * the one answering: the device of its lease.
  */
-machine: string | null, };
+machine: string | null, 
+/**
+ * The settings the agent the web UI last ran in it here ran with, for
+ * it to start again with; none from a server.
+ */
+agent_settings: KeptSettings | null, };
+
+export type KeptSettings = { 
+/**
+ * The agent, by its name.
+ */
+agent: string, 
+/**
+ * Each setting's value, by its id.
+ */
+settings: { [key in string]: string }, };
 
 export type TurnInfo = { 
 /**

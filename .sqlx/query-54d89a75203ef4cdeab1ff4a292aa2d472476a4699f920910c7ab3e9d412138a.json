@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT thread_id, agent, state, error, preset, mode, updated_ms FROM agent_runs",
+  "query": "SELECT thread_id, agent, state, error, preset, mode, settings, updated_ms FROM agent_runs",
   "describe": {
     "columns": [
       {
@@ -70,8 +70,19 @@
         }
       },
       {
-        "name": "updated_ms",
+        "name": "settings",
         "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_runs",
+            "name": "settings"
+          }
+        }
+      },
+      {
+        "name": "updated_ms",
+        "ordinal": 7,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -91,8 +102,9 @@
       true,
       false,
       true,
+      false,
       false
     ]
   },
-  "hash": "d2b3a11282b475676841581aa3aa6c90b23ed8f1e0574559d457cf67a04f7dba"
+  "hash": "54d89a75203ef4cdeab1ff4a292aa2d472476a4699f920910c7ab3e9d412138a"
 }

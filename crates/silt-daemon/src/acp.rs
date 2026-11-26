@@ -731,6 +731,9 @@ impl Core {
             })
             .await?;
         }
+        if let Some(record) = self.agent_runs.get(&thread).filter(|record| record.agent == info.name) {
+            options.settings = with_kept(std::mem::take(&mut options.settings), &record.settings);
+        }
         self.next_token += 1;
         let run = self.next_token;
         let load = self.earlier_session(thread, &info.id);
@@ -1224,6 +1227,7 @@ impl Core {
             error: run.error.clone(),
             preset: stored.map_or_else(|| "ask_before_commands".to_owned(), |stored| stored.preset.clone()),
             mode: stored.and_then(|stored| stored.mode.clone()),
+            settings: stored.map(|stored| stored.settings.clone()).unwrap_or_default(),
             updated_ms: crate::core::now_ms(),
         };
         let unchanged = stored
@@ -1400,8 +1404,29 @@ impl Core {
         }
         send(run, Command::SetSetting { id, value });
         self.remember_seen(thread);
+        self.keep_settings(thread).await?;
         self.announce_agent(thread);
         Ok("set")
+    }
+
+    /// Keeps the settings the thread's agent runs with, for it to start
+    /// again with.
+    async fn keep_settings(&mut self, thread: ThreadId) -> Result<(), CoreError> {
+        let Some(run) = self.acp.get(&thread) else {
+            return Ok(());
+        };
+        let (agent, settings) = (run.info.name.clone(), kept_settings(&run.settings, run.local_model.is_some()));
+        let stored = self.agent_runs.get(&thread);
+        if stored.is_some_and(|stored| stored.agent == agent && stored.settings == settings) {
+            return Ok(());
+        }
+        self.keep_choice(thread, |record| {
+            record.agent = agent;
+            record.settings = settings;
+        })
+        .await?;
+        self.announce(crate::protocol::BusEvent::Threads);
+        Ok(())
     }
 
     /// Stores a choice the person made for the thread's agent.
@@ -1416,6 +1441,7 @@ impl Core {
             error: None,
             preset: Preset::default().as_str().to_owned(),
             mode: None,
+            settings: std::collections::BTreeMap::new(),
             updated_ms: 0,
         });
         choose(&mut record);
@@ -1663,6 +1689,7 @@ impl Core {
                 }
                 let first = run.first.take();
                 self.remember_seen(thread);
+                self.keep_settings(thread).await?;
                 self.acp_ready(thread, &session, loaded).await?;
                 if self.resend(thread) {
                     return Ok(());
@@ -1699,6 +1726,7 @@ impl Core {
             AcpEvent::Agent(silt_acp::Event::Settings(settings)) => {
                 run.settings = settings;
                 self.remember_seen(thread);
+                self.keep_settings(thread).await?;
             }
             AcpEvent::Agent(silt_acp::Event::Commands(commands)) => {
                 run.commands = commands;
@@ -2861,6 +2889,30 @@ fn permission_value(preset: Preset, setting: &silt_acp::Setting) -> Option<Strin
     Some(if preset == Preset::FullAccess { on } else { off })
 }
 
+/// The settings a thread's agent starts with: those the start names, then
+/// the thread's own, so the agent's own configuration, such as the model
+/// Claude Code's settings file names, doesn't replace the one it ran with.
+fn with_kept(mut chosen: Vec<(String, String)>, kept: &std::collections::BTreeMap<String, String>) -> Vec<(String, String)> {
+    for (id, value) in kept {
+        if !chosen.iter().any(|(named, _)| named == id) {
+            chosen.push((id.clone(), value.clone()));
+        }
+    }
+    chosen
+}
+
+/// What of the agent's settings the thread keeps: not its mode or
+/// permissions, which the preset decides, nor the model of a run on a
+/// local model, which goes in its environment instead.
+fn kept_settings(settings: &[silt_acp::Setting], on_local_model: bool) -> std::collections::BTreeMap<String, String> {
+    settings
+        .iter()
+        .filter(|setting| !matches!(setting.category.as_deref(), Some("mode" | "permissions")))
+        .filter(|setting| !(on_local_model && setting.id == "model"))
+        .map(|setting| (setting.id.clone(), setting.current.clone()))
+        .collect()
+}
+
 /// Puts the agent's own permissions settings where the preset says.
 fn follow_preset_in_settings(run: &mut AcpRun, preset: Preset) {
     let changes: Vec<(String, String)> = run
@@ -3029,6 +3081,28 @@ mod tests {
     use silt_types::{ActorId, FamilyId};
 
     use super::*;
+
+    #[test]
+    fn a_start_takes_the_threads_settings_it_doesnt_name() {
+        let setting = |id: &str, category: &str, current: &str| silt_acp::Setting {
+            id: id.into(),
+            name: id.into(),
+            category: Some(category.into()),
+            current: current.into(),
+            choices: Vec::new(),
+        };
+        let running =
+            [setting("model", "model", "opus"), setting("effort", "thought_level", "high"), setting("mode", "mode", "plan")];
+        let kept = kept_settings(&running, false);
+        assert_eq!(kept, [("effort".to_owned(), "high".to_owned()), ("model".to_owned(), "opus".to_owned())].into());
+        assert!(!kept_settings(&running, true).contains_key("model"), "a local model goes in the environment");
+        let named = vec![("effort".to_owned(), "low".to_owned())];
+        assert_eq!(
+            with_kept(named, &kept),
+            [("effort".to_owned(), "low".to_owned()), ("model".to_owned(), "opus".to_owned())],
+            "what the start names wins"
+        );
+    }
 
     #[test]
     fn a_local_model_for_claude_goes_in_its_environment_not_its_settings() {
@@ -3281,6 +3355,7 @@ mod tests {
             error: None,
             preset: "ask_before_commands".into(),
             mode: None,
+            settings: Default::default(),
             updated_ms: 1,
         };
         store.put_agent_run(thread, &run("working")).await.expect("saves");
