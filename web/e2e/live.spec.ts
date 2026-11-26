@@ -52,6 +52,17 @@ async function startInTheBackground(page: Page) {
   await page.getByRole('menuitem', { name: /^Start in the background/ }).click()
 }
 
+/** Whether the thread open in the page is kept on this machine only, as its summary says. */
+async function keptHere(page: Page): Promise<boolean | undefined> {
+  const id = new URL(page.url()).pathname.split('/')[2]
+  return page.evaluate(async (id) => {
+    const threads = (await (
+      await fetch('/api/threads', { headers: { Authorization: `Bearer ${sessionStorage.getItem('silt-token')}` } })
+    ).json()) as { id: string; local_only: boolean }[]
+    return threads.find((thread) => thread.id === id)?.local_only
+  }, id)
+}
+
 /** Opens the thread's Live page. */
 async function goLive(page: Page, url: string) {
   await page.goto(url)
@@ -1771,7 +1782,7 @@ test('a project kept on this machine starts threads that stay here, until it mov
   await pick(form, 'agent to start', { label: 'Fake agent' })
   await form.getByLabel('first prompt').press('Enter')
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
-  await expect(page.getByText('This machine only', { exact: true })).toBeVisible()
+  expect(await keptHere(page)).toBe(true)
   await stopAgent(page)
   const kept = new URL(page.url()).pathname
 
@@ -1780,7 +1791,7 @@ test('a project kept on this machine starts threads that stay here, until it mov
   await expect(page.getByText(/1 threads kept on this machine now sync there/).first()).toBeVisible()
   await page.goto(new URL(kept, live.alice).toString())
   await expect(page.getByPlaceholder('Ask for the next step; sending starts the agent')).toBeVisible()
-  await expect(page.getByText('This machine only', { exact: true })).toHaveCount(0)
+  await expect.poll(() => keptHere(page)).toBe(false)
 })
 
 test('a new project made from New thread starts its first thread in a folder made for it, kept on this machine', async ({
@@ -1801,7 +1812,7 @@ test('a new project made from New thread starts its first thread in a folder mad
   await pick(form, 'agent to start', { label: 'Fake agent' })
   await form.getByLabel('first prompt').press('Enter')
   await expect(page.getByTestId('agent-state')).toHaveText('Fake agent is ready')
-  await expect(page.getByText('This machine only', { exact: true })).toBeVisible()
+  expect(await keptHere(page)).toBe(true)
   await page.getByLabel('draft').fill('hello')
   await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: hello')).toBeVisible()
