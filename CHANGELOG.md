@@ -15,8 +15,8 @@ Protocol version 24.
 - **Agents from the web UI** over ACP, agents asking other agents, artifacts, themes, workspaces with their own rules, Silt's sandbox on Linux, plugins, and local models.
 
 ### Added
-- The sidebar's Chats section folds by its name, as a project does, showing how many chats it holds or how many are working while folded. It stays folded after a reload, in the browser or the desktop app.
 - The sidebar remembers which projects you folded or opened, and whether Older projects is open, after a reload. A project you never toggled still opens when recent and folds when older.
+- The sidebar's Chats section folds by its name, as a project does, showing how many chats it holds or how many are working while folded. It stays folded after a reload, in the browser or the desktop app.
 - Auto for every agent the web UI runs (ADR 0132). An agent without an auto mode of its own, such as GitHub Copilot, Codex or OpenCode, no longer greys Auto out: Silt checks each of its commands first, with a judge. See [Auto for every agent](docs/guide/auto.md).
   - The judge is by default the thread's own agent on its model, in a session of its own and in the thread's sandbox. It's given the call and your last prompts, never the agent's own words.
   - An allowed call goes through, and goes through again without a check while the thread stays on Auto. A refused one goes back to the agent with why. With no verdict within 60 seconds the call waits for you, saying why.
