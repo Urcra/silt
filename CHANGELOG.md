@@ -15,10 +15,15 @@ Protocol version 24.
 - **Agents from the web UI** over ACP, agents asking other agents, artifacts, themes, workspaces with their own rules, Silt's sandbox on Linux, plugins, and local models.
 
 ### Added
+- Settings › Network, with a switch for everything Silt connects to on its own: update checks, plan usage, the agent registry, and artifacts' libraries. **Offline**, at the top, turns them all off, so Silt connects only to your own servers; `SILT_OFFLINE=1` does the same from the environment. Silt sends no telemetry, and the README and [What Silt sends over the network](docs/guide/network.md) now say so.
 - Nightly releases: `main` is built each night for Linux, macOS and Windows, as `silt` archives and the desktop app's packages, into the rolling [nightly release](https://github.com/Urcra/silt/releases/tag/nightly). Nothing in it is signed yet.
 - Three channels: stable, nightly and dev. A build of your own clone is now a dev build, and `silt --version` says `dev` where it said `nightly`. A nightly build says when a newer nightly is out and links to it; a dev build updates its clone as before. The desktop window's title names the channel, as `Silt (dev)`, and plain `Silt` on stable.
 
+### Changed
+- Artifacts' libraries and fonts load through Silt by default, on each machine and on the server, so a viewer's browser contacts no CDN, Google Fonts included. A page naming a library without an exact version loads it only with the switch off. Turn it off in Settings › Network, or with `artifact_proxy = false` in `server.toml`. The switch moved there from Appearance.
+
 ### Fixed
+- What Silt sends over the network said artifacts' libraries came through Silt when by default they didn't, and left out the release check a stable or nightly build makes to GitHub.
 - `just install` and `just update` no longer fail where corepack's default pnpm isn't the one the web UI names: corepack looked for it at the repository's root, found none, and ran its own default, which then refused the web UI.
 - An agent writing many files, as an asset import does, no longer holds up the web UI: recording each new file listed every path of its thread, so 500 files in a large checkout took 20 s, now about 1 s, and pages are answered between files and while a checkout is listed, waiting at most for one file. A long thread opens for the first time in about half the time.
 - Switching threads no longer waits behind a long thread being read: the daemon reads a history it doesn't keep away from everything else, keeps the 16 read most recently rather than forgetting all of them at the 17th, and logs any event that holds it for 250 ms or more. Going back to one of the last 8 threads left shows it as it is now, never as it was when left.

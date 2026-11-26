@@ -1462,14 +1462,25 @@ pub struct ArtifactPut {
     pub missing: Option<String>,
 }
 
-/// How artifacts' frames load libraries and fonts (ADR 0071).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// How artifacts' frames load libraries and fonts (ADR 0071, ADR 0132).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ArtifactSettings {
     /// Through Silt's vendor route, which fetches and keeps each file, so
-    /// the viewer's browser never contacts a CDN; else from the CDNs.
-    #[serde(default)]
+    /// the viewer's browser never contacts a CDN, as by default; else from
+    /// the CDNs.
+    #[serde(default = "through_silt")]
     pub proxy: bool,
+}
+
+impl Default for ArtifactSettings {
+    fn default() -> Self {
+        Self { proxy: through_silt() }
+    }
+}
+
+fn through_silt() -> bool {
+    true
 }
 
 /// What [`Request::ArtifactRead`] answers.

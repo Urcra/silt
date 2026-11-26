@@ -31,8 +31,9 @@ pub struct Config {
     pub forges: Vec<Forge>,
     /// Artifacts' frames load libraries and fonts through this server,
     /// which fetches and keeps each file, rather than from the CDNs, so a
-    /// viewer never contacts one (ADR 0071).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    /// viewer never contacts one (ADR 0071). On unless set to `false`
+    /// (ADR 0132).
+    #[serde(default = "default_artifact_proxy", skip_serializing_if = "is_on")]
     pub artifact_proxy: bool,
     /// The most the files people add to one artifact's page may take, in
     /// MiB (ADR 0074).
@@ -68,7 +69,7 @@ impl Default for Config {
             auth: Auth::default(),
             trash_days: default_trash_days(),
             forges: Vec::new(),
-            artifact_proxy: false,
+            artifact_proxy: default_artifact_proxy(),
             artifact_assets_mib: default_artifact_assets_mib(),
             max_file_mib: None,
         }
@@ -89,6 +90,14 @@ impl Config {
 
 fn default_artifact_assets_mib() -> u64 {
     silt_proto::artifact::PAGE_ASSETS_BYTES >> 20
+}
+
+fn default_artifact_proxy() -> bool {
+    true
+}
+
+fn is_on(value: &bool) -> bool {
+    *value
 }
 
 fn default_listen() -> String {

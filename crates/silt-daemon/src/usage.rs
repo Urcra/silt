@@ -53,6 +53,15 @@ impl Usage {
 
     async fn ask(&self, provider: Provider, home: &Path, last: Option<AgentUsage>) -> AgentUsage {
         let now = now_ms();
+        if crate::network::offline() {
+            return match provider.recorded(home, now) {
+                Some(recorded) => view(provider, recorded, None, true, now),
+                None => {
+                    let why = format!("Silt is offline (SILT_OFFLINE), so it doesn't ask {}'s provider", provider.agent());
+                    view(provider, PlanUsage { plan: None, limits: Vec::new() }, Some(why), false, now)
+                }
+            };
+        }
         let github = match provider {
             Provider::Copilot => github_token().await,
             Provider::Claude | Provider::Codex => None,

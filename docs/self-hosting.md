@@ -190,13 +190,15 @@ A fork without its own setting follows its source. A private thread reaches othe
 
 ## Artifacts' libraries and fonts
 
-An HTML artifact may load scripts from a few public CDNs and fonts from Google Fonts, so by default a person opening one, or a read-only link to one, contacts those hosts. To keep viewers off them, set this in `server.toml` and restart the server:
+An HTML artifact may load scripts from a few public CDNs and fonts from Google Fonts. The server loads them for its viewers: it fetches each file once, only pinned versions of the allowlisted CDNs, keeps it under `vendor/` in its data folder (at most 512 MiB), and serves it to the hosted app's and read-only links' frames from `/vendor/`. A person opening an artifact, or a read-only link to one, then contacts no CDN.
+
+To have viewers' browsers load them from the CDNs instead, set this in `server.toml` and restart the server:
 
 ```toml
-artifact_proxy = true
+artifact_proxy = false
 ```
 
-The server then fetches each file once, only pinned versions of the allowlisted CDNs, keeps it under `vendor/` in its data folder (at most 512 MiB), and serves it to the hosted app's and read-only links' frames from `/vendor/`. Each machine has the same choice for its own web UI, in Settings › Appearance ([ADR 0071](adr/0071-artifact-design-guidance-design-systems-and-libraries.md)).
+Each machine has the same choice for its own web UI, in Settings › Network ([ADR 0132](adr/0132-no-telemetry-and-an-offline-switch.md)). [What Silt sends over the network](guide/network.md#a-server) lists everything a server connects to.
 
 ## Artifacts' files
 

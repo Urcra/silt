@@ -23,6 +23,8 @@ pub enum VendorError {
     Fetch(#[from] reqwest::Error),
     #[error("could not keep the file: {0}")]
     Disk(#[from] std::io::Error),
+    #[error("this machine is offline, and Silt hasn't kept {0}")]
+    Offline(String),
 }
 
 /// A file as the vendor route serves it.
@@ -32,14 +34,24 @@ pub struct Fetched {
     pub bytes: Vec<u8>,
 }
 
+/// Where a file comes from when it isn't kept yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    /// Fetched from its CDN, then kept.
+    Cdn,
+    /// Nowhere: an offline machine serves only what it kept.
+    KeptOnly,
+}
+
 pub struct Vendor {
     dir: PathBuf,
     client: reqwest::Client,
+    reach: Reach,
 }
 
 impl Vendor {
-    pub fn new(dir: &Path) -> Self {
-        Self { dir: dir.to_owned(), client: reqwest::Client::new() }
+    pub fn new(dir: &Path, reach: Reach) -> Self {
+        Self { dir: dir.to_owned(), client: reqwest::Client::new(), reach }
     }
 
     /// The file at `host` and `path`, from the cache or else the CDN.
@@ -53,6 +65,9 @@ impl Vendor {
         let (body, kind) = (self.dir.join(format!("{key}.bin")), self.dir.join(format!("{key}.type")));
         if let (Ok(bytes), Ok(content_type)) = (tokio::fs::read(&body).await, tokio::fs::read_to_string(&kind).await) {
             return Ok(Fetched { content_type, bytes });
+        }
+        if self.reach == Reach::KeptOnly {
+            return Err(VendorError::Offline(url));
         }
         let response = self.client.get(&url).header(reqwest::header::USER_AGENT, BROWSER).send().await?;
         if !response.status().is_success() {
@@ -103,7 +118,7 @@ mod tests {
     #[tokio::test]
     async fn a_kept_file_is_served_without_the_cdn_and_others_are_refused() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let vendor = Vendor::new(dir.path());
+        let vendor = Vendor::new(dir.path(), Reach::Cdn);
         let url = "https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js";
         let key: String = Sha256::digest(url.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
         std::fs::write(dir.path().join(format!("{key}.bin")), b"window.d3={}").expect("write");
@@ -112,5 +127,18 @@ mod tests {
         assert_eq!((kept.content_type.as_str(), kept.bytes.as_slice()), ("text/javascript", b"window.d3={}".as_slice()));
         assert!(matches!(vendor.get("esm.sh", "/react@18.3.1", None).await, Err(VendorError::Refused(_))));
         assert!(matches!(vendor.get("unpkg.com", "/react@latest/index.js", None).await, Err(VendorError::Refused(_))));
+    }
+
+    #[tokio::test]
+    async fn offline_it_serves_what_it_kept_and_fetches_nothing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let vendor = Vendor::new(dir.path(), Reach::KeptOnly);
+        let url = "https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js";
+        let key: String = Sha256::digest(url.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
+        std::fs::write(dir.path().join(format!("{key}.bin")), b"window.d3={}").expect("write");
+        std::fs::write(dir.path().join(format!("{key}.type")), "text/javascript").expect("write");
+        assert!(vendor.get("cdnjs.cloudflare.com", "/ajax/libs/d3/7.9.0/d3.min.js", None).await.is_ok());
+        let missing = vendor.get("cdnjs.cloudflare.com", "/ajax/libs/three.js/0.160.0/three.min.js", None).await;
+        assert!(matches!(missing, Err(VendorError::Offline(_))), "{missing:?}");
     }
 }

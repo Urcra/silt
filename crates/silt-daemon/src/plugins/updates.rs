@@ -203,7 +203,7 @@ pub fn remember(data_dir: &Path, update: &GitUpdate) {
 /// Starts a check in the background when none ran for a day.
 pub fn check_if_due(data_dir: &Path) {
     static CHECKING: AtomicBool = AtomicBool::new(false);
-    if std::env::var("SILT_UPDATE_CHECK").is_ok_and(|value| value == "never") {
+    if !crate::network::checks_for_updates() {
         return;
     }
     let due = crate::core::now_ms().saturating_sub(kept(data_dir).checked_ms) >= CHECK_EVERY.as_millis() as i64;

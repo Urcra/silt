@@ -1220,7 +1220,8 @@ export type DesignSource = "project" | "personal";
 export type ArtifactSettings = { 
 /**
  * Through Silt's vendor route, which fetches and keeps each file, so
- * the viewer's browser never contacts a CDN; else from the CDNs.
+ * the viewer's browser never contacts a CDN, as by default; else from
+ * the CDNs.
  */
 proxy: boolean, };
 
