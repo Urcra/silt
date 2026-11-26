@@ -1,4 +1,4 @@
-# 0132: No telemetry, an offline switch, and artifacts' libraries through Silt by default
+# 0134: No telemetry, an offline switch, and artifacts' libraries through Silt by default
 
 - Status: accepted
 - Date: 2026-11-26

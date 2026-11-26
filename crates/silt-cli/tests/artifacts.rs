@@ -314,7 +314,7 @@ fn a_read_only_link_shows_one_artifact_sandboxed() {
     assert_eq!(status, "200");
     assert!(body.starts_with("<!doctype html><script>window.silt=") && body.ends_with("<h1>Rescan benchmark</h1>"), "{body}");
     assert!(headers[0].starts_with("sandbox allow-scripts;") && headers[0].contains("default-src 'none'"), "{headers:?}");
-    // Libraries come through the server, so a viewer contacts no CDN (ADR 0132).
+    // Libraries come through the server, so a viewer contacts no CDN (ADR 0134).
     assert!(
         headers[0].contains("/vendor/")
             && !headers[0].contains("https://cdnjs.cloudflare.com")

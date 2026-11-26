@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-11-17
-- Amended by: [ADR 0132](0132-no-telemetry-and-an-offline-switch.md): plan usage can be turned off, and is off offline
+- Amended by: [ADR 0134](0134-no-telemetry-and-an-offline-switch.md): plan usage can be turned off, and is off offline
 
 ## Context
 People run agents on subscription plans: Claude Code on Pro or Max, Codex on a ChatGPT plan, Copilot on GitHub's. Each plan has limits, such as a 5-hour window, a week, or a month's premium requests. Each CLI shows them its own way: Claude Code's `/usage`, Codex's `/status`, Copilot's settings page. From Silt's web UI, the only way to know a limit is near is to hit it.

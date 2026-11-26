@@ -1,4 +1,4 @@
-//! What this machine connects to on its own (ADR 0132): the switches in
+//! What this machine connects to on its own (ADR 0134): the switches in
 //! `$SILT_HOME/network.json`, which the environment overrides. Offline, it
 //! connects only to the servers it's signed in to; what the person asks
 //! for, such as a model download, still goes ahead.

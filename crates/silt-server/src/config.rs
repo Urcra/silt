@@ -32,7 +32,7 @@ pub struct Config {
     /// Artifacts' frames load libraries and fonts through this server,
     /// which fetches and keeps each file, rather than from the CDNs, so a
     /// viewer never contacts one (ADR 0071). On unless set to `false`
-    /// (ADR 0132).
+    /// (ADR 0134).
     #[serde(default = "default_artifact_proxy", skip_serializing_if = "is_on")]
     pub artifact_proxy: bool,
     /// The most the files people add to one artifact's page may take, in

@@ -1,5 +1,5 @@
 //! What a machine connects to on its own, by Settings › Network and
-//! `SILT_OFFLINE=1` (ADR 0132): offline, it asks no provider for plan usage,
+//! `SILT_OFFLINE=1` (ADR 0134): offline, it asks no provider for plan usage,
 //! fetches no artifact library it hasn't kept and leaves the agent registry
 //! as built in.
 

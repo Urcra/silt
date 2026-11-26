@@ -82,7 +82,7 @@ function Line({
   )
 }
 
-/** What this machine connects to on its own, each with a switch, and Offline above them (ADR 0132). */
+/** What this machine connects to on its own, each with a switch, and Offline above them (ADR 0134). */
 export function NetworkSettingsSection() {
   const queries = useQueryClient()
   const network = useQuery({ queryKey: keys.networkSettings, queryFn: api.networkSettings })

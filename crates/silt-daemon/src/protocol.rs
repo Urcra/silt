@@ -593,7 +593,7 @@ pub enum Request {
         #[serde(default)]
         text: Option<silt_theme::TextSettings>,
     },
-    /// What this machine connects to on its own (ADR 0132).
+    /// What this machine connects to on its own (ADR 0134).
     NetworkSettings,
     SetNetworkSettings {
         settings: NetworkSettings,
@@ -1467,7 +1467,7 @@ pub struct ArtifactPut {
     pub missing: Option<String>,
 }
 
-/// How artifacts' frames load libraries and fonts (ADR 0071, ADR 0132).
+/// How artifacts' frames load libraries and fonts (ADR 0071, ADR 0134).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ArtifactSettings {
@@ -1489,7 +1489,7 @@ fn through_silt() -> bool {
 }
 
 /// The switches for what this machine connects to on its own, kept in
-/// `network.json` (ADR 0132). Offline turns the others off without
+/// `network.json` (ADR 0134). Offline turns the others off without
 /// changing them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]

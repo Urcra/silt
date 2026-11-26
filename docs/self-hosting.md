@@ -198,7 +198,7 @@ To have viewers' browsers load them from the CDNs instead, set this in `server.t
 artifact_proxy = false
 ```
 
-Each machine has the same choice for its own web UI, in Settings › Network ([ADR 0132](adr/0132-no-telemetry-and-an-offline-switch.md)). [What Silt sends over the network](guide/network.md#a-server) lists everything a server connects to.
+Each machine has the same choice for its own web UI, in Settings › Network ([ADR 0134](adr/0134-no-telemetry-and-an-offline-switch.md)). [What Silt sends over the network](guide/network.md#a-server) lists everything a server connects to.
 
 ## Artifacts' files
 

@@ -253,7 +253,7 @@ export function ArtifactViewer({
     enabled: Boolean(styleBlob),
     staleTime: Infinity,
   })
-  // Libraries and fonts come through Silt's vendor route when that's on, and always offline (ADR 0071, ADR 0132).
+  // Libraries and fonts come through Silt's vendor route when that's on, and always offline (ADR 0071, ADR 0134).
   const settings = useQuery({ queryKey: keys.artifactSettings, queryFn: api.artifactSettings, staleTime: 60_000 })
   const network = useQuery({
     queryKey: keys.networkSettings,

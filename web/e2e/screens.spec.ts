@@ -411,7 +411,7 @@ test('devices and pairing a phone', async ({ page }) => {
   })
 })
 
-test('Settings › Network, online and offline (ADR 0132)', async ({ page }) => {
+test('Settings › Network, online and offline (ADR 0134)', async ({ page }) => {
   await open(page, '/settings/network')
   await shoot(page, 'network', async (shown) => {
     await expect(shown.getByRole('switch', { name: 'Plan usage' })).toBeChecked()

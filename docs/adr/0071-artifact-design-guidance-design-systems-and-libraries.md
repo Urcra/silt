@@ -10,7 +10,7 @@
 - Amended by: [ADR 0086](0086-design-systems-components.md): a system's components; what the guide says when none applies
 - Amended by: [ADR 0087](0087-no-built-in-design-systems.md): Silt ships no design system; Nous moves into Silt's repository and Plain is removed
 - Amended by: [ADR 0088](0088-design-systems-in-settings.md): components' guidelines, a cover and assets; Settings shows and makes systems
-- Amended by: [ADR 0132](0132-no-telemetry-and-an-offline-switch.md): artifacts' libraries load through Silt by default
+- Amended by: [ADR 0134](0134-no-telemetry-and-an-offline-switch.md): artifacts' libraries load through Silt by default
 
 ## Context
 Agents in Silt make poor pages, mockups most of all, because of the context they get: one sentence, a frame with no theme, and no network. A good page needs a page contract and design guidance before its first line, the person's design systems, and scripts and fonts from a known set of CDNs.
