@@ -41,18 +41,34 @@ fn new_id() -> String {
     format!("{:032x}", uuid::Uuid::new_v4().as_u128())[..12].to_owned()
 }
 
+/// The folders an agent may not show the person files from.
+#[derive(Debug, Default)]
+pub(crate) struct Denies {
+    pub(crate) folders: Vec<PathBuf>,
+    /// The run's own chat's folder, shown from although Silt's data, which
+    /// is denied, holds it.
+    pub(crate) own_chat: Option<PathBuf>,
+}
+
+impl Denies {
+    fn refuses(&self, real: &Path) -> bool {
+        let canonical = |folder: &PathBuf| silt_os::canonicalize(folder).unwrap_or_else(|_| folder.clone());
+        if self.own_chat.as_ref().is_some_and(|chat| real.starts_with(canonical(chat))) {
+            return false;
+        }
+        self.folders.iter().any(|folder| real.starts_with(canonical(folder)))
+    }
+}
+
 /// The file `path` names for a run in `checkout`, if an agent may show it:
-/// a regular file outside every folder in `denied`. Its size is the
-/// caller's to check: an image or a video has no limit (ADR 0121).
-pub(crate) fn readable_file(path: &str, checkout: &Path, denied: &[PathBuf]) -> Result<PathBuf, CoreError> {
+/// a regular file `denied` doesn't refuse. Its size is the caller's to
+/// check: an image or a video has no limit (ADR 0121).
+pub(crate) fn readable_file(path: &str, checkout: &Path, denied: &Denies) -> Result<PathBuf, CoreError> {
     let given = Path::new(path);
     let joined = if given.is_absolute() { given.to_owned() } else { checkout.join(given) };
     let real = silt_os::canonicalize(&joined).map_err(|_| CoreError::Invalid(format!("there is no file at {path}")))?;
-    for folder in denied {
-        let folder = silt_os::canonicalize(folder).unwrap_or_else(|_| folder.clone());
-        if real.starts_with(&folder) {
-            return Err(CoreError::Invalid(format!("{path} is in a folder agents here may not show")));
-        }
+    if denied.refuses(&real) {
+        return Err(CoreError::Invalid(format!("{path} is in a folder agents here may not show")));
     }
     let meta = std::fs::metadata(&real).map_err(|_| CoreError::Invalid(format!("there is no file at {path}")))?;
     if !meta.is_file() {
@@ -281,7 +297,7 @@ impl Core {
                 (None, None, Some(from)) => {
                     let checkout =
                         checkout.ok_or_else(|| CoreError::Invalid(format!("{path}: no checkout to read {from} from")))?;
-                    let real = readable_file(&from, checkout, &self.artifact_denies(workspace))?;
+                    let real = readable_file(&from, checkout, &self.show_denies(workspace, checkout))?;
                     if std::fs::metadata(&real).map_or(0, |meta| meta.len()) > FILE_BYTES {
                         return Err(CoreError::Invalid(format!("{path} is over {} MiB", FILE_BYTES >> 20)));
                     }
@@ -552,7 +568,7 @@ impl Core {
             Some(path) => {
                 let checkout =
                     checkout.as_deref().ok_or_else(|| CoreError::Invalid("a page saves its own source, not a file".into()))?;
-                Some(readable_file(path, checkout, &self.artifact_denies(workspace))?)
+                Some(readable_file(path, checkout, &self.show_denies(workspace, checkout))?)
             }
             None => None,
         };
@@ -1055,7 +1071,7 @@ mod tests {
         std::fs::write(checkout.path().join("chart.svg"), "<svg/>").expect("write");
         std::fs::write(denied.path().join("secret.html"), "<p>no</p>").expect("write");
         std::fs::create_dir(checkout.path().join("folder")).expect("dir");
-        let denies = [denied.path().to_owned()];
+        let denies = Denies { folders: vec![denied.path().to_owned()], own_chat: None };
         assert!(readable_file("chart.svg", checkout.path(), &denies).is_ok());
         let secret = denied.path().join("secret.html");
         assert!(readable_file(&secret.to_string_lossy(), checkout.path(), &denies).is_err());
@@ -1065,6 +1081,30 @@ mod tests {
         {
             std::os::unix::fs::symlink(&secret, checkout.path().join("link.html")).expect("link");
             assert!(readable_file("link.html", checkout.path(), &denies).is_err(), "a link into a denied folder");
+        }
+    }
+
+    #[test]
+    fn a_chat_shows_its_own_folder_and_nothing_else_in_the_data_dir() {
+        let data = tempfile::tempdir().expect("temp dir");
+        let chat = data.path().join("chats/a-chat");
+        let other = data.path().join("chats/another");
+        std::fs::create_dir_all(&chat).expect("dir");
+        std::fs::create_dir_all(&other).expect("dir");
+        std::fs::write(chat.join("tree.png"), "png").expect("write");
+        std::fs::write(other.join("theirs.png"), "png").expect("write");
+        std::fs::write(data.path().join("redaction-key"), "key").expect("write");
+        let key = data.path().join("redaction-key");
+        let project = Denies { folders: vec![data.path().to_owned()], own_chat: None };
+        assert!(readable_file(&chat.join("tree.png").to_string_lossy(), &chat, &project).is_err(), "not its own chat");
+        let own = Denies { folders: vec![data.path().to_owned()], own_chat: Some(chat.clone()) };
+        assert!(readable_file("tree.png", &chat, &own).is_ok());
+        assert!(readable_file(&key.to_string_lossy(), &chat, &own).is_err(), "the rest of Silt's data");
+        assert!(readable_file("../another/theirs.png", &chat, &own).is_err(), "another chat");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&key, chat.join("link.png")).expect("link");
+            assert!(readable_file("link.png", &chat, &own).is_err(), "a link out of the chat");
         }
     }
 

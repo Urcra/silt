@@ -138,7 +138,8 @@ impl Core {
         let config = self.declared(thread, id, "files")?;
         let record = &self.threads[&thread];
         let workspace = self.family_workspace(record.family).id.to_string();
-        let denied = self.artifact_denies(&workspace);
+        // A chat's files are its own, though Silt's data, which is denied, holds its folder.
+        let denied = if self.is_chat(thread) { Vec::new() } else { self.artifact_denies(&workspace) };
         let readable = |path: &str| {
             files_allowed(&config, path)
                 && (record.repo_root.as_os_str().is_empty()
