@@ -1,6 +1,7 @@
-//! Updating this machine's Silt from the web UI (ADR 0100): whether a newer
-//! build is out, checked at start and every few hours, and the detached
-//! `silt update run` that installs it, whose state this reads back.
+//! Updating this machine's Silt from the web UI (ADR 0100, ADR 0129): whether
+//! a newer build is out, checked at start and every few hours, and, for a dev
+//! build, the detached `silt update run` that installs it, whose state this
+//! reads back.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -40,11 +41,7 @@ pub(crate) struct Updates {
 
 impl Updates {
     pub(crate) fn new(data_dir: &Path) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(RELEASE_WAIT)
-            .user_agent(concat!("silt/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .unwrap_or_default();
+        let client = release_client();
         Self {
             data_dir: data_dir.to_owned(),
             build: BuildInfo::current(),
@@ -97,25 +94,13 @@ impl Updates {
             return Availability::Off { reason: OffReason::DebugBuild };
         }
         match self.build.channel {
-            Channel::Nightly => {
+            Channel::Dev => {
                 let build = self.build.clone();
-                tokio::task::spawn_blocking(move || check::nightly(&build, true))
+                tokio::task::spawn_blocking(move || check::dev(&build, true))
                     .await
                     .unwrap_or_else(|error| Availability::Failed { message: error.to_string() })
             }
-            Channel::Stable => self.release().await,
-        }
-    }
-
-    async fn release(&self) -> Availability {
-        let asked = self.client.get(check::RELEASES).header("Accept", "application/vnd.github+json").send().await;
-        let answer = match asked.and_then(reqwest::Response::error_for_status) {
-            Ok(answer) => answer.json::<serde_json::Value>().await,
-            Err(error) => Err(error),
-        };
-        match answer {
-            Ok(answer) => check::release(&self.build, &answer),
-            Err(error) => Availability::Failed { message: format!("could not reach the releases: {error}") },
+            Channel::Nightly | Channel::Stable => released(&self.client, &self.build).await,
         }
     }
 
@@ -182,8 +167,12 @@ impl Updates {
         if let Err(reason) = check::updatable(&self.build) {
             return Err(CoreError::Invalid(format!("no update: {}", reason.explain())));
         }
-        if self.build.channel != Channel::Nightly {
-            return Err(CoreError::Invalid("a stable build updates with its installer".to_owned()));
+        match self.build.channel {
+            Channel::Dev => {}
+            Channel::Nightly => {
+                return Err(CoreError::Invalid("a nightly build updates from the nightly release's downloads".to_owned()));
+            }
+            Channel::Stable => return Err(CoreError::Invalid("a stable build updates with its installer".to_owned())),
         }
         if run::read_state(&self.data_dir).is_some_and(|state| state.in_flight() && run::runner_alive(&state)) {
             return Err(CoreError::Invalid("an update is already running".to_owned()));
@@ -196,5 +185,35 @@ impl Updates {
             Command::new(exe).args(["update", "run"]).current_dir("/").stdin(Stdio::null()).stdout(log).stderr(log_err),
         )?;
         Ok(())
+    }
+}
+
+/// A client for asking GitHub of releases.
+pub fn release_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(RELEASE_WAIT)
+        .user_agent(concat!("silt/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .unwrap_or_default()
+}
+
+/// Whether a release past a nightly or stable build is out: the `nightly`
+/// release for a nightly build, the latest release for a stable one.
+pub async fn released(client: &reqwest::Client, build: &BuildInfo) -> Availability {
+    let api = std::env::var("SILT_UPDATE_API").ok().filter(|api| !api.is_empty()).unwrap_or_else(|| check::API.to_owned());
+    let url = match (build.channel, &build.commit) {
+        (Channel::Nightly, Some(built)) => check::nightly_url(&api, built),
+        (Channel::Nightly, None) => return Availability::Off { reason: OffReason::NoClone },
+        _ => check::releases_url(&api),
+    };
+    let asked = client.get(url).header("Accept", "application/vnd.github+json").send().await;
+    let answer = match asked.and_then(reqwest::Response::error_for_status) {
+        Ok(answer) => answer.json::<serde_json::Value>().await,
+        Err(error) => Err(error),
+    };
+    match (answer, build.channel) {
+        (Ok(answer), Channel::Nightly) => check::nightly(&answer),
+        (Ok(answer), _) => check::release(build, &answer),
+        (Err(error), _) => Availability::Failed { message: format!("could not reach the releases: {error}") },
     }
 }
