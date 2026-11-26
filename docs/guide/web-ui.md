@@ -20,12 +20,12 @@ Every page shares the sidebar:
 
 What changed since you last looked is marked unread.
 
-From a thread's menu in the sidebar, or the palette:
+Right-click a thread in the sidebar or on All threads for its menu (its **⋯** on hover opens the same one). From there, or the palette:
 - **Pin** a thread to keep it at the top.
 - **Snooze** it for an hour, until tomorrow, or until something happens in it.
 - **Settle** it once it needs nothing more.
 
-These are yours alone, and follow you to your other machines through the server.
+These are yours alone, and follow you to your other machines through the server. The same menu has **Copy thread ID**, the id `silt resume` and `silt fork` take in a terminal, **Fork**, **History graph** and **Join live**.
 
 The top of the sidebar is the workspace you're looking at: its name and its server. Pick it to narrow everything to one server, one org, or this machine (see [several servers](servers.md)); its menu also shows which account you're signed in as on each server.
 
@@ -56,7 +56,7 @@ A chat is a thread that belongs to no project: a question, some research, a quic
 - **Its folder.** Each chat works in a folder of its own, a small git repository under `chats/` in Silt's data directory, where the agent can save what it finds. The chat's **Files** panel shows them. Settings › Chats can put new chats' folders somewhere you browse, outside any repository that would take them in.
 - **Private, and on your other devices.** A chat is visible only to you until you share it, and it syncs to your server like any thread, with its files: **Resume** on another machine makes a folder there with them, and **Fork** gives the fork a folder of its own.
 - **Full access.** A chat starts with full access, as its folder holds only what its agent wrote. Settings › Chats changes the default; each chat can pick another.
-- **Into a project.** The thread's More menu has **Make it a project…**, which makes the chat's folder a project of its own, with the chat in it, and **Continue in a project…**, which starts a thread in one of your projects from the chat's conversation, with its files copied to a folder there.
+- **Into a project.** Right-click the chat in the sidebar for **Move to a project…**: **Make it a project** makes the chat's folder a project of its own, with the chat in it, and **Continue in a project** starts a thread in one of your projects from the chat's conversation, with its files copied to a folder there.
 
 From a terminal, `silt chat` runs Claude Code (or another agent CLI, `silt chat codex`) in a new chat; `--about` names its folder. `silt claude` run outside any repository says so and points to `silt chat`. The design is in [ADR 0059](../adr/0059-chats-without-a-project.md).
 
@@ -67,11 +67,11 @@ Commands stand on their own, as `$ command` with the last lines of their output,
 
 **Subagents and background commands.** A subagent, or a command the agent left running in the background, is a card of its own that says how it stands, and what still runs is listed above the composer. While the agent runs on this machine, **Stop** on a running command's card or line ends the command and what it started; the agent then hears it ended, and Silt keeps it from going on about it. A command Copilot left running is marked done once its process is gone, as Copilot may never say so. What an agent the web UI started leaves running ends with it: when you stop the agent, when the daemon stops, and after the machine went down, its threads say so (ADR 0057).
 
-**Grouping and detail.** The agent's work between two things it says to you is a run: one closed line that counts what it did ("Edited 2 files, ran 3 commands · thought for 12s"), with its thoughts, commands and edits inside. A question, a plan and a failed command stand on their own. The thread's More menu sets, for this browser, how the work is grouped: **By turn**, the default, folds a finished turn under one "Worked for" line and leaves its reply, and **By run** shows every run. It also sets how much each step shows: **Normal** keeps them closed and **Verbose** opens every fold. **Shift+T** opens every thought, and closes them again.
+**Grouping and detail.** The agent's work between two things it says to you is a run: one closed line that counts what it did ("Edited 2 files, ran 3 commands · thought for 12s"), with its thoughts, commands and edits inside. A question, a plan and a failed command stand on their own. Settings › Text and layout sets, for this machine, how the work is grouped, and so does the palette: **By turn**, the default, folds a finished turn under one "Worked for" line and leaves its reply, and **By run** shows every run. It also sets how much each step shows: **Normal** keeps them closed and **Verbose** opens every fold. **Shift+T** opens every thought, and closes them again.
 
 **Messages.** Hovering a message copies it. On a prompt after the first, the pencil forks the thread from the turn before it and puts the prompt in the fork's composer, to edit and send again.
 
-**Changes.** Over the composer, once the thread changed files, a bar says how many, with **Review**, **Create PR**, and on a fork, **Offer as merge request**. Create PR pushes the branch the thread's checkout is on to `origin`, with your own git credentials, and opens the forge's page for a new pull request of it (GitHub, GitLab, Forgejo or Gitea); the thread needs commits on a branch of its own. The header names the branch the thread's latest commit went on.
+**Changes.** The panel's toggle in the header counts what the thread changed, and opens the changes beside the conversation; **Expand** in the panel's header shows them across the page. On a fork, the header has **Offer as merge request**. Details names the branch the thread's latest commit went on, beside its commits.
 
 **Prompting.** ⏎ sends and ⇧⏎ starts a new line. There's no send arrow, except on a touch screen, where ⏎ starts a new line and the arrow sends.
 - **Send** prompts the agent now.
