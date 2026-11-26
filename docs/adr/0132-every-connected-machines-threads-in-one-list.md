@@ -17,7 +17,7 @@ With a server, a thread from another device is already listed (`On homelab · 2d
 - A thread that is on two machines through a server is listed once, from the machine that holds it (`location: here`).
 - Opening a thread on another machine switches the window to it and opens the thread there. The row is chosen at once, and the foot says `Opening it on nuc…`. Its other actions (pin, settle, snooze) are made on its own machine's page.
 - Each machine's row in the menu says how it stands: `over SSH · 1 needs you · 3 running`.
-- While a machine's threads load, the list says so without moving the others. When a machine drops, its threads leave the list, a notice says so with Retry, and the app reconnects as it does now. With only This computer connected, a notice offers to connect another.
+- How the machines stand is said in the sidebar's foot, not in the list: `Getting nuc's threads…` above the machine while they load, as `Opening it on nuc…` is, and `2 connected · lost nuc` when one drops. A dropped machine's threads leave the list, and the app reconnects as it does now. With only This computer connected, the list is its own and the foot says `1 connected`.
 
 **The desktop app gathers the listings.** It holds each connected backend's address and token already. It follows each one's `/api/threads`, and its `/api/events` for the `threads` topic, over the tunnel. It hands every page the result:
 - `window.__siltThreads`, with a `silt-threads` event when it changes: per backend, its id, `loading`, `ready` or `lost`, and its `ThreadSummary` list as that daemon gave it.
