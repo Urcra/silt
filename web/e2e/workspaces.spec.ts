@@ -246,7 +246,7 @@ test("a workspace's sandbox reach and its plugins are set in its settings, and a
     .getByRole('link', { name: /work on the app/ })
     .first()
     .click()
-  await page.getByRole('tab', { name: 'Access' }).click()
+  await page.getByRole('tab', { name: 'Details' }).click()
   const next = page.getByRole('region', { name: 'this run' })
   await expect(next).toContainText('The next run')
   await expect(next).toContainText('None')
@@ -388,7 +388,7 @@ test('an agent asks for a folder on a card, and goes on with it once approved (A
 
   // The agent is restarted in a sandbox with it, told what's there, and goes on.
   await expect(page.getByText(/is now in your sandbox, read-only, at that path/)).toBeVisible({ timeout: 60_000 })
-  await page.getByRole('tab', { name: 'Access' }).click()
+  await page.getByRole('tab', { name: 'Details' }).click()
   const folders = page.getByRole('region', { name: 'folders' })
   await expect(folders).toContainText(shared)
   await shoot(page, '8-folder-granted')

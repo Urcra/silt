@@ -20,7 +20,7 @@ Every page shares the sidebar:
 
 What changed since you last looked is marked unread.
 
-Right-click a thread in the sidebar or on All threads for its menu (its **⋯** on hover opens the same one). From there, or the palette:
+Right-click a thread in the sidebar or on All threads for its menu; its **⋯** on hover, or a long press on a phone, opens the same one. From there, or the palette:
 - **Pin** a thread to keep it at the top.
 - **Snooze** it for an hour, until tomorrow, or until something happens in it.
 - **Settle** it once it needs nothing more.
@@ -128,22 +128,21 @@ Artifacts are kept in the thread's history, so they hand off, fork and sync with
 **Questions.** An agent run from the web UI can ask you a question with choices. It waits in the conversation where it was asked: pick a choice, by click or by its number, type your own answer under the choices, which goes to the agent as a steer, or **Skip** it (Esc). The hosted app and your other devices answer it as well, through the server. A question a terminal session asks is answered in the terminal; the thread shows it, and the answer once given.
 
 ## A thread's page
-- **Header.** Fork, Share, and Changes, which opens the panel beside the conversation. Its menu sets the transcript's detail, copies the commands that resume or fork the thread in a terminal, joins live, and opens the details.
+- **Header.** The title, then Fork, Share, and the panel's toggle, which opens Changes, Artifacts and Details beside the conversation. The rest is on the thread's right-click in the sidebar.
 - **Composer.** With no agent running, pick one from the composer's chip and send: the agent starts in the thread with your draft as its first prompt.
 - **Turns.** The conversation, by turn, with what each turn changed. Each turn also has "fork from turn N", "revert to turn N" and "copy link".
-- **Changes.** The changes panel diffs against the last turn, the thread's start or `main`. **Hide git's changes** leaves out what git rewrote when the agent, or you between turns, ran a pull, checkout, rebase, reset or stash, here, in the expanded review, in the turns' changes and in merge requests, until you untick it. On a thread another agent worked beside, **Hide other agents' changes** does the same for that agent's edits. Comments made with either on land on the right lines. To review it, the "+" beside a line comments on it, a drag from it takes several lines, and deleted lines take comments too. Add single comment keeps one at once; Start a review keeps comments pending, in this browser. A pending comment follows its text as the agent edits the file; one whose lines are deleted shows apart, with the lines it was on. **Finish review** opens over the diff with a note and asks what the agent gets:
+- **Changes.** Under the panel's tabs, a toolbar says how many files the diff shows and how much changed, and what it compares: the last turn, the thread's start or `main`. Its view button sets the layout, Unified or Split, and what the diff leaves out. **Hide git's changes** leaves out what git rewrote when the agent, or you between turns, ran a pull, checkout, rebase, reset or stash, here, in the expanded review, in the turns' changes and in merge requests, until you untick it. On a thread another agent worked beside, **Hide other agents' changes** does the same for that agent's edits. Comments made with either on land on the right lines. To review it, the "+" beside a line comments on it, a drag from it takes several lines, and deleted lines take comments too. Add single comment keeps one at once; Start a review keeps comments pending, in this browser. A pending comment follows its text as the agent edits the file; one whose lines are deleted shows apart, with the lines it was on. **Finish review** opens over the diff with a note and asks what the agent gets:
   - **Request changes**: the note and every comment as one prompt, sent now or once the running turn ends;
   - **Request changes, stopping the turn**, while the agent works;
   - **Mark reviewed**, in the expanded review: nothing to change, and the next review starts after this turn;
   - **Keep as comments**.
 
   With no agent running from Silt, the review is copied to paste into the agent's terminal. A sent comment says Sent and stays open until you resolve it.
-- **The expanded review.** ⇧D, the expand button in the header, or **Review** over the composer opens the changes across the page, at `/t/<id>/review`; Esc or **Conversation** goes back. On the left are the files, with Seen to tick each off as you look at it: a file ticked off comes back half-ticked when the agent changes it again, and the lines new since are marked at their edge. The diff is split, follows the agent's edits as they land, and each hunk names the turn that wrote it, a link to it in the conversation. **Turns** shows one turn's changes, or a range of them with shift-click; it starts after the turn you last marked reviewed. Its keys: j and k for files, n and p for hunks, ] for the next file not seen, c to comment, v for Seen, t for the hunk's turn, s for the layout, / to filter and ⌘⏎ to finish. Seen and the turn reviewed through are yours, and follow you to your other machines.
+- **The expanded review.** ⇧D, or the expand button in the panel's header, opens the changes across the page, at `/t/<id>/review`; Esc or **Conversation** goes back. On the left are the files, with Seen to tick each off as you look at it: a file ticked off comes back half-ticked when the agent changes it again, and the lines new since are marked at their edge. The diff is split, follows the agent's edits as they land, and each hunk names the turn that wrote it, a link to it in the conversation. **Turns** shows one turn's changes, or a range of them with shift-click; it starts after the turn you last marked reviewed. Its keys: j and k for files, n and p for hunks, ] for the next file not seen, c to comment, v for Seen, t for the hunk's turn, s for the layout, / to filter and ⌘⏎ to finish. Seen and the turn reviewed through are yours, and follow you to your other machines.
 - **Artifacts.** What agents made for you in the thread, and the images and videos they showed; each artifact opens beside the conversation. The tab shows once there is something in it.
-- **Details.** The handoff, files, commits and comments on code.
-- **Lineage.** What the thread was forked from, and its forks.
+- **Details.** The handoff; the thread's lineage, what it was forked from and its forks, when it has any; its commits and branch; comments on code; and what its agent's sandbox reaches, the grants in force and the plugin calls made.
 
-On a phone, the list of threads is the home page and New thread opens from it; the menu at the left of each page's header opens the sidebar.
+On a phone, the list of threads is the home page and New thread opens from it; the menu at the left of each page's header opens the sidebar. A long press on a thread opens the menu a right-click does.
 
 [History and search](history-and-search.md) and [forks and merge requests](forks-and-merge-requests.md) have the details.
 

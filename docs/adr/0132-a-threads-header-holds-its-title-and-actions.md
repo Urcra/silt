@@ -13,12 +13,12 @@ A bar over the composer repeated the changes' counts, a Review that the panel's 
 - **The header is one line:** the title, a pill only when the agent waits on the person or stopped with an error, who else is here, then Fork, Offer as merge request on a fork, Share and the panel's toggle. No meta line, no This machine only, no shield, no More.
 - **A thread's menu is a right-click** on it in the sidebar or on All threads (the row's ⋯ on hover opens the same menu): pin, snooze and settle, Copy thread ID (what `silt resume` and `silt fork` take), Fork, Move to a project… for a chat, History graph, Join live, and Erase from this machine… for a Local only thread.
 - **The transcript's grouping and detail** are set in Settings › Text and layout, where they were already kept for the machine, and from the palette.
-- **What the agent's sandbox reaches** is in the panel's Access tab, which also says what the workspace's rules give the next run.
-- **Expand** sits in the Changes panel's header; the branch goes beside Details' commits.
+- **The panel has three tabs:** Changes, Artifacts when there are some, and Details, which takes in Lineage (shown when the thread has a source or forks) and Access (what the agent's sandbox reaches, what the workspace gives the next run, grants and plugin calls). Details no longer lists the files changed, which Changes does; the branch goes beside its commits.
+- **Changes has a toolbar under the tabs:** how many files the diff shows and how much changed, what it compares, and one button for how it shows (Unified or Split, and what it leaves out). Expand sits on the tabs' row.
 - **The bar over the composer is gone,** and Create PR on the forge with it.
 
 ## Consequences
 - The title keeps the header's width, on a phone too.
 - Each fact has one place. Someone looking for the thread's machine or agent finds it in the panel, not at a glance.
 - The daemon's pull request endpoints have no caller in the UI.
-- A phone has no right-click; the row's ⋯ and a long press, where the browser fires it, open the menu.
+- A phone has no right-click: a long press opens the same menu, timed by Silt as iOS fires no contextmenu for one, and the tap that ends it follows no link.

@@ -10,7 +10,7 @@ import { needsYou } from '../sections'
 import { hosted } from '../served'
 import { inBackground, inProgress, threadWhere } from '../threadLook'
 import { ago } from '../time'
-import { Avatar, ContextMenu, EmptyState, Icon, Input, type MenuAt, Skeleton, Tabs, Tag, type Tone, buttonClass, cx } from '../ui'
+import { Avatar, ContextMenu, EmptyState, Icon, Input, Skeleton, Tabs, Tag, type Tone, buttonClass, cx, useMenuAt } from '../ui'
 import { useInWorkspace } from '../workspaceFilter'
 import { Page } from './Page'
 import { useThreadMenu } from './ThreadMenu'
@@ -78,15 +78,12 @@ function ThreadRow({
   const to = recovered ? ('/t/$id/reconcile' as const) : ('/t/$id' as const)
   const mr = into ?? fromIt
   const { items, dialogs } = useThreadMenu(thread)
-  const [menuAt, setMenuAt] = useState<MenuAt>()
+  const menu = useMenuAt()
   return (
     <tr
-      onContextMenu={(event) => {
-        event.preventDefault()
-        setMenuAt({ x: event.clientX, y: event.clientY })
-      }}
+      {...menu.handlers}
       className={cx(
-        'group relative border-b border-line-subtle hover:bg-surface-1',
+        'group relative border-b border-line-subtle hover:bg-surface-1 [-webkit-touch-callout:none] pointer-coarse:select-none',
         (into || recovered) && 'bg-accent-tint hover:bg-accent-tint',
       )}
     >
@@ -159,12 +156,12 @@ function ThreadRow({
       </td>
       <td className="pr-3 pl-3 text-right font-mono text-2xs whitespace-nowrap text-fg-3">
         <span data-volatile>{ago(thread.last_ms, now)}</span>
-        {menuAt && (
+        {menu.at && (
           <ContextMenu
             label={`actions for ${thread.title ?? 'Untitled thread'}`}
             items={items}
-            at={menuAt}
-            onClose={() => setMenuAt(undefined)}
+            at={menu.at}
+            onClose={menu.close}
           />
         )}
         {dialogs}

@@ -773,10 +773,13 @@ export function AccessPanel({
   thread,
   summary,
   agent,
+  embedded = false,
 }: {
   thread: string
   summary: ThreadSummary | undefined
   agent: AgentStatus | null | undefined
+  /** Its sections only, in a list of others such as Details. */
+  embedded?: boolean
 }) {
   const workspaces = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
   const queries = useQueryClient()
@@ -810,7 +813,7 @@ export function AccessPanel({
   const reach = live?.sandbox ?? next
   const grants = (access.data?.grants ?? []).filter((grant) => grant.active)
   return (
-    <div className="flex flex-col gap-6 px-5 py-5 text-sm">
+    <div className={cx('flex flex-col gap-6 text-sm', !embedded && 'px-5 py-5')}>
       <section aria-label="this run" className="flex flex-col gap-2">
         <Heading>{next ? 'The next run' : 'This run'}</Heading>
         {reach ? (

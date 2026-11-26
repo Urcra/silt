@@ -27,7 +27,7 @@ import {
   type IconName,
   Kbd,
   Menu,
-  type MenuAt,
+  useMenuAt,
   Popover,
   SectionLabel,
   Skeleton,
@@ -149,7 +149,7 @@ function ThreadItem({
   const now = useNow()
   const title = thread.title ?? 'Untitled thread'
   const { items: actions, dialogs } = useThreadMenu(thread)
-  const [menuAt, setMenuAt] = useState<MenuAt>()
+  const menu = useMenuAt()
   const item = useRef<HTMLLIElement>(null)
   const open = useRouterState({ select: (state) => state.location.pathname }) === `/t/${thread.id}`
   // The thread open shows in the list however far down its project is.
@@ -159,11 +159,8 @@ function ThreadItem({
   return (
     <li
       ref={item}
-      className="group relative flex items-center"
-      onContextMenu={(event) => {
-        event.preventDefault()
-        setMenuAt({ x: event.clientX, y: event.clientY })
-      }}
+      className="group relative flex items-center [-webkit-touch-callout:none] pointer-coarse:select-none"
+      {...menu.handlers}
     >
       <Link
         to="/t/$id"
@@ -203,7 +200,7 @@ function ThreadItem({
       <span className="absolute right-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
         <Menu label={`actions for ${title}`} trigger={<Icon name="more" />} items={actions} />
       </span>
-      {menuAt && <ContextMenu label={`actions for ${title}`} items={actions} at={menuAt} onClose={() => setMenuAt(undefined)} />}
+      {menu.at && <ContextMenu label={`actions for ${title}`} items={actions} at={menu.at} onClose={menu.close} />}
       {dialogs}
     </li>
   )

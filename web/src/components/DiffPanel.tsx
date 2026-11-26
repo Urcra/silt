@@ -8,7 +8,7 @@ import { keptView } from '../reviewView'
 import { itemOf, useReview } from '../review'
 import { useActions } from '../shortcuts'
 import { useThreadDiff } from '../threadDiff'
-import { Button, Input, Select, Skeleton, Tabs } from '../ui'
+import { Button, Counts, Icon, Input, Popover, Select, Skeleton, Tabs, buttonClass } from '../ui'
 import { ChipSelect } from './ChipSelect'
 import { type DiffLayout, DiffView } from './DiffView'
 import { useTextSettings } from '../text'
@@ -40,7 +40,7 @@ export const DiffPanel = memo(function DiffPanel({
   working?: boolean
   /** Room for the diff side by side. */
   wide?: boolean
-  /** Where what it compares and how go, beside the inspector's tabs; above the diff without it. */
+  /** The panel's toolbar under its tabs, for what it compares and how; above the diff without it. */
   controlsIn?: HTMLElement | null
 }) {
   const [view, setView] = useState<View>('thread')
@@ -88,18 +88,44 @@ export const DiffPanel = memo(function DiffPanel({
     { id: 'against-main', label: 'Changes against main', run: () => setView('main') },
   ])
 
-  // What it compares is a menu, as it's picked once in a while; the layout stays a toggle.
+  const listed = stats.data ?? []
+  const added = listed.reduce((sum, file) => sum + file.added, 0)
+  const removed = listed.reduce((sum, file) => sum + file.removed, 0)
+  // How much the diff shown changed and what it compares, then how it shows, which is set once in a while.
   const controls = (
     <>
+      {stats.data && (
+        <span className="flex items-center gap-2 whitespace-nowrap">
+          <span className="text-fg-1">
+            {listed.length} {listed.length === 1 ? 'file' : 'files'}
+          </span>
+          {(added > 0 || removed > 0) && <Counts added={added} removed={removed} />}
+        </span>
+      )}
       <ChipSelect
         label="compare"
         value={view}
         onChange={(chosen) => setView(chosen as View)}
         options={VIEWS.map((choice) => ({ id: choice.id, name: choice.label }))}
       />
-      <HideGitBox on={hideGitSetting} onChange={setHideGit} disabled={view === 'main'} />
-      {shared && <HideOthersBox on={hideOthersSetting} onChange={setHideOthers} disabled={view === 'main'} />}
-      <Tabs label="layout" tabs={LAYOUTS} value={layout} onChange={setPicked} />
+      <span className="ml-auto">
+        <Popover
+          label="How the diff shows"
+          triggerLabel="How the diff shows"
+          align="right"
+          triggerClassName={buttonClass('ghost')}
+          panelClassName="flex w-64 flex-col gap-1.5 p-2"
+          trigger={<Icon name="sliders" className="h-4 w-4" />}
+        >
+          <p className="px-1 text-2xs text-fg-2">Layout</p>
+          <Tabs label="layout" tabs={LAYOUTS} value={layout} onChange={setPicked} />
+          <div className="my-0.5 border-t border-line-subtle" />
+          <span className="px-1">
+            <HideGitBox on={hideGitSetting} onChange={setHideGit} disabled={view === 'main'} />
+            {shared && <HideOthersBox on={hideOthersSetting} onChange={setHideOthers} disabled={view === 'main'} />}
+          </span>
+        </Popover>
+      </span>
     </>
   )
   return (
@@ -107,7 +133,7 @@ export const DiffPanel = memo(function DiffPanel({
       {controlsIn ? (
         createPortal(controls, controlsIn)
       ) : (
-        <div className="flex flex-wrap items-center justify-end gap-2">{controls}</div>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-fg-2">{controls}</div>
       )}
       {view === 'other' && (
         <div className="flex flex-wrap items-center gap-2">

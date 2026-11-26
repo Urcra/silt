@@ -123,9 +123,11 @@ test('shows a thread with compaction, turn diffs and comments', async ({ page })
   await expect(changes.getByTestId('diff')).toContainText('+ fn farewell() {}')
   // Hiding git's changes leaves them out of the Changes tab's counts too, whatever the panel compares.
   const counted = page.waitForRequest((request) => /\/diff\/stats\?git=hide$/.test(request.url()))
+  await page.getByRole('button', { name: 'How the diff shows' }).click()
   await page.getByRole('checkbox', { name: 'Hide git’s changes' }).check()
   await counted
   await page.getByRole('checkbox', { name: 'Hide git’s changes' }).uncheck()
+  await page.keyboard.press('Escape')
 
   await page.getByText('Please add a farewell line to main').hover()
   await page.getByRole('button', { name: 'comment on entry 0' }).click()

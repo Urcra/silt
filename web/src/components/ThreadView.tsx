@@ -20,7 +20,7 @@ import {
   api,
   short,
   type CommentView,
-  type DiffStat,
+  type AgentStatus,
   type HistoryEntry,
   type Presence,
   type ThreadSummary,
@@ -1404,15 +1404,13 @@ function ThreadCommits({ thread }: { thread: string }) {
   )
 }
 
-/** How many of the thread's files Details lists before More. */
-const LISTED_FILES = 200
-
 /** The Thread board's inspector: handoff, lineage, files, commits and comments on code. */
 function Details({
   thread,
   summary,
   total,
-  files,
+  threads,
+  agent,
   codeComments,
   anchor,
   onChanged,
@@ -1421,7 +1419,10 @@ function Details({
   thread: string
   summary: ThreadSummary | undefined
   total: number
-  files: DiffStat[] | null
+  /** Every thread, for its lineage. */
+  threads: ThreadSummary[]
+  /** The agent here, for what its sandbox reaches. */
+  agent: AgentStatus | null | undefined
   codeComments: CommentView[]
   anchor: Anchor
   onChanged: () => Promise<unknown>
@@ -1430,7 +1431,7 @@ function Details({
   const now = useNow()
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
   const device = status.data?.servers?.[0]?.name ?? 'this machine'
-  const [listed, setListed] = useState(LISTED_FILES)
+  const related = summary && (summary.forked_from || threads.some((other) => other.forked_from === summary.id))
   const liveOn =
     summary?.location === 'moved'
       ? 'another device'
@@ -1478,29 +1479,18 @@ function Details({
           Picking it up on another machine moves the agent session there. This one stops writing.
         </p>
       </InspectorSection>
-      <InspectorSection title="Files changed">
-        {files === null && <Skeleton className="h-10" />}
-        {files?.length === 0 && <p className="text-xs text-fg-2">No changes yet.</p>}
-        <ul className="flex flex-col gap-0.5 font-mono text-2xs">
-          {files?.slice(0, listed).map((file) => (
-            <li key={file.path} className="flex items-center gap-2 py-0.5">
-              <a
-                href={appHref(filePath(thread, file.path))}
-                className="min-w-0 flex-1 truncate text-fg-1 hover:text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center"
-                title={file.path}
-              >
-                {file.path}
-              </a>
-              <Counts added={file.added} removed={file.removed} binary={file.binary} />
-            </li>
-          ))}
-        </ul>
-        {files && files.length > listed && (
-          <Button variant="ghost" size="sm" className="self-start" onClick={() => setListed(listed + LISTED_FILES)}>
-            {(files.length - listed).toLocaleString()} more files
-          </Button>
-        )}
-      </InspectorSection>
+      {summary && related && (
+        <InspectorSection
+          title="Lineage"
+          aside={
+            <Link to="/graph" className="text-accent-fg hover:text-fg-1">
+              View graph
+            </Link>
+          }
+        >
+          <Lineage summary={summary} threads={threads} />
+        </InspectorSection>
+      )}
       <ThreadCommits thread={thread} />
       <InspectorSection title="Comments on code">
         <ul data-testid="code-comments" className="flex flex-col gap-2">
@@ -1553,6 +1543,7 @@ function Details({
           Comment on lines
         </Button>
       </InspectorSection>
+      {!hosted() && <AccessPanel thread={thread} summary={summary} agent={agent} embedded />}
     </div>
   )
 }
@@ -1571,7 +1562,7 @@ function Here({ people }: { people: { user: string; device: string }[] }) {
   )
 }
 
-type InspectorTab = 'design' | 'changes' | 'artifacts' | 'details' | 'lineage' | 'access'
+type InspectorTab = 'design' | 'changes' | 'artifacts' | 'details'
 
 const NO_PEOPLE: Presence[] = []
 const NO_TURNS: TurnInfo[] = []
@@ -2142,58 +2133,63 @@ function ThreadBody({
                               </Suspense>
                             ) : (
                               <div className="flex flex-col">
-                                <div className="sticky top-0 z-10 flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line-subtle bg-bg px-4 py-1.5">
-                                  <Tabs
-                                    label="inspector"
-                                    tabs={[
-                                      ...(designTitle ? [{ id: 'design' as const, label: designTitle }] : []),
-                                      {
-                                        id: 'changes',
-                                        label: (
-                                          <>
-                                            {isChat(summary?.repo) ? 'Files' : 'Changes'}{' '}
-                                            {totals && (totals.added > 0 || totals.removed > 0) && (
-                                              <Counts added={totals.added} removed={totals.removed} />
-                                            )}
-                                          </>
-                                        ),
-                                      },
-                                      ...(groups.length > 0 || images.length > 0
-                                        ? [
-                                            {
-                                              id: 'artifacts' as const,
-                                              label: (
-                                                <>
-                                                  Artifacts{' '}
-                                                  <span className="font-mono text-2xs text-accent-fg">
-                                                    {groups.length + images.length}
-                                                  </span>
-                                                </>
-                                              ),
-                                            },
-                                          ]
-                                        : []),
-                                      { id: 'details', label: 'Details' },
-                                      { id: 'lineage', label: 'Lineage' },
-                                      ...(hosted() ? [] : [{ id: 'access' as const, label: 'Access' }]),
-                                    ]}
-                                    value={tab}
-                                    onChange={setTab}
-                                  />
+                                <div className="sticky top-0 z-10 flex shrink-0 flex-col bg-bg">
+                                  <div className="flex min-h-12 flex-wrap items-center gap-2 border-b border-line-subtle px-4 py-1.5">
+                                    <Tabs
+                                      label="inspector"
+                                      tabs={[
+                                        ...(designTitle ? [{ id: 'design' as const, label: designTitle }] : []),
+                                        {
+                                          id: 'changes',
+                                          label: (
+                                            <>
+                                              {isChat(summary?.repo) ? 'Files' : 'Changes'}{' '}
+                                              {totals && (totals.added > 0 || totals.removed > 0) && (
+                                                <Counts added={totals.added} removed={totals.removed} />
+                                              )}
+                                            </>
+                                          ),
+                                        },
+                                        ...(groups.length > 0 || images.length > 0
+                                          ? [
+                                              {
+                                                id: 'artifacts' as const,
+                                                label: (
+                                                  <>
+                                                    Artifacts{' '}
+                                                    <span className="font-mono text-2xs text-accent-fg">
+                                                      {groups.length + images.length}
+                                                    </span>
+                                                  </>
+                                                ),
+                                              },
+                                            ]
+                                          : []),
+                                        { id: 'details', label: 'Details' },
+                                      ]}
+                                      value={tab}
+                                      onChange={setTab}
+                                    />
+                                    {tab === 'changes' && roomy && (
+                                      <Button
+                                        variant="ghost"
+                                        className="ml-auto"
+                                        aria-label="Expand the review"
+                                        onClick={openReview}
+                                        title="The changes across the page, to review (⇧D)"
+                                      >
+                                        <Icon name="expand" className="h-4 w-4" />
+                                      </Button>
+                                    )}
+                                  </div>
+                                  {/* What the diff shows and how, under the tabs, filled by the diff itself. */}
                                   {tab === 'changes' && (
-                                    <span className="ml-auto flex items-center gap-2">
-                                      <span ref={setDiffControls} className="flex items-center gap-2" />
-                                      {roomy && (
-                                        <Button
-                                          variant="ghost"
-                                          aria-label="Expand the review"
-                                          onClick={openReview}
-                                          title="The changes across the page, to review (⇧D)"
-                                        >
-                                          <Icon name="expand" className="h-4 w-4" />
-                                        </Button>
-                                      )}
-                                    </span>
+                                    <div
+                                      ref={setDiffControls}
+                                      role="toolbar"
+                                      aria-label="what the diff shows"
+                                      className="flex min-h-10 flex-wrap items-center gap-2 border-b border-line-subtle px-4 py-1 text-xs text-fg-2"
+                                    />
                                   )}
                                 </div>
                                 {tab === 'design' ? (
@@ -2209,29 +2205,13 @@ function ThreadBody({
                                       onOpen={(id) => openArtifact(id)}
                                     />
                                   </Suspense>
-                                ) : tab === 'access' ? (
-                                  <AccessPanel thread={thread} summary={summary} agent={agent} />
-                                ) : tab === 'lineage' ? (
-                                  <div className="flex flex-col gap-6 px-5 py-5">
-                                    {summary && (
-                                      <InspectorSection
-                                        title="Lineage"
-                                        aside={
-                                          <Link to="/graph" className="text-accent-fg hover:text-fg-1">
-                                            View graph
-                                          </Link>
-                                        }
-                                      >
-                                        <Lineage summary={summary} threads={threads.data ?? []} />
-                                      </InspectorSection>
-                                    )}
-                                  </div>
                                 ) : tab === 'details' ? (
                                   <Details
                                     thread={thread}
                                     summary={summary}
                                     total={total}
-                                    files={files}
+                                    threads={threads.data ?? []}
+                                    agent={agent}
                                     codeComments={codeComments}
                                     anchor={anchor}
                                     onChanged={reloadComments}

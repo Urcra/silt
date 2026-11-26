@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import { expect, test, vi } from 'vitest'
-import { Avatar, Banner, ContextMenu, IconButton, type MenuAt, Menu, Tabs, Toaster, Tooltip, toast } from '.'
+import { Avatar, Banner, ContextMenu, IconButton, type MenuAt, Menu, Tabs, Toaster, Tooltip, toast, useMenuAt } from '.'
 
 function TwoTabs() {
   const [tab, setTab] = useState<'diff' | 'chat'>('chat')
@@ -100,6 +100,47 @@ test("a right-click opens the page's own menu in place of the browser's, at the 
   fireEvent.click(screen.getByRole('menuitem', { name: 'Pin' }))
   expect(onPin).toHaveBeenCalledOnce()
   expect(screen.queryByRole('menu')).toBeNull()
+})
+
+function Pressable({ onOpen }: { onOpen: () => void }) {
+  const menu = useMenuAt()
+  return (
+    <div {...menu.handlers}>
+      <button type="button" onClick={onOpen}>
+        A thread
+      </button>
+      {menu.at && (
+        <ContextMenu label="actions" items={[{ label: 'Pin', onSelect: () => {} }]} at={menu.at} onClose={menu.close} />
+      )}
+    </div>
+  )
+}
+
+test('a long press opens the same menu on a touch screen, and the tap ending it follows no link', () => {
+  vi.useFakeTimers()
+  const onOpen = vi.fn()
+  render(<Pressable onOpen={onOpen} />)
+  const row = screen.getByRole('button', { name: 'A thread' })
+  fireEvent.touchStart(row, { touches: [{ clientX: 30, clientY: 50 }] })
+  act(() => vi.advanceTimersByTime(499))
+  expect(screen.queryByRole('menu')).toBeNull()
+  act(() => vi.advanceTimersByTime(1))
+  expect(screen.getByRole('menu', { name: 'actions' })).toHaveStyle({ left: '30px', top: '50px' })
+  fireEvent.touchEnd(row)
+  fireEvent.click(row)
+  expect(onOpen).not.toHaveBeenCalled()
+
+  // A touch that moves is a scroll, and a short one a tap.
+  fireEvent.keyDown(document, { key: 'Escape' })
+  fireEvent.touchStart(row, { touches: [{ clientX: 30, clientY: 50 }] })
+  fireEvent.touchMove(row, { touches: [{ clientX: 30, clientY: 80 }] })
+  act(() => vi.advanceTimersByTime(600))
+  expect(screen.queryByRole('menu')).toBeNull()
+  fireEvent.touchStart(row, { touches: [{ clientX: 30, clientY: 50 }] })
+  fireEvent.touchEnd(row)
+  fireEvent.click(row)
+  expect(onOpen).toHaveBeenCalledOnce()
+  vi.useRealTimers()
 })
 
 test('a tooltip describes its element while focused', () => {
