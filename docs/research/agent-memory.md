@@ -19,8 +19,10 @@ Research for a memory viewer, and for sharing what agents remember across agents
     **Why:** a mocked test hid a broken migration.
     **How to apply:** any test touching storage. See [[project-db]].
     ```
-  - The system prompt (`# auto memory`) tells the agent the folder, the four types, to keep `MEMORY.md` an index, to update rather than duplicate, to turn relative dates absolute, and to check a remembered path or flag still exists before relying on it.
-- **Which folder a checkout gets.** `<slug>` is the project root with every non-alphanumeric character turned into `-`. The root is the *common* git dir's working tree, so worktrees share their clone's memory:
+  - The system prompt (`# auto memory`) tells the agent the folder, the four types, to keep `MEMORY.md` an index, to update rather than duplicate, to keep each file under 4 KB (recall shows only that much), to turn relative dates absolute, and to check a remembered path or flag still exists before relying on it.
+  - Claude Code adds `modified` and `originSessionId` to `metadata` itself (read in the binary).
+- **It writes memory by itself too** (read in the binary, `strings` of the Bun executable): `extractMemories`, a forked pass after a turn that wrote none (`CLAUDE_CODE_POST_TURN_MEMORY*`), and `autoDream`, a consolidation pass at most every 24 h and 5 sessions, holding `.consolidate-lock` in the folder (`autoDreamEnabled`). Both run as background subagents, so their writes may not show in the main transcript.
+- **Which folder a checkout gets.** `<slug>` is the key with every character outside `[a-zA-Z0-9]` turned into `-` (cut at 200, with a hash). The key is `findCanonicalGitRoot` of the cwd: the first `.git` upward; a `.git` file pointing at `<common>/worktrees/<id>` whose back-link matches is keyed by the main working tree; any other `.git` file, as `--separate-git-dir` makes, is keyed by its own working tree. `CLAUDE_CODE_PROJECT_DIR_NAME` (with `CLAUDE_CONFIG_DIR` set) fixes the folder's name instead. So worktrees share their clone's memory, and Silt's checkouts don't:
 
   | cwd | memory folder |
   | --- | --- |
@@ -30,8 +32,12 @@ Research for a memory viewer, and for sharing what agents remember across agents
 
   **So every thread in a managed checkout starts with empty memory, and what it learns is never read again** once the thread ends: its checkout's slug is used by no other thread. Only `--here` threads share the clone's memory.
 - **Moving or turning it off:** `--settings '{"autoMemoryDirectory": "<abs dir>"}'` moves it, and Claude Code creates the folder (probed). `{"autoMemoryEnabled": false}` drops the `# auto memory` section entirely (probed). Silt already passes `--settings` on every run (`locked_settings`), so it can point every thread of a project at one folder.
-  - In a Claude Code cloud session (`CLAUDE_CODE_REMOTE` set) the section is absent: no auto memory.
-- **Rules files:** `~/.claude/CLAUDE.md`, `CLAUDE.md` and `.claude/CLAUDE.md` from the cwd up to `/`, `.claude/rules/*.md`, `@path` imports. A managed checkout sits inside its clone, so it reads the clone's `CLAUDE.md` too, as well as its own.
+  - `autoMemoryDirectory` is read from policy, `--settings`, then (in a trusted folder) local and project settings, then user settings; it must be absolute or start with `~/`. `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` turns memory off.
+  - In a Claude Code cloud session (`CLAUDE_CODE_REMOTE` set) memory is off unless `CLAUDE_CODE_REMOTE_MEMORY_DIR` names a folder (probed: the section is absent here).
+- **Subagents' memory:** a subagent with `memory: user | project | local` gets `<config dir>/agent-memory/<name>/`, `<cwd>/.claude/agent-memory/<name>/` or `<cwd>/.claude/agent-memory-local/<name>/`, laid out the same, its `MEMORY.md` in its own prompt. The `project` one is in the checkout, so Silt already captures and syncs it as a file of the thread.
+- **Organisation memory:** the binary also has `memory_list`, `memory_read` and `memory_write` tools for a store held by Anthropic (`CLAUDE_CODE_MEMORY_API_BASE_URL`, `CLAUDE_CODE_DISABLE_ORG_MEMORY`). Undocumented; not tried.
+- **Rules files:** managed policy (`/etc/claude-code/CLAUDE.md`), `~/.claude/CLAUDE.md` and `~/.claude/rules/`, `CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` from `/` down to the cwd, `.claude/rules/**/*.md` (`paths:` globs), `@path` imports four deep; subfolders' files load when the agent touches a file there. `AGENTS.md` only where no `CLAUDE.md` is (`instructionFiles`). A managed checkout sits inside its clone, so it reads the clone's `CLAUDE.md` too, as well as its own.
+- **Hooks:** `InstructionsLoaded` fires for each rules file (`file_path`, `memory_type`, `load_reason`), not for auto memory. Nothing fires when memory is written: watch the folder, or a `PostToolUse` on Write and Edit under it.
 - **Silt's sandbox** keeps `~/.claude/CLAUDE.md` read-only and lets a run write its own `projects/<slug>/` (`ProjectState::own`), so auto memory works sandboxed; a moved `autoMemoryDirectory` needs to be writable in the sandbox as well.
 - **Capture:** a memory write is a Write or Edit tool call outside the checkout, so it's already in the thread's transcript, but not in its files.
 
