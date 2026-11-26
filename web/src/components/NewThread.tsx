@@ -2,15 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AgentMark } from './AgentMark'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useEffect, useId, useRef, useState } from 'react'
-import {
-  PRESETS,
-  nextPermission,
-  ownModes,
-  presetForOwnMode,
-  presetUnavailable,
-  startSettings,
-  startingValue,
-} from '../agentState'
+import { PRESETS, checkedBySilt, nextPermission, ownModes, presetForOwnMode, startSettings, startingValue } from '../agentState'
 import {
   type AgentSetting,
   api,
@@ -771,8 +763,8 @@ export function NewThread() {
   const settingValue = (setting: AgentSetting) =>
     startingValue(setting, chosenSettings[setting.id], agentDefaults?.settings?.[setting.id])
   // The preset is the one control for every agent; the agent starts in the mode that does what it says (ADR 0114).
-  // One without an auto mode asks as for Ask before commands.
-  const refusedPreset = (id: Preset) => presetRefused(workspace, id) ?? presetUnavailable(id, modes, agentName)
+  // One without an auto mode has Silt check its commands on Auto (ADR 0132).
+  const refusedPreset = (id: Preset) => presetRefused(workspace, id)
   const preset: Preset = refusedPreset(capped) && capped === 'auto' ? 'ask_before_commands' : capped
   const own = ownModes(seen?.modes)
   const inOwn = own.find((mode) => mode.id === chosenMode)?.id
@@ -975,6 +967,7 @@ export function NewThread() {
                     choices.isSuccess && <span className="px-2 text-xs text-fg-2">No agent found</span>
                   )}
                   <PermissionChip
+                    checked={checkedBySilt(modes)}
                     value={preset}
                     onChange={setPreset}
                     refused={refusedPreset}

@@ -4,6 +4,7 @@
 
 mod asks;
 mod folders;
+mod judge;
 mod plugins;
 mod policy;
 mod preset;
@@ -14,6 +15,7 @@ mod workspace;
 
 pub use asks::{ASKS_AT_ONCE, AskPolicy, AskRefusal};
 pub use folders::{FolderAnswer, FolderRule, FolderVerdict};
+pub use judge::Judge;
 pub use plugins::{OrgPlugin, OrgPluginRule, PluginPolicy};
 pub use policy::{
     AgentChoice, AgentKey, Broken, KNOWN_AGENTS, ModeMeaning, OrgPolicy, Policy, Refusal, Rules, SandboxSupport, Source,
