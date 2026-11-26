@@ -57,7 +57,7 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring
 time = "0.3.55"
 if-addrs = "0.15.0"
 mdns-sd = "0.22.0"
-qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+qrcode = { version = "0.15.0", default-features = false, features = ["svg"] }
 web-push-native = "0.5.0"
 sha2 = "0.11.1"
 thiserror = "2.0.21"
