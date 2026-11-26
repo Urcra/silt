@@ -188,6 +188,15 @@ pub fn is_thread_id(text: &str) -> bool {
     (12..=64).contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
+/// A computer's name as its threads are marked with it: up to its domain,
+/// and nothing that isn't plainly a name.
+pub fn short_host(said: &str) -> Option<String> {
+    let name = said.trim().split('.').next()?;
+    let plain =
+        !name.is_empty() && name.len() <= 64 && name.chars().all(|char| char.is_alphanumeric() || char == '-' || char == '_');
+    plain.then(|| name.to_owned())
+}
+
 /// A change to a thread on another machine: pin, snooze, settle, or its read mark.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateChange {
@@ -422,6 +431,14 @@ mod tests {
         for wrong in ["", "a81cee7", "A81CEE7ABCB7", "../../etc/pa", "a81cee7abcb7/x", &"0".repeat(65)] {
             assert!(!is_thread_id(wrong), "{wrong}");
         }
+    }
+
+    #[test]
+    fn a_computer_is_named_up_to_its_domain() {
+        assert_eq!(short_host("framework\n").as_deref(), Some("framework"));
+        assert_eq!(short_host("MacBook-Pro.local").as_deref(), Some("MacBook-Pro"));
+        assert_eq!(short_host(""), None);
+        assert_eq!(short_host("<script>"), None);
     }
 
     #[test]

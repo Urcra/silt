@@ -29,6 +29,8 @@ export interface Backend {
   pendingRestart?: number | null
   /** The colour its threads are marked with (ADR 0132). */
   colour?: MachineColour
+  /** This computer's name, which its threads are marked with on other machines' pages. */
+  host?: string | null
 }
 
 /** The colours a machine can have, in the order the desktop app gives them out. */

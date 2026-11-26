@@ -98,6 +98,12 @@ impl State {
             .iter()
             .map(|backend| {
                 let mut entry = serde_json::json!({ "id": backend.id(), "label": backend.label(), "kind": backend.kind() });
+                // What its threads are marked with on other machines' pages (ADR 0132).
+                if *backend == Backend::Native
+                    && let Some(host) = host_name()
+                {
+                    entry["host"] = host.into();
+                }
                 // What a machine over SSH is offered to update to (ADR 0109).
                 if *backend == Backend::Native
                     && let Some(version) = backends.machines.local_version()
@@ -289,6 +295,18 @@ fn main() {
                 }
             }
         });
+}
+
+/// This computer's name, without its domain, as `hostname` says it.
+fn host_name() -> Option<&'static str> {
+    static NAME: OnceLock<Option<String>> = OnceLock::new();
+    NAME.get_or_init(|| {
+        let said = env::var("COMPUTERNAME")
+            .ok()
+            .or_else(|| daemon::output_of(Command::new("hostname")).map(|out| String::from_utf8_lossy(&out).into_owned()))?;
+        elsewhere::short_host(&said)
+    })
+    .as_deref()
 }
 
 /// A key no page can guess.

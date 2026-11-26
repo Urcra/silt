@@ -46,8 +46,9 @@ export function useAllMachines(local: ThreadSummary[]): { threads: Listed[]; loa
   return { threads: merged(local, listings, current), loading: named('loading'), lost: named('lost'), all }
 }
 
-/** A machine's name as its threads are marked with it: a distribution without "WSL: ". */
+/** A machine's name as its threads are marked with it: This computer's own name, a distribution without "WSL: ". */
 export function machineName(backend: Backend): string {
+  if (backend.kind === 'native' && backend.host) return backend.host
   return backend.kind === 'wsl' ? backend.label.replace(/^WSL: /, '') : backend.label
 }
 
