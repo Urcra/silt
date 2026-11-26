@@ -106,10 +106,11 @@ test('shows a thread with compaction, turn diffs and comments', async ({ page })
   await expect(page.getByText('Compaction summary: Summary: farewell was added to main.')).toBeVisible()
   // The agent that recorded it, by its mark (ADR 0114).
   await expect(page.getByRole('main').getByRole('img', { name: 'Claude Code' })).toBeVisible()
-  await page.getByRole('button', { name: 'More for this thread' }).click()
-  await page.getByLabel('agent', { exact: true }).selectOption('codex')
-  await expect(page.getByRole('button', { name: /^silt resume \w+ --agent codex$/ })).toBeVisible()
+  // A right-click on it in the sidebar offers its id, for `silt resume` and `silt fork` in a terminal.
+  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: /farewell/ }).first().click({ button: 'right' })
+  await expect(page.getByRole('menuitem', { name: new RegExp(`^Copy thread ID${thread.slice(-12)}$`) })).toBeVisible()
   await page.keyboard.press('Escape')
+  await expect(page.getByRole('menu')).toHaveCount(0)
 
   await page.getByRole('button', { name: 'show what turn 1 changed' }).click()
   await expect(page.getByTestId('diff').first()).toContainText('+ fn farewell() {}')

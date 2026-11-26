@@ -17,7 +17,6 @@ import { type Section, inListOrder, old, section, sections, unread } from '../se
 import { hosted, serverName } from '../served'
 import { formatKeys } from '../shortcuts'
 import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
-import { useThreadMenu } from '../threadState'
 import { ago } from '../time'
 import {
   Button,
@@ -38,6 +37,7 @@ import {
 import { pillOf, useUpdate } from '../updates'
 import { useInWorkspace } from '../workspaceFilter'
 import { AgentMark } from './AgentMark'
+import { useThreadMenu } from './ThreadMenu'
 import { ThreadMark } from './ThreadMark'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 
@@ -148,7 +148,7 @@ function ThreadItem({
 }) {
   const now = useNow()
   const title = thread.title ?? 'Untitled thread'
-  const actions = useThreadMenu(thread)
+  const { items: actions, dialogs } = useThreadMenu(thread)
   const [menuAt, setMenuAt] = useState<MenuAt>()
   const item = useRef<HTMLLIElement>(null)
   const open = useRouterState({ select: (state) => state.location.pathname }) === `/t/${thread.id}`
@@ -204,6 +204,7 @@ function ThreadItem({
         <Menu label={`actions for ${title}`} trigger={<Icon name="more" />} items={actions} />
       </span>
       {menuAt && <ContextMenu label={`actions for ${title}`} items={actions} at={menuAt} onClose={() => setMenuAt(undefined)} />}
+      {dialogs}
     </li>
   )
 }

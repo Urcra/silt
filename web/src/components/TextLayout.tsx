@@ -3,6 +3,7 @@
 
 import { type ReactNode, useState } from 'react'
 import type { DiffLayout, TextSettings } from '../api'
+import { DETAILS, GROUPINGS } from '../detail'
 import { inDesktop } from '../desktop'
 import { message } from '../query'
 import { hosted } from '../served'
@@ -397,6 +398,31 @@ export function TextLayoutSettings() {
                   { id: 'wide', label: '880' },
                   { id: 'full', label: 'Full' },
                 ]}
+              />,
+            )}
+          </div>
+          <p className={GROUP}>Transcript</p>
+          <div className="overflow-hidden rounded-md border border-line bg-elevated">
+            {row(
+              'grouping',
+              "Group the agent's work",
+              "A finished turn folded under Worked for, or each run between the agent's words.",
+              <Choices
+                label="transcript grouping"
+                value={shown.grouping}
+                onChange={(next) => put('grouping', next)}
+                options={GROUPINGS.map((choice) => ({ id: choice.id, label: choice.label }))}
+              />,
+            )}
+            {row(
+              'detail',
+              'How much each step shows',
+              'Normal keeps each step closed, failures and questions showing; Verbose opens every fold.',
+              <Choices
+                label="transcript detail"
+                value={shown.detail}
+                onChange={(next) => put('detail', next)}
+                options={DETAILS.map((choice) => ({ id: choice.id, label: choice.label }))}
               />,
             )}
           </div>

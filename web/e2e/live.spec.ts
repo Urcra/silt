@@ -56,9 +56,8 @@ async function startInTheBackground(page: Page) {
 async function goLive(page: Page, url: string) {
   await page.goto(url)
   await allThreads(page)
-  await page.getByRole('link', { name: live.thread }).click()
-  await page.getByRole('button', { name: 'More for this thread' }).click()
-  await page.getByRole('link', { name: /^Join live/ }).click()
+  await page.getByRole('link', { name: live.thread }).click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Join live' }).click()
 }
 
 async function openFile(page: Page, url: string) {

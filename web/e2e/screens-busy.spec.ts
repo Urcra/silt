@@ -19,11 +19,14 @@ test.afterAll(() => {
   teardown(SILT, world.work, [join(world.work, 'silt')])
 })
 
-/** Picks how the transcript groups the agent's work, or how much each step shows, from the thread's menu. */
+/** Picks how the transcript groups the agent's work, or how much each step shows, from the palette (Settings › Text
+ * and layout keeps the same choice). */
 async function choose(page: Page, group: 'transcript grouping' | 'transcript detail', label: string) {
-  await page.getByRole('button', { name: 'More for this thread' }).click()
-  await page.getByRole('radiogroup', { name: group }).getByRole('radio', { name: label }).click()
-  await page.keyboard.press('Escape')
+  await page.keyboard.press('ControlOrMeta+k')
+  const palette = page.getByRole('dialog', { name: 'Command palette' })
+  await palette.getByLabel('command').fill(group === 'transcript grouping' ? `Group the work ${label.toLowerCase()}` : `Transcript: ${label}`)
+  await page.keyboard.press('Enter')
+  await expect(palette).toBeHidden()
   // No hover or focus left over from the menu in the shot.
   await page.mouse.move(1430, 1790)
   await page.waitForTimeout(300)

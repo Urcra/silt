@@ -17,7 +17,6 @@ import {
   useState,
 } from 'react'
 import {
-  AGENTS,
   api,
   short,
   type CommentView,
@@ -34,7 +33,7 @@ import { readWhole } from '../diffParse'
 import { useHideGit, useHideOthers, useShared } from '../hideGit'
 import { useHistory } from '../historyLoad'
 import { appHref, filePath } from '../permalink'
-import { forgeOf, projectName } from '../projects'
+import { forgeOf } from '../projects'
 import { keys, message } from '../query'
 import { useNow } from '../now'
 import { useMedia } from '../media'
@@ -85,27 +84,10 @@ import {
 import { RunningStrip, TaskCard } from './Tasks'
 import { AskCard, AskStrip, AskedNote } from './Asks'
 import { askOfCall, askedIn, useAsks } from '../asks'
-import {
-  Avatar,
-  Button,
-  Counts,
-  Dot,
-  Icon,
-  Input,
-  Kbd,
-  KeyValue,
-  Popover,
-  Select,
-  Skeleton,
-  Tabs,
-  buttonClass,
-  cx,
-  toast,
-} from '../ui'
+import { Avatar, Button, Counts, Dot, Icon, Input, Kbd, KeyValue, Popover, Skeleton, Tabs, buttonClass, cx, toast } from '../ui'
 import { AgentDock, AgentTail, PermissionCard, PlanCard, SignInCard } from './Agent'
 import { AccessPanel, Approvals } from './Sandbox'
 import { CommentThread } from './CommentThread'
-import { EraseThread } from './EraseThread'
 import { CopyLink } from './CopyLink'
 import { DiffPanel } from './DiffPanel'
 import { DiffView } from './DiffView'
@@ -131,8 +113,6 @@ import {
   TranscriptGrouping,
   useDetailChoice,
   useGroupingChoice,
-  type Detail,
-  type Grouping,
 } from '../detail'
 import { draftOf, keepDraft, threadDraft, useDraft } from '../drafts'
 
@@ -1309,315 +1289,6 @@ function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
   )
 }
 
-/** The header's More (ADR 0044): the commands that pick the thread up in a terminal, with which agent, Join live, the graph and the details. */
-function ThreadMore({
-  thread,
-  summary,
-  here,
-  onDetails,
-  onAccess,
-  detail,
-  onDetail,
-  grouping,
-  onGrouping,
-}: {
-  thread: string
-  summary: ThreadSummary | undefined
-  here: number
-  onDetails: () => void
-  onAccess?: () => void
-  detail: Detail
-  onDetail: (detail: Detail) => void
-  grouping: Grouping
-  onGrouping: (grouping: Grouping) => void
-}) {
-  const [agent, setAgent] = useState('')
-  const commands = [
-    `silt resume ${short(thread)}${agent ? ` --agent ${agent}` : ''}`,
-    `silt fork ${short(thread)}${agent ? ` --agent ${agent}` : ''}`,
-  ]
-  return (
-    <Popover
-      label="more for this thread"
-      triggerLabel="More for this thread"
-      align="right"
-      triggerClassName="inline-flex h-7 w-7 items-center justify-center rounded-sm text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11"
-      panelClassName="flex w-80 flex-col gap-1 p-2"
-      trigger={<Icon name="more" />}
-    >
-      {(close) => (
-        <>
-          <p className="px-1 pb-0.5 text-2xs text-fg-2">Group the agent&apos;s work</p>
-          <span role="radiogroup" aria-label="transcript grouping" className="mx-1 flex rounded-sm border border-line p-0.5">
-            {GROUPINGS.map((choice) => (
-              <button
-                key={choice.id}
-                type="button"
-                role="radio"
-                aria-checked={grouping === choice.id}
-                title={choice.says}
-                onClick={() => onGrouping(choice.id)}
-                className={cx(
-                  'flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11',
-                  grouping === choice.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1',
-                )}
-              >
-                {choice.label}
-              </button>
-            ))}
-          </span>
-          <p className="px-1 pt-1 pb-0.5 text-2xs text-fg-2">How much each step shows</p>
-          <span role="radiogroup" aria-label="transcript detail" className="mx-1 flex rounded-sm border border-line p-0.5">
-            {DETAILS.map((choice) => (
-              <button
-                key={choice.id}
-                type="button"
-                role="radio"
-                aria-checked={detail === choice.id}
-                title={choice.says}
-                onClick={() => onDetail(choice.id)}
-                className={cx(
-                  'flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11',
-                  detail === choice.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1',
-                )}
-              >
-                {choice.label}
-              </button>
-            ))}
-          </span>
-          <div className="my-1 border-t border-line-subtle" />
-          {summary && isChat(summary.repo) && !hosted() && (
-            <>
-              <ChatToProject thread={thread} summary={summary} onDone={close} />
-              <div className="my-1 border-t border-line-subtle" />
-            </>
-          )}
-          <EraseThread thread={thread} summary={summary} onDone={close} />
-          <p className="px-1 pb-0.5 text-2xs text-fg-2">
-            {summary && isChat(summary.repo)
-              ? 'Continue in a terminal, anywhere'
-              : 'Continue in a terminal, in a clone of the repository'}
-          </p>
-          <label className="flex items-center gap-2 px-1 text-xs text-fg-2">
-            with
-            <select
-              aria-label="agent"
-              value={agent}
-              onChange={(event) => setAgent(event.target.value)}
-              className="rounded-sm border border-line bg-elevated px-2 py-1 font-mono text-xs text-fg-1"
-            >
-              <option value="">{summary?.agent ?? 'its agent'}</option>
-              {AGENTS.filter((name) => name !== summary?.agent).map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {commands.map((command) => (
-            <button
-              key={command}
-              type="button"
-              className={cx(buttonClass('ghost'), 'justify-start font-mono font-normal text-fg-1')}
-              onClick={() => {
-                void navigator.clipboard?.writeText(command).catch(() => undefined)
-                toast(`Copied: ${command}`, 'ok')
-                close()
-              }}
-            >
-              <Icon name="copy" />
-              {command}
-            </button>
-          ))}
-          <div className="my-1 border-t border-line-subtle" />
-          {!hosted() && (
-            <Link
-              to="/t/$id/live"
-              params={{ id: thread }}
-              className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
-            >
-              <Dot tone={here > 0 ? 'ok' : 'idle'} />
-              Join live{here > 0 && ` · ${here} here`}
-            </Link>
-          )}
-          <Link to="/graph" className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}>
-            <Icon name="graph" />
-            History graph
-          </Link>
-          <button
-            type="button"
-            className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
-            onClick={() => {
-              close()
-              onDetails()
-            }}
-          >
-            <Icon name="info" />
-            Details
-          </button>
-          {onAccess && (
-            <button
-              type="button"
-              className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
-              onClick={() => {
-                close()
-                onAccess()
-              }}
-            >
-              <Icon name="shield" />
-              Access
-            </button>
-          )}
-        </>
-      )}
-    </Popover>
-  )
-}
-
-/**
- * What a chat can become (ADR 0059): a project of its own, its folder as it is, or a new thread in a project that starts from the
- * chat's conversation, with its files copied in.
- */
-function ChatToProject({ thread, summary, onDone }: { thread: string; summary: ThreadSummary; onDone: () => void }) {
-  const navigate = useNavigate()
-  const queries = useQueryClient()
-  const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
-  const clones = choices.data?.clones ?? []
-  const agents = choices.data?.agents ?? []
-  const [making, setMaking] = useState(false)
-  const [continuing, setContinuing] = useState(false)
-  const [clone, setClone] = useState('')
-  const [copy, setCopy] = useState(true)
-  const [copyTo, setCopyTo] = useState(`notes/chat-${short(thread)}`)
-  const [prompt, setPrompt] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string>()
-  const chosen = clone || clones[0]?.path || ''
-  const agent =
-    agents.find((candidate) => candidate.name === summary.agent || candidate.id === summary.agent)?.id ?? agents[0]?.id ?? ''
-  const failed = (failure: unknown) => setError(message(failure))
-  const makeProject = () => {
-    setBusy(true)
-    api
-      .makeProject(thread)
-      .then((project) => {
-        toast(`The chat is now the project ${projectName(project)}`, 'ok')
-        void queries.invalidateQueries({ queryKey: keys.threads })
-        void queries.invalidateQueries({ queryKey: keys.projects })
-        void queries.invalidateQueries({ queryKey: keys.agents })
-        onDone()
-      }, failed)
-      .finally(() => setBusy(false))
-  }
-  const continueIn = () => {
-    setBusy(true)
-    api
-      .startAgent(
-        agent,
-        { clone: chosen },
-        {
-          here: true,
-          continues: thread,
-          copy_to: copy ? copyTo.trim() : null,
-          prompt: prompt.trim() || 'Carry on from the chat.',
-        },
-      )
-      .then((started) => {
-        void queries.invalidateQueries({ queryKey: keys.threads })
-        onDone()
-        void navigate({ to: '/t/$id', params: { id: started } })
-      }, failed)
-      .finally(() => setBusy(false))
-  }
-  return (
-    <div className="flex flex-col gap-1.5">
-      <p className="px-1 pb-0.5 text-2xs text-fg-2">This chat belongs to no project</p>
-      {!making ? (
-        <button
-          type="button"
-          className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
-          onClick={() => setMaking(true)}
-        >
-          <Icon name="folder" />
-          Make it a project…
-        </button>
-      ) : (
-        <div className="flex flex-col gap-1.5 rounded-sm border border-line p-2 text-xs">
-          <p className="text-fg-2">
-            Its folder becomes a project of its own, with this chat and its files in it. Add a remote later to share it.
-          </p>
-          <span className="flex justify-end gap-1.5">
-            <Button variant="ghost" onClick={() => setMaking(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" disabled={busy} onClick={makeProject}>
-              Make it a project
-            </Button>
-          </span>
-        </div>
-      )}
-      {!continuing ? (
-        <button
-          type="button"
-          className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
-          onClick={() => setContinuing(true)}
-        >
-          <Icon name="branch" />
-          Continue in a project…
-        </button>
-      ) : (
-        <form
-          className="flex flex-col gap-1.5 rounded-sm border border-line p-2 text-xs"
-          onSubmit={(event) => {
-            event.preventDefault()
-            continueIn()
-          }}
-        >
-          {clones.length === 0 ? (
-            <p className="text-fg-2">No project on this machine yet.</p>
-          ) : (
-            <Select aria-label="project to continue in" value={chosen} onChange={(event) => setClone(event.target.value)}>
-              {clones.map((candidate) => (
-                <option key={candidate.path} value={candidate.path}>
-                  {candidate.repo ? projectName(candidate.repo) : candidate.path}
-                </option>
-              ))}
-            </Select>
-          )}
-          <label className="flex items-center gap-1.5 text-fg-2">
-            <input type="checkbox" checked={copy} onChange={(event) => setCopy(event.target.checked)} />
-            Copy the chat&apos;s files to
-          </label>
-          {copy && (
-            <Input
-              aria-label="folder in the project"
-              value={copyTo}
-              onChange={(event) => setCopyTo(event.target.value)}
-              className="font-mono text-xs"
-            />
-          )}
-          <Input
-            aria-label="first prompt there"
-            placeholder="Carry on from the chat."
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-          />
-          <p className="text-fg-2">A new thread in your clone, its agent starting from this chat&apos;s conversation.</p>
-          <span className="flex justify-end gap-1.5">
-            <Button variant="ghost" onClick={() => setContinuing(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" disabled={busy || !chosen || !agent}>
-              Start there
-            </Button>
-          </span>
-        </form>
-      )}
-      {error && <p className="px-1 text-xs text-danger">{error}</p>}
-    </div>
-  )
-}
-
 /** The thread's header (ADR 0044): its title, a pill when it needs the person, then Fork, Share, More and the panel's toggle. */
 export function ThreadHeader({
   thread,
@@ -1627,30 +1298,16 @@ export function ThreadHeader({
   panelOpen,
   waiting,
   onChanges,
-  onDetails,
-  onAccess,
-  detail,
-  onDetail,
-  grouping,
-  onGrouping,
   onConversation,
 }: {
   thread: string
   summary: ThreadSummary | undefined
-  detail: Detail
-  onDetail: (detail: Detail) => void
-  grouping: Grouping
-  onGrouping: (grouping: Grouping) => void
   people: { user: string; device: string }[]
   changes: { added: number; removed: number } | null
   panelOpen: boolean
   /** The agent waits on the person: a plan to approve or a permission. */
   waiting: boolean
   onChanges: () => void
-  /** Opens the details, beside the conversation or as a sheet on a phone. */
-  onDetails: () => void
-  /** Opens what the agent reaches, in the panel's Access tab. */
-  onAccess?: () => void
   /** Back to the conversation, from the expanded review, in place of the panel's toggle. */
   onConversation?: () => void
 }) {
@@ -1675,17 +1332,6 @@ export function ThreadHeader({
       <span className="flex shrink-0 items-center gap-1">
         <ForkActions thread={thread} forked={Boolean(summary?.forked_from)} />
         {summary && <ShareDialog thread={summary} />}
-        <ThreadMore
-          thread={thread}
-          summary={summary}
-          here={people.length}
-          onDetails={onDetails}
-          onAccess={onAccess}
-          detail={detail}
-          onDetail={onDetail}
-          grouping={grouping}
-          onGrouping={onGrouping}
-        />
         {onConversation ? (
           <Button icon="collapse" onClick={onConversation} title="Back to the conversation (Esc)">
             Conversation <Kbd>Esc</Kbd>
@@ -2651,7 +2297,7 @@ function ThreadBody({
                                     />
                                   </Suspense>
                                 ) : tab === 'access' ? (
-                                  <AccessPanel thread={thread} agent={agent} />
+                                  <AccessPanel thread={thread} summary={summary} agent={agent} />
                                 ) : tab === 'lineage' ? (
                                   <div className="flex flex-col gap-6 px-5 py-5">
                                     {summary && (
@@ -2702,25 +2348,7 @@ function ThreadBody({
                             changes={totals}
                             panelOpen={panel && desktop}
                             waiting={agent?.state === 'awaiting_input' || agent?.state === 'awaiting_permission'}
-                            detail={detail}
-                            onDetail={setDetail}
-                            grouping={grouping}
-                            onGrouping={setGrouping}
                             onChanges={showChanges}
-                            onDetails={() => {
-                              setTab('details')
-                              setPanel(true)
-                              setSheet(window.matchMedia('(max-width: 1023px)').matches)
-                            }}
-                            onAccess={
-                              hosted()
-                                ? undefined
-                                : () => {
-                                    setTab('access')
-                                    setPanel(true)
-                                    setSheet(window.matchMedia('(max-width: 1023px)').matches)
-                                  }
-                            }
                           />
                           <div className="mx-auto flex w-full max-w-(--read-width) flex-1 flex-col px-4 md:px-6">
                             {askedHere && (
