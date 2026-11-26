@@ -27,6 +27,7 @@ import {
 import type { Opened } from '../artifactActions'
 import { canvasOf, canvasOffline, deckOf, deckOffline } from '../typed'
 import { keys, message } from '../query'
+import { hosted } from '../served'
 import { useNow } from '../now'
 import { usePermalink } from '../usePermalink'
 import { Links } from './ShareDialog'
@@ -252,9 +253,16 @@ export function ArtifactViewer({
     enabled: Boolean(styleBlob),
     staleTime: Infinity,
   })
-  // Libraries and fonts come through Silt's vendor route when that's on (ADR 0071).
+  // Libraries and fonts come through Silt's vendor route when that's on, and always offline (ADR 0071, ADR 0134).
   const settings = useQuery({ queryKey: keys.artifactSettings, queryFn: api.artifactSettings, staleTime: 60_000 })
-  const vendor = settings.data?.proxy ? `${window.location.origin}/vendor/` : null
+  const network = useQuery({
+    queryKey: keys.networkSettings,
+    queryFn: api.networkSettings,
+    staleTime: 60_000,
+    enabled: !hosted(),
+  })
+  const keptOnly = !hosted() && (network.data?.offline ?? network.isError)
+  const vendor = settings.data?.proxy || keptOnly ? `${window.location.origin}/vendor/` : null
   // What this viewer's frame saw go wrong in the version shown, until it's sent or dismissed.
   const [problems, setProblems] = useState<{ blob: string; seen: FrameProblem[] } | null>(null)
   const link = usePermalink(thread)

@@ -198,6 +198,7 @@ The first resume or fork of such a thread imports the commit's tree before check
 | `SILT_ALLOW_UNVERIFIED_AGENTS=1` | Run registry agents that have no checksum |
 | `SILT_ASK_AGENTS=0` | Don't ask installed agents what they offer in the background; New thread shows what was last seen or built in. The screen references set it, so a screen never depends on when an answer came |
 | `SILT_UPDATE_CHECK=never` | Don't check for a newer Silt by itself; Settings › Updates' Check now still does. The e2e tests and the benchmarks set it, as their daemons run a build of the clone they test ([ADR 0100](adr/0100-update-channels.md)) |
+| `SILT_OFFLINE=1` | Offline: connect only to the servers this machine is signed in to, whatever Settings › Network says (`network.rs`, [ADR 0134](adr/0134-no-telemetry-and-an-offline-switch.md)) |
 | `SILT_BUILD_COMMIT`, `SILT_BUILD_BRANCH`, `SILT_BUILD_DIRTY`, `SILT_BUILD_SOURCE`, `SILT_BUILD_CHANNEL` | Set while building: what the build says of itself, over what git says. A debug build given `SILT_BUILD_SOURCE` when it runs takes them all from then, as an older build of that clone, for tests |
 | `SILT_UPDATE_JUST` | In a debug build, the program an update runs in place of `just`, for tests |
 | `SILT_THREAD`, `SILT_CHECKOUT`, `SILT_SOURCE` | Given to a project's `.agents/prepare` script |

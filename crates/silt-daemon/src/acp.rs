@@ -534,11 +534,14 @@ impl Core {
 
     /// The agents the web UI can start. The registry's copy is brought up to
     /// date in the background the first time someone looks, not whenever a
-    /// daemon starts; the bundled one answers meanwhile.
+    /// daemon starts; the bundled one answers meanwhile, and always does
+    /// offline.
     pub(crate) fn acp_agents(&mut self) -> AgentChoices {
         if !self.registry_checked {
             self.registry_checked = true;
-            tokio::spawn(registry::refresh(self.data_dir.clone()));
+            if crate::network::allowed(&self.data_dir).agent_registry {
+                tokio::spawn(registry::refresh(self.data_dir.clone()));
+            }
         }
         let mut clones: Vec<CloneInfo> =
             self.clones.iter().map(|(repo, path)| CloneInfo { repo: repo.clone(), path: path.clone() }).collect();
