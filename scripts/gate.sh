@@ -76,6 +76,7 @@ has_web=false
 
 if $has_web; then
     step "web dependencies"
+    sh scripts/check-pnpm.sh
     # Corepack reads the root's, which `pnpm -C web` starts from; pnpm reads web's.
     node -e 'const [r, w] = ["./package.json", "./web/package.json"].map((p) => require(p).packageManager);
         if (r !== w) { console.error(`package.json names ${r} but web/package.json ${w}; make them the same`); process.exit(1); }'

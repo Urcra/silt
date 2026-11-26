@@ -110,8 +110,7 @@ uninstall:
 
 [private]
 check-pnpm:
-    @command -v node > /dev/null || { echo "Building the web UI needs Node.js (see docs/contributing.md)" >&2; exit 1; }
-    @command -v pnpm > /dev/null || { echo "Building the web UI needs pnpm: \`corepack enable pnpm\`, or \`npm install -g pnpm\` (see docs/contributing.md)" >&2; exit 1; }
+    @sh scripts/check-pnpm.sh
 
 [private]
 check-webkit:
