@@ -72,7 +72,7 @@ pub mod theme;
 mod theme_sync;
 mod thumbnails;
 mod transcripts;
-mod updates;
+pub mod updates;
 mod usage;
 mod views;
 mod voice;

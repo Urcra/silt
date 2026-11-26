@@ -2515,9 +2515,9 @@ export type BuildView = { version: string, channel: Channel, commit: Commit | nu
  */
 source: string | null, };
 
-export type Channel = "stable" | "nightly";
+export type Channel = "stable" | "nightly" | "dev";
 
-export type Availability = { "kind": "up_to_date" } | { "kind": "behind", target: Commit, ahead: number, commits: Array<NewCommit>, } | { "kind": "off", reason: OffReason, } | { "kind": "release", tag: string, url: string, } | { "kind": "failed", message: string, };
+export type Availability = { "kind": "up_to_date" } | { "kind": "behind", target: Commit, ahead: number, commits: Array<NewCommit>, } | { "kind": "off", reason: OffReason, } | { "kind": "release", tag: string, url: string, } | { "kind": "nightly", ahead: number, commits: Array<NewCommit>, url: string, } | { "kind": "failed", message: string, };
 
 export type NewCommit = { hash: Commit, subject: string, 
 /**

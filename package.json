@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "Only names the pnpm for corepack, which looks for it where pnpm starts: `pnpm -C web` starts here. The web UI is web/package.json, whose packageManager must match.",
+  "packageManager": "pnpm@12.22.0"
+}

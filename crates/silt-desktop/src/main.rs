@@ -289,6 +289,15 @@ fn current_script(backend: &Backend) -> String {
     )
 }
 
+/// "Silt" on the stable channel, else the channel beside it, as "Silt (dev)",
+/// so a window says which kind of Silt it is (ADR 0129).
+fn window_title(channel: &str) -> String {
+    match channel {
+        "" | "stable" => "Silt".to_owned(),
+        channel => format!("Silt ({channel})"),
+    }
+}
+
 fn open_window(app: &AppHandle, state: Arc<State>, silts: Arc<Silts>, dir: Option<PathBuf>) -> tauri::Result<WebviewWindow> {
     let started = AtomicBool::new(false);
     let (navigating, loading, listening) = (state.clone(), state.clone(), state.clone());
@@ -300,7 +309,7 @@ fn open_window(app: &AppHandle, state: Arc<State>, silts: Arc<Silts>, dir: Optio
     let last_zoom = zoom_file.as_deref().and_then(zoom::last);
     let zoomed = app.clone();
     let mut builder = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
-        .title("Silt")
+        .title(window_title(env!("SILT_BUILD_CHANNEL")))
         .inner_size(1440.0, 900.0)
         .min_inner_size(390.0, 600.0)
         .initialization_script(desktop_script(&state))
@@ -724,6 +733,14 @@ fn explain(error: &Exn<DesktopError>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_names_every_channel_but_stable() {
+        assert_eq!(window_title("stable"), "Silt");
+        assert_eq!(window_title(""), "Silt");
+        assert_eq!(window_title("nightly"), "Silt (nightly)");
+        assert_eq!(window_title("dev"), "Silt (dev)");
+    }
 
     /// Starts this computer's backend and a WSL distribution's through the
     /// commands the app runs, when `SILT_TEST_WSL` names a distribution with
