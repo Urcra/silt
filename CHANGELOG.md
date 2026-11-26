@@ -7,7 +7,7 @@ User-visible changes, newest first. The format follows [Keep a Changelog](https:
 Silt has no releases yet; this section collects what changes until the first one. The git history has everything before this file began.
 
 ### What Silt does so far
-Protocol version 24.
+Protocol version 25.
 - **Recording** Claude Code, Codex, Qudiks, Gemini CLI, Antigravity CLI, OpenCode and GitHub Copilot CLI sessions, run through `silt <agent>`, with or without a daemon, and importing the sessions already on disk.
 - **Handoff, forks and merge requests** between machines and people, through a server you host, or kept on one machine; several servers per machine.
 - **History and search** across compaction, the history graph, forking from and reverting to a turn, and commits linked to turns.
@@ -15,6 +15,7 @@ Protocol version 24.
 - **Agents from the web UI** over ACP, agents asking other agents, artifacts, themes, workspaces with their own rules, Silt's sandbox on Linux, plugins, and local models.
 
 ### Added
+- An agent you run in a terminal, with `silt claude` and the like, shows as working while it's in a turn: in this machine's thread list, which says **Working in a terminal**, and on your other devices and in the hosted app, through the server. A page passes nothing on to it: its terminal answers it. **Protocol 25: update every machine and the server together.**
 - December decorations in the desktop app: lights under each page's header, a hat on the workspace's tile, snow resting on the composer, and on the New thread screen a tree drawn as a branch graph with snow falling behind it. The desktop app's starting page lights the tree while it connects. They take their colours from your theme, which stays as it is, and keep still when you ask for less motion. On by default from 1 December to 6 January; Settings › Appearance › Seasonal touches turns them off, keeps them all year, or stops the snow.
 - Yule, a bundled Christmas theme in light and dark: snow on pine and a forest at night. It shows only when you pick it.
 - Nightly releases: `main` is built each night for Linux, macOS and Windows, as `silt` archives and the desktop app's packages, into the rolling [nightly release](https://github.com/Urcra/silt/releases/tag/nightly). Nothing in it is signed yet.

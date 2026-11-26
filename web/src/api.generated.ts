@@ -2239,6 +2239,11 @@ cloud: string | null,
  */
 machine: string | null, 
 /**
+ * Its agent works in a terminal, which answers it, not this page
+ * (ADR 0026).
+ */
+terminal: boolean, 
+/**
  * The settings the agent the web UI last ran in it here ran with, for
  * it to start again with; none from a server.
  */
