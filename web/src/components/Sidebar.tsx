@@ -38,6 +38,7 @@ import { AgentMark } from './AgentMark'
 import { MachineChip, MachineInitial, MachineStripe } from './MachineMark'
 import { ThreadMark } from './ThreadMark'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
+import { SnowDrift } from './Seasonal'
 
 const ROW = 'flex min-w-0 items-center gap-2 rounded-sm px-2 text-fg-1 hover:bg-surface-2 max-md:min-h-11'
 const ACTIVE = 'bg-accent-tint text-accent-fg shadow-[inset_2px_0_0_var(--accent)] hover:bg-accent-tint'
@@ -777,7 +778,8 @@ function MachineFooter({
     running > 0 ? `${running} running` : 'nothing running',
   ].join(' · ')
   return (
-    <div className="flex flex-col gap-1 border-t border-line pt-1.5">
+    <div className="relative flex flex-col gap-1 border-t border-line pt-1.5">
+      <SnowDrift seed={3} />
       {!hosted() && <UpdateStrip />}
       <div className="flex items-center gap-1">
         {hosted() ? (

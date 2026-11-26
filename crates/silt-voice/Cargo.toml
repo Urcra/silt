@@ -32,12 +32,12 @@ thiserror = "2.0.21"
 ureq = "3.5.1"
 
 [target.'cfg(not(windows))'.dependencies]
-sherpa-onnx = "=2.0.1"
+sherpa-onnx = "=2.0.2"
 
 # The static library needs the static CRT and the MSVC STL it was built with;
 # the DLLs keep both behind a C API, whatever Visual Studio is installed.
 [target.'cfg(windows)'.dependencies]
-sherpa-onnx = { version = "=2.0.1", default-features = false, features = ["shared"] }
+sherpa-onnx = { version = "=2.0.2", default-features = false, features = ["shared"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

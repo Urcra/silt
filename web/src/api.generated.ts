@@ -1230,7 +1230,15 @@ export type AppearanceSettings = { mode: AppearanceMode, light: string, dark: st
 /**
  * Sizes, fonts and spacing over the theme (ADR 0107).
  */
-text: TextSettings, };
+text: TextSettings, 
+/**
+ * December's decorations in the desktop app (ADR 0133).
+ */
+seasonal: SeasonalSettings, };
+
+export type SeasonalSettings = { show: SeasonalShow, snow: boolean, };
+
+export type SeasonalShow = "auto" | "always" | "off";
 
 export type TextSettings = { zoom?: Zoom | null, ui_size?: UiSize | null, chat_size?: ChatSize | null, code_size?: CodeSize | null, ui_font?: FontChoice | null, code_font?: FontChoice | null, 
 /**
@@ -2229,7 +2237,22 @@ cloud: string | null,
  * Which of the person's own machines holds it, by name, when it isn't
  * the one answering: the device of its lease.
  */
-machine: string | null, };
+machine: string | null, 
+/**
+ * The settings the agent the web UI last ran in it here ran with, for
+ * it to start again with; none from a server.
+ */
+agent_settings: KeptSettings | null, };
+
+export type KeptSettings = { 
+/**
+ * The agent, by its name.
+ */
+agent: string, 
+/**
+ * Each setting's value, by its id.
+ */
+settings: { [key in string]: string }, };
 
 export type TurnInfo = { 
 /**

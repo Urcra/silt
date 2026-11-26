@@ -53,6 +53,7 @@ import { ThreadMark } from './ThreadMark'
 import { addSending } from '../sending'
 import { useTypeahead } from '../typeahead'
 import { usePathCompletion, withoutTrailingSeparator } from '../pathCompletion'
+import { SeasonalTree, Snowfall } from './Seasonal'
 
 interface Draft {
   text: string
@@ -913,8 +914,11 @@ export function NewThread() {
 
   return (
     <Page title="New thread" flush label="new thread">
-      <div className="mx-auto flex w-full max-w-[760px] flex-1 flex-col justify-center gap-[18px] px-4 pt-10 pb-16 md:px-6 md:pt-14">
-        <h2 className="flex flex-wrap items-center justify-center gap-2.5 text-center text-display font-medium tracking-[-0.015em] max-md:text-xl">
+      {/* Snow falls behind the screen, so what's on it is drawn after, over it (ADR 0133). */}
+      <Snowfall />
+      <div className="relative mx-auto flex w-full max-w-[760px] flex-1 flex-col justify-center gap-[18px] px-4 pt-10 pb-16 md:px-6 md:pt-14">
+        <h2 className="relative flex flex-wrap items-center justify-center gap-2.5 text-center text-display font-medium tracking-[-0.015em] max-md:text-xl">
+          <SeasonalTree />
           What should we work on in
           {choices.isPending ? (
             <Skeleton className="h-8 w-24" />

@@ -1212,6 +1212,42 @@ fn listed_background(api: &Api, thread: &str) -> u64 {
     listed["background"].as_u64().expect("a count")
 }
 
+/// A thread's agent started again without settings, as from another of the
+/// person's devices, runs on the thread's model, not the one its own
+/// configuration names, as Claude Code's settings file can.
+#[test]
+fn an_agent_started_again_keeps_the_threads_model() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let start = serde_json::json!({"clone": env.repo, "agent": "v1", "prompt": "Which model", "settings": [["model", "smart"]]});
+    let thread = start_fake_acp_in(&env, &api, &start);
+    settled_history(&api, &thread, "Model: smart");
+    api.ok("POST", &format!("/api/threads/{thread}/agent/stop"), None);
+    let live = || api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert!(eventually(|| live()["agent"]["state"] == "stopped"), "{}", live());
+
+    let again = serde_json::json!({"thread": thread, "agent": "v1", "prompt": "Which model now"});
+    api.ok("POST", "/api/agents/start", Some(again));
+    let answers = || -> Vec<String> {
+        let history = api.ok("GET", &format!("/api/threads/{thread}/history?whole=true"), None);
+        history["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .filter_map(|entry| entry["text"].as_str().filter(|text| text.starts_with("Model: ")).map(str::to_owned))
+            .collect()
+    };
+    assert!(eventually(|| answers().len() == 2), "{:?}", answers());
+    assert_eq!(answers(), ["Model: smart", "Model: smart"]);
+
+    // The web UI starts it again with the thread's model once the daemon restarted too.
+    env.silt(&["daemon", "stop"]);
+    let api = Api::open(&env);
+    let threads = api.ok("GET", "/api/threads", None);
+    let listed = threads.as_array().expect("a list").iter().find(|listed| listed["id"] == thread.as_str()).expect("listed");
+    assert_eq!(listed["agent_settings"], serde_json::json!({"agent": "Fake v1", "settings": {"model": "smart"}}), "{listed}");
+}
+
 /// What the agent left running goes with it, whether the person stops the
 /// agent or the daemon stops, and the history says so, also after the
 /// daemon starts again.

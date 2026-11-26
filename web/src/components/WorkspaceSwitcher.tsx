@@ -12,6 +12,7 @@ import { hosted, serverName } from '../served'
 import { formatKeys, useActions } from '../shortcuts'
 import { Avatar, Button, Dialog, Dot, Icon, Kbd, Popover, cx } from '../ui'
 import { type Workspace, inWorkspace, orgsOf, setWorkspace, useWorkspace, workspaceValue } from '../workspace'
+import { SeasonalHat } from './Seasonal'
 
 interface Choice {
   name: string
@@ -271,7 +272,10 @@ export function WorkspaceSwitcher() {
         panelClassName="w-[340px] max-w-[calc(100vw-20px)] p-1.5"
         trigger={
           <>
-            {badgeOf(current)}
+            <span className="relative shrink-0">
+              {badgeOf(current)}
+              <SeasonalHat />
+            </span>
             <span className="flex min-w-0 flex-1 flex-col" title={host}>
               <span className="truncate font-medium">{current.name}</span>
               <span className="truncate font-mono text-2xs text-fg-2">{current.brief ?? current.sub}</span>
