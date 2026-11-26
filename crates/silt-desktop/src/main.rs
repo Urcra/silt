@@ -508,6 +508,9 @@ fn open_window(app: &AppHandle, state: Arc<State>, silts: Arc<Silts>, dir: Optio
             let shown = loading.shown.lock().expect("lock").clone();
             let shown = shown.unwrap_or_else(|| loading.target.lock().expect("lock").backend.clone());
             let _ = window.eval(current_script(&shown));
+            // A page that loads after a listing or the view changed hears them again (ADR 0132).
+            let _ = window.eval(elsewhere::view_script(&loading.view.lock().expect("lock")));
+            let _ = window.eval(elsewhere::script(&loading.listings.lock().expect("lock")));
             let state = loading.clone();
             std::thread::spawn(move || state.tell());
             if !started.swap(true, Ordering::SeqCst) {
@@ -700,6 +703,13 @@ fn gather(state: &State, silts: &Silts) {
                 let id = backend.id();
                 let answered = matches!(before.get(&id), Some(Listing::Ready(_) | Listing::Lost));
                 let due = again.get(&id).is_none_or(|(at, _)| Instant::now() >= *at);
+                // Finding a daemon with `silt open` can take seconds, and the page says so meanwhile.
+                if !before.contains_key(&id) && due && !matches!(&backend, Backend::Ssh(_)) && state.ui_found(&backend).is_none()
+                {
+                    let mut loading = before.clone();
+                    loading.insert(id.clone(), Listing::Loading);
+                    tell_threads(state, &loading, &mut told);
+                }
                 let Some(ui) = ui_to_ask(state, &backend, &program, silts, due) else {
                     if answered
                         && matches!(&backend, Backend::Ssh(_))

@@ -25,7 +25,7 @@ import { useNow } from '../now'
 import { openPalette } from '../palette'
 import { projectName, projects } from '../projects'
 import { keys } from '../query'
-import { type Section, inListOrder, old, section, sections, unread } from '../sections'
+import { type Section, inListOrder, needsYou, old, section, sections, unread } from '../sections'
 import { hosted, serverName } from '../served'
 import { formatKeys } from '../shortcuts'
 import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
@@ -569,11 +569,14 @@ function MachineMenu({
   said,
   failing,
   running,
+  waiting,
   allSaid,
 }: {
   said: string
   failing: string | null
   running: number
+  /** How many of the shown machine's threads wait on the person. */
+  waiting: number
   /** What the trigger says in All machines (ADR 0132). */
   allSaid: string | null
 }) {
@@ -588,6 +591,10 @@ function MachineMenu({
   const device = status.data?.servers?.[0]?.name
   const server = status.data?.servers?.[0]
   const here = [device, running > 0 ? `${running} running` : 'nothing running'].filter(Boolean).join(' · ')
+  // In All machines, the shown machine's row says what its threads do, as the others' do.
+  const hereAll = shown
+    ? [kindLine(shown).said.split(' · ')[0], countsSaid({ running, needsYou: waiting })].filter(Boolean).join(' · ')
+    : here
   const listingOf = (id: string) => listings.find((listing) => listing.id === id)
   const rows =
     backends.length > 0
@@ -601,7 +608,7 @@ function MachineMenu({
             shown: isShown,
             chosen: isShown && !all,
             ...line,
-            said: isShown ? here : line.said,
+            said: isShown ? (all ? hereAll : here) : line.said,
           }
         })
       : [{ id: 'here', label: 'This computer', ssh: false, shown: true, chosen: true, said: here, tone: 'ok' as DotTone }]
@@ -612,9 +619,8 @@ function MachineMenu({
   const connected = backends.filter(
     (backend) => backend.id === current || backend.kind !== 'ssh' || backend.state === 'connected',
   ).length
-  const waiting = listings
-    .filter((listing) => listing.id !== current)
-    .reduce((sum, listing) => sum + countsOf(listing).needsYou, 0)
+  const waitingAll =
+    waiting + listings.filter((listing) => listing.id !== current).reduce((sum, listing) => sum + countsOf(listing).needsYou, 0)
   const runningAll =
     running + listings.filter((listing) => listing.id !== current).reduce((sum, listing) => sum + countsOf(listing).running, 0)
   return (
@@ -658,7 +664,7 @@ function MachineMenu({
                 <span className="flex min-w-0 flex-col">
                   <b className="truncate font-medium">All machines</b>
                   <span className="truncate font-mono text-2xs text-fg-2">
-                    {[`${connected} connected`, countsSaid({ running: runningAll, needsYou: waiting })]
+                    {[`${connected} connected`, countsSaid({ running: runningAll, needsYou: waitingAll })]
                       .filter(Boolean)
                       .join(' · ')}
                   </span>
@@ -747,6 +753,7 @@ function MachineFooter({
 }) {
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
   const running = threads.filter((thread) => !backendOf(thread) && inProgress(thread)).length
+  const waiting = threads.filter((thread) => !backendOf(thread) && thread.location === 'here' && needsYou(thread)).length
   const signIn = status.data?.servers?.[0]
   const sync = status.data?.sync_error
   const { backends, current } = useBackends()
@@ -776,7 +783,7 @@ function MachineFooter({
             <span className="truncate font-medium">On the server</span>
           </span>
         ) : (
-          <MachineMenu said={said} failing={sync ?? null} running={running} allSaid={allSaid} />
+          <MachineMenu said={said} failing={sync ?? null} running={running} waiting={waiting} allSaid={allSaid} />
         )}
         <Link
           to="/settings"
