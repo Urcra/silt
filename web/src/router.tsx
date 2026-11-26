@@ -11,7 +11,7 @@ const root = createRootRoute({ component: Layout })
 export interface NewThreadSearch {
   project?: string
   pick?: 'projects' | 'new' | 'folder' | 'clone' | 'workspace'
-  /** The project to start in, by its origin, as another machine's New thread sends it (ADR 0132). */
+  /** The project to start in, by its origin, as another machine's New thread sends it (ADR 0136). */
   origin?: string
   /** What was typed there. */
   draft?: string

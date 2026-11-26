@@ -716,7 +716,7 @@ export function NewThread() {
   const clones = choices.data?.clones ?? []
   const known = (path: string | undefined) => (path && clones.some((clone) => clone.path === path) ? path : undefined)
   const [picked, setPicked] = useState<string>()
-  // Another machine's New thread names its project by origin (ADR 0132).
+  // Another machine's New thread names its project by origin (ADR 0136).
   const fromOrigin = search.origin ? clones.find((candidate) => candidate.repo === search.origin)?.path : undefined
   const project =
     known(picked) ?? known(search.project) ?? fromOrigin ?? known(stored<string>(LAST_PROJECT_KEY, '')) ?? clones[0]?.path ?? ''
@@ -1095,7 +1095,7 @@ export function NewThread() {
   )
 }
 
-/** "on [machine]" in New thread's headline, in All machines (ADR 0132): picking another machine starts the thread there. */
+/** "on [machine]" in New thread's headline, in All machines (ADR 0136): picking another machine starts the thread there. */
 function MachinePicker({ draft, origin }: { draft: string; origin: string }) {
   const view = useMachinesView()
   const { backends, current } = useBackends()

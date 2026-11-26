@@ -68,7 +68,7 @@ pub struct Target {
     pub page: Option<Page>,
 }
 
-/// A page on another machine the window opens once it shows it (ADR 0132).
+/// A page on another machine the window opens once it shows it (ADR 0136).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Page {
     /// A thread there, by its id.

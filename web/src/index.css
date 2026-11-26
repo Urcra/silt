@@ -19,7 +19,7 @@
   initial-value: 360px;
 }
 
-/* Machines' colours (ADR 0132), kept apart from amber, rust and olive, which
+/* Machines' colours (ADR 0136), kept apart from amber, rust and olive, which
    mark a thread's state, and apart in lightness. Each reads as text on
    --bg-elevated and under it. */
 :root {

@@ -22,7 +22,7 @@ Once connected, a machine stays connected until you disconnect it or quit the ap
 The window then shows that machine's own web UI: its threads, its agents and its files. Its Settings › Machines lists your machines and can open them, but adds, changes and removes them only from this computer.
 
 ## Every machine's threads in one list
-With **All machines** picked in the machine menu, the sidebar lists the threads of every connected machine together, sorted by what moved last as always, so you see what changed on each without switching ([ADR 0132](../adr/0132-every-connected-machines-threads-in-one-list.md)). It's picked from the start; picking one machine in the menu lists only that machine's, as before.
+With **All machines** picked in the machine menu, the sidebar lists the threads of every connected machine together, sorted by what moved last as always, so you see what changed on each without switching ([ADR 0136](../adr/0136-every-connected-machines-threads-in-one-list.md)). It's picked from the start; picking one machine in the menu lists only that machine's, as before.
 - A project worked on from two machines is one group, matched by its origin, and **Needs you** gathers from every machine.
 - Each thread on another machine is marked with it: a chip with its name, unless you pick another way.
 - Opening one switches the window to its machine and opens it there. Pin, snooze and settle work on it from here.

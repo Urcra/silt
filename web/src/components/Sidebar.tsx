@@ -74,7 +74,7 @@ function StateLine({ said, when, marked }: { said: string | null; when: string |
   )
 }
 
-/** Opens a thread on another machine there, in place of following the link here (ADR 0132). */
+/** Opens a thread on another machine there, in place of following the link here (ADR 0136). */
 function openThere(thread: ThreadSummary) {
   const backend = backendOf(thread)
   if (!backend) return undefined
@@ -578,7 +578,7 @@ function MachineMenu({
   running: number
   /** How many of the shown machine's threads wait on the person. */
   waiting: number
-  /** What the trigger says in All machines (ADR 0132). */
+  /** What the trigger says in All machines (ADR 0136). */
   allSaid: string | null
 }) {
   const navigate = useNavigate()
@@ -751,7 +751,7 @@ function MachineFooter({
   lost,
 }: {
   threads: ThreadSummary[]
-  /** All machines is picked (ADR 0132). */
+  /** All machines is picked (ADR 0136). */
   all: boolean
   loading: Backend[]
   lost: Backend[]

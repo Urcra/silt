@@ -1,4 +1,4 @@
-# 0132: Every connected machine's threads in one list
+# 0136: Every connected machine's threads in one list
 
 - Status: accepted
 - Date: 2026-11-26

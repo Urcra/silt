@@ -69,7 +69,7 @@ struct State {
     /// own page is told: a frame in it, such as an artifact's, could send
     /// such a link too.
     key: String,
-    /// How threads are listed and marked, and the file that keeps it (ADR 0132).
+    /// How threads are listed and marked, and the file that keeps it (ADR 0136).
     view: Mutex<View>,
     view_file: OnceLock<PathBuf>,
     /// The other backends' threads, as the page was last told them.
@@ -98,7 +98,7 @@ impl State {
             .iter()
             .map(|backend| {
                 let mut entry = serde_json::json!({ "id": backend.id(), "label": backend.label(), "kind": backend.kind() });
-                // What its threads are marked with on other machines' pages (ADR 0132).
+                // What its threads are marked with on other machines' pages (ADR 0136).
                 if *backend == Backend::Native
                     && let Some(host) = host_name()
                 {
@@ -427,7 +427,7 @@ fn open_window(app: &AppHandle, state: Arc<State>, silts: Arc<Silts>, dir: Optio
                 std::thread::spawn(move || state.tell());
                 return false;
             }
-            // And how threads are listed and marked (ADR 0132), from any machine's page.
+            // And how threads are listed and marked (ADR 0136), from any machine's page.
             if let Some(edit) = elsewhere::view_edit_of(to) {
                 if navigating.keyed(to) {
                     let state = navigating.clone();
@@ -508,7 +508,7 @@ fn open_window(app: &AppHandle, state: Arc<State>, silts: Arc<Silts>, dir: Optio
             let shown = loading.shown.lock().expect("lock").clone();
             let shown = shown.unwrap_or_else(|| loading.target.lock().expect("lock").backend.clone());
             let _ = window.eval(current_script(&shown));
-            // A page that loads after a listing or the view changed hears them again (ADR 0132).
+            // A page that loads after a listing or the view changed hears them again (ADR 0136).
             let _ = window.eval(elsewhere::view_script(&loading.view.lock().expect("lock")));
             let _ = window.eval(elsewhere::script(&loading.listings.lock().expect("lock")));
             let state = loading.clone();
@@ -610,7 +610,7 @@ fn keep_ui(window: &WebviewWindow, state: &State, silts: &Silts, dir: Option<&Pa
         let carried = if showing.as_ref() == Some(&wanted) { known.as_ref() } else { None };
         let opened = open_ui(&wanted, &program, silts, state).and_then(|new| {
             let mut moved = daemon::same_page_on(Some(&shown), carried, &new);
-            // A thread or New thread asked for on another machine (ADR 0132).
+            // A thread or New thread asked for on another machine (ADR 0136).
             if let Some(page) = wanted.page.as_ref().filter(|_| carried.is_none()) {
                 let (path, query) = page.path();
                 moved.set_path(&path);
@@ -683,7 +683,7 @@ fn keep_ui(window: &WebviewWindow, state: &State, silts: &Silts, dir: Option<&Pa
 const GATHER_EVERY: Duration = Duration::from_secs(3);
 
 /// Asks every connected backend the window doesn't show for its threads,
-/// while All machines is picked, and tells the page (ADR 0132). Only
+/// while All machines is picked, and tells the page (ADR 0136). Only
 /// connected machines are asked: a machine over SSH is connected only when
 /// the person picks or tests it. One that answered and stops is lost until
 /// it answers again; this computer's and a distribution's daemons are found

@@ -1,4 +1,4 @@
-// Every connected machine's threads in one list (ADR 0132): the desktop app hands the page each other
+// Every connected machine's threads in one list (ADR 0136): the desktop app hands the page each other
 // machine's listing, and the sidebar lists them beside this machine's own.
 
 import type { ThreadSummary } from './api'
@@ -65,7 +65,7 @@ export function countsOf(listing: Listing | undefined): { running: number; needs
   return { running, needsYou: waiting }
 }
 
-/** How a thread's machine is marked in the list, if it is (ADR 0132). */
+/** How a thread's machine is marked in the list, if it is (ADR 0136). */
 export interface MachineMarked {
   name: string
   colour: string

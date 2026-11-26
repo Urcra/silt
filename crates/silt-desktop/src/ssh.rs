@@ -100,7 +100,7 @@ struct Local {
     version: String,
 }
 
-/// How a machine's connection stands, for asking its daemon (ADR 0132).
+/// How a machine's connection stands, for asking its daemon (ADR 0136).
 pub enum Connection {
     Up(Url),
     Connecting,

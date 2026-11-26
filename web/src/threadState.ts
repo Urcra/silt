@@ -12,7 +12,7 @@ const HOUR_MS = 60 * 60 * 1000
 const UNTIL_ACTIVITY_MS = 365 * 24 * HOUR_MS
 const NOTHING: StateChange = { pinned: null, snooze: null, settled: null, seen: false, reviewed_turn: null }
 
-/** Pin, snooze or settle a thread for this person (ADR 0024), as menu items; on another machine, through the desktop app (ADR 0132). */
+/** Pin, snooze or settle a thread for this person (ADR 0024), as menu items; on another machine, through the desktop app (ADR 0136). */
 export function useThreadState(thread: ThreadSummary): { label: string; onSelect: () => void }[] {
   const queries = useQueryClient()
   const backend = backendOf(thread)

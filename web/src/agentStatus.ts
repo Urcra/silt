@@ -10,7 +10,7 @@ export function useAgentStatus(thread: string, here = true): AgentStatus | null 
   useTopic(`thread:${thread}`)
   const heard = useRef(0)
   useEffect(() => {
-    // A thread on another machine (ADR 0132) has no status here.
+    // A thread on another machine (ADR 0136) has no status here.
     if (!here) return
     let current = true
     const before = heard.current

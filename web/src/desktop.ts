@@ -27,7 +27,7 @@ export interface Backend {
   canInstall?: boolean
   /** An update waits for this many agents to finish before its daemon restarts on it. */
   pendingRestart?: number | null
-  /** The colour its threads are marked with (ADR 0132). */
+  /** The colour its threads are marked with (ADR 0136). */
   colour?: MachineColour
   /** This computer's name, which its threads are marked with on other machines' pages. */
   host?: string | null
@@ -37,7 +37,7 @@ export interface Backend {
 export const MACHINE_COLOURS = ['teal', 'plum', 'blue', 'rose', 'sand', 'ink'] as const
 export type MachineColour = (typeof MACHINE_COLOURS)[number]
 
-/** How a thread on another machine is told apart in the list (ADR 0132). */
+/** How a thread on another machine is told apart in the list (ADR 0136). */
 export const MARKS = ['chip', 'colour-chip', 'line', 'stripe', 'initial', 'nothing'] as const
 export type Mark = (typeof MARKS)[number]
 
@@ -90,9 +90,9 @@ declare global {
     /** Set by the desktop app's window: where it can show Silt from, sent again as that changes. */
     __siltBackends?: Backend[]
     __siltBackend?: string
-    /** Set by the desktop app's window: the commit it was built from (ADR 0100), the key its machines links carry, and how threads are listed (ADR 0132). */
+    /** Set by the desktop app's window: the commit it was built from (ADR 0100), the key its machines links carry, and how threads are listed (ADR 0136). */
     __siltDesktop?: { commit?: string; key?: string; view?: MachinesView }
-    /** Set by the desktop app's window: the threads of every other connected machine (ADR 0132). */
+    /** Set by the desktop app's window: the threads of every other connected machine (ADR 0136). */
     __siltThreads?: Listing[]
   }
 }

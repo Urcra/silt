@@ -115,7 +115,7 @@ function Row({
   meta: ReactNode
   actions?: ReactNode
   children?: ReactNode
-  /** Its colour's picker, in the desktop app (ADR 0132). */
+  /** Its colour's picker, in the desktop app (ADR 0136). */
   colour?: ReactNode
 }) {
   return (
@@ -608,7 +608,7 @@ const COLOUR_NAMES: Record<MachineColour, string> = {
   ink: 'Ink',
 }
 
-/** A machine's colour, which its threads are marked with (ADR 0132), and the others to pick from. */
+/** A machine's colour, which its threads are marked with (ADR 0136), and the others to pick from. */
 function ColourPicker({ backend }: { backend: Backend }) {
   const colour = backend.colour ?? 'ink'
   return (
@@ -675,7 +675,7 @@ function MarkPreview({ mark, backend }: { mark: Mark; backend: Backend }) {
   )
 }
 
-/** Whether the sidebar lists every connected machine's threads, and how each thread's machine is marked (ADR 0132). */
+/** Whether the sidebar lists every connected machine's threads, and how each thread's machine is marked (ADR 0136). */
 function ThreadsFromMachines() {
   const view = useMachinesView()
   const { backends, current } = useBackends()
