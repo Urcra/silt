@@ -82,7 +82,9 @@ impl Watchers {
             return Ok(watched);
         }
         let config = notify::Config::default().with_follow_symlinks(false);
-        let debouncing = |config| notify_debouncer_full::Config::default().with_timeout(DEBOUNCE).with_tick_rate(TICK).with_notify_config(config);
+        let debouncing = |config| {
+            notify_debouncer_full::Config::default().with_timeout(DEBOUNCE).with_tick_rate(TICK).with_notify_config(config)
+        };
         let result = if mode == WatchMode::Polled {
             let config = config.with_poll_interval(POLL_INTERVAL).with_compare_contents(true);
             started(&mut lock(&self.polled), || new_debouncer_opt(debouncing(config), handler(&self.routes), NoCache))
