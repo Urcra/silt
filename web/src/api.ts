@@ -7,6 +7,7 @@ import { apiUrl, hosted } from './served'
 import { askedServer } from './workspace'
 import type {
   AskView,
+  Judge,
   AppearanceMode,
   AppearanceSettings,
   TextSettings,
@@ -674,6 +675,11 @@ export const api = {
   stopTask: (id: string, call: string) => request<string>('POST', `${thread(id)}/agent/tasks/${encodeURIComponent(call)}/stop`),
   answer: (id: string, permission: number, option: string | null) =>
     request<string>('POST', `${thread(id)}/agent/answer`, { id: permission, option }),
+  /** The person's answer to a call Auto refused that the agent asks them to allow, with words for it (ADR 0132). */
+  answerEscalation: (id: string, escalation: number, allow: boolean, words: string | null) =>
+    request<string>('POST', `${thread(id)}/agent/escalation`, { id: escalation, allow, words }),
+  /** Who checks the thread's commands on Auto; `null` for its workspace's default (ADR 0132). */
+  setJudge: (id: string, judge: Judge | null) => request<string>('POST', `${thread(id)}/agent/judge`, { judge }),
   /** Answers a question the agent waits on, each field by its chosen values; none declines it. */
   answerQuestion: (id: string, question: number, answers: Record<string, string[]> | null) =>
     request<string>('POST', `${thread(id)}/agent/reply`, { id: question, answers }),

@@ -58,6 +58,8 @@ pub enum Entry {
     Task(Task),
     /// What the agent showed the person through Silt (ADR 0068).
     Artifact(Box<silt_proto::view::ArtifactView>),
+    /// Auto's verdict on one of its calls (ADR 0132).
+    Auto(silt_proto::view::AutoView),
     /// Anything else the agent records (hooks, settings, file snapshots).
     Other {
         kind: String,
@@ -85,6 +87,7 @@ impl Entry {
             Self::Woke { .. } => "wake",
             Self::Task(_) => "task",
             Self::Artifact(_) => "artifact",
+            Self::Auto(_) => "auto",
             Self::Other { kind } => kind,
         }
     }
@@ -100,6 +103,7 @@ impl Entry {
             Self::Compaction { summary } => summary.clone(),
             Self::Task(task) => task.summary.clone(),
             Self::Artifact(artifact) => Some(artifact.title.clone()),
+            Self::Auto(auto) => Some(auto.reason.clone()),
             Self::Image { .. } | Self::Usage { .. } | Self::Woke { .. } | Self::Other { .. } => None,
         }
     }
@@ -115,6 +119,7 @@ impl Entry {
             Self::Plan { steps } => Some(plan_text(&steps)),
             Self::Compaction { summary } | Self::Task(Task { summary, .. }) => summary,
             Self::Artifact(artifact) => Some(artifact.title),
+            Self::Auto(auto) => Some(auto.reason),
             Self::Image { .. } | Self::Usage { .. } | Self::Woke { .. } | Self::Other { .. } => None,
         }
     }

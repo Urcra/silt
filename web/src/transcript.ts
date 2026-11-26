@@ -2,7 +2,7 @@
 // followed it, between dividers for compaction and for what came from
 // elsewhere.
 
-import type { HistoryEntry, TurnInfo } from './api'
+import type { AutoView, HistoryEntry, TurnInfo } from './api'
 import { askOfCall } from './askCall'
 import { NO_TASKS, type Tasks } from './tasks'
 
@@ -138,7 +138,8 @@ function stands(step: ToolStep, tasks: Tasks): boolean {
   return (
     kind === 'question' ||
     Boolean(proposedPlan(step.call)) ||
-    (kind === 'execute' && Boolean(step.result?.outcome?.failed)) ||
+    // A call Auto refused never ran: it stays in its run, its reason under it (ADR 0132).
+    (kind === 'execute' && Boolean(step.result?.outcome?.failed) && step.auto?.verdict !== 'refuse') ||
     tasked(step, tasks)
   )
 }
@@ -196,7 +197,12 @@ export function piecesOf(entries: HistoryEntry[], tasks: Tasks = NO_TASKS): Piec
     const last = pieces[pieces.length - 1]
     if (entry === plan) pieces.push({ kind: 'plan', entry })
     else if (hidden.has(entry)) continue
-    else if (standing.has(entry)) {
+    else if (entry.kind === 'auto') {
+      // Auto's verdict goes into its call's fold, whose rows show it on the call; a call standing on its own has it already.
+      const call = steps.find((step) => step.call?.tool?.id === entry.auto?.call)?.call
+      const fold = call && foldOf.get(call)
+      if (fold) fold.entries.push(entry)
+    } else if (standing.has(entry)) {
       const step = steps.find((candidate) => candidate.call === entry)
       if (step) pieces.push({ kind: 'step', step })
     } else if (FOLDED.has(entry.kind)) {
@@ -363,6 +369,8 @@ export interface ToolStep {
   result: HistoryEntry | null
   /** The pictures its result carried. */
   images: HistoryEntry[]
+  /** Auto's verdict on the call, for an agent without an auto mode of its own (ADR 0132). */
+  auto?: AutoView | null
 }
 
 /**
@@ -406,6 +414,11 @@ export function stepsOf(entries: HistoryEntry[]): ToolStep[] {
       steps.push({ call: entry, result: result ?? null, images: [] })
     } else if (entry.kind === 'tool_result' && !claimed.has(entry)) {
       steps.push({ call: null, result: entry, images: [] })
+    } else if (entry.kind === 'auto' && entry.auto) {
+      // Auto's verdict shows on the call it's on; the last one stands.
+      const on = entry.auto.call
+      const step = steps.find((candidate) => candidate.call?.tool?.id === on)
+      if (step) step.auto = entry.auto
     } else if (entry.kind === 'image') {
       // A result's pictures follow it.
       const before = entries

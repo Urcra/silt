@@ -33,6 +33,7 @@ mod gateway;
 mod history;
 mod homes;
 mod import;
+mod judges;
 pub mod lan;
 mod lifecycle;
 mod live;
