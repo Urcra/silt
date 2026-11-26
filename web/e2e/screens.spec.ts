@@ -417,6 +417,10 @@ test('Settings › Network, online and offline (ADR 0132)', async ({ page }) => 
     await expect(shown.getByRole('switch', { name: 'Plan usage' })).toBeChecked()
   })
   await page.getByRole('switch', { name: 'Offline' }).click()
+  await expect(page.getByRole('switch', { name: 'Offline' })).toBeChecked()
+  // Clicked at the last variant's width, which scrolls the page; open it afresh, with nothing hovered.
+  await open(page, '/settings/network')
+  await page.mouse.move(0, 0)
   try {
     await shoot(page, 'network-offline', async (shown) => {
       await expect(shown.getByRole('switch', { name: 'Plan usage' })).toBeDisabled()
