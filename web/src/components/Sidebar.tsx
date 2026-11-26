@@ -246,6 +246,7 @@ function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
 /**
  * One project's threads, those busy in the last few minutes by title and then newest first, folded away
  * by its name, with what's old, settled or snoozed behind a count. An older project is one row until opened, and then has nothing to hold back.
+ * Once toggled, the fold stays as the person left it in this browser.
  */
 function ProjectGroup({
   repo,
@@ -262,7 +263,7 @@ function ProjectGroup({
   now: number
   older?: boolean
 }) {
-  const [open, setOpen] = useState(!older)
+  const [open, setOpen] = useFold(`project:${repo}`, !older)
   const [showRest, setShowRest] = useState(false)
   const ordered = [...threads].sort(inListOrder(now))
   const held = (thread: ThreadSummary) => old(thread, now) || ['snoozed', 'settled'].includes(section(thread, now))
@@ -666,7 +667,7 @@ export function Sidebar() {
   // Chats have a section of their own above the projects (ADR 0059).
   const chats = listed.filter((thread) => isChat(thread.repo))
   const inProjects = listed.filter((thread) => !isChat(thread.repo))
-  const [showOlder, setShowOlder] = useState(false)
+  const [showOlder, setShowOlder] = useFold('older-projects', false)
   const byProject = projects(inProjects)
   const isOlder = ([, inRepo]: [string, ThreadSummary[]]) => inRepo.every((thread) => old(thread, now))
   const recentProjects = byProject.filter((project) => !isOlder(project))
