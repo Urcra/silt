@@ -1,6 +1,7 @@
-//! `silt update`: a nightly build fast-forwards its clone's `main`, runs
+//! `silt update`: a dev build fast-forwards its clone's `main`, runs
 //! `just update` there and restarts the daemon on what it installed, while
-//! writing how far it got for the web UI to show (ADR 0100).
+//! writing how far it got for the web UI to show (ADR 0100). Nightly and
+//! stable builds only check for a newer release (ADR 0129).
 
 use std::env;
 use std::fs::{File, OpenOptions};
@@ -40,21 +41,30 @@ pub fn check() -> Result<(), Exn<CliError>> {
     let build = BuildInfo::current();
     println!("silt {}", silt_update::VERSION);
     let availability = match build.channel {
-        Channel::Nightly => check::nightly(&build, true),
-        Channel::Stable => {
-            println!("A stable build: see https://github.com/Urcra/silt/releases for newer releases.");
-            return Ok(());
-        }
+        Channel::Dev => check::dev(&build, true),
+        Channel::Nightly | Channel::Stable => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .or_raise(|| CliError("could not start a runtime".into()))?
+            .block_on(silt_daemon::updates::released(&silt_daemon::updates::release_client(), &build)),
     };
     println!("{}", availability.explain());
-    if let Availability::Behind { commits, ahead, .. } = &availability {
+    let listed = match &availability {
+        Availability::Behind { commits, ahead, .. } | Availability::Nightly { commits, ahead, .. } => Some((commits, *ahead)),
+        _ => None,
+    };
+    if let Some((commits, ahead)) = listed {
         for commit in commits.iter().take(10) {
             println!("  {} {}", commit.hash.short(), commit.subject);
         }
-        if *ahead as usize > commits.len().min(10) {
-            println!("  and {} more", *ahead as usize - commits.len().min(10));
+        if ahead as usize > commits.len().min(10) {
+            println!("  and {} more", ahead as usize - commits.len().min(10));
         }
-        println!("`silt update` installs it.");
+    }
+    match &availability {
+        Availability::Behind { .. } => println!("`silt update` installs it."),
+        Availability::Nightly { url, .. } => println!("Download it from {url}"),
+        _ => {}
     }
     Ok(())
 }
@@ -70,6 +80,15 @@ pub fn run(echo: bool) -> Result<(), Exn<CliError>> {
     let before = run::read_state(&data);
     if before.as_ref().is_some_and(|before| before.in_flight() && before.pid != std::process::id() && run::runner_alive(before)) {
         return Err(fail("an update is already running; Settings › Updates shows how far it got"));
+    }
+    match build.channel {
+        Channel::Dev => {}
+        Channel::Nightly => {
+            return Err(fail(format!("a nightly build updates from the nightly release's downloads, {}", check::NIGHTLY_URL)));
+        }
+        Channel::Stable => {
+            return Err(fail("a stable build updates with its installer; `silt update --check` says whether one is out"));
+        }
     }
     let (source, built) = check::updatable(&build)
         .map(|(source, built)| (source.clone(), built.clone()))
@@ -230,7 +249,7 @@ impl Runner {
     fn install(&mut self, build: &BuildInfo, source: &Source) -> Result<(), String> {
         self.state.begin(Phase::Fetch, now_ms());
         self.save();
-        let target = match check::nightly(build, true) {
+        let target = match check::dev(build, true) {
             Availability::Behind { target, .. } => target,
             Availability::UpToDate => return Err("already up to date with main".to_owned()),
             other => return Err(other.explain()),

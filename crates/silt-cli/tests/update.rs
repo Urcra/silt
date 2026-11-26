@@ -83,7 +83,7 @@ impl Setup {
             .env("SILT_BUILD_SOURCE", &self.clone)
             .env("SILT_BUILD_COMMIT", &self.first)
             .env("SILT_BUILD_BRANCH", "main")
-            .env("SILT_BUILD_CHANNEL", "nightly")
+            .env("SILT_BUILD_CHANNEL", "dev")
             .env("SILT_UPDATE_JUST", &self.just)
             .env("SILT_ASK_AGENTS", "0")
             .envs(envs.iter().copied());
@@ -209,7 +209,7 @@ fn the_web_ui_sees_the_update_starts_it_and_reads_it_back_after_the_restart() {
         "the daemon's check finds main ahead: {view}"
     );
     assert_eq!(view["availability"]["ahead"], 2);
-    assert_eq!(view["build"]["channel"], "nightly");
+    assert_eq!(view["build"]["channel"], "dev");
     // Not inside the desktop app, nothing to relaunch; the app built from the first commit would.
     assert_eq!(view["relaunch"], false);
     let first = setup.first.clone();
@@ -362,4 +362,73 @@ fn restart_now_ends_the_wait_for_an_agent() {
     assert!(common::eventually(|| setup.state()["outcome"]["kind"] == "done"), "the update finishes: {}", setup.state());
     assert!(runner.wait().expect("the update ends").success());
     assert_ne!(setup.daemon_pid(), before, "the daemon runs the new build");
+}
+
+/// GitHub's API for a repository whose `nightly` tag is two commits past
+/// `built`; anything else is not found.
+fn github(built: String) -> String {
+    use axum::Router;
+    use axum::extract::Path as UrlPath;
+    use axum::http::StatusCode;
+    use axum::routing::get;
+
+    let listed = |sha: &str, message: &str| serde_json::json!({"sha": sha, "commit": {"message": message, "committer": {"date": "2026-11-26T03:17:05Z"}}});
+    let answer = serde_json::json!({
+        "status": "ahead",
+        "ahead_by": 2,
+        "commits": [listed("a1b2c3d4e5f6a1b2", "feat: older"), listed("b2c3d4e5f6a1b2c3", "fix: newer")],
+    });
+    let app = Router::new().route(
+        "/repos/Urcra/silt/compare/{range}",
+        get(move |UrlPath(range): UrlPath<String>| {
+            let answer = answer.clone();
+            let wanted = format!("{built}...nightly");
+            async move { if range == wanted { Ok(axum::Json(answer)) } else { Err(StatusCode::NOT_FOUND) } }
+        }),
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let url = format!("http://{}/repos/Urcra/silt", listener.local_addr().expect("address"));
+    std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().expect("runtime").block_on(async move {
+            axum::serve(tokio::net::TcpListener::from_std(listener).expect("listener"), app).await.expect("serves");
+        });
+    });
+    url
+}
+
+#[test]
+fn a_nightly_build_hears_of_a_newer_nightly_and_links_to_it() {
+    let setup = Setup::new();
+    let api = github(setup.first.clone());
+    let nightly = [("SILT_BUILD_CHANNEL", "nightly"), ("SILT_UPDATE_API", api.as_str())];
+
+    let checked = setup.run(&["update", "--check"], &nightly);
+    assert!(checked.status.success(), "{}", text(&checked));
+    let said = String::from_utf8_lossy(&checked.stdout);
+    assert!(said.contains("the nightly release is 2 commits ahead"), "{said}");
+    assert!(said.find("fix: newer") < said.find("feat: older"), "newest first: {said}");
+    assert!(said.contains("https://github.com/Urcra/silt/releases/tag/nightly"), "{said}");
+
+    let refused = setup.run(&["update"], &nightly);
+    assert!(!refused.status.success());
+    assert!(text(&refused).contains("a nightly build updates from the nightly release's downloads"), "{}", text(&refused));
+    assert_eq!(git(&setup.clone, &["rev-parse", "HEAD"]).trim(), setup.first, "the clone is a dev build's, not this one's");
+
+    let started = setup.run(&["daemon", "start"], &nightly);
+    assert!(started.status.success(), "{}", text(&started));
+    let mut view = serde_json::Value::Null;
+    assert!(
+        common::eventually(|| {
+            view = setup.web("GET", "/api/update").1;
+            view["availability"]["kind"] == "nightly"
+        }),
+        "the daemon's check finds the newer nightly: {view}"
+    );
+    assert_eq!(view["build"]["channel"], "nightly");
+    assert_eq!(view["build"]["source"], serde_json::Value::Null, "a release keeps no clone");
+    assert_eq!(view["availability"]["ahead"], 2);
+    assert_eq!(view["availability"]["commits"][0]["subject"], "fix: newer");
+    let (status, _) = setup.web("POST", "/api/update/start");
+    assert!(status.starts_with('4'), "a nightly isn't updated in place: {status}");
 }

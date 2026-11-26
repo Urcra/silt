@@ -1,9 +1,9 @@
-// What a build says of itself (ADR 0100): its commit, branch, whether
-// tracked files had changes, the clone it was built from and its channel.
-// Shared by silt-update's build script and silt-desktop's, which is its own
-// workspace. Each `SILT_BUILD_*` variable set while building wins over git:
-// the release workflow names the channel, and install-windows.sh, which
-// builds a copy without `.git`, names the WSL clone.
+// What a build says of itself (ADR 0100, ADR 0129): its commit, branch,
+// whether tracked files had changes, the clone it was built from and its
+// channel. Shared by silt-update's build script and silt-desktop's, which is
+// its own workspace. Each `SILT_BUILD_*` variable set while building wins
+// over git: the release workflow names the channel, stable or nightly, and
+// install-windows.sh, which builds a copy without `.git`, names the WSL clone.
 
 fn emit_build_info() {
     use std::path::{Path, PathBuf};
@@ -49,8 +49,10 @@ fn emit_build_info() {
         None => toplevel.is_some() && git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|status| !status.is_empty()),
     };
     let source = given("SILT_BUILD_SOURCE").or(toplevel).and_then(one_line);
-    let nightly = commit.is_some() && source.is_some();
-    let channel = given("SILT_BUILD_CHANNEL").unwrap_or_else(|| if nightly { "nightly" } else { "stable" }.to_owned());
+    let dev = commit.is_some() && source.is_some();
+    let channel = given("SILT_BUILD_CHANNEL").unwrap_or_else(|| if dev { "dev" } else { "stable" }.to_owned());
+    // A release is built in CI's checkout, which no one updates (ADR 0129).
+    let source = source.filter(|_| channel == "dev");
     let commit = commit.and_then(one_line).unwrap_or_default();
     let branch = branch.and_then(one_line).unwrap_or_default();
 

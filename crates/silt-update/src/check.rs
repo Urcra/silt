@@ -1,6 +1,6 @@
-//! Whether a newer build is out: for a nightly build, whether `main` has
-//! moved past it in its clone; for a stable one, whether a newer release is
-//! out (ADR 0100).
+//! Whether a newer build is out: for a dev build, whether `main` has moved
+//! past it in its clone; for a nightly one, whether the `nightly` release has;
+//! for a stable one, whether a newer release is out (ADR 0100, ADR 0129).
 
 use std::time::Duration;
 
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::info::{BuildInfo, Commit, Source};
 use crate::shell::{self, Ran};
 
-/// The branch nightly builds follow.
+/// The branch dev and nightly builds follow.
 pub const MAIN: &str = "main";
 
 /// How many of the new commits a check lists.
@@ -38,6 +38,13 @@ pub enum Availability {
     /// A newer release than this stable build.
     Release {
         tag: String,
+        url: String,
+    },
+    /// The `nightly` release is `ahead` commits past this nightly build; the
+    /// newest come first.
+    Nightly {
+        ahead: u32,
+        commits: Vec<NewCommit>,
         url: String,
     },
     /// The check itself failed, say offline.
@@ -110,6 +117,7 @@ impl Availability {
             Self::Behind { target, ahead, .. } => format!("{MAIN} is {ahead} commits ahead, at {}", target.short()),
             Self::Off { reason } => format!("updates are off: {}", reason.explain()),
             Self::Release { tag, url } => format!("{tag} is out: {url}"),
+            Self::Nightly { ahead, url, .. } => format!("the nightly release is {ahead} commits ahead: {url}"),
             Self::Failed { message } => format!("could not check: {message}"),
         }
     }
@@ -130,7 +138,7 @@ pub struct Facts {
     pub commits: Vec<NewCommit>,
 }
 
-/// What can be said from the build alone, before asking git: its clone and
+/// What can be said of a dev build alone, before asking git: its clone and
 /// commit, or why it has no updates.
 pub fn updatable(build: &BuildInfo) -> Result<(&Source, &Commit), OffReason> {
     if build.debug {
@@ -148,7 +156,7 @@ pub fn updatable(build: &BuildInfo) -> Result<(&Source, &Commit), OffReason> {
     Ok((source, commit))
 }
 
-/// What a nightly build's clone offers, from what git said of it.
+/// What a dev build's clone offers, from what git said of it.
 pub fn decide(facts: &Facts) -> Availability {
     let off = |reason| Availability::Off { reason };
     if facts.branch.as_deref() != Some(MAIN) {
@@ -200,8 +208,73 @@ pub fn release(build: &BuildInfo, answer: &serde_json::Value) -> Availability {
     }
 }
 
-/// Where stable builds learn of releases.
-pub const RELEASES: &str = "https://api.github.com/repos/Urcra/silt/releases/latest";
+/// The repository's API, where releases are learnt of. `SILT_UPDATE_API`
+/// stands in for it in tests.
+pub const API: &str = "https://api.github.com/repos/Urcra/silt";
+
+/// The rolling release nightly builds come from (ADR 0129).
+pub const NIGHTLY_TAG: &str = "nightly";
+pub const NIGHTLY_URL: &str = "https://github.com/Urcra/silt/releases/tag/nightly";
+
+/// Where stable builds learn of releases: `releases/latest`, which skips
+/// prereleases such as the nightly.
+pub fn releases_url(api: &str) -> String {
+    format!("{api}/releases/latest")
+}
+
+/// Where a nightly build learns how far the `nightly` release is past it.
+pub fn nightly_url(api: &str, built: &Commit) -> String {
+    format!("{api}/compare/{built}...{NIGHTLY_TAG}")
+}
+
+/// The `nightly` release against this nightly build, as GitHub's API answers
+/// `repos/<repo>/compare/<build>...nightly`.
+pub fn nightly(answer: &serde_json::Value) -> Availability {
+    let Some(ahead) = answer.get("ahead_by").and_then(serde_json::Value::as_u64) else {
+        return Availability::Failed { message: "the release service answered without a comparison".to_owned() };
+    };
+    if ahead == 0 {
+        return Availability::UpToDate;
+    }
+    // GitHub lists them oldest first.
+    let mut commits: Vec<NewCommit> = answer
+        .get("commits")
+        .and_then(serde_json::Value::as_array)
+        .map(|listed| listed.iter().filter_map(compared_commit).collect())
+        .unwrap_or_default();
+    commits.reverse();
+    commits.truncate(LISTED);
+    Availability::Nightly { ahead: u32::try_from(ahead).unwrap_or(u32::MAX), commits, url: NIGHTLY_URL.to_owned() }
+}
+
+fn compared_commit(listed: &serde_json::Value) -> Option<NewCommit> {
+    let hash = Commit::parse(listed.get("sha")?.as_str()?)?;
+    let commit = listed.get("commit")?;
+    let message = commit.get("message").and_then(serde_json::Value::as_str).unwrap_or_default();
+    let time = commit.pointer("/committer/date").and_then(serde_json::Value::as_str).and_then(utc_seconds).unwrap_or_default();
+    Some(NewCommit { hash, subject: message.lines().next().unwrap_or_default().to_owned(), time })
+}
+
+/// Seconds since the epoch of a time as GitHub writes it, `2026-11-26T03:17:00Z`.
+fn utc_seconds(text: &str) -> Option<i64> {
+    let (date, time) = text.strip_suffix('Z')?.split_once('T')?;
+    let numbers = |text: &str, separator: char| -> Option<Vec<i64>> {
+        text.split(separator).map(|part| part.parse().ok()).collect::<Option<Vec<_>>>().filter(|parts| parts.len() == 3)
+    };
+    let (date, time) = (numbers(date, '-')?, numbers(time, ':')?);
+    let (year, month, day) = (date[0], date[1], date[2]);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // Days from the civil date, after Howard Hinnant's `days_from_civil`.
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let of_era = year - era * 400;
+    let of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let of_era_days = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
+    let days = era * 146_097 + of_era_days - 719_468;
+    Some(days * 86_400 + time[0] * 3_600 + time[1] * 60 + time[2])
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum CheckError {
@@ -311,8 +384,8 @@ fn new_commit(line: &str) -> Option<NewCommit> {
     Some(NewCommit { hash, time, subject: fields.next().unwrap_or_default().to_owned() })
 }
 
-/// Whether a nightly build has an update, fetching first when `fetch`.
-pub fn nightly(build: &BuildInfo, fetch: bool) -> Availability {
+/// Whether a dev build has an update, fetching first when `fetch`.
+pub fn dev(build: &BuildInfo, fetch: bool) -> Availability {
     let (source, built) = match updatable(build) {
         Ok(found) => found,
         Err(reason) => return Availability::Off { reason },
@@ -388,7 +461,7 @@ mod tests {
         use crate::info::Channel;
         let build = BuildInfo {
             version: "0.0.1".into(),
-            channel: Channel::Nightly,
+            channel: Channel::Dev,
             commit: Some(commit("a1b2c3d4")),
             branch: Some(MAIN.into()),
             dirty: false,
@@ -412,5 +485,32 @@ mod tests {
         assert!(!newer_release("0.3.0", "v0.3.0"));
         assert!(!newer_release("0.3.0", "v0.2.9"));
         assert!(!newer_release("0.3.0", "nightly"));
+    }
+
+    #[test]
+    fn github_times_are_seconds_since_the_epoch() {
+        assert_eq!(utc_seconds("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(utc_seconds("2000-03-01T00:00:00Z"), Some(951_868_800));
+        assert_eq!(utc_seconds("2026-11-26T03:17:05Z"), Some(1_795_663_025));
+        assert_eq!(utc_seconds("2026-11-26T03:17:05+01:00"), None);
+        assert_eq!(utc_seconds("2026-13-26T03:17:05Z"), None);
+    }
+
+    #[test]
+    fn the_nightly_past_the_build_lists_its_commits_newest_first() {
+        let listed = |sha: &str, message: &str| serde_json::json!({"sha": sha, "commit": {"message": message, "committer": {"date": "1970-01-01T00:01:00Z"}}});
+        let answer = serde_json::json!({
+            "status": "ahead",
+            "ahead_by": 2,
+            "commits": [listed("a1b2c3d4e5f6", "feat: older\n\nbody"), listed("b2c3d4e5f6a1", "fix: newer")],
+        });
+        let Availability::Nightly { ahead, commits, url } = nightly(&answer) else { panic!("an update") };
+        assert_eq!((ahead, url.as_str()), (2, NIGHTLY_URL));
+        let subjects: Vec<_> = commits.iter().map(|commit| (commit.hash.short(), commit.subject.as_str(), commit.time)).collect();
+        assert_eq!(subjects, [("b2c3d4e", "fix: newer", 60), ("a1b2c3d", "feat: older", 60)]);
+
+        assert_eq!(nightly(&serde_json::json!({"status": "identical", "ahead_by": 0, "commits": []})), Availability::UpToDate);
+        assert_eq!(nightly(&serde_json::json!({"status": "behind", "ahead_by": 0, "behind_by": 3})), Availability::UpToDate);
+        assert!(matches!(nightly(&serde_json::json!({"message": "Not Found"})), Availability::Failed { .. }));
     }
 }
