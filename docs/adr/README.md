@@ -119,7 +119,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0111](0111-steering-without-stopping.md) | Steering without stopping | accepted |
 | [0112](0112-phones-on-the-local-network.md) | Phones on the local network | accepted; amended by 0113 |
 | [0113](0113-pairing-a-phone-without-its-certificate.md) | Pairing a phone without its certificate | accepted |
-| [0114](0114-one-set-of-permissions-and-agents-by-their-marks.md) | One set of permissions, and agents shown by their marks | accepted; amended by 0118 |
+| [0114](0114-one-set-of-permissions-and-agents-by-their-marks.md) | One set of permissions, and agents shown by their marks | accepted; amended by 0118, 0132 |
 | [0115](0115-the-sidebar-names-the-workspace-and-the-machine.md) | The sidebar names the workspace at its top and the machine at its bottom | accepted |
 | [0116](0116-memory-that-follows-the-work.md) | Memory that follows the work | accepted |
 | [0117](0117-conversations-open-at-their-end.md) | Conversations open at their end | accepted; amended by 0127 |
@@ -137,5 +137,6 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0129](0129-nightly-releases-and-three-channels.md) | Nightly releases, and three channels: stable, nightly and dev | accepted |
 | [0130](0130-the-whole-gate-on-every-pull-request.md) | The whole gate on every pull request | accepted |
 | [0131](0131-the-gate-runs-on-the-pull-request.md) | The gate runs on the pull request | accepted |
+| [0132](0132-auto-for-agents-without-an-auto-mode.md) | Auto for agents without an auto mode | accepted |
 | [0133](0133-december-decorations-in-the-desktop-app.md) | December decorations in the desktop app | accepted |
 | [0134](0134-no-telemetry-and-an-offline-switch.md) | No telemetry, an offline switch, and artifacts' libraries through Silt by default | accepted |

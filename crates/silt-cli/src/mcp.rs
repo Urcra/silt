@@ -599,6 +599,10 @@ machine. Pass `design_system` to choose one, or `none` to keep the page's own st
                 let view: AskView = self.ask_within(Request::Ask { thread: self.thread.clone(), ask }, ASK_TIMEOUT)?;
                 ask_text(&view)
             }
+            "silt_escalate" => {
+                let (call, why) = (text_arg(arguments, "call")?, text_arg(arguments, "why")?);
+                self.ask_within(Request::Escalate { thread: self.thread.clone(), call, why }, ASK_TIMEOUT)
+            }
             "silt_ask_wait" => {
                 let ask = text_arg(arguments, "ask")?;
                 let view: AskView = self.ask_within(Request::AskWait { thread: self.thread.clone(), ask }, ASK_TIMEOUT)?;

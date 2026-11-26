@@ -23,6 +23,7 @@ import { UpdatesSettings } from './Updates'
 import { NetworkSettingsSection } from './Network'
 import { WorkspacesSettings } from './Workspaces'
 import { PluginsSettings } from './Plugins'
+import { AutoSettings } from './AutoSettings'
 
 const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
   {
@@ -30,6 +31,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
     sections: [
       ...(hosted() ? [] : [{ id: 'workspaces', label: 'Workspaces' }]),
       ...(hosted() ? [] : [{ id: 'plugins', label: 'Plugins' }]),
+      ...(hosted() ? [] : [{ id: 'auto', label: 'Auto' }]),
       { id: 'projects', label: 'Projects' },
       { id: 'orgs', label: 'Orgs' },
       ...(hosted() ? [] : [{ id: 'design-systems', label: 'Design systems' }]),
@@ -133,7 +135,11 @@ function Chats() {
               />
             </span>
             <span className="text-xs text-fg-3">
-              Auto uses the agent&apos;s own auto mode; an agent without one starts at Ask before commands.
+              Auto uses the agent&apos;s own auto mode; for an agent without one, Silt checks its commands, as{' '}
+              <Link to="/settings/$section" params={{ section: 'auto' }} className="text-accent-fg hover:text-fg-1">
+                Settings › Auto
+              </Link>{' '}
+              says.
             </span>
           </div>
           <form
@@ -364,6 +370,7 @@ export function Settings() {
     models: <LocalModelsSettings />,
     workspaces: <WorkspacesSettings />,
     plugins: <PluginsSettings />,
+    auto: <AutoSettings />,
     appearance: <Appearance />,
     text: <TextLayoutSettings />,
     update: <UpdatesSettings />,

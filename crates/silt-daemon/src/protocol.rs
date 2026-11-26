@@ -1306,6 +1306,28 @@ pub enum Request {
         #[serde(default)]
         option: Option<String>,
     },
+    /// `thread`'s agent asks the person to allow a call Auto's check refused
+    /// (ADR 0132); answered once they do, or when the wait runs out.
+    Escalate {
+        thread: String,
+        call: String,
+        why: String,
+    },
+    /// The person's answer to an escalation, with words for the agent.
+    EscalationAnswer {
+        thread: String,
+        id: u64,
+        allow: bool,
+        #[serde(default)]
+        words: Option<String>,
+    },
+    /// Who checks the thread's commands on Auto; the workspace's default
+    /// when none (ADR 0132).
+    SetJudge {
+        thread: String,
+        #[serde(default)]
+        judge: Option<silt_workspace::Judge>,
+    },
     /// Answers a question with each field's chosen values, or declines it.
     AcpReply {
         thread: String,
@@ -2284,6 +2306,45 @@ pub struct AgentStatus {
     /// What Silt's sandbox lets it reach, when it runs in one (ADR 0093).
     #[serde(default)]
     pub sandbox: Option<silt_workspace::Reach>,
+    /// Who checks its commands on Auto, for an agent without an auto mode of
+    /// its own (ADR 0132).
+    #[serde(default)]
+    pub auto_check: Option<AutoCheck>,
+    /// The calls Auto's check is judging now, by their tool call ids.
+    #[serde(default)]
+    pub checking: Vec<String>,
+    /// Calls Auto refused that the agent asks the person to allow.
+    #[serde(default)]
+    pub escalations: Vec<EscalationAsked>,
+}
+
+/// Who checks a thread's commands on Auto (ADR 0132).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct AutoCheck {
+    /// The judge that holds: the rules', the thread's, or the workspace's.
+    pub judge: silt_workspace::Judge,
+    /// The thread's own choice, when it made one.
+    #[serde(default)]
+    pub chosen: Option<silt_workspace::Judge>,
+    /// Whose rule fixes the judge, when one does.
+    #[serde(default)]
+    pub fixed_by: Option<String>,
+    /// The judge as the person knows it: its agent and model.
+    pub name: String,
+}
+
+/// A call Auto's check refused that the agent asks the person to allow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct EscalationAsked {
+    pub id: u64,
+    /// The call, as Auto's check refused it.
+    pub call: String,
+    /// Why Auto refused it.
+    pub refused: String,
+    /// Why the agent says it's needed.
+    pub why: String,
 }
 
 /// A file sent with a prompt.
@@ -2602,6 +2663,10 @@ pub struct PermissionAsked {
     /// The tool call it asks about, whose card shows it waiting rather than running.
     #[serde(default)]
     pub tool_call: Option<String>,
+    /// Why Auto's check couldn't judge it, which leaves it to the person
+    /// (ADR 0132).
+    #[serde(default)]
+    pub unchecked: Option<String>,
 }
 
 /// Tokens of a context window used, of its size.
@@ -2930,6 +2995,7 @@ mod tests {
             silt_proto::BlobState::decl(&config),
             CutView::decl(&config),
             silt_proto::view::ArtifactView::decl(&config),
+            silt_proto::view::AutoView::decl(&config),
             silt_proto::artifact::ArtifactFile::decl(&config),
             silt_proto::view::ArtifactListed::decl(&config),
             crate::connectors::PageConnector::decl(&config),
@@ -3003,6 +3069,8 @@ mod tests {
             MrGuide::decl(&config),
             MrSummary::decl(&config),
             PermissionAsked::decl(&config),
+            AutoCheck::decl(&config),
+            EscalationAsked::decl(&config),
             Preset::decl(&config),
             Project::decl(&config),
             PromptAttachment::decl(&config),
@@ -3026,6 +3094,7 @@ mod tests {
             silt_workspace::FolderRule::decl(&config),
             silt_workspace::PluginPolicy::decl(&config),
             silt_workspace::AskPolicy::decl(&config),
+            silt_workspace::Judge::decl(&config),
             silt_workspace::OrgPlugin::decl(&config),
             silt_workspace::OrgPluginRule::decl(&config),
             silt_workspace::FolderAnswer::decl(&config),

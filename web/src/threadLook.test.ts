@@ -10,10 +10,16 @@ test('a waiting thread is sorted by what it waits for, the agent’s status firs
   const asking = thread({ agent_state: 'awaiting_permission' })
   expect(waitKind(asking, status({ questions: [{ id: 1, message: 'What?', fields: [] }] }))).toBe('question')
   expect(
-    waitKind(asking, status({ permissions: [{ id: 1, title: 'Plan', options: [], plan: '# Plan', tool_call: null }] })),
+    waitKind(
+      asking,
+      status({ permissions: [{ id: 1, title: 'Plan', options: [], plan: '# Plan', tool_call: null, unchecked: null }] }),
+    ),
   ).toBe('plan')
   expect(
-    waitKind(asking, status({ permissions: [{ id: 1, title: 'Edit src/main.rs', options: [], plan: null, tool_call: null }] })),
+    waitKind(
+      asking,
+      status({ permissions: [{ id: 1, title: 'Edit src/main.rs', options: [], plan: null, tool_call: null, unchecked: null }] }),
+    ),
   ).toBe('permission')
   // Before its status arrives, the thread's own state says enough.
   expect(waitKind(asking, null)).toBe('permission')

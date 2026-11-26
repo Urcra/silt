@@ -731,10 +731,16 @@ impl Lan {
 fn notice(machine: &str, status: &crate::protocol::AgentStatus) -> Option<(&'static str, String)> {
     let agent = &status.agent;
     Some(match status.state {
-        AgentState::AwaitingPermission => {
-            let asked = status.permissions.first().map_or("something", |asked| asked.title.as_str());
-            ("An agent asks for a permission", format!("{agent} on {machine} asks to run: {asked}"))
-        }
+        AgentState::AwaitingPermission => match (status.permissions.first(), status.escalations.first()) {
+            (None, Some(escalated)) => (
+                "An agent asks you to allow what Auto refused",
+                format!("{agent} on {machine} asks you to allow: {}", escalated.call),
+            ),
+            (asked, _) => {
+                let asked = asked.map_or("something", |asked| asked.title.as_str());
+                ("An agent asks for a permission", format!("{agent} on {machine} asks to run: {asked}"))
+            }
+        },
         AgentState::AwaitingInput => {
             ("An agent wrote a plan to approve", format!("{agent} on {machine} wrote a plan for you to approve"))
         }
@@ -767,6 +773,9 @@ mod tests {
             suggestion: None,
             stoppable: Vec::new(),
             sandbox: None,
+            auto_check: None,
+            checking: Vec::new(),
+            escalations: Vec::new(),
         }
     }
 
@@ -777,6 +786,19 @@ mod tests {
         assert_eq!(body, "Claude Code on workstation wrote a plan for you to approve");
         assert!(notice("workstation", &status(AgentState::Error)).is_some());
         assert!(notice("workstation", &status(AgentState::AwaitingPermission)).unwrap().1.contains("asks to run"));
+        let escalated = crate::protocol::AgentStatus {
+            escalations: vec![crate::protocol::EscalationAsked {
+                id: 1,
+                call: "git push --force".into(),
+                refused: "Rewrites history.".into(),
+                why: "A rebase.".into(),
+            }],
+            ..status(AgentState::AwaitingPermission)
+        };
+        assert_eq!(
+            notice("workstation", &escalated).unwrap().1,
+            "Claude Code on workstation asks you to allow: git push --force"
+        );
         for quiet in [AgentState::Working, AgentState::Idle, AgentState::Starting, AgentState::Stopped] {
             assert!(notice("workstation", &status(quiet)).is_none(), "{quiet:?}");
         }

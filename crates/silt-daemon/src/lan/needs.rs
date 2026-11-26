@@ -133,7 +133,9 @@ impl Request {
             | Self::Plugins { .. }
             | Self::PluginActivity { .. }
             | Self::LanPush { .. } => Read,
-            Self::AcpAnswer { .. } | Self::AcpReply { .. } | Self::ApprovalAnswer { .. } => AnswerPermissions,
+            Self::AcpAnswer { .. } | Self::AcpReply { .. } | Self::ApprovalAnswer { .. } | Self::EscalationAnswer { .. } => {
+                AnswerPermissions
+            }
             Self::AcpPrompt { .. }
             | Self::MayUpload
             | Self::AcpSteer { .. }
@@ -153,6 +155,7 @@ impl Request {
             | Self::AcpMode { .. }
             | Self::AcpSetting { .. }
             | Self::AgentPreset { .. }
+            | Self::SetJudge { .. }
             | Self::AcpSignIn { .. }
             | Self::AcpSignInCode { .. }
             | Self::AcpSignInCancel { .. }
@@ -209,6 +212,7 @@ impl Request {
             | Self::Message { .. }
             | Self::Ask { .. }
             | Self::AskWait { .. }
+            | Self::Escalate { .. }
             | Self::AskStop { .. }
             | Self::AskTake { .. }
             | Self::SetVisibility { .. }
