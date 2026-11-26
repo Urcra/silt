@@ -14,6 +14,7 @@ Your daemon keeps the pick, so the browser and the desktop app on one machine ag
 ## Bundled themes
 - **Nous**, light and dark: Silt's own warm paper and tobacco, with one amber accent.
 - **Fjord**, light and dark: cool slate with a teal accent, rounder corners, and Inter and JetBrains Mono where you have them installed.
+- **Yule**, light and dark: snow on pine and a forest at night, with cranberry, gold and holly beside the pine accent, and red keywords in code. It's there all year, and shows only when you pick it.
 - **Ink**, light and dark: black and white at the highest contrast, with square corners.
 - **Ports:** Catppuccin (Latte, Frappé, Macchiato, Mocha), Gruvbox (light and dark), Rosé Pine (Dawn, Main, Moon), Tokyo Night, Solarized (light and dark) and Nord.
 
@@ -125,6 +126,24 @@ Your daemon keeps these per machine in `appearance.json` in Silt's data folder, 
   "light": "nous-light",
   "dark": "nous-dark",
   "text": { "chat_size": 15, "code_size": 13, "code_font": "JetBrains Mono", "density": "compact" }
+}
+```
+
+## December decorations
+In December the desktop app decorates itself: lights under each page's header, a hat on the workspace's tile, snow resting on the composer and above the machine footer, and on the New thread screen a tree drawn as a branch graph, with snow falling behind it. The app's starting page lights the tree while it connects.
+
+They take their colours from the theme you use, so the theme stays as it is, and nothing under them moves or stops working. Snow falls only on screens with nothing to read yet, and with less motion the lights stay lit and the snow lies still.
+
+**Settings › Appearance › Seasonal touches** chooses when they show: **Auto**, the default, from 1 December to 6 January; **Always**; or **Off**. **Falling snow** keeps the rest without the snow. The browser and the hosted app don't show them. See [ADR 0133](https://github.com/Urcra/silt/blob/main/docs/adr/0133-december-decorations-in-the-desktop-app.md).
+
+The choice is kept in `appearance.json` beside the theme you picked:
+
+```json
+{
+  "mode": "system",
+  "light": "yule-light",
+  "dark": "yule-dark",
+  "seasonal": { "show": "auto", "snow": true }
 }
 ```
 

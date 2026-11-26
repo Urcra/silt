@@ -140,6 +140,7 @@ import {
   type Grouping,
 } from '../detail'
 import { draftOf, keepDraft, threadDraft, useDraft } from '../drafts'
+import { SeasonalLights } from './Seasonal'
 
 // The panel's viewer and list load only once there is an artifact to show.
 // Drawn again only when what it shows changes: beside the conversation, every key typed and every word streamed
@@ -1788,6 +1789,7 @@ export function ThreadHeader({
         )}
       </span>
       {summary && <ThreadStateActions summary={summary} />}
+      <SeasonalLights />
     </header>
   )
 }

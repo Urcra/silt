@@ -96,6 +96,8 @@ pub struct AgentRunRecord {
     pub error: Option<String>,
     pub preset: String,
     pub mode: Option<String>,
+    /// The settings it runs with, such as its model, by each one's id.
+    pub settings: std::collections::BTreeMap<String, String>,
     pub updated_ms: i64,
 }
 
@@ -1488,7 +1490,7 @@ impl Store {
     }
 
     pub async fn agent_runs(&self) -> Result<HashMap<ThreadId, AgentRunRecord>, StoreError> {
-        let rows = sqlx::query!("SELECT thread_id, agent, state, error, preset, mode, updated_ms FROM agent_runs")
+        let rows = sqlx::query!("SELECT thread_id, agent, state, error, preset, mode, settings, updated_ms FROM agent_runs")
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter()
@@ -1499,6 +1501,8 @@ impl Store {
                     error: row.error,
                     preset: row.preset,
                     mode: row.mode,
+                    settings: serde_json::from_str(&row.settings)
+                        .map_err(|_| StoreError::Corrupt { what: "an agent run's settings" })?,
                     updated_ms: row.updated_ms,
                 };
                 Ok((ThreadId(id_from(&row.thread_id)?), record))
@@ -1508,16 +1512,18 @@ impl Store {
 
     pub async fn put_agent_run(&self, thread: ThreadId, run: &AgentRunRecord) -> Result<(), StoreError> {
         let thread = id_bytes(thread.0);
+        let settings = serde_json::to_string(&run.settings).unwrap_or_else(|_| "{}".to_owned());
         sqlx::query!(
-            "INSERT INTO agent_runs (thread_id, agent, state, error, preset, mode, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO agent_runs (thread_id, agent, state, error, preset, mode, settings, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (thread_id) DO UPDATE SET agent = excluded.agent, state = excluded.state, error = excluded.error,
-                 preset = excluded.preset, mode = excluded.mode, updated_ms = excluded.updated_ms",
+                 preset = excluded.preset, mode = excluded.mode, settings = excluded.settings, updated_ms = excluded.updated_ms",
             thread,
             run.agent,
             run.state,
             run.error,
             run.preset,
             run.mode,
+            settings,
             run.updated_ms,
         )
         .execute(&self.pool)

@@ -240,3 +240,28 @@
 ::highlight(silt-doc-comments) {
   background-color: var(--color-accent-tint);
 }
+
+/* The desktop app's December lights (ADR 0133): each bulb fades in and out,
+   out of step; with less motion they stay lit rather than flicker at the
+   0.01ms nous.css sets. */
+@keyframes silt-twinkle {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.silt-twinkle {
+  animation: silt-twinkle 3.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion='full']) .silt-twinkle {
+    animation: none;
+  }
+}
+
+:root[data-motion='reduced'] .silt-twinkle {
+  animation: none;
+}

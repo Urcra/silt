@@ -732,7 +732,13 @@ export function AgentDock({
   const narrow = typeof window !== 'undefined' && window.matchMedia?.('(max-width: 767px)').matches
   // Before an agent runs here, the modes and settings to start it with: the thread's own, else as it last ran on this machine.
   const seen = agents.find((choice) => choice.id === agent)
-  const restart = restartChoices(agent, stopped, seen, workspace?.workspace.defaults.agents?.[agent]?.settings)
+  const restart = restartChoices(
+    agent,
+    stopped,
+    seen,
+    workspace?.workspace.defaults.agents?.[agent]?.settings,
+    summary?.agent_settings,
+  )
   const seenModes = restart.modes?.available
   // Before it runs, the preset says which mode it starts in (ADR 0114).
   const seenSettings = restart.settings

@@ -1,4 +1,4 @@
-import type { AgentChoice, AgentChoiceItem, AgentModes, AgentSetting, AgentState, AgentStatus, Preset } from './api'
+import type { AgentChoice, AgentChoiceItem, AgentModes, AgentSetting, AgentState, AgentStatus, KeptSettings, Preset } from './api'
 import type { Tone } from './ui'
 
 /** Which of the agent's permission requests the daemon answers by itself (ADR 0022), and Plan, which asks for a plan
@@ -174,21 +174,29 @@ export function threadAgent(
 
 /**
  * The modes and settings `agent` starts again with in a thread whose agent stopped. The thread's own, as its agent
- * left them, when it's the same agent, so the session goes on with the model it had; the agent's as it last ran
- * anywhere on this machine otherwise, under the workspace's defaults.
+ * left them, when it's the same agent, so the session goes on with the model it had: as the daemon still has them,
+ * else as it keeps them for the thread once it restarted. The agent's as it last ran anywhere on this machine
+ * otherwise, under the workspace's defaults.
  */
 export function restartChoices(
   agent: string,
   stopped: AgentStatus | null,
   seen: AgentChoice | undefined,
   preferred: Record<string, string> | undefined,
+  kept?: KeptSettings | null,
 ): { modes: AgentModes | null; settings: AgentSetting[]; value: (setting: AgentSetting, chosen: string | undefined) => string } {
   const own = stopped?.agent_id === agent ? stopped : undefined
   const modes = own ? own.modes : (seen?.modes ?? null)
+  const thread = seen && kept?.agent === seen.name ? kept.settings : undefined
+  const offered = (setting: AgentSetting) => {
+    const value = thread?.[setting.id]
+    return setting.choices.some((choice) => choice.id === value) ? value : undefined
+  }
   return {
     modes,
     settings: startSettings((own ?? seen)?.settings ?? [], modes?.available),
-    value: (setting, chosen) => (own ? (chosen ?? setting.current) : startingValue(setting, chosen, preferred?.[setting.id])),
+    value: (setting, chosen) =>
+      own ? (chosen ?? setting.current) : startingValue(setting, chosen ?? offered(setting), preferred?.[setting.id]),
   }
 }
 
