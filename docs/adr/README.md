@@ -132,3 +132,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0124](0124-an-agents-own-allow-all-follows-the-preset.md) | An agent's own allow-all follows the preset | accepted; amended by 0118 |
 | [0125](0125-antigravity-resumes-from-its-own-store.md) | Antigravity CLI resumes from its own store, and starts primed elsewhere | accepted |
 | [0126](0126-budgets-for-a-github-actions-runner.md) | Budgets for a GitHub Actions runner | accepted |
+| [0127](0127-the-whole-gate-on-every-pull-request.md) | The whole gate on every pull request | accepted |

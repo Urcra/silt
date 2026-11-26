@@ -9,6 +9,10 @@
 #                                 two rounds of fixes, CI, then a merge commit
 #   /claude gate [notes]          the same without the merge
 #   /claude review [fix] [notes]  a review, and with `fix` the fixes pushed
+#   /claude review dangerously full [notes]
+#                                 the owner only: on a fork's PR, the review
+#                                 with members' token and tools rather than
+#                                 the read-only ones
 # On an issue:
 #   /claude fix [notes]           a pull request that fixes it, or questions
 #   /claude plan [notes]          a plan as a comment, no code
@@ -25,7 +29,8 @@
 # anyone else's only inform. Claude never decides to merge:
 # .github/scripts/claude.sh, taken from the default branch so a PR can't
 # change it, merges only a head that passed every part of the gate and CI
-# with no review left open. Needs the Claude GitHub App on the repository and
+# with no review left open. On a fork's PR only review and ask run, with an
+# app token that can't push or merge. Needs the Claude GitHub App on the repository and
 # the CLAUDE_CODE_OAUTH_TOKEN secret (`claude setup-token`).
 name: Claude
 run-name: "Claude on #${{ github.event.issue.number }}"
@@ -128,6 +133,8 @@ jobs:
       - name: The issue or pull request
         id: target
         if: steps.command.outputs.command != ''
+        env:
+          ASSOCIATION: ${{ github.event.comment.author_association }}
         run: '"$HELPER" check "${{ steps.command.outputs.command }}" "${{ steps.command.outputs.mode }}"'
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -204,10 +211,15 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: ${{ steps.prompt.outputs.text }}
+          # Only review and ask reach here on a fork's PR (claude.sh refuses
+          # the rest). Their app token can't push or merge, as Claude reads
+          # an outsider's text, unless the owner asked for `review dangerously full`.
+          allow_fork_prs: ${{ steps.target.outputs.fork == 'true' && 'true' || 'false' }}
+          additional_permissions: "${{ steps.target.outputs.readonly == 'true' && 'contents: read' || '' }}"
           claude_args: >-
             --max-turns ${{ steps.command.outputs.build == 'true' && '250' || '80' }}
             --permission-mode acceptEdits
-            --allowedTools "${{ steps.command.outputs.build == 'true' && 'Bash,Read,Edit,Write,Glob,Grep,TodoWrite' || 'Read,Glob,Grep,TodoWrite,Bash(gh api:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git fetch:*),Bash(git grep:*)' }}"
+            --allowedTools "${{ steps.command.outputs.build == 'true' && 'Bash,Read,Edit,Write,Glob,Grep,TodoWrite' || steps.target.outputs.readonly == 'true' && 'Read,Glob,Grep,TodoWrite,Bash(gh api:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git fetch:*),Bash(git grep:*)' || 'Read,Glob,Grep,TodoWrite,Bash(gh api:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git fetch:*),Bash(git grep:*)' }}"
             --disallowedTools "Bash(gh pr merge:*),Bash(gh pr close:*),Bash(gh pr review:*),Bash(gh issue close:*),Bash(gh issue delete:*),Bash(gh repo:*),Bash(gh release:*),Bash(gh secret:*),Bash(gh variable:*),Bash(gh workflow:*),Bash(gh run:*),Bash(gh label delete:*)"
       - name: The status comment
         if: always() && steps.command.outputs.command != ''
