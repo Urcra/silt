@@ -25,7 +25,7 @@ Right-click a thread in the sidebar or on All threads for its menu; its **⋯** 
 - **Snooze** it for an hour, until tomorrow, or until something happens in it.
 - **Settle** it once it needs nothing more.
 
-These are yours alone, and follow you to your other machines through the server. The same menu has **Copy thread ID**, the id `silt resume` and `silt fork` take in a terminal, **Fork**, **History graph** and **Join live**.
+These are yours alone, and follow you to your other machines through the server. The same menu has **Copy thread ID**, the id `silt resume` and `silt fork` take in a terminal, **Fork**, **History of this thread**, which opens the history graph on the thread's family, **History graph** and **Join live**.
 
 The top of the sidebar is the workspace you're looking at: its name and its server. Pick it to narrow everything to one server, one org, or this machine (see [several servers](servers.md)); its menu also shows which account you're signed in as on each server.
 

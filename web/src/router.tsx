@@ -108,6 +108,8 @@ export const router = createRouter({
       getParentRoute: () => root,
       path: '/graph',
       component: lazyRouteComponent(() => import('./components/Graph'), 'Graph'),
+      validateSearch: (search: Record<string, unknown>): { thread?: string } =>
+        typeof search.thread === 'string' ? { thread: search.thread } : {},
     }),
     createRoute({
       getParentRoute: () => root,

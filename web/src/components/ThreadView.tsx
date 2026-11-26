@@ -1483,7 +1483,7 @@ function Details({
         <InspectorSection
           title="Lineage"
           aside={
-            <Link to="/graph" className="text-accent-fg hover:text-fg-1">
+            <Link to="/graph" search={{ thread: summary.id }} className="text-accent-fg hover:text-fg-1">
               View graph
             </Link>
           }

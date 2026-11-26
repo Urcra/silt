@@ -77,6 +77,13 @@ test('lists threads and searches across compaction', async ({ page }) => {
   const threads = page.getByTestId('threads')
   await expect(threads).toContainText(thread)
   await expect(threads.getByRole('row').filter({ hasText: fork })).toContainText(`fork of ${thread}`)
+  // A thread's menu opens its history: its family in the graph, with its newest row chosen.
+  await threads.getByRole('row').filter({ hasText: fork }).click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'History of this thread' }).click()
+  await expect(page).toHaveURL(/\/graph\?thread=/)
+  await expect(page.getByRole('tab', { name: 'This thread’s family' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('complementary', { name: 'selected' }).getByRole('link', { name: `Thread ${fork}` })).toBeVisible()
+  await allThreads(page)
 
   await page.keyboard.press('ControlOrMeta+Shift+F')
   await page.getByLabel('search', { exact: true }).fill('farewell')

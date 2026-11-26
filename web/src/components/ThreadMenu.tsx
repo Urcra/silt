@@ -44,7 +44,12 @@ export function useThreadMenu(thread: ThreadSummary): { items: MenuItem[]; dialo
         ),
     },
     ...(isChat(thread.repo) && !hosted() ? [{ label: 'Move to a project…', onSelect: () => setAsking('project') }] : []),
-    { label: 'History graph', divided: true, onSelect: () => void navigate({ to: '/graph' }) },
+    {
+      label: 'History of this thread',
+      divided: true,
+      onSelect: () => void navigate({ to: '/graph', search: { thread: thread.id } }),
+    },
+    { label: 'History graph', onSelect: () => void navigate({ to: '/graph' }) },
     ...(hosted()
       ? []
       : [{ label: 'Join live', onSelect: () => void navigate({ to: '/t/$id/live', params: { id: thread.id } }) }]),
