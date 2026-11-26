@@ -5,6 +5,7 @@ import {
   api,
   type AgentSetting,
   type AgentStatus,
+  type EscalationAsked,
   type PermissionAsked,
   type Presence,
   type Preset,
@@ -16,10 +17,10 @@ import {
   DEFAULT_PRESETS,
   PRESETS,
   STATE_PHRASE,
+  checkedBySilt,
   nextPermission,
   ownModes,
   presetForOwnMode,
-  presetUnavailable,
   restartChoices,
   running,
   threadAgent,
@@ -33,6 +34,8 @@ import { formatKeys, useActions, useShortcut } from '../shortcuts'
 import { Button, Dot, Icon, Input, Kbd, Spinner, buttonClass, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
 import { AgentChip, PermissionChip } from './AgentPickers'
+import { JudgeRow } from './AutoJudge'
+import { isModel } from '../agentSettings'
 import { agentRefused, modeRefused, presetRefused, workspaceOf } from '../rules'
 import { ATTACH, useAttachments } from '../attachments'
 import { AttachedFiles } from './Attachments'
@@ -90,7 +93,12 @@ function working(status: AgentStatus | null): boolean {
 function statePhrase(status: AgentStatus): string {
   if (status.sign_in) return `${status.agent} needs you to sign in`
   const asking = (status.questions?.length ?? 0) > 0 && status.state === 'awaiting_permission'
-  return `${status.agent} ${asking ? 'is asking you a question' : STATE_PHRASE[status.state]}`
+  if (asking) return `${status.agent} is asking you a question`
+  // A call Auto refused that the agent asks the person to allow, or one Auto is still checking (ADR 0132).
+  if (status.state === 'awaiting_permission' && status.permissions.length === 0 && (status.escalations?.length ?? 0) > 0)
+    return `${status.agent} is waiting for you to allow what Auto refused`
+  if (status.state === 'working' && (status.checking?.length ?? 0) > 0) return `${status.agent} is waiting for Auto’s check`
+  return `${status.agent} ${STATE_PHRASE[status.state]}`
 }
 
 /** A permission the agent asks for, answered in place: ⏎ allows, Esc dismisses (ADR 0022). */
@@ -149,6 +157,13 @@ export function PermissionCard({
           {asked.title}
         </pre>
       )}
+      {/* Auto's check couldn't judge it, so it's the person's, as on Ask before commands (ADR 0132). */}
+      {asked.unchecked && (
+        <p className="flex items-start gap-1.5 text-xs text-warn-fg">
+          <Icon name="alert" className="mt-px h-3.5 w-3.5 shrink-0" />
+          <span>{asked.unchecked}</span>
+        </p>
+      )}
       {/* In the page's own flow, not a box of its own to scroll: the plan is what's being read. */}
       {asked.plan && (
         <div className="rounded-sm border border-line-subtle bg-bg px-3.5 py-2.5 text-sm">
@@ -182,6 +197,98 @@ export function PermissionCard({
           </Button>
         </span>
       )}
+      {error && <span className="text-xs text-danger">{error}</span>}
+    </div>
+  )
+}
+
+/**
+ * A call Auto's check refused that the agent asks the person to allow (ADR 0132): the call, why Auto refused it and
+ * why the agent says it's needed, with words for the agent. Allowed, the same call goes through once; ⏎ allows, Esc
+ * stops the turn.
+ */
+export function EscalationCard({
+  thread,
+  asked,
+  agent,
+  first,
+}: {
+  thread: string
+  asked: EscalationAsked
+  agent: string
+  first: boolean
+}) {
+  const [error, setError] = useState<string>()
+  const [words, setWords] = useState('')
+  const answer = (allow: boolean) => {
+    setError(undefined)
+    api.answerEscalation(thread, asked.id, allow, words.trim() || null).catch((failure: unknown) => setError(message(failure)))
+  }
+  useShortcut('enter', 'Allow what the agent asks', () => {
+    if (first && !document.querySelector('dialog[open]')) answer(true)
+  })
+  useShortcut('escape', 'Answer neither and stop the turn', () => {
+    if (first && !document.querySelector('dialog[open]'))
+      void api.cancelTurn(thread).catch((failure: unknown) => setError(message(failure)))
+  })
+  return (
+    <div
+      role="group"
+      aria-label="escalation"
+      className="flex flex-col gap-2.5 rounded-md border border-warn bg-elevated px-3.5 py-3"
+    >
+      <span className="flex min-w-0 items-center gap-2 text-xs text-fg-2">
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" />
+        {agent} asks you to allow what Auto refused
+      </span>
+      <pre className="max-h-64 overflow-y-auto rounded-sm border border-line bg-bg px-2.5 py-2 font-mono text-xs whitespace-pre-wrap text-fg-1 [overflow-wrap:anywhere]">
+        {asked.call}
+      </pre>
+      <dl className="flex flex-col gap-1.5 text-xs">
+        <div className="flex flex-col gap-0.5">
+          <dt className="flex items-center gap-1.5 text-fg-2">
+            <Icon name="shield" className="h-3 w-3 shrink-0 text-fg-3" />
+            Auto refused it
+          </dt>
+          <dd className="text-fg-1">{asked.refused}</dd>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <dt className="text-fg-2">{agent} says why it&apos;s needed</dt>
+          <dd className="text-fg-1">{asked.why}</dd>
+        </div>
+      </dl>
+      <label className="flex flex-col gap-1 text-xs">
+        <span className="text-fg-2">Words for {agent}, if you like</span>
+        <Input
+          value={words}
+          onChange={(event) => setWords(event.target.value)}
+          placeholder="Go ahead, or say what to do instead"
+          onKeyDown={(event) => {
+            // ⏎ in the box allows, as it does on the card; it doesn't also reach the page's shortcut.
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              event.stopPropagation()
+              answer(true)
+            }
+          }}
+        />
+      </label>
+      <span className="flex flex-wrap gap-1.5">
+        <Button variant="primary" title="Lets this exact call through once, without Auto's check" onClick={() => answer(true)}>
+          Allow once
+          {first && <Kbd onAccent>⏎</Kbd>}
+        </Button>
+        <Button variant="secondary" title={`Tells ${agent} no, with your words`} onClick={() => answer(false)}>
+          Refuse
+        </Button>
+        <Button
+          variant="ghost"
+          title="Answers neither: the agent drops what it asked and ends its turn"
+          onClick={() => void api.cancelTurn(thread).catch((failure: unknown) => setError(message(failure)))}
+        >
+          Stop the turn {first && <Kbd>Esc</Kbd>}
+        </Button>
+      </span>
       {error && <span className="text-xs text-danger">{error}</span>}
     </div>
   )
@@ -853,7 +960,7 @@ export function AgentDock({
   const attachable = (live || startable) && !hosted()
   const attach = (files: File[], pasted = false) => act(add(files, pasted))
 
-  const refusedPreset = (id: Preset) => presetRefused(workspace, id) ?? presetUnavailable(id, agentModes, agentCalled)
+  const refusedPreset = (id: Preset) => presetRefused(workspace, id)
   // Running, the chip stops the agent wherever it is; another agent takes over only where this daemon can start one.
   const switchable = live && !hosted() && status.agent_id !== '' && agents.length > 0
   // A server before it relayed the agent's id leaves it out; its name still finds its mark.
@@ -883,6 +990,25 @@ export function AgentDock({
           value={preset}
           onChange={choosePreset}
           refused={refusedPreset}
+          checked={checkedBySilt(agentModes)}
+          judge={
+            live && status.auto_check ? (
+              <JudgeRow
+                check={status.auto_check}
+                agent={runningId}
+                agents={agents
+                  .filter((each) => each.id !== runningId)
+                  .concat(agents.filter((each) => each.id === runningId))
+                  .map((each) => ({
+                    id: each.id,
+                    name: each.name,
+                    models: each.settings.find(isModel)?.choices.map(({ id, name }) => ({ id, name })) ?? [],
+                    refused: agentRefused(workspace, each.id),
+                  }))}
+                onPick={(judge) => act(api.setJudge(thread, judge))}
+              />
+            ) : undefined
+          }
           own={
             own.length > 0
               ? { agent: ownAgent, name: agentCalled, modes: own, mode: inOwn, onMode: chooseMode, refused: refusedOwn }

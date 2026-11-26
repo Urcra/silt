@@ -32,11 +32,22 @@ impl Usage {
         Self { client, kept: tokio::sync::Mutex::default() }
     }
 
-    /// `agent`'s usage, with the sign-in it would run with in `cwd`.
-    pub(crate) async fn of(&self, agent: &str, cwd: Option<&Path>) -> Result<AgentUsage, CoreError> {
+    /// `agent`'s usage, with the sign-in it would run with in `cwd`; only
+    /// what the agent recorded when `off` says why its provider isn't asked.
+    pub(crate) async fn of(&self, agent: &str, cwd: Option<&Path>, off: Option<&str>) -> Result<AgentUsage, CoreError> {
         let provider = Provider::for_agent(silt_workspace::agent_key(agent).as_str())
             .ok_or_else(|| CoreError::Invalid(format!("Silt doesn't know how to read {agent}'s plan usage")))?;
         let home = provider.home(cwd).ok_or_else(|| CoreError::Invalid("HOME is not set".to_owned()))?;
+        if let Some(why) = off {
+            let now = now_ms();
+            return Ok(match provider.recorded(&home, now) {
+                Some(recorded) => view(provider, recorded, None, true, now),
+                None => {
+                    let why = format!("Silt doesn't ask {}'s provider: {why}", provider.agent());
+                    view(provider, PlanUsage { plan: None, limits: Vec::new() }, Some(why), false, now)
+                }
+            });
+        }
         // Held across the ask, so composers opening together ask once.
         let mut kept = self.kept.lock().await;
         let key = (provider, home);

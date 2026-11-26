@@ -413,6 +413,9 @@ pub struct HistoryEntry {
     /// On a `task`: news of a subagent or background command.
     #[serde(default)]
     pub task: Option<TaskView>,
+    /// On an `auto`: Auto's verdict on a call (ADR 0132).
+    #[serde(default)]
+    pub auto: Option<AutoView>,
     /// What a page of history left out of the entry, read whole with `whole`:
     /// an image's data, or a long output's start.
     #[serde(default)]
@@ -476,6 +479,25 @@ pub struct TaskView {
     pub side: Option<String>,
     /// What the agent said of how it went.
     pub summary: Option<String>,
+}
+
+/// Auto's verdict on a call of an agent without an auto mode of its own
+/// (ADR 0132).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AutoView {
+    /// The tool call it's on.
+    pub call: String,
+    /// `allow`, `refuse`, `unchecked` (left to the person), `before` (the
+    /// same call was allowed earlier) or `granted` (the person allowed it).
+    pub verdict: String,
+    pub reason: String,
+    /// The agent and model that judged, where one did.
+    #[serde(default)]
+    pub judge: Option<String>,
+    /// How long the check took.
+    #[serde(default)]
+    pub ms: Option<i64>,
 }
 
 /// A step of an agent's plan.
@@ -1444,6 +1466,7 @@ mod cut_tests {
             plan: None,
             side: None,
             task: None,
+            auto: None,
             cut: None,
         }
     }

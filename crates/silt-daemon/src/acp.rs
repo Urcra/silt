@@ -37,10 +37,15 @@ pub(crate) struct AcpRun {
     pub(crate) last_said: String,
     /// What its sandbox reaches and the run's token, when it runs in Silt's
     /// sandbox, for starting it again the same way (ADR 0093).
-    sandbox: Option<(silt_workspace::Reach, String, String)>,
+    pub(crate) sandbox: Option<(silt_workspace::Reach, String, String)>,
     /// The folders granted to it that its sandbox was started with
     /// (ADR 0102).
-    folders: std::collections::BTreeMap<String, bool>,
+    pub(crate) folders: std::collections::BTreeMap<String, bool>,
+    /// The run's token, for its MCP server and its gateway.
+    pub(crate) token: String,
+    /// Auto's check of its calls, where it has no auto mode of its own
+    /// (ADR 0132).
+    pub(crate) auto: crate::judges::AutoState,
     /// What to tell it once it's restarted with other folders.
     resume_note: Option<String>,
     checkout_id: CheckoutId,
@@ -61,7 +66,7 @@ pub(crate) struct AcpRun {
     thought: String,
     /// When the thought being streamed began, which its record keeps.
     thought_ms: i64,
-    asking: Vec<Permission>,
+    pub(crate) asking: Vec<Permission>,
     /// Questions the agent asked and waits on.
     questions: Vec<Question>,
     context: Option<ContextUse>,
@@ -72,7 +77,7 @@ pub(crate) struct AcpRun {
     steering: Option<String>,
     /// The agent adds a steer to the turn it runs (`_session/steering`), so
     /// a steer needn't cancel it (ADR 0111).
-    steers: bool,
+    pub(crate) steers: bool,
     /// Steers that found no turn running, each to send as a prompt in turn.
     steered: Vec<String>,
     /// Each tool call's kind as the agent announced it, for permission
@@ -227,9 +232,30 @@ impl AcpRun {
         }
         match self.state {
             // Awaiting input stays the plan's to approve.
-            AgentState::Working if !self.asking.is_empty() || !self.questions.is_empty() => AgentState::AwaitingPermission,
+            AgentState::Working if !self.asking.is_empty() || !self.questions.is_empty() || self.auto.waits_on_person() => {
+                AgentState::AwaitingPermission
+            }
             other => other,
         }
+    }
+
+    /// Which of the thread's runs this is.
+    pub(crate) fn run_number(&self) -> u64 {
+        self.run
+    }
+
+    /// The model it runs on, by its id and name, where it says.
+    pub(crate) fn model(&self) -> Option<(String, String)> {
+        let setting = self.settings.iter().find(|setting| is_model(&setting.category, &setting.id))?;
+        let name =
+            setting.choices.iter().find(|choice| choice.id == setting.current).map_or(&setting.current, |choice| &choice.name);
+        Some((setting.current.clone(), name.clone()))
+    }
+
+    /// Whether it has an auto mode of its own, which Auto moves it into
+    /// rather than Silt's check (ADR 0114, ADR 0132).
+    pub(crate) fn has_own_auto(&self) -> bool {
+        self.modes.as_ref().is_some_and(|modes| modes.available.iter().any(|mode| mode_key(&mode.id) == "auto"))
     }
 
     /// How many commands and subagents it left running.
@@ -406,7 +432,7 @@ fn own_answer(question: &Question, text: &str) -> String {
     )
 }
 
-fn silt_exe() -> PathBuf {
+pub(crate) fn silt_exe() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("silt"))
 }
 
@@ -496,7 +522,7 @@ impl Core {
     }
 
     /// What `local` needs to reach the gateway with its run's token.
-    async fn local_env(&self, token: &str) -> Result<Vec<(String, String)>, CoreError> {
+    pub(crate) async fn local_env(&self, token: &str) -> Result<Vec<(String, String)>, CoreError> {
         let mut env = vec![
             ("SILT_MODEL_URL".to_owned(), self.models.gateway().await?),
             ("SILT_MODEL_TOKEN".to_owned(), token.to_owned()),
@@ -508,11 +534,14 @@ impl Core {
 
     /// The agents the web UI can start. The registry's copy is brought up to
     /// date in the background the first time someone looks, not whenever a
-    /// daemon starts; the bundled one answers meanwhile.
+    /// daemon starts; the bundled one answers meanwhile, and always does
+    /// offline.
     pub(crate) fn acp_agents(&mut self) -> AgentChoices {
         if !self.registry_checked {
             self.registry_checked = true;
-            tokio::spawn(registry::refresh(self.data_dir.clone()));
+            if crate::network::allowed(&self.data_dir).agent_registry {
+                tokio::spawn(registry::refresh(self.data_dir.clone()));
+            }
         }
         let mut clones: Vec<CloneInfo> =
             self.clones.iter().map(|(repo, path)| CloneInfo { repo: repo.clone(), path: path.clone() }).collect();
@@ -744,6 +773,7 @@ impl Core {
         let project = self.threads.get(&thread).map(|record| record.repo.clone());
         let token = self.mint_run_token(thread, &workspace.id, project.as_deref()).await?;
         let local_token = token.clone();
+        let run_token = token.clone();
         let mut start = self.agent_start(thread, &checkout, load.as_ref().map(|(_, native)| native.clone()));
         if let Some(mcp) = &mut start.mcp {
             mcp.args.extend(["--token".to_owned(), token.clone()]);
@@ -780,6 +810,8 @@ impl Core {
                 last_said: String::new(),
                 sandbox: kept,
                 folders,
+                token: run_token,
+                auto: crate::judges::AutoState::default(),
                 resume_note: None,
                 checkout_id,
                 checkout,
@@ -1022,6 +1054,19 @@ impl Core {
     /// turn is cancelled for it, as for an agent that takes no steers.
     async fn steered(&mut self, thread: ThreadId, text: String, outcome: silt_acp::Steered) -> Result<(), CoreError> {
         use silt_acp::Steered;
+        let run = self.acp.get_mut(&thread).expect("caller checked");
+        // A note of Silt's own reads as Silt's, and waits for the turn's end
+        // where the agent didn't take it in its turn.
+        if let Some(at) = run.auto.silt_steers.iter().position(|said| *said == text) {
+            run.auto.silt_steers.remove(at);
+            if matches!(outcome, Steered::Injected | Steered::StartedNewTurn) {
+                self.flush_acp(thread).await?;
+                self.record_acp(thread, &acp::prompt(&text, crate::judges::SILT, &[], &[])).await?;
+                return Ok(());
+            }
+            run.auto.hand_back.push(text);
+            return self.next_prompt(thread).await;
+        }
         match outcome {
             Steered::Injected | Steered::StartedNewTurn => {
                 self.flush_acp(thread).await?;
@@ -1063,6 +1108,9 @@ impl Core {
             let steer = run.steered.remove(0);
             let me = self.own_user(thread);
             return self.send_prompt(thread, &me, &steer, Given::default()).await;
+        }
+        if self.hand_back(thread).await? {
+            return Ok(());
         }
         let Some(next) = self.store.take_next(thread).await? else {
             return Ok(());
@@ -1141,6 +1189,9 @@ impl Core {
             prompt = format!("{prompt}\n\n{}", saved_note(&saved));
         }
         let run = self.acp.get_mut(&thread).expect("caller checked");
+        if author != crate::judges::SILT {
+            run.auto.prompted(&said);
+        }
         run.state = AgentState::Working;
         run.error = None;
         run.suggestion = None;
@@ -1176,6 +1227,7 @@ impl Core {
                 return Err(CoreError::Invalid("the agent didn't offer that option".into()));
             }
             run.asking.retain(|asked| asked.id != *id);
+            run.auto.unchecked.remove(id);
         }
         if command == Command::Cancel {
             run.stopped = true;
@@ -1242,9 +1294,10 @@ impl Core {
         self.announce(crate::protocol::BusEvent::Threads);
     }
 
-    /// Answers a permission request by the thread's preset when it can, and
-    /// leaves it for the person otherwise (ADR 0022).
-    fn permission_asked(&mut self, thread: ThreadId, permission: Permission) {
+    /// Answers a permission request by the thread's preset when it can, puts
+    /// it to Auto's check for an agent without an auto mode of its own
+    /// (ADR 0132), and leaves the rest to the person (ADR 0022).
+    async fn permission_asked(&mut self, thread: ThreadId, permission: Permission) {
         let preset = self.capped_preset(thread, self.preset(thread));
         let run = self.acp.get_mut(&thread).expect("caller checked");
         if !run.presents_plans && plan_put(run, &permission.tool_call_id).is_some() {
@@ -1262,6 +1315,22 @@ impl Core {
             .or_else(|| run.tool_kinds.get(&permission.tool_call_id).cloned());
         match crate::presets::decide_with(preset, kind.as_deref(), asks, &permission.option_kinds) {
             Some(option) => send(run, Command::Answer { id: permission.id, option: Some(option.to_owned()) }),
+            None if preset == Preset::Auto && !run.has_own_auto() => {
+                let (title, input) =
+                    run.tool_said.get(&permission.tool_call_id).cloned().unwrap_or_else(|| (permission.title.clone(), None));
+                let said = crate::judges::CallSaid {
+                    id: permission.tool_call_id.clone(),
+                    kind,
+                    title,
+                    input,
+                    cwd: run.checkout.to_string_lossy().into_owned(),
+                };
+                if let Some(unanswered) = self.auto_check(thread, permission, said).await
+                    && let Some(run) = self.acp.get_mut(&thread)
+                {
+                    run.asking.push(unanswered);
+                }
+            }
             None => run.asking.push(permission),
         }
     }
@@ -1331,6 +1400,9 @@ impl Core {
         .await?;
         if let Some(run) = self.acp.get_mut(&thread) {
             follow_preset_in_settings(run, preset);
+            if preset != Preset::Auto {
+                run.auto.left_auto();
+            }
         }
         // An agent with modes of its own is put in the one that does what the preset says, so the two never disagree.
         if let Some(run) = self.acp.get_mut(&thread)
@@ -1574,6 +1646,7 @@ impl Core {
                     options: asked.options.clone(),
                     plan: plan_put(run, &asked.tool_call_id).map(str::to_owned),
                     tool_call: Some(asked.tool_call_id.to_string()),
+                    unchecked: run.auto.unchecked.get(&asked.id).cloned(),
                 })
                 .collect(),
             questions: run.questions.iter().map(question_asked).collect(),
@@ -1588,6 +1661,9 @@ impl Core {
             suggestion: run.suggestion.clone(),
             stoppable: run.background.values().map(|task| task.call.clone()).collect(),
             sandbox: run.sandbox.as_ref().map(|(reach, _, _)| reach.clone()),
+            auto_check: self.auto_check_view(thread),
+            checking: run.auto.checking(),
+            escalations: run.auto.escalations(),
         })
     }
 
@@ -1748,7 +1824,7 @@ impl Core {
                 }
             }
             AcpEvent::Agent(silt_acp::Event::Update(update)) => self.acp_update(thread, update).await?,
-            AcpEvent::Agent(silt_acp::Event::Permission(permission)) => self.permission_asked(thread, permission),
+            AcpEvent::Agent(silt_acp::Event::Permission(permission)) => self.permission_asked(thread, permission).await,
             AcpEvent::Agent(silt_acp::Event::Question(question)) => self.question_asked(thread, question).await?,
             AcpEvent::Agent(silt_acp::Event::SignIn(methods)) => {
                 let name = run.info.name.clone();
@@ -1792,6 +1868,7 @@ impl Core {
                     AgentState::Idle
                 };
                 run.asking.clear();
+                run.auto.turn_ended();
                 run.tool_kinds.clear();
                 run.tool_said.clear();
                 run.calls_running.clear();
@@ -2381,7 +2458,7 @@ impl Core {
 /// with the sandbox's variables, and Silt's MCP server reaching the daemon
 /// through the run's channel.
 /// Tasks that end with the value, such as a run's gateway with its agent.
-struct Aborting(Vec<tokio::task::JoinHandle<()>>);
+pub(crate) struct Aborting(pub(crate) Vec<tokio::task::JoinHandle<()>>);
 
 impl Drop for Aborting {
     fn drop(&mut self) {
@@ -2391,7 +2468,7 @@ impl Drop for Aborting {
     }
 }
 
-fn sandboxed(
+pub(crate) fn sandboxed(
     start: &mut Start,
     given: Vec<(String, String)>,
     info: &AgentInfo,
@@ -2558,6 +2635,21 @@ struct Seen {
     presents_plans: bool,
     #[serde(default)]
     commands: Vec<crate::protocol::AgentCommand>,
+}
+
+/// Whether a setting is the agent's model: tagged so, or, untagged, called so.
+pub(crate) fn is_model(category: &Option<String>, id: &str) -> bool {
+    match category.as_deref() {
+        Some(category) => category == "model",
+        None => id == "model",
+    }
+}
+
+/// The name agent `agent` gives its model `model`, as last seen here.
+pub(crate) fn seen_model_name(data_dir: &Path, agent: &str, model: &str) -> Option<String> {
+    let seen = read_seen(data_dir).remove(agent)?;
+    let setting = seen.settings.into_iter().find(|setting| is_model(&setting.category, &setting.id))?;
+    setting.choices.into_iter().find(|choice| choice.id == model).map(|choice| choice.name)
 }
 
 /// What an agent takes attached to a prompt, as kept beside its modes.
@@ -2788,7 +2880,7 @@ pub(crate) fn mode_meaning(agent: &str, mode: &str, planning: bool, default: boo
 
 /// A mode's id as Silt knows it: Copilot's are links to the protocol's
 /// page on modes, ending in `#agent`, `#plan` and `#autopilot`.
-fn mode_key(mode: &str) -> &str {
+pub(crate) fn mode_key(mode: &str) -> &str {
     mode.rsplit_once('#').map_or(mode, |(_, key)| key)
 }
 
@@ -2865,7 +2957,7 @@ fn mode_ids(modes: &silt_acp::Modes) -> Vec<&str> {
 /// Copilot's `agent` asks as its permissions setting says, which follows
 /// the preset; Full access never moves it into `autopilot`, which also
 /// runs on without the person.
-fn mode_for_preset(preset: Preset, modes: &silt_acp::Modes) -> Option<String> {
+pub(crate) fn mode_for_preset(preset: Preset, modes: &silt_acp::Modes) -> Option<String> {
     if preset == Preset::Plan {
         return silt_acp::plan_mode(modes).map(|mode| mode.id.clone());
     }
@@ -2943,7 +3035,7 @@ fn plan_first(run: &mut AcpRun) {
     }
 }
 
-fn send(run: &mut AcpRun, command: Command) {
+pub(crate) fn send(run: &mut AcpRun, command: Command) {
     match &run.handle {
         Some(handle) => {
             handle.send(command);
@@ -2998,13 +3090,13 @@ impl Core {
 
 /// Silt's sandbox for an ACP agent's run (ADR 0093).
 pub(crate) struct AcpSandbox {
-    reach: silt_workspace::Reach,
-    token: String,
-    scratch: PathBuf,
-    workspace: String,
-    thread: String,
+    pub(crate) reach: silt_workspace::Reach,
+    pub(crate) token: String,
+    pub(crate) scratch: PathBuf,
+    pub(crate) workspace: String,
+    pub(crate) thread: String,
     /// The devices Silt relays to its sandbox.
-    relayed: Vec<crate::sandbox::Relayed>,
+    pub(crate) relayed: Vec<crate::sandbox::Relayed>,
 }
 
 pub(crate) fn spawn_agent(

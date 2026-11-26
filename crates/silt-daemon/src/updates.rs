@@ -51,10 +51,11 @@ impl Updates {
         }
     }
 
-    /// Starts a check when none ran for a while, unless `SILT_UPDATE_CHECK`
-    /// is `never`, which leaves checks to Check now.
+    /// Starts a check when none ran for a while, unless this machine is
+    /// offline or `SILT_UPDATE_CHECK` is `never`, which leave checks to
+    /// Check now.
     pub(crate) fn check_if_due(self: &Arc<Self>) {
-        if std::env::var("SILT_UPDATE_CHECK").is_ok_and(|value| value == "never") {
+        if !crate::network::allowed(&self.data_dir).update_checks {
             return;
         }
         let due = {

@@ -7,7 +7,7 @@ import {
   ownModeSays,
   ownModes,
   presetForOwnMode,
-  presetUnavailable,
+  checkedBySilt,
   restartChoices,
   threadAgent,
 } from './agentState'
@@ -88,13 +88,12 @@ describe('presets', () => {
     expect(nextPreset('plan', () => 'all refused')).toBeUndefined()
   })
 
-  it('offer Auto only to an agent with an auto mode, once its modes are known', () => {
-    expect(presetUnavailable('auto', modes('default', 'acceptEdits', 'auto'), 'Claude Code')).toBeUndefined()
-    expect(presetUnavailable('auto', modes('read-only', 'auto', 'full-access'), 'Codex')).toBeUndefined()
+  it('have Silt check for an agent without an auto mode of its own', () => {
+    expect(checkedBySilt(modes('default', 'acceptEdits', 'auto'))).toBe(false)
+    expect(checkedBySilt(modes('read-only', 'auto', 'full-access'))).toBe(false)
     const copilot = modes('#agent', '#plan', '#autopilot').map((mode) => ({ ...mode, id: `https://x/session-modes${mode.id}` }))
-    expect(presetUnavailable('auto', copilot, 'GitHub Copilot')).toBe('GitHub Copilot has no auto mode')
-    expect(presetUnavailable('auto', undefined, 'GitHub Copilot')).toBeUndefined()
-    expect(presetUnavailable('full_access', copilot, 'GitHub Copilot')).toBeUndefined()
+    expect(checkedBySilt(copilot)).toBe(true)
+    expect(checkedBySilt(undefined)).toBe(true)
   })
 
   it('move an agent without an auto mode to the one for Ask before commands', () => {

@@ -89,7 +89,7 @@ Commands stand on their own, as `$ command` with the last lines of their output,
 - **Plan:** every new prompt gets a plan to approve before the agent changes anything. Approving it picks the preset the thread moves to.
 - **Ask for everything.**
 - **Ask before commands**, the default: edits, reads and searches are allowed, and anything else asks.
-- **Auto:** the agent's own auto mode lets safe actions through and asks about risky ones. Only agents with an auto mode offer it, Claude Code among them.
+- **Auto:** what's safe goes through and the rest asks. An agent with an auto mode of its own, such as Claude Code, uses it; for any other, Silt checks each command first, and what it refuses goes back to the agent with why. **Checked by**, under Auto, says which agent checks. See [Auto for every agent](auto.md).
 - **Full access**, for a machine you trust.
 
 When the agent waits on you, the header says so and the composer turns amber.
@@ -107,7 +107,7 @@ Once it's signed in, the agent starts again and goes on with the prompt it refus
 - **Sharing.** **Share** makes a read-only link to the artifact alone (see [sharing](sharing.md)), copies a link to it in the thread, or downloads it, as its file or as one HTML file that opens anywhere.
 - **Problems.** If your browser blocks something the page loads, a script in it fails, or it's wider than the panel, a notice under the page says so, and **Send to the agent** asks for a version that fixes it.
 - **Images and videos.** Neither has a size limit. An image shows as a small preview, and opens in a viewer over the whole window. There you zoom with the wheel, a pinch, + and − or a double-click, pan by dragging or with the arrows, press 0 to fit it and 1 for actual size, and **Full resolution** (or F) loads the original. A video plays where it is, with play, seek, volume, speed and full screen; its expand button opens it in the viewer with loop and picture in picture too, and **?** lists its keys. A video plays as it arrives, so a long one starts at once. One another machine made shows how much of it has arrived until it's all here.
-- **Safety.** An HTML artifact runs in a sandbox that reaches nothing of Silt's. It may load scripts from a few public CDNs (cdnjs, jsDelivr, unpkg, Tailwind's and jQuery's) and fonts from Google Fonts, so opening one can contact those hosts; it can't send anything anywhere else. SVG, Mermaid and images show as images, so nothing in them runs.
+- **Safety.** An HTML artifact runs in a sandbox that reaches nothing of Silt's. It may load scripts from a few public CDNs (cdnjs, jsDelivr, unpkg, Tailwind's and jQuery's) and fonts from Google Fonts, which Silt fetches once and keeps, so opening one contacts no CDN; it can't send anything anywhere else. SVG, Mermaid and images show as images, so nothing in them runs.
 
 Artifacts are kept in the thread's history, so they hand off, fork and sync with it, and are found by their titles in search. [Artifacts](artifacts.md) covers the kinds there are, what a page can do, and the Artifacts page. An agent in a terminal (`silt claude`) isn't offered these tools, as nobody is looking at the web UI for it ([ADR 0068](../adr/0068-artifacts.md)).
 
@@ -122,7 +122,7 @@ Artifacts are kept in the thread's history, so they hand off, fork and sync with
 - **Changing one.** **Change it with an agent** on a system's page starts a new thread for that change, so each change has its own review. The agent reads the system first and changes only what you ask.
 - **Your own follow you.** The design systems in your data folder sync through each server you use, so a system made on one machine is there on the others, and one removed is removed everywhere.
 - **Each version keeps its copy** of the tokens it was made with, so it looks the same after a handoff, in the hosted app and behind a read-only link.
-- **Libraries and fonts through Silt.** Settings › Appearance can load artifacts' libraries and fonts through Silt, which fetches each file once and keeps it, so opening an artifact never contacts a CDN and pages you've opened before work offline. A server has the same setting for the hosted app and its links.
+- **Libraries and fonts through Silt.** Artifacts' libraries and fonts load through Silt, which fetches each file once and keeps it, so opening an artifact never contacts a CDN and pages you've opened before work offline. Settings › Network can turn it off, so each page loads them from the CDNs itself. A server has the same setting for the hosted app and its links ([What Silt sends over the network](network.md)).
 - **The agent checks its pages.** Where Node and Playwright are installed, the agent renders a page at a phone's width and a desktop's, in light and dark, before telling you about it, and reads an earlier version back to revise it after a handoff.
 
 **Questions.** An agent run from the web UI can ask you a question with choices. It waits in the conversation where it was asked: pick a choice, by click or by its number, type your own answer under the choices, which goes to the agent as a steer, or **Skip** it (Esc). The hosted app and your other devices answer it as well, through the server. A question a terminal session asks is answered in the terminal; the thread shows it, and the answer once given.
@@ -147,6 +147,6 @@ On a phone, the list of threads is the home page and New thread opens from it; t
 [History and search](history-and-search.md) and [forks and merge requests](forks-and-merge-requests.md) have the details.
 
 ## Settings
-Settings, the cog at the sidebar's bottom right, holds **Projects** (with their defaults and adding one), **Devices**, **Sync**, **Orgs**, **Chats**, **Notifications**, **Appearance** and **Text and layout**. Appearance picks a light and a dark theme from Silt's own and yours, imported from VS Code or Zed or written yourself; Text and layout sets the zoom, text sizes, fonts and spacing over it; see [Themes](themes.md).
+Settings, the cog at the sidebar's bottom right, holds **Projects** (with their defaults and adding one), **Devices**, **Sync**, **Orgs**, **Chats**, **Notifications**, **Appearance**, **Text and layout**, **Updates** and **Network**. Appearance picks a light and a dark theme from Silt's own and yours, imported from VS Code or Zed or written yourself; Text and layout sets the zoom, text sizes, fonts and spacing over it; see [Themes](themes.md). Network has a switch for each thing Silt connects to on its own, and **Offline** for all of them; see [What Silt sends over the network](network.md).
 
 The design is in [ADR 0044](../adr/0044-the-standard-agent-workspace.md), [ADR 0022](../adr/0022-agent-runtime.md) and [ADR 0024](../adr/0024-per-person-state.md).

@@ -20,8 +20,10 @@ import { TextLayoutSettings } from './TextLayout'
 import { ThemeSettings } from './Themes'
 import { AddProjectPage, Projects } from './Projects'
 import { UpdatesSettings } from './Updates'
+import { NetworkSettingsSection } from './Network'
 import { WorkspacesSettings } from './Workspaces'
 import { PluginsSettings } from './Plugins'
+import { AutoSettings } from './AutoSettings'
 
 const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
   {
@@ -29,6 +31,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
     sections: [
       ...(hosted() ? [] : [{ id: 'workspaces', label: 'Workspaces' }]),
       ...(hosted() ? [] : [{ id: 'plugins', label: 'Plugins' }]),
+      ...(hosted() ? [] : [{ id: 'auto', label: 'Auto' }]),
       { id: 'projects', label: 'Projects' },
       { id: 'orgs', label: 'Orgs' },
       ...(hosted() ? [] : [{ id: 'design-systems', label: 'Design systems' }]),
@@ -45,6 +48,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
       { id: 'appearance', label: 'Appearance' },
       { id: 'text', label: 'Text and layout' },
       ...(hosted() ? [] : [{ id: 'update', label: 'Updates' }]),
+      ...(hosted() ? [] : [{ id: 'network', label: 'Network' }]),
     ],
   },
 ]
@@ -131,7 +135,11 @@ function Chats() {
               />
             </span>
             <span className="text-xs text-fg-3">
-              Auto uses the agent&apos;s own auto mode; an agent without one starts at Ask before commands.
+              Auto uses the agent&apos;s own auto mode; for an agent without one, Silt checks its commands, as{' '}
+              <Link to="/settings/$section" params={{ section: 'auto' }} className="text-accent-fg hover:text-fg-1">
+                Settings › Auto
+              </Link>{' '}
+              says.
             </span>
           </div>
           <form
@@ -167,34 +175,8 @@ function Appearance() {
   return (
     <section aria-label="Appearance" className="flex flex-col gap-3">
       <ThemeSettings />
-      {!hosted() && <ArtifactLoading />}
       {!hosted() && <PageConnectors />}
     </section>
-  )
-}
-
-/** Whether artifacts' libraries and fonts load through Silt rather than from the CDNs (ADR 0071). */
-function ArtifactLoading() {
-  const queries = useQueryClient()
-  const settings = useQuery({ queryKey: keys.artifactSettings, queryFn: api.artifactSettings })
-  if (!settings.data) return null
-  const proxy = settings.data.proxy
-  const change = (next: boolean) =>
-    api.setArtifactSettings({ proxy: next }).then(
-      () => void queries.invalidateQueries({ queryKey: keys.artifactSettings }),
-      (failure: unknown) => toast(message(failure), 'danger'),
-    )
-  return (
-    <label className="flex items-start gap-2 pt-2 text-sm text-fg-1">
-      <input type="checkbox" checked={proxy} onChange={(event) => void change(event.target.checked)} className="mt-1" />
-      <span className="flex flex-col gap-0.5">
-        Load artifacts' libraries and fonts through Silt
-        <span className="text-xs text-fg-2">
-          Silt fetches each file once and keeps it, so opening an artifact never contacts a CDN, and pages you've opened before
-          work offline. Off, the page loads them from the CDNs.
-        </span>
-      </span>
-    </label>
   )
 }
 
@@ -388,9 +370,11 @@ export function Settings() {
     models: <LocalModelsSettings />,
     workspaces: <WorkspacesSettings />,
     plugins: <PluginsSettings />,
+    auto: <AutoSettings />,
     appearance: <Appearance />,
     text: <TextLayoutSettings />,
     update: <UpdatesSettings />,
+    network: <NetworkSettingsSection />,
     'design-systems': <DesignSystemsSettings />,
   }
   return (

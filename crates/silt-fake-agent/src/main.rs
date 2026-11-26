@@ -330,6 +330,37 @@ async fn agent() -> Result<()> {
                     }
                     notify(&worker, &session, SessionUpdate::AgentThoughtChunk(text("Thinking about the prompt.")))?;
                     notify(&worker, &session, SessionUpdate::UsageUpdate(UsageUpdate::new(53_000, 200_000)))?;
+                    if prompt.starts_with("You are Silt's Auto check") {
+                        // As the judge of Silt's Auto check (ADR 0132).
+                        notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(judge(&prompt, &model))))?;
+                        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+                    }
+                    if let Some(command) =
+                        newest(&prompt).split_once("Run `").and_then(|(_, rest)| rest.split_once('`')).map(|(command, _)| command.to_owned())
+                    {
+                        let mut reply = if run_asked(&worker, &session, &command, 1).await? {
+                            format!("Ran {command}.")
+                        } else {
+                            format!("I was not allowed to run {command}.")
+                        };
+                        if !reply.starts_with("Ran") && prompt.contains("escalate") {
+                            let servers = state.lock().expect("lock").mcp.get(&session.to_string()).cloned().unwrap_or_default();
+                            let arguments = serde_json::json!({"call": command, "why": "The person asked for it."});
+                            let place = cwd.clone();
+                            let answer = tokio::task::spawn_blocking(move || mcp::call(&servers, &place, "silt_escalate", arguments))
+                                .await
+                                .unwrap_or_else(|error| Err(error.to_string()))
+                                .unwrap_or_else(|error| format!("failed: {error}"));
+                            reply.push_str(&format!(" Asked the person: {answer}"));
+                            if answer.contains("allowed") {
+                                let again = run_asked(&worker, &session, &command, 2).await?;
+                                reply.push_str(if again { " Ran it after all." } else { " Still not allowed." });
+                            }
+                        }
+                        notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(reply.clone())))?;
+                        state.lock().expect("lock").said.entry(session.to_string()).or_default().extend([(true, prompt), (false, reply)]);
+                        return responder.respond(PromptResponse::new(StopReason::EndTurn));
+                    }
                     if prompt.contains("Long") {
                         let build = ToolCall::new("long-1", "cargo build")
                             .kind(ToolKind::Execute)
@@ -826,6 +857,55 @@ document.getElementById('add').onclick=function(){db.collection('tasks').add({do
     };
     let fields = ToolCallUpdateFields::new().status(status).raw_output(serde_json::json!(text));
     notify(worker, session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("show-1", fields)))
+}
+
+/// The fake judge's verdict on the call in Silt's Auto check's prompt
+/// (ADR 0132): `rm -rf` and `--force` refused, `unreadable` no verdict at all,
+/// anything else allowed, each saying the model that judged.
+fn judge(prompt: &str, model: &str) -> String {
+    let data = prompt
+        .split_once("```json\n")
+        .and_then(|(_, rest)| rest.split_once("\n```"))
+        .and_then(|(data, _)| serde_json::from_str::<serde_json::Value>(data).ok())
+        .unwrap_or_default();
+    let call = &data["call"];
+    let command = call["input"]["command"].as_str().or_else(|| call["title"].as_str()).unwrap_or_default();
+    if command.contains("unreadable") {
+        return "I'd rather not say.".to_owned();
+    }
+    let (verdict, reason) = if command.contains("rm -rf") || command.contains("--force") {
+        ("refuse", format!("{command} deletes or rewrites what you didn't ask to change (judged on {model})."))
+    } else {
+        ("allow", format!("{command} does what you asked (judged on {model})."))
+    };
+    format!("Looking at it.\n```json\n{}\n```", serde_json::json!({"verdict": verdict, "reason": reason}))
+}
+
+/// Asks permission to run `command` as call `run-<n>`, and runs it when
+/// allowed; answers whether it ran.
+async fn run_asked(worker: &ConnectionTo<Client>, session: &SessionId, command: &str, n: u32) -> Result<bool> {
+    let id = format!("run-{n}");
+    let call = ToolCall::new(id.clone(), format!("Run {command}"))
+        .kind(ToolKind::Execute)
+        .raw_input(serde_json::json!({"command": command}));
+    notify(worker, session, SessionUpdate::ToolCall(call))?;
+    let options = vec![
+        PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce),
+        PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce),
+    ];
+    let asked = RequestPermissionRequest::new(
+        session.clone(),
+        ToolCallUpdate::new(id.clone(), ToolCallUpdateFields::new().title(format!("Run {command}"))),
+        options,
+    );
+    let answer = worker.send_request(asked).block_task().await?;
+    let allowed =
+        matches!(&answer.outcome, RequestPermissionOutcome::Selected(selected) if selected.option_id.to_string() == "allow");
+    let (status, output) =
+        if allowed { (ToolCallStatus::Completed, "ran") } else { (ToolCallStatus::Failed, "The user refused the call.") };
+    let fields = ToolCallUpdateFields::new().status(status).raw_output(serde_json::json!(output));
+    notify(worker, session, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id, fields)))?;
+    Ok(allowed)
 }
 
 /// A prompt's last paragraph: what was asked, past a conversation primed

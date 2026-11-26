@@ -37,16 +37,13 @@ export function nextPreset(preset: Preset, refused: (preset: Preset) => string |
   return undefined
 }
 
-/** Why the agent can't take `preset` itself, or nothing: Auto needs an auto mode of its own, so one without asks as
- * for Ask before commands. Nothing while its modes aren't known. */
-export function presetUnavailable(
-  preset: Preset,
-  modes: AgentChoiceItem[] | null | undefined,
-  agent: string,
-): string | undefined {
-  if (preset !== 'auto' || !modes || modes.some((mode) => (mode.id.split('#').pop() ?? mode.id) === 'auto')) return undefined
-  return `${agent || 'This agent'} has no auto mode`
+/** Whether Auto is Silt's check for an agent, as it has no auto mode of its own, or its modes aren't known (ADR 0132). */
+export function checkedBySilt(modes: AgentChoiceItem[] | null | undefined): boolean {
+  return !(modes ?? []).some((mode) => (mode.id.split('#').pop() ?? mode.id) === 'auto')
 }
+
+/** What Auto does for an agent Silt checks (ADR 0132). */
+export const SILT_AUTO_SAYS = 'edits apply; Silt checks each command first, and what it refuses goes back to the agent'
 
 /** The presets a project can start its threads with: Plan is chosen per thread. */
 export const DEFAULT_PRESETS = PRESETS.filter((preset) => preset.id !== 'plan')

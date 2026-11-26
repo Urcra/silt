@@ -5,6 +5,7 @@
 - Amended by: [ADR 0109](0109-installing-and-updating-silt-over-ssh.md): Installing and updating Silt over SSH
 - Amended by: [ADR 0115](0115-the-sidebar-names-the-workspace-and-the-machine.md): The sidebar names the workspace at its top and the machine at its bottom
 - Amended by: [ADR 0129](0129-nightly-releases-and-three-channels.md): Nightly releases, and three channels: stable, nightly and dev
+- Amended by: [ADR 0134](0134-no-telemetry-and-an-offline-switch.md): update checks can be turned off in Settings › Network, and are off offline
 
 ## Context
 Updating a Silt built from source means going to its clone, pulling `main` and running `just install`. Release binaries exist (ADR 0043), but most people running Silt today build it themselves, and they want the app to tell them when `main` has moved and to update without a terminal. ADR 0041 planned signed updates for release packages, which aren't built yet.

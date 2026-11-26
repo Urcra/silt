@@ -7,6 +7,7 @@ import { apiUrl, hosted } from './served'
 import { askedServer } from './workspace'
 import type {
   AskView,
+  Judge,
   AppearanceMode,
   AppearanceSettings,
   TextSettings,
@@ -20,6 +21,8 @@ import type {
   ConnectorTool,
   PageConnector,
   ArtifactSettings,
+  NetworkSettings,
+  NetworkView,
   ChatSettings,
   CloudLaunch,
   DesignSystemView,
@@ -624,6 +627,8 @@ export const api = {
   setAppearance: (settings: AppearanceSettings) => request<string>('PUT', '/api/appearance', settings),
   importTheme: (text: string) => request<ThemeSaved>('POST', '/api/themes/import', { text }),
   duplicateTheme: (from: string) => request<ThemeSaved>('POST', '/api/themes/duplicate', { from }),
+  networkSettings: () => request<NetworkView>('GET', '/api/network-settings'),
+  setNetworkSettings: (settings: NetworkSettings) => request<string>('PUT', '/api/network-settings', settings),
   artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),
   setArtifactSettings: (settings: ArtifactSettings) => request<string>('PUT', '/api/artifact-settings', settings),
   projectDesignSystems: () => request<Record<string, string>>('GET', '/api/projects/design-systems'),
@@ -674,6 +679,11 @@ export const api = {
   stopTask: (id: string, call: string) => request<string>('POST', `${thread(id)}/agent/tasks/${encodeURIComponent(call)}/stop`),
   answer: (id: string, permission: number, option: string | null) =>
     request<string>('POST', `${thread(id)}/agent/answer`, { id: permission, option }),
+  /** The person's answer to a call Auto refused that the agent asks them to allow, with words for it (ADR 0132). */
+  answerEscalation: (id: string, escalation: number, allow: boolean, words: string | null) =>
+    request<string>('POST', `${thread(id)}/agent/escalation`, { id: escalation, allow, words }),
+  /** Who checks the thread's commands on Auto; `null` for its workspace's default (ADR 0132). */
+  setJudge: (id: string, judge: Judge | null) => request<string>('POST', `${thread(id)}/agent/judge`, { judge }),
   /** Answers a question the agent waits on, each field by its chosen values; none declines it. */
   answerQuestion: (id: string, question: number, answers: Record<string, string[]> | null) =>
     request<string>('POST', `${thread(id)}/agent/reply`, { id: question, answers }),

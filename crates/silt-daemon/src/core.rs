@@ -125,6 +125,13 @@ pub enum Event {
         run: u64,
         event: crate::acp::AcpEvent,
     },
+    /// What a judge of Auto's check answered (ADR 0132).
+    Judged(Box<crate::judges::Judged>),
+    /// An agent's `silt_escalate` waited as long as it may.
+    EscalationWaited {
+        thread: ThreadId,
+        id: u64,
+    },
     /// What an agent offers, as a session opened only to ask said; none
     /// where it couldn't be asked.
     AgentProbed {
@@ -377,6 +384,8 @@ pub struct Core {
     pub(crate) agent_runs: HashMap<ThreadId, silt_store::AgentRunRecord>,
     /// Agents asking other agents (ADR 0120).
     pub(crate) asks: crate::asks::Asks,
+    /// The judges threads chose for Auto's check (ADR 0132).
+    pub(crate) judges: crate::judges::Judges,
     /// What each thread's summary reads from its log, with the family's log
     /// length it was read at.
     pub(crate) summary_folds: Mutex<HashMap<FamilyId, crate::views::FamilyFold>>,
@@ -672,6 +681,7 @@ impl Core {
             bus,
             agent_runs: HashMap::new(),
             asks: crate::asks::Asks::load(data_dir),
+            judges: crate::judges::Judges::load(data_dir),
             summary_folds: Mutex::new(HashMap::new()),
             personal: crate::personal::Personal::default(),
             control: crate::control::Control::default(),
@@ -773,6 +783,16 @@ impl Core {
                 // An agent the web UI runs asks for its own thread only.
                 match self.run_thread(&token).await.and_then(|thread| self.find_thread(&thread)) {
                     Ok(thread) => self.ask_request(Some(thread), *asking, reply).await,
+                    Err(error) => {
+                        let _ = reply.send(to_response::<()>(Err(error)));
+                    }
+                }
+                return;
+            }
+            if let Request::Escalate { call, why, .. } = &*asking {
+                // An agent asks for its own thread only.
+                match self.run_thread(&token).await.and_then(|thread| self.find_thread(&thread)) {
+                    Ok(thread) => self.escalate(thread, call, why, reply).await,
                     Err(error) => {
                         let _ = reply.send(to_response::<()>(Err(error)));
                     }
@@ -919,8 +939,26 @@ impl Core {
             }
             return;
         }
+        if let Request::Escalate { thread, call, why } = &request {
+            match self.find_thread(thread) {
+                Ok(thread) => self.escalate(thread, call, why, reply).await,
+                Err(error) => {
+                    let _ = reply.send(to_response::<()>(Err(error)));
+                }
+            }
+            return;
+        }
         let response = match request {
             Request::OnServer { .. } => Response::error("a request names one server at a time"),
+            Request::Escalate { .. } => Response::error("an escalation is answered above"),
+            Request::EscalationAnswer { thread, id, allow, words } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.escalation_answer(thread, id, allow, words.as_deref()).await),
+                Err(error) => Response::error(error),
+            },
+            Request::SetJudge { thread, judge } => match self.find_thread(&thread) {
+                Ok(thread) => to_response(self.set_judge(thread, judge).await),
+                Err(error) => Response::error(error),
+            },
             Request::Asks => Response::ok(self.asks_view()),
             Request::Askable { .. }
             | Request::Ask { .. }
@@ -1050,6 +1088,10 @@ impl Core {
                 let motion = text.as_ref().unwrap_or(&appearance.text).motion_attribute();
                 let css = crate::theme::css(&self.data_dir, light, dark, text);
                 Response::ok(serde_json::json!({ "css": css, "mode": appearance.mode, "motion": motion }))
+            }
+            Request::NetworkSettings => to_response(crate::network::view(&self.data_dir)),
+            Request::SetNetworkSettings { settings } => {
+                to_response(crate::network::save(&self.data_dir, settings).map(|()| "saved"))
             }
             Request::ArtifactSettings => Response::ok(crate::design::artifact_settings(&self.data_dir)),
             Request::SetArtifactSettings { settings } => {
@@ -1478,7 +1520,8 @@ impl Core {
                 // A thread's folder may be in a workspace whose agents sign in apart; a thread not here asks as this machine.
                 let cwd = thread.and_then(|thread| self.find_thread(&thread).and_then(|thread| self.clone_of(thread)).ok());
                 let usage = self.usage.clone();
-                return answer_later(reply, Ok(async move { usage.of(&agent, cwd.as_deref()).await }));
+                let off = crate::network::allowed(&self.data_dir).no_plan_usage();
+                return answer_later(reply, Ok(async move { usage.of(&agent, cwd.as_deref(), off).await }));
             }
             Request::AcpStart { thread, clone, agent, options } => {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent, options).await)

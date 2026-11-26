@@ -58,6 +58,7 @@ export const keys = {
   designAsset: (where: object, path: string) => ['design-systems', 'asset', where, path] as const,
   threadDesign: (id: string) => ['thread', id, 'design-system'] as const,
   artifactSettings: ['artifact-settings'] as const,
+  networkSettings: ['network-settings'] as const,
   themes: ['themes'] as const,
   themeDetail: (id: string) => ['themes', 'detail', id] as const,
   themeCss: ['themes', 'css'] as const,

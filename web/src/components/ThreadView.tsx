@@ -84,7 +84,7 @@ import { RunningStrip, TaskCard } from './Tasks'
 import { AskCard, AskStrip, AskedNote } from './Asks'
 import { askOfCall, askedIn, useAsks } from '../asks'
 import { Avatar, Button, Counts, Dot, Icon, Input, Kbd, KeyValue, Popover, Skeleton, Tabs, buttonClass, cx, toast } from '../ui'
-import { AgentDock, AgentTail, PermissionCard, PlanCard, SignInCard } from './Agent'
+import { AgentDock, AgentTail, EscalationCard, PermissionCard, PlanCard, SignInCard } from './Agent'
 import { AccessPanel, Approvals } from './Sandbox'
 import { CommentThread } from './CommentThread'
 import { CopyLink } from './CopyLink'
@@ -458,7 +458,10 @@ function Thought({ entries, took, ...props }: EntryProps & { entries: HistoryEnt
 
 /** How many of a run's tool calls failed. */
 function failedIn(entries: HistoryEntry[]): number {
-  return entries.filter((entry) => entry.kind === 'tool_result' && entry.outcome?.failed).length
+  // A call Auto refused never ran, so it didn't fail (ADR 0132).
+  const refused = new Set(entries.flatMap((entry) => (entry.auto?.verdict === 'refuse' ? [entry.auto.call] : [])))
+  return entries.filter((entry) => entry.kind === 'tool_result' && entry.outcome?.failed && !refused.has(entry.outcome.call))
+    .length
 }
 
 /** A subagent's own transcript, inside the card of the call that started it: its prompt, its work and what it said. */
@@ -2051,6 +2054,7 @@ function ThreadBody({
   const permissions = agent?.permissions
   const questions = agent?.questions
   const agentName = agent?.agent
+  const checking = agent?.checking
   const liveQuestions = useMemo(
     () =>
       agentName !== undefined && permissions
@@ -2059,9 +2063,10 @@ function ThreadBody({
             agent: agentName,
             questions: questions ?? [],
             awaiting: permissions.flatMap((asked) => (asked.tool_call ? [asked.tool_call] : [])),
+            checking: checking ?? [],
           }
         : null,
-    [thread, agentName, questions, permissions],
+    [thread, agentName, questions, permissions, checking],
   )
 
   // The review across the page, where there's room for it and a daemon to read the diff from.
@@ -2285,6 +2290,15 @@ function ThreadBody({
                                   asked={asked}
                                   agent={agent.agent}
                                   first={index === 0}
+                                />
+                              ))}
+                              {agent?.escalations?.map((asked, index) => (
+                                <EscalationCard
+                                  key={asked.id}
+                                  thread={thread}
+                                  asked={asked}
+                                  agent={agent.agent}
+                                  first={index === 0 && agent.permissions.length === 0}
                                 />
                               ))}
                               <Approvals thread={thread} />

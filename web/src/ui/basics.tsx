@@ -183,3 +183,42 @@ export function Avatar({ name, size = 20 }: { name: string; size?: number }) {
     </span>
   )
 }
+
+/** An on/off switch, with a touch-sized target on phones. */
+export function Switch({
+  on,
+  label,
+  onChange,
+  disabled = false,
+}: {
+  on: boolean
+  label: string
+  onChange: (on: boolean) => void
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!on)}
+      className="inline-flex h-11 w-11 shrink-0 items-center justify-center disabled:cursor-not-allowed disabled:opacity-50 md:h-6"
+    >
+      <span
+        className={cx(
+          'relative inline-block h-4 w-7 rounded-full transition-colors duration-100',
+          on ? 'bg-accent' : 'bg-surface-3',
+        )}
+      >
+        <span
+          className={cx(
+            'absolute top-0.5 h-3 w-3 rounded-full bg-elevated transition-[left] duration-100',
+            on ? 'left-3.5' : 'left-0.5',
+          )}
+        />
+      </span>
+    </button>
+  )
+}
