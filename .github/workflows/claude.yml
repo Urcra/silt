@@ -204,6 +204,10 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: ${{ steps.prompt.outputs.text }}
+          # The action denies cargo, pnpm and shells on PRs whose author lacks
+          # write access, dependabot's included. The commands that build refuse
+          # forks, so their head is always a branch of this repository.
+          restrict_untrusted_prs: ${{ steps.command.outputs.build == 'true' && 'false' || 'true' }}
           claude_args: >-
             --max-turns ${{ steps.command.outputs.build == 'true' && '250' || '80' }}
             --permission-mode acceptEdits
@@ -387,6 +391,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: ${{ steps.prompt.outputs.text }}
+          restrict_untrusted_prs: "false"
           claude_args: >-
             --max-turns 250 --permission-mode acceptEdits
             --allowedTools "Bash,Read,Edit,Write,Glob,Grep,TodoWrite"
@@ -570,6 +575,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: ${{ steps.prompt.outputs.text }}
+          restrict_untrusted_prs: "false"
           claude_args: >-
             --max-turns 250 --permission-mode acceptEdits
             --allowedTools "Bash,Read,Edit,Write,Glob,Grep,TodoWrite"
