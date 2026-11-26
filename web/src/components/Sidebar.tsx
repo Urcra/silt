@@ -341,7 +341,7 @@ function ChatGroup({ threads, now }: { threads: ThreadSummary[]; now: number }) 
   return (
     <section aria-label="chats" className="mt-2">
       {/* SectionLabel's look, with its name as the fold's toggle. */}
-      <div className="flex items-center gap-2 pt-1.5 pr-2 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">
+      <div className="flex items-center gap-2 pt-1.5 pr-3 font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">
         <button
           type="button"
           aria-expanded={open}
