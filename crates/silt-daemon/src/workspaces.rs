@@ -470,6 +470,16 @@ impl Core {
         denied
     }
 
+    /// [`Self::artifact_denies`] for a run in `checkout`, which may show
+    /// files from it when it's a chat's folder, kept in Silt's data.
+    pub(crate) fn show_denies(&self, workspace: &str, checkout: &Path) -> crate::artifacts::Denies {
+        let real = |path: &Path| silt_os::canonicalize(path).ok();
+        let own_chat = silt_git::Repo::discover(checkout)
+            .is_ok_and(|repo| repo.is_chat() && real(repo.root()) == real(checkout))
+            .then(|| checkout.to_owned());
+        crate::artifacts::Denies { folders: self.artifact_denies(workspace), own_chat }
+    }
+
     /// The design system a workspace styles artifacts with when the project
     /// names none (ADR 0071).
     pub(crate) fn workspace_design_system(&self, workspace: &str) -> Option<String> {
