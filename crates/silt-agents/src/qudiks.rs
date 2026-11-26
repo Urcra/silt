@@ -169,6 +169,7 @@ mod tests {
             args: vec!["--github".into()],
             locks: crate::Locks { no_bypass, ..crate::Locks::default() },
             env: Vec::new(),
+            memory: None,
         };
         let args = |no_bypass| -> Vec<String> {
             let launch = Qudiks.launch(&plan(no_bypass)).expect("launches");
@@ -195,6 +196,7 @@ mod tests {
             args: vec!["--github".into()],
             locks: crate::Locks::default(),
             env: Vec::new(),
+            memory: None,
         };
         let words =
             |launch: crate::Launch| -> Vec<String> { launch.args.iter().map(|arg| arg.to_string_lossy().into_owned()).collect() };

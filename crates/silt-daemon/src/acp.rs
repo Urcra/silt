@@ -895,6 +895,7 @@ impl Core {
             }),
             load,
             sign_in_first: None,
+            memory: None,
         }
     }
 
@@ -2820,6 +2821,7 @@ async fn ask_agent(info: &AgentInfo, data_dir: &Path, mut ending: tokio::sync::w
         mcp: None,
         load: None,
         sign_in_first: None,
+        memory: None,
     };
     let (sender, mut receiver) = mpsc::unbounded_channel();
     let handle = silt_acp::start(start, sender);
@@ -3099,6 +3101,15 @@ pub(crate) struct AcpSandbox {
     pub(crate) relayed: Vec<crate::sandbox::Relayed>,
 }
 
+/// Where the agent `id` keeps what it remembers of the project at `cwd`,
+/// when not where it would by itself (ADR 0135).
+fn memory_folder(id: &str, env: &[(String, String)], cwd: &Path) -> Option<PathBuf> {
+    let key = silt_workspace::agent_key(id);
+    let agent = silt_agents::AGENTS.iter().copied().find(|agent| silt_workspace::agent_key(agent.id()) == key)?;
+    let lookup = |name: &str| env.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.clone());
+    agent.memory(&silt_os::home_dir()?, &lookup, cwd)
+}
+
 pub(crate) fn spawn_agent(
     events: mpsc::UnboundedSender<Event>,
     thread: ThreadId,
@@ -3124,6 +3135,7 @@ pub(crate) fn spawn_agent(
         let given: Vec<(String, String)> = env.into_iter().chain(workspace_env).collect();
         let inherited = registry::agent_environment(&info.id, &data_dir);
         start.env = inherited.iter().chain(&given).cloned().collect();
+        start.memory = memory_folder(&info.id, &start.env, &start.cwd);
         // What answers the sandbox's relays, such as its gateway, for as
         // long as the agent runs.
         let mut outside = Vec::new();
@@ -3173,6 +3185,32 @@ mod tests {
     use silt_types::{ActorId, FamilyId};
 
     use super::*;
+
+    #[test]
+    fn claude_in_a_managed_checkout_keeps_its_clones_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let clone = dir.path().join("clone");
+        std::fs::create_dir_all(&clone).unwrap();
+        for args in [&["init", "-q", "-b", "main"][..], &["commit", "-q", "--allow-empty", "-m", "init"]] {
+            let ran = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&clone)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(ran.success());
+        }
+        let repo = silt_git::Repo::discover(&clone).unwrap();
+        let base = repo.head_commit().unwrap().unwrap();
+        let checkout = repo.create_managed_checkout("t1", base, None).unwrap().path;
+        let config = dir.path().join("claude");
+        let env = vec![("CLAUDE_CONFIG_DIR".to_owned(), config.to_string_lossy().into_owned())];
+        let shared = config.join("projects").join(silt_agents::claude::project_slug(&clone)).join("memory");
+        assert_eq!(memory_folder(registry::CLAUDE_AGENT, &env, &checkout), Some(shared));
+        assert_eq!(memory_folder(registry::CLAUDE_AGENT, &env, &clone), None, "Claude Code finds that one itself");
+        assert_eq!(memory_folder("codex-acp", &env, &checkout), None);
+    }
 
     #[test]
     fn a_start_takes_the_threads_settings_it_doesnt_name() {

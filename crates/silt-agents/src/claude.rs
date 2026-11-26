@@ -258,6 +258,14 @@ impl Agent for ClaudeCode {
             .collect()
     }
 
+    fn memory(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>, cwd: &Path) -> Option<PathBuf> {
+        // Claude Code keys its memory by the git root, joining worktrees to
+        // their clone but not a managed checkout, whose git dir is its own.
+        let clone = crate::managed_clone(cwd)?;
+        let dir = self.homes(home, env).into_iter().find(|dir| dir.extension().is_none())?;
+        Some(dir.join("projects").join(project_slug(&clone)).join("memory"))
+    }
+
     fn project_state(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>, cwd: &Path) -> crate::ProjectState {
         let Some(dir) = self.homes(home, env).into_iter().find(|dir| dir.extension().is_none()) else {
             return crate::ProjectState::default();
@@ -266,7 +274,7 @@ impl Agent for ClaudeCode {
         // project; the prompt history isn't.
         crate::ProjectState {
             hide: vec![dir.join("projects"), dir.join("file-history")],
-            own: vec![dir.join("projects").join(project_slug(cwd))],
+            own: [dir.join("projects").join(project_slug(cwd))].into_iter().chain(self.memory(home, env, cwd)).collect(),
             fresh: vec![dir.join("history.jsonl")],
             // Its MCP servers, which it and Silt's connectors start outside.
             copied: vec![match env("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
@@ -420,7 +428,7 @@ impl Agent for ClaudeCode {
         });
         launch.arg("--mcp-config").arg(mcp.to_string());
         let hooks = hook_settings(&plan.hook_command, cfg!(windows).then_some(plan.hook_program.as_path()));
-        launch.arg("--settings").arg(locked_settings(&hooks, &plan.locks));
+        launch.arg("--settings").arg(with_memory(&locked_settings(&hooks, &plan.locks), plan.memory.as_deref()));
         if let Some(instructions) = &plan.instructions {
             launch.arg("--append-system-prompt").arg(instructions);
         }
@@ -803,6 +811,14 @@ pub struct HookInput {
     pub reason: Option<String>,
 }
 
+/// `settings` keeping its memory in `memory`, when given (ADR 0135).
+pub fn with_memory(settings: &str, memory: Option<&Path>) -> String {
+    let Some(memory) = memory else { return settings.to_owned() };
+    let mut settings: Value = serde_json::from_str(settings).unwrap_or_else(|_| json!({}));
+    settings["autoMemoryDirectory"] = json!(memory.to_string_lossy());
+    settings.to_string()
+}
+
 /// `settings` with the workspace's locks in Claude Code's own keys, which
 /// it honors from `--settings` (ADR 0065).
 pub fn locked_settings(settings: &str, locks: &crate::Locks) -> String {
@@ -858,6 +874,42 @@ mod tests {
     #[test]
     fn slug_replaces_everything_but_ascii_alphanumerics() {
         assert_eq!(project_slug(Path::new("/home/u/my_repo.v2/src")), "-home-u-my-repo-v2-src");
+    }
+
+    /// A clone, a managed checkout of it as `silt_git` lays one out, and a
+    /// worktree of it.
+    fn checkouts() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let clone = dir.path().join("clone");
+        let git_dir = clone.join(".git/silt/clones/t1.git");
+        let checkout = clone.join(".silt/checkouts/t1");
+        let worktree = dir.path().join("wt");
+        for made in [&git_dir, &checkout.join("src"), &worktree] {
+            fs::create_dir_all(made).unwrap();
+        }
+        fs::write(checkout.join(".git"), format!("gitdir: {}\n", git_dir.display())).unwrap();
+        fs::write(worktree.join(".git"), format!("gitdir: {}\n", clone.join(".git/worktrees/wt").display())).unwrap();
+        (dir, clone, checkout, worktree)
+    }
+
+    #[test]
+    fn a_managed_checkout_keeps_its_clones_memory() {
+        let (_dir, clone, checkout, worktree) = checkouts();
+        let env = |name: &str| (name == "CLAUDE_CONFIG_DIR").then(|| "/c".to_owned());
+        let shared = Path::new("/c/projects").join(project_slug(&clone)).join("memory");
+        assert_eq!(ClaudeCode.memory(Path::new("/home/u"), &env, &checkout.join("src")), Some(shared.clone()));
+        assert!(ClaudeCode.project_state(Path::new("/home/u"), &env, &checkout).own.contains(&shared));
+        // Claude Code finds the clone's own folder by itself in these.
+        assert_eq!(ClaudeCode.memory(Path::new("/home/u"), &env, &clone), None);
+        assert_eq!(ClaudeCode.memory(Path::new("/home/u"), &env, &worktree), None);
+    }
+
+    #[test]
+    fn memory_goes_in_the_settings_beside_the_rest() {
+        let settings = with_memory(r#"{"hooks":{}}"#, Some(Path::new("/c/projects/-clone/memory")));
+        let settings: Value = serde_json::from_str(&settings).unwrap();
+        assert_eq!(settings, json!({"hooks": {}, "autoMemoryDirectory": "/c/projects/-clone/memory"}));
+        assert_eq!(with_memory(r#"{"hooks":{}}"#, None), r#"{"hooks":{}}"#);
     }
 
     #[test]

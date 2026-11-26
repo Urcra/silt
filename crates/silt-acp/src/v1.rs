@@ -183,7 +183,7 @@ impl ConnectTo<Agent> for V1 {
                             .send_request(
                                 LoadSessionRequest::new(SessionId::new(id.clone()), start.cwd.clone())
                                     .mcp_servers(mcp_servers.clone())
-                                    .meta(crate::session_meta()),
+                                    .meta(crate::session_meta(start.memory.as_deref())),
                             )
                             .block_task()
                             .await;
@@ -219,7 +219,7 @@ impl ConnectTo<Agent> for V1 {
                             .send_request(
                                 NewSessionRequest::new(start.cwd.clone())
                                     .mcp_servers(mcp_servers.clone())
-                                    .meta(crate::session_meta()),
+                                    .meta(crate::session_meta(start.memory.as_deref())),
                             )
                             .block_task()
                             .await
