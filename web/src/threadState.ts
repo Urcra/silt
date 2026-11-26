@@ -1,9 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { api, type StateChange, type ThreadSummary } from './api'
+import { useNavigate } from '@tanstack/react-router'
+import { api, short, type StateChange, type ThreadSummary } from './api'
 import { useNow } from './now'
 import { keys, message } from './query'
 import { snoozed, tomorrowMorning } from './sections'
-import { toast } from './ui'
+import { hosted } from './served'
+import { type MenuItem, toast } from './ui'
 
 const HOUR_MS = 60 * 60 * 1000
 /** Far enough ahead that only activity ends it. */
@@ -42,5 +44,40 @@ export function useThreadState(thread: ThreadSummary): { label: string; onSelect
     thread.mine.settled
       ? { label: 'Unsettle', onSelect: change({ settled: false }, 'Back among the active') }
       : { label: 'Settle', onSelect: change({ settled: true }, 'Settled') },
+  ]
+}
+
+/**
+ * Everything the sidebar offers for a thread, on a right-click or its ⋯: pin, snooze and settle, then its id for `silt
+ * resume` and `silt fork`, a fork, the history graph and the live view.
+ */
+export function useThreadMenu(thread: ThreadSummary): MenuItem[] {
+  const navigate = useNavigate()
+  const state = useThreadState(thread)
+  const id = short(thread.id)
+  return [
+    ...state,
+    {
+      label: 'Copy thread ID',
+      hint: id,
+      divided: true,
+      onSelect: () =>
+        void navigator.clipboard?.writeText(id).then(
+          () => toast(`Copied ${id}`, 'ok'),
+          () => toast('Copying needs the page in focus', 'danger'),
+        ),
+    },
+    {
+      label: 'Fork',
+      onSelect: () =>
+        void api.fork(thread.id).then(
+          (made) => navigate({ to: '/t/$id', params: { id: made.thread } }),
+          (failure: unknown) => toast(message(failure), 'danger'),
+        ),
+    },
+    { label: 'History graph', divided: true, onSelect: () => void navigate({ to: '/graph' }) },
+    ...(hosted()
+      ? []
+      : [{ label: 'Join live', onSelect: () => void navigate({ to: '/t/$id/live', params: { id: thread.id } }) }]),
   ]
 }
