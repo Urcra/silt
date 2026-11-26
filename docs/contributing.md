@@ -65,7 +65,7 @@ Commit however you like; a pull request's CI runs the whole gate, its three part
 People with write access can have Claude work on an issue or pull request from a comment (`.github/workflows/claude.yml`). It runs in GitHub Actions, and what it writes comes from `claude[bot]`. Notes after the command steer it.
 - On a pull request:
   - `/claude fix` merges the base in if it conflicts, makes the changes open reviews and comments ask for, replies and resolves them, and pushes. It never merges.
-  - `/claude merge` runs the full gate on the PR merged with its base, fixes conflicts and failures (up to two rounds), waits for CI, and merges with a merge commit. It refuses while review threads or change requests are open.
+  - `/claude merge` runs the full gate on the PR merged with its base, fixes conflicts and failures (up to two rounds), waits for CI, and merges with a merge commit. It skips its own first gate when CI already passed the whole gate on the same head and base, and the PR doesn't change `.github/`. It refuses while review threads or change requests are open.
   - `/claude gate` does the same without the merge, and says whether the gate passed.
   - `/claude review` posts a review; `/claude review fix` also fixes what it found.
   - On a pull request from a fork, only `/claude review` and `/claude ask` run, and Claude's token there can read the code and post comments and reviews but not push or merge. The owner can have `/claude review dangerously full` give it the token and tools it has on members' pull requests (ADR 0129).

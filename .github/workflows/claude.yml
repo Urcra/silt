@@ -24,7 +24,7 @@
 #
 # merge and gate run the gate's three parts (scripts/gate.sh --part) as
 # parallel jobs, each on its own runner, with Claude's fix rounds between
-# them; the other commands are one job. Comments are weighed by their
+# them, unless CI's run already passed them on the same head and base; the other commands are one job. Comments are weighed by their
 # author's association: owner, then members, collaborators and contributors;
 # anyone else's only inform. Claude never decides to merge:
 # .github/scripts/claude.sh, taken from the default branch so a PR can't
@@ -108,6 +108,7 @@ jobs:
       base: ${{ steps.target.outputs.base }}
       sha: ${{ steps.target.outputs.sha }}
       base_sha: ${{ steps.target.outputs.base_sha }}
+      ci_gated: ${{ steps.ci_gated.outputs.ci_gated }}
       status_id: ${{ steps.command.outputs.status_id }}
       status_start: ${{ steps.command.outputs.status_start }}
     steps:
@@ -136,6 +137,11 @@ jobs:
         env:
           ASSOCIATION: ${{ github.event.comment.author_association }}
         run: '"$HELPER" check "${{ steps.command.outputs.command }}" "${{ steps.command.outputs.mode }}"'
+
+      - name: Gated in CI already
+        id: ci_gated
+        if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated == 'true'
+        run: '"$HELPER" ci-gated "${{ steps.target.outputs.sha }}" "${{ steps.target.outputs.base_sha }}"'
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.target.outputs.ok == 'true' && steps.command.outputs.gated != 'true'
@@ -230,7 +236,7 @@ jobs:
   gate1:
     name: Gate (${{ matrix.part }})
     needs: start
-    if: needs.start.outputs.ok == 'true' && needs.start.outputs.gated == 'true'
+    if: needs.start.outputs.ok == 'true' && needs.start.outputs.gated == 'true' && needs.start.outputs.ci_gated == ''
     strategy:
       fail-fast: false
       matrix:
@@ -684,6 +690,7 @@ jobs:
       checks: read
     env:
       GH_TOKEN: ${{ github.token }}
+      CI_GATED: ${{ needs.start.outputs.ci_gated }}
       STATUS_ID: ${{ needs.start.outputs.status_id }}
       STATUS_START: ${{ needs.start.outputs.status_start }}
       STATUS_COMMAND: ${{ needs.start.outputs.command }}

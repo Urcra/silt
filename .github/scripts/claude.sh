@@ -147,7 +147,11 @@ render_jobs() {
         fi
     }
     job_line "Checks" "$(pick Start)"
-    parts "Gate (merged with base)" "Gate"
+    if [ -s "$temp/status-ci-gated" ]; then
+        printf -- '- ✅ Gate (merged with base): passed in [CI](%s)\n' "$(cat "$temp/status-ci-gated")"
+    else
+        parts "Gate (merged with base)" "Gate"
+    fi
     state=$(pick "Fix round 1")
     if [ -n "$state" ] && [ "$(jq -r .conclusion <<<"$state")" != skipped ]; then
         job_line "Fixes, round 1 (Claude's comment below)" "$state"
@@ -263,6 +267,7 @@ cmd_status() {
             echo "$STATUS_START" >"$temp/status-start"
             echo "$STATUS_COMMAND" >"$temp/status-command"
             touch "$temp/status-jobs" "$temp/status-result"
+            printf '%s' "${CI_GATED:-}" >"$temp/status-ci-gated"
             : >"$phases"
             status_push || true
             nohup "$0" status watch >/dev/null 2>&1 &
@@ -534,6 +539,46 @@ cmd_gate_part() {
     return 1
 }
 
+# Whether CI's run on `sha` passed the whole gate on it merged with
+# `base_sha`, in which case merge and gate needn't run it again. Each of
+# ci.yml's gate jobs notes the merge commit's parents it tested. A pull
+# request's CI runs its own ci.yml, so one that changes .github/ is gated here
+# regardless. Says the run's URL as `ci_gated`, or nothing.
+cmd_ci_gated() {
+    local url
+    url=$(ci_gated_run "$@" || true)
+    echo "ci_gated=$url" >>"$out"
+    if [ -n "$url" ]; then
+        echo "CI_GATED=$url" >>"${GITHUB_ENV:-/dev/null}"
+        printf '%s' "$url" >"$temp/status-ci-gated"
+    fi
+}
+
+ci_gated_run() {
+    local sha=$1 base_sha=$2 changed runs run url jobs part job note
+    # GitHub lists at most 300 of a comparison's files, so more could hide one.
+    changed=$(gh api "repos/$repo/compare/$base_sha...$sha?per_page=1" --jq '[.files[]?.filename]') || return 1
+    if [ "$(jq length <<<"$changed")" -ge 300 ] || jq -e 'any(startswith(".github/"))' <<<"$changed" >/dev/null; then
+        return 1
+    fi
+    runs=$(gh api "repos/$repo/actions/workflows/ci.yml/runs?head_sha=$sha&event=pull_request&status=success&per_page=20" \
+        --jq '.workflow_runs[] | "\(.id) \(.html_url)"') || return 1
+    while read -r run url; do
+        [ -n "$run" ] || continue
+        jobs=$(gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" --jq '.jobs') || continue
+        for part in checks tests perf; do
+            job=$(jq -c --arg name "Gate ($part)" 'map(select(.name == $name and .conclusion == "success")) | last // empty' <<<"$jobs")
+            [ -n "$job" ] || continue 2
+            note=$(gh api "repos/$repo/check-runs/$(jq -r .id <<<"$job")/annotations" \
+                --jq '[.[] | select(.title == "gated")][0].message // empty') || continue 2
+            [ "$note" = "head $sha, base $base_sha" ] || continue 2
+        done
+        echo "$url"
+        return 0
+    done <<<"$runs"
+    return 1
+}
+
 # Waits for every check run on the head commit to finish, and says
 # whether all passed.
 cmd_ci() {
@@ -632,7 +677,8 @@ cmd_guard() {
 # gate, the result.
 cmd_passed() {
     local sha='' base_sha=''
-    if [ "${R1:-}" = success ]; then sha=$S1 base_sha=$B1
+    if [ -n "${CI_GATED:-}" ]; then sha=$S1 base_sha=$B1
+    elif [ "${R1:-}" = success ]; then sha=$S1 base_sha=$B1
     elif [ "${R2:-}" = success ]; then sha=$S2 base_sha=$B2
     elif [ "${R3:-}" = success ]; then sha=$S3 base_sha=$B3
     fi
@@ -642,7 +688,11 @@ cmd_passed() {
     } >>"$out"
     if [ -n "$sha" ]; then
         if [ "$(cat "$temp/status-command")" = gate ]; then
-            cmd_status result "✅ Gate passed (\`${sha:0:8}\` + base)"
+            if [ -n "${CI_GATED:-}" ]; then
+                cmd_status result "✅ Gate passed in [CI](${CI_GATED}) (\`${sha:0:8}\` + base)"
+            else
+                cmd_status result "✅ Gate passed (\`${sha:0:8}\` + base)"
+            fi
         fi
     elif [ "${GUARD1:-}" = false ] || [ "${GUARD2:-}" = false ]; then
         cmd_status result "❌ Stopped: the fixes changed \`.github/\` (${TOUCHED1:-}${TOUCHED2:-}). Not merged; check the branch."

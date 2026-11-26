@@ -43,6 +43,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # GitHub's merge commit has the base, then the head, as parents.
+      # `/claude merge` reads this to skip a gate this run already passed.
+      - name: What's gated
+        if: github.event_name == 'pull_request'
+        run: |
+          set -- $(git cat-file -p HEAD | sed -n 's/^parent //p')
+          echo "::notice title=gated::head $2, base $1"
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - name: The sandbox's tools
