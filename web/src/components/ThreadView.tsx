@@ -1,8 +1,6 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AgentMark } from './AgentMark'
-import { agentName } from '../rules'
-import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   type ComponentProps,
   type ReactNode,
@@ -17,39 +15,44 @@ import {
   useMemo,
   useRef,
   useState,
-} from 'react'
+} from "react";
 import {
   AGENTS,
   api,
   short,
-  type AgentStatus,
   type CommentView,
   type DiffStat,
   type HistoryEntry,
   type Presence,
   type ThreadSummary,
   type TurnInfo,
-} from '../api'
-import { isChat } from '../chats'
-import { CloudSession } from './Cloud'
-import { useTopic, useWarm } from '../bus'
-import { readWhole } from '../diffParse'
-import { useHideGit, useHideOthers, useShared } from '../hideGit'
-import { useHistory } from '../historyLoad'
-import { appHref, filePath } from '../permalink'
-import { forgeOf, projectName } from '../projects'
-import { keys, message } from '../query'
-import { useNow } from '../now'
-import { useMedia } from '../media'
-import { MainScroll } from '../scroll'
-import { hosted } from '../served'
-import { useClearSentDraft, useLive, usePresence } from '../session'
-import { type Sending, addSending, arrived, dropSending, useSending } from '../sending'
-import { formatKeys, useActions } from '../shortcuts'
-import { inBackground, threadTone } from '../threadLook'
-import { taskNotification } from '../taskNotification'
-import { useThreadState } from '../threadState'
-import { ago } from '../time'
+} from "../api";
+import { isChat } from "../chats";
+import { CloudSession } from "./Cloud";
+import { useTopic, useWarm } from "../bus";
+import { readWhole } from "../diffParse";
+import { useHideGit, useHideOthers, useShared } from "../hideGit";
+import { useHistory } from "../historyLoad";
+import { appHref, filePath } from "../permalink";
+import { forgeOf, projectName } from "../projects";
+import { keys, message } from "../query";
+import { useNow } from "../now";
+import { useMedia } from "../media";
+import { MainScroll } from "../scroll";
+import { hosted } from "../served";
+import { useClearSentDraft, useLive, usePresence } from "../session";
+import {
+  type Sending,
+  addSending,
+  arrived,
+  dropSending,
+  useSending,
+} from "../sending";
+import { formatKeys, useActions } from "../shortcuts";
+import { threadTone } from "../threadLook";
+import { taskNotification } from "../taskNotification";
+import { useThreadState } from "../threadState";
+import { ago } from "../time";
 import {
   type Piece,
   type Row,
@@ -73,7 +76,7 @@ import {
   sameList,
   taskEntries,
   callsById,
-} from '../transcript'
+} from "../transcript";
 import {
   SessionLive,
   type Stoppable,
@@ -84,17 +87,16 @@ import {
   mayRun,
   runOf,
   tasksOf,
-} from '../tasks'
-import { RunningStrip, TaskCard } from './Tasks'
-import { AskCard, AskStrip, AskedNote } from './Asks'
-import { askOfCall, askedIn, useAsks } from '../asks'
+} from "../tasks";
+import { RunningStrip, TaskCard } from "./Tasks";
+import { AskCard, AskStrip, AskedNote } from "./Asks";
+import { askOfCall, askedIn, useAsks } from "../asks";
 import {
   Avatar,
   Button,
   Counts,
   Dot,
   Icon,
-  type IconName,
   Input,
   Kbd,
   KeyValue,
@@ -102,30 +104,42 @@ import {
   Select,
   Skeleton,
   Tabs,
-  Tag,
   buttonClass,
   cx,
   toast,
-} from '../ui'
-import { AgentDock, AgentTail, PermissionCard, PlanCard, SignInCard } from './Agent'
-import { AccessPanel, Approvals, SandboxShield } from './Sandbox'
-import { CommentThread } from './CommentThread'
-import { EraseThread } from './EraseThread'
-import { CopyLink } from './CopyLink'
-import { DiffPanel } from './DiffPanel'
-import { DiffView } from './DiffView'
-import { FilesByStats } from './StatDiff'
-import { Markdown } from './Markdown'
-import { Mock } from './Mock'
-import { mocksOn } from '../mocks'
-import { DrawerButton, Page } from './Page'
-import { ShareDialog } from './ShareDialog'
-import { ArtifactCard, ShownImage } from './ArtifactCards'
-import { ArtifactActions, type Opened } from '../artifactActions'
-import { artifactsOf, shownImagesOf } from '../artifacts'
-import { CommandCard, ImageThumb, PlanSteps, ProposedPlan, QuestionCard, StepRow } from './ToolSteps'
-import { LiveQuestions } from '../liveQuestions'
-import { shown, unrecorded } from '../unrecorded'
+} from "../ui";
+import {
+  AgentDock,
+  AgentTail,
+  PermissionCard,
+  PlanCard,
+  SignInCard,
+} from "./Agent";
+import { AccessPanel, Approvals } from "./Sandbox";
+import { CommentThread } from "./CommentThread";
+import { EraseThread } from "./EraseThread";
+import { CopyLink } from "./CopyLink";
+import { DiffPanel } from "./DiffPanel";
+import { DiffView } from "./DiffView";
+import { FilesByStats } from "./StatDiff";
+import { Markdown } from "./Markdown";
+import { Mock } from "./Mock";
+import { mocksOn } from "../mocks";
+import { DrawerButton, Page } from "./Page";
+import { ShareDialog } from "./ShareDialog";
+import { ArtifactCard, ShownImage } from "./ArtifactCards";
+import { ArtifactActions, type Opened } from "../artifactActions";
+import { artifactsOf, shownImagesOf } from "../artifacts";
+import {
+  CommandCard,
+  ImageThumb,
+  PlanSteps,
+  ProposedPlan,
+  QuestionCard,
+  StepRow,
+} from "./ToolSteps";
+import { LiveQuestions } from "../liveQuestions";
+import { shown, unrecorded } from "../unrecorded";
 import {
   DETAILS,
   GROUPINGS,
@@ -138,71 +152,107 @@ import {
   useGroupingChoice,
   type Detail,
   type Grouping,
-} from '../detail'
-import { draftOf, keepDraft, threadDraft, useDraft } from '../drafts'
+} from "../detail";
+import { draftOf, keepDraft, threadDraft, useDraft } from "../drafts";
 
 // The panel's viewer and list load only once there is an artifact to show.
 // Drawn again only when what it shows changes: beside the conversation, every key typed and every word streamed
 // drew it, decoding and parsing the artifact each time.
-const ArtifactViewer = lazy(() => import('./Artifacts').then((module) => ({ default: memo(module.ArtifactViewer) })))
-const ArtifactList = lazy(() => import('./Artifacts').then((module) => ({ default: module.ArtifactList })))
-const ThreadDesignPanel = lazy(() => import('./DesignSystems').then((module) => ({ default: module.ThreadDesignPanel })))
+const ArtifactViewer = lazy(() =>
+  import("./Artifacts").then((module) => ({
+    default: memo(module.ArtifactViewer),
+  })),
+);
+const ArtifactList = lazy(() =>
+  import("./Artifacts").then((module) => ({ default: module.ArtifactList })),
+);
+const ThreadDesignPanel = lazy(() =>
+  import("./DesignSystems").then((module) => ({
+    default: module.ThreadDesignPanel,
+  })),
+);
 
 /** What a permalink's `#turn-N` or `#comment-<id>` points at on the thread page (ADR 0031). */
-type Anchor = { entry?: number; comment?: string }
+type Anchor = { entry?: number; comment?: string };
 
 /** What `hash` names, once what it names has loaded. */
-function anchorOf(hash: string, turns: TurnInfo[] | undefined, comments: CommentView[] | undefined): Anchor | undefined {
-  const turn = /^turn-(\d+)$/.exec(hash)
+function anchorOf(
+  hash: string,
+  turns: TurnInfo[] | undefined,
+  comments: CommentView[] | undefined,
+): Anchor | undefined {
+  const turn = /^turn-(\d+)$/.exec(hash);
   if (turn) {
-    const found = turns?.find((candidate) => candidate.number === Number(turn[1]))
-    return found && { entry: found.entry ?? undefined }
+    const found = turns?.find(
+      (candidate) => candidate.number === Number(turn[1]),
+    );
+    return found && { entry: found.entry ?? undefined };
   }
-  const commentId = /^comment-(.+)$/.exec(hash)?.[1]
-  const comment = commentId === undefined ? undefined : comments?.find((candidate) => candidate.id === commentId)
-  if (!comment) return undefined
-  return { comment: comment.id, entry: comment.location.at === 'entry' ? comment.location.index : undefined }
+  const commentId = /^comment-(.+)$/.exec(hash)?.[1];
+  const comment =
+    commentId === undefined
+      ? undefined
+      : comments?.find((candidate) => candidate.id === commentId);
+  if (!comment) return undefined;
+  return {
+    comment: comment.id,
+    entry: comment.location.at === "entry" ? comment.location.index : undefined,
+  };
 }
 
 /** Keeps the page at its bottom while the person is there, as a turn grows and asks things below it;
  * scrolling up leaves them where they are. Says whether it follows, for a jump to the end to set. */
-function useFollow(scroll: RefObject<HTMLElement | null>, watched: RefObject<HTMLElement | null>[], thread: string) {
+function useFollow(
+  scroll: RefObject<HTMLElement | null>,
+  watched: RefObject<HTMLElement | null>[],
+  thread: string,
+) {
   // Off until the page lands at its end, once the whole history is in: following a history still
   // loading would chase each page's end, and a link to a place in it is where the page stays.
-  const atBottom = useRef(false)
-  const landed = useRef(false)
+  const atBottom = useRef(false);
+  const landed = useRef(false);
   useEffect(() => {
-    atBottom.current = false
-    landed.current = false
-  }, [thread])
+    atBottom.current = false;
+    landed.current = false;
+  }, [thread]);
   useEffect(() => {
-    const element = scroll.current
-    if (!element || typeof ResizeObserver === 'undefined') return
+    const element = scroll.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
     const onScroll = () => {
-      if (landed.current) atBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 120
-    }
-    element.addEventListener('scroll', onScroll, { passive: true })
+      if (landed.current)
+        atBottom.current =
+          element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+    };
+    element.addEventListener("scroll", onScroll, { passive: true });
     const grown = new ResizeObserver(() => {
-      if (atBottom.current) element.scrollTop = element.scrollHeight
-    })
-    for (const ref of watched) if (ref.current) grown.observe(ref.current)
+      if (atBottom.current) element.scrollTop = element.scrollHeight;
+    });
+    for (const ref of watched) if (ref.current) grown.observe(ref.current);
     return () => {
-      element.removeEventListener('scroll', onScroll)
-      grown.disconnect()
-    }
+      element.removeEventListener("scroll", onScroll);
+      grown.disconnect();
+    };
     // The refs' elements are the page's own, there from its first render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scroll, thread])
-  return useMemo(() => ({ atBottom, landed }), [])
+  }, [scroll, thread]);
+  return useMemo(() => ({ atBottom, landed }), []);
 }
 
-const NO_ANCHOR: Anchor = {}
+const NO_ANCHOR: Anchor = {};
 
 /** What the page's hash names, once what it names has loaded; the same object until that changes. */
-function useNamedAnchor(turns: TurnInfo[] | undefined, comments: CommentView[] | undefined) {
-  const hash = useRouterState({ select: (state) => state.location.hash }).replace(/^#/, '')
-  const named = useMemo(() => anchorOf(hash, turns, comments), [hash, turns, comments])
-  return { hash, named }
+function useNamedAnchor(
+  turns: TurnInfo[] | undefined,
+  comments: CommentView[] | undefined,
+) {
+  const hash = useRouterState({
+    select: (state) => state.location.hash,
+  }).replace(/^#/, "");
+  const named = useMemo(
+    () => anchorOf(hash, turns, comments),
+    [hash, turns, comments],
+  );
+  return { hash, named };
 }
 
 /** Follows the page's hash once what it names has loaded, scrolling there with `scrollTo` (a row of `rows`).
@@ -216,30 +266,57 @@ function useFollowAnchor(
   scroller: RefObject<HTMLElement | null>,
 ) {
   // Followed again in a new scroller: the page's column takes over from the main one once the panel beside it shows.
-  const followed = useRef<{ hash: string; in: RefObject<HTMLElement | null> } | null>(null)
+  const followed = useRef<{
+    hash: string;
+    in: RefObject<HTMLElement | null>;
+  } | null>(null);
   useEffect(() => {
-    if (!anchor || (followed.current?.hash === hash && followed.current.in === scroller)) return
+    if (
+      !anchor ||
+      (followed.current?.hash === hash && followed.current.in === scroller)
+    )
+      return;
     const holds = (row: Row, index: number) =>
-      row.kind === 'turn' && (row.prompt?.index === index || row.entries.some((entry) => entry.index === index))
-    const at = anchor.entry === undefined ? -1 : rows.findIndex((row) => holds(row, anchor.entry!))
-    if (at < 0 && anchor.entry !== undefined && !complete) return
-    followed.current = { hash, in: scroller }
-    if (at >= 0) scrollTo(at)
-    else if (anchor.comment) document.getElementById(`comment-${anchor.comment}`)?.scrollIntoView({ block: 'center' })
-  }, [hash, anchor, rows, complete, scrollTo, scroller])
+      row.kind === "turn" &&
+      (row.prompt?.index === index ||
+        row.entries.some((entry) => entry.index === index));
+    const at =
+      anchor.entry === undefined
+        ? -1
+        : rows.findIndex((row) => holds(row, anchor.entry!));
+    if (at < 0 && anchor.entry !== undefined && !complete) return;
+    followed.current = { hash, in: scroller };
+    if (at >= 0) scrollTo(at);
+    else if (anchor.comment)
+      document
+        .getElementById(`comment-${anchor.comment}`)
+        ?.scrollIntoView({ block: "center" });
+  }, [hash, anchor, rows, complete, scrollTo, scroller]);
 }
 
-function CommentBox({ onSave, onCancel }: { onSave: (text: string) => Promise<void>; onCancel: () => void }) {
-  const [text, setText] = useState('')
+function CommentBox({
+  onSave,
+  onCancel,
+}: {
+  onSave: (text: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState("");
   return (
     <form
       className="flex gap-2"
       onSubmit={(event) => {
-        event.preventDefault()
-        void onSave(text).then(() => setText(''))
+        event.preventDefault();
+        void onSave(text).then(() => setText(""));
       }}
     >
-      <Input aria-label="comment" autoFocus value={text} onChange={(event) => setText(event.target.value)} className="flex-1" />
+      <Input
+        aria-label="comment"
+        autoFocus
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        className="flex-1"
+      />
       <Button type="submit" variant="primary" disabled={!text.trim()}>
         Comment
       </Button>
@@ -247,63 +324,75 @@ function CommentBox({ onSave, onCancel }: { onSave: (text: string) => Promise<vo
         Cancel
       </Button>
     </form>
-  )
+  );
 }
 
 interface EntryProps {
-  thread: string
-  comments: CommentView[]
-  anchor: Anchor
-  onComment: (index: number, text: string) => Promise<void>
-  onChanged: () => Promise<unknown>
+  thread: string;
+  comments: CommentView[];
+  anchor: Anchor;
+  onComment: (index: number, text: string) => Promise<void>;
+  onChanged: () => Promise<unknown>;
 }
 
 /** Copies what a message says, and for a prompt, forks from the turn before it with the prompt in the fork's draft to edit. */
-function MessageActions({ entry, thread, turn }: { entry: HistoryEntry; thread: string; turn: number | undefined }) {
-  const navigate = useNavigate()
-  const [copied, setCopied] = useState(false)
+function MessageActions({
+  entry,
+  thread,
+  turn,
+}: {
+  entry: HistoryEntry;
+  thread: string;
+  turn: number | undefined;
+}) {
+  const navigate = useNavigate();
+  const [copied, setCopied] = useState(false);
   const action =
-    'invisible shrink-0 rounded-sm p-0.5 text-fg-2 group-hover/entry:visible hover:bg-surface-2 hover:text-fg-1 focus:visible max-md:visible'
+    "invisible shrink-0 rounded-sm p-0.5 text-fg-2 group-hover/entry:visible hover:bg-surface-2 hover:text-fg-1 focus:visible max-md:visible";
   const copy = () =>
     void navigator.clipboard?.writeText(entry.text).then(
       () => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1500)
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
       },
       () => undefined,
-    )
+    );
   const edit = () =>
     api.fork(thread, turn! - 1).then(
       (made) => {
-        keepDraft(threadDraft(made.thread), entry.text)
-        void navigate({ to: '/t/$id', params: { id: made.thread } })
+        keepDraft(threadDraft(made.thread), entry.text);
+        void navigate({ to: "/t/$id", params: { id: made.thread } });
       },
-      (failure: unknown) => toast(message(failure), 'danger'),
-    )
+      (failure: unknown) => toast(message(failure), "danger"),
+    );
   return (
     <>
       <button
         type="button"
-        aria-label={copied ? 'copied' : `copy entry ${entry.index}`}
+        aria-label={copied ? "copied" : `copy entry ${entry.index}`}
         title="Copy"
         className={action}
         onClick={copy}
       >
-        <Icon name={copied ? 'check' : 'copy'} className="h-3.5 w-3.5" />
+        <Icon name={copied ? "check" : "copy"} className="h-3.5 w-3.5" />
       </button>
-      {entry.kind === 'user' && turn !== undefined && turn > 1 && !hosted() && !taskNotification(entry.text) && (
-        <button
-          type="button"
-          aria-label={`edit from turn ${turn}`}
-          title="Edit this prompt in a fork from the turn before it"
-          className={action}
-          onClick={() => void edit()}
-        >
-          <Icon name="edit" className="h-3.5 w-3.5" />
-        </button>
-      )}
+      {entry.kind === "user" &&
+        turn !== undefined &&
+        turn > 1 &&
+        !hosted() &&
+        !taskNotification(entry.text) && (
+          <button
+            type="button"
+            aria-label={`edit from turn ${turn}`}
+            title="Edit this prompt in a fork from the turn before it"
+            className={action}
+            onClick={() => void edit()}
+          >
+            <Icon name="edit" className="h-3.5 w-3.5" />
+          </button>
+        )}
     </>
-  )
+  );
 }
 
 /** One entry of the history, with its comments and a way to comment on it. */
@@ -317,33 +406,47 @@ function Entry({
   onChanged,
   turn,
 }: EntryProps & { entry: HistoryEntry; children: ReactNode; turn?: number }) {
-  const [commenting, setCommenting] = useState(false)
-  const here = comments.filter((comment) => comment.location.at === 'entry' && comment.location.index === entry.index)
-  const highlighted = anchor.entry === entry.index
+  const [commenting, setCommenting] = useState(false);
+  const here = comments.filter(
+    (comment) =>
+      comment.location.at === "entry" && comment.location.index === entry.index,
+  );
+  const highlighted = anchor.entry === entry.index;
   return (
     <div
       data-testid="entry"
       data-rewound={entry.rewound || undefined}
       data-highlighted={highlighted || undefined}
       className={cx(
-        'group/entry relative',
-        entry.rewound && 'opacity-50',
-        highlighted && 'rounded-sm ring-2 ring-accent ring-offset-4 ring-offset-bg',
+        "group/entry relative",
+        entry.rewound && "opacity-50",
+        highlighted &&
+          "rounded-sm ring-2 ring-accent ring-offset-4 ring-offset-bg",
       )}
-      title={entry.rewound ? 'Rewound by a revert: kept in the history, no longer part of the conversation' : undefined}
+      title={
+        entry.rewound
+          ? "Rewound by a revert: kept in the history, no longer part of the conversation"
+          : undefined
+      }
     >
-      {entry.rewound && entry.kind === 'user' && <p className="text-xs text-fg-2 italic">rewound by a revert</p>}
+      {entry.rewound && entry.kind === "user" && (
+        <p className="text-xs text-fg-2 italic">rewound by a revert</p>
+      )}
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">{children}</div>
         {/* Over the card's corner on a desktop, so every card in a turn is as wide as the others and nothing sits outside the column. */}
         <span
           className={cx(
-            'flex shrink-0 items-center gap-0.5 md:invisible md:absolute md:-top-2.5 md:right-1 md:z-10 md:rounded-sm md:border md:border-line md:bg-elevated md:px-0.5 md:shadow-sm md:group-hover/entry:visible md:focus-within:visible',
+            "flex shrink-0 items-center gap-0.5 md:invisible md:absolute md:-top-2.5 md:right-1 md:z-10 md:rounded-sm md:border md:border-line md:bg-elevated md:px-0.5 md:shadow-sm md:group-hover/entry:visible md:focus-within:visible",
             // A phone shows no comment button, so only messages keep the column.
-            entry.kind !== 'user' && entry.kind !== 'assistant' && 'max-md:hidden',
+            entry.kind !== "user" &&
+              entry.kind !== "assistant" &&
+              "max-md:hidden",
           )}
         >
-          {(entry.kind === 'user' || entry.kind === 'assistant') && <MessageActions entry={entry} thread={thread} turn={turn} />}
+          {(entry.kind === "user" || entry.kind === "assistant") && (
+            <MessageActions entry={entry} thread={thread} turn={turn} />
+          )}
           <button
             type="button"
             aria-label={`comment on entry ${entry.index}`}
@@ -372,36 +475,51 @@ function Entry({
         <div className="mt-1.5">
           <CommentBox
             onCancel={() => setCommenting(false)}
-            onSave={(text) => onComment(entry.index, text).then(() => setCommenting(false))}
+            onSave={(text) =>
+              onComment(entry.index, text).then(() => setCommenting(false))
+            }
           />
         </div>
       )}
     </div>
-  )
+  );
 }
 
 /** A prompt the person sent, shown as theirs until the history has it. */
 function SendingPrompt({ item }: { item: Sending }) {
   return (
-    <div data-testid="sending" className="flex flex-col items-end gap-1" aria-busy="true">
+    <div
+      data-testid="sending"
+      className="flex flex-col items-end gap-1"
+      aria-busy="true"
+    >
       <p className="w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-chat leading-[1.45] whitespace-pre-wrap opacity-70">
         {item.text}
       </p>
-      {item.files.length > 0 && <span className="text-2xs text-fg-2">{item.files.join(', ')}</span>}
+      {item.files.length > 0 && (
+        <span className="text-2xs text-fg-2">{item.files.join(", ")}</span>
+      )}
     </div>
-  )
+  );
 }
 
 /** What one entry says: a prompt, the agent's words as Markdown, or an event. */
 function EntryText({ entry }: { entry: HistoryEntry }) {
-  const notification = entry.kind === 'user' ? taskNotification(entry.text) : null
+  const notification =
+    entry.kind === "user" ? taskNotification(entry.text) : null;
   if (notification)
     return (
-      <details data-testid="task-notification" className="group/task rounded-md border border-line bg-elevated text-xs">
+      <details
+        data-testid="task-notification"
+        className="group/task rounded-md border border-line bg-elevated text-xs"
+      >
         <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11">
-          <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/task:rotate-90" />
+          <Icon
+            name="chevronRight"
+            className="h-3 w-3 transition-transform group-open/task:rotate-90"
+          />
           <span className="min-w-0 truncate">{notification.summary}</span>
-          {notification.status && notification.status !== 'completed' && (
+          {notification.status && notification.status !== "completed" && (
             <span className="text-danger">· {notification.status}</span>
           )}
         </summary>
@@ -411,24 +529,37 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
           </div>
         )}
       </details>
-    )
-  if (entry.kind === 'user')
+    );
+  if (entry.kind === "user")
     return (
       <p className="ml-auto w-fit max-w-[85%] rounded-lg bg-surface-2 px-3.5 py-2.5 text-chat leading-[1.45] whitespace-pre-wrap">
         {entry.text}
       </p>
-    )
-  if (entry.kind === 'assistant') return <Markdown text={entry.text} />
-  if (entry.kind === 'artifact' && entry.artifact) return <ShownArtifact entry={entry} />
-  if (entry.kind === 'merge' || entry.kind === 'pull') {
+    );
+  if (entry.kind === "assistant") return <Markdown text={entry.text} />;
+  if (entry.kind === "artifact" && entry.artifact)
+    return <ShownArtifact entry={entry} />;
+  if (entry.kind === "merge" || entry.kind === "pull") {
     // `merged "title" from fork <id>: <summary>`, whose summary is Markdown that reads as such folded under the line.
-    const [, said, summary] = /^([^:]*?from fork \S+): ([\s\S]+)$/.exec(entry.text) ?? [null, entry.text, null]
+    const [, said, summary] = /^([^:]*?from fork \S+): ([\s\S]+)$/.exec(
+      entry.text,
+    ) ?? [null, entry.text, null];
     return (
       <details className="group/merge text-xs text-info">
-        <summary className={cx('flex items-center gap-1.5', summary ? 'cursor-pointer' : 'list-none')}>
+        <summary
+          className={cx(
+            "flex items-center gap-1.5",
+            summary ? "cursor-pointer" : "list-none",
+          )}
+        >
           <Icon name="merge" className="h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0">{said}</span>
-          {summary && <Icon name="chevronRight" className="h-3 w-3 shrink-0 transition-transform group-open/merge:rotate-90" />}
+          {summary && (
+            <Icon
+              name="chevronRight"
+              className="h-3 w-3 shrink-0 transition-transform group-open/merge:rotate-90"
+            />
+          )}
         </summary>
         {summary && (
           <div className="mt-1.5 border-l-2 border-line pl-3 text-sm text-fg-1">
@@ -436,29 +567,45 @@ function EntryText({ entry }: { entry: HistoryEntry }) {
           </div>
         )}
       </details>
-    )
+    );
   }
-  if (entry.kind === 'thinking') return <p className="text-xs text-fg-2 italic whitespace-pre-wrap">{entry.text}</p>
-  if (entry.kind === 'tool_call') {
-    const call = toolOf(entry.text)
+  if (entry.kind === "thinking")
+    return (
+      <p className="text-xs text-fg-2 italic whitespace-pre-wrap">
+        {entry.text}
+      </p>
+    );
+  if (entry.kind === "tool_call") {
+    const call = toolOf(entry.text);
     return (
       <p className="font-mono text-xs break-all text-fg-1" title={entry.text}>
         <span className="font-medium">{call.name}</span>
         {call.file ? (
           <span className="text-fg-2"> {call.file}</span>
         ) : (
-          <span className="text-fg-2"> {entry.text.slice(call.name.length + 1, 160)}</span>
+          <span className="text-fg-2">
+            {" "}
+            {entry.text.slice(call.name.length + 1, 160)}
+          </span>
         )}
       </p>
-    )
+    );
   }
-  return <p className="line-clamp-4 font-mono text-xs break-all whitespace-pre-wrap text-fg-2">{entry.text}</p>
+  return (
+    <p className="line-clamp-4 font-mono text-xs break-all whitespace-pre-wrap text-fg-2">
+      {entry.text}
+    </p>
+  );
 }
 
 /** A thought in its own look, a rule beside it: how long it took, its words a click away. */
-function Thought({ entries, took, ...props }: EntryProps & { entries: HistoryEntry[]; took: string | null }) {
-  const verbose = useContext(TranscriptDetail) === 'verbose'
-  const thoughts = useContext(ThoughtsOpen)
+function Thought({
+  entries,
+  took,
+  ...props
+}: EntryProps & { entries: HistoryEntry[]; took: string | null }) {
+  const verbose = useContext(TranscriptDetail) === "verbose";
+  const thoughts = useContext(ThoughtsOpen);
   return (
     <details
       key={`${verbose}-${thoughts.times}`}
@@ -467,8 +614,11 @@ function Thought({ entries, took, ...props }: EntryProps & { entries: HistoryEnt
       className="group/think border-l-2 border-line pl-3 text-xs text-fg-2"
     >
       <summary className="flex cursor-pointer list-none items-center gap-1.5 hover:text-fg-1 max-md:min-h-11">
-        <Icon name="chevronRight" className="h-3 w-3 transition-transform group-open/think:rotate-90" />
-        {took ? `Thought for ${took}` : 'Thought'}
+        <Icon
+          name="chevronRight"
+          className="h-3 w-3 transition-transform group-open/think:rotate-90"
+        />
+        {took ? `Thought for ${took}` : "Thought"}
       </summary>
       <div className="mt-1.5 flex flex-col gap-1.5">
         {entries.map((entry) => (
@@ -478,39 +628,61 @@ function Thought({ entries, took, ...props }: EntryProps & { entries: HistoryEnt
         ))}
       </div>
     </details>
-  )
+  );
 }
 
 /** How many of a run's tool calls failed. */
 function failedIn(entries: HistoryEntry[]): number {
-  return entries.filter((entry) => entry.kind === 'tool_result' && entry.outcome?.failed).length
+  return entries.filter(
+    (entry) => entry.kind === "tool_result" && entry.outcome?.failed,
+  ).length;
 }
 
 /** A subagent's own transcript, inside the card of the call that started it: its prompt, its work and what it said. */
-function SideTranscript({ task, side, ...props }: EntryProps & { task: TaskState; side: string }) {
-  const tasks = useContext(TasksContext)
-  const { from_ms, until_ms } = runOf(tasks, task)
+function SideTranscript({
+  task,
+  side,
+  ...props
+}: EntryProps & { task: TaskState; side: string }) {
+  const tasks = useContext(TasksContext);
+  const { from_ms, until_ms } = runOf(tasks, task);
   const entries = (tasks.sides.get(side) ?? []).filter(
-    (entry) => (from_ms === null || entry.time_ms >= from_ms) && (until_ms === null || entry.time_ms < until_ms),
-  )
-  if (entries.length === 0) return null
+    (entry) =>
+      (from_ms === null || entry.time_ms >= from_ms) &&
+      (until_ms === null || entry.time_ms < until_ms),
+  );
+  if (entries.length === 0) return null;
   return (
-    <div data-testid="subagent-transcript" className="flex flex-col gap-2 border-l-2 border-line pl-3 text-sm">
+    <div
+      data-testid="subagent-transcript"
+      className="flex flex-col gap-2 border-l-2 border-line pl-3 text-sm"
+    >
       {piecesOf(entries, tasks).map((piece) =>
-        piece.kind === 'tools' ? (
-          <RunFold key={piece.entries[0].index} entries={piece.entries} until={piece.until} {...props} />
-        ) : piece.kind === 'step' ? (
-          <Entry key={piece.step.call!.index} entry={piece.step.call!} {...props}>
+        piece.kind === "tools" ? (
+          <RunFold
+            key={piece.entries[0].index}
+            entries={piece.entries}
+            until={piece.until}
+            {...props}
+          />
+        ) : piece.kind === "step" ? (
+          <Entry
+            key={piece.step.call!.index}
+            entry={piece.step.call!}
+            {...props}
+          >
             <StepCard step={piece.step} {...props} />
           </Entry>
-        ) : piece.kind === 'plan' ? (
+        ) : piece.kind === "plan" ? (
           <Entry key={piece.entry.index} entry={piece.entry} {...props}>
             <PlanSteps entry={piece.entry} />
           </Entry>
         ) : (
           <Entry key={piece.entry.index} entry={piece.entry} {...props}>
-            {piece.entry.kind === 'user' ? (
-              <p className="text-xs whitespace-pre-wrap text-fg-2">{piece.entry.text}</p>
+            {piece.entry.kind === "user" ? (
+              <p className="text-xs whitespace-pre-wrap text-fg-2">
+                {piece.entry.text}
+              </p>
             ) : (
               <EntryText entry={piece.entry} />
             )}
@@ -518,45 +690,55 @@ function SideTranscript({ task, side, ...props }: EntryProps & { task: TaskState
         ),
       )}
     </div>
-  )
+  );
 }
 
 /** A step that stands on its own: a plan, a question, a subagent or background command, or a failed command. */
 function StepCard({ step, ...props }: EntryProps & { step: ToolStep }) {
-  const tasks = useContext(TasksContext)
-  const call = step.call!
-  const asked = askOfCall(call)
-  if (asked) return <AskCard step={step} thread={props.thread} asked={asked} />
-  if (proposedPlan(call)) return <ProposedPlan step={step} />
-  if (kindOf(call) === 'question') return <QuestionCard step={step} />
+  const tasks = useContext(TasksContext);
+  const call = step.call!;
+  const asked = askOfCall(call);
+  if (asked) return <AskCard step={step} thread={props.thread} asked={asked} />;
+  if (proposedPlan(call)) return <ProposedPlan step={step} />;
+  if (kindOf(call) === "question") return <QuestionCard step={step} />;
   if (tasked(step, tasks)) {
-    const task = call.tool ? tasks.byCall.get(call.tool.id) : undefined
-    return <TaskCard step={step}>{task?.side && <SideTranscript task={task} side={task.side} {...props} />}</TaskCard>
+    const task = call.tool ? tasks.byCall.get(call.tool.id) : undefined;
+    return (
+      <TaskCard step={step}>
+        {task?.side && (
+          <SideTranscript task={task} side={task.side} {...props} />
+        )}
+      </TaskCard>
+    );
   }
-  return <CommandCard step={step} card />
+  return <CommandCard step={step} card />;
 }
 
 /** One of a run's steps, as its row. */
-function StepItem({ step, running, ...props }: EntryProps & { step: ToolStep; running: boolean }) {
-  const verbose = useContext(TranscriptDetail) === 'verbose'
-  const tasks = useContext(TasksContext)
+function StepItem({
+  step,
+  running,
+  ...props
+}: EntryProps & { step: ToolStep; running: boolean }) {
+  const verbose = useContext(TranscriptDetail) === "verbose";
+  const tasks = useContext(TasksContext);
   if (tasked(step, tasks)) {
     return (
       <Entry entry={step.call!} {...props}>
         <StepCard step={step} {...props} />
       </Entry>
-    )
+    );
   }
-  const anchor = step.call ?? step.result!
+  const anchor = step.call ?? step.result!;
   return (
     <Entry entry={anchor} {...props}>
-      {step.call && kindOf(step.call) === 'execute' ? (
+      {step.call && kindOf(step.call) === "execute" ? (
         <CommandCard step={step} running={running} />
       ) : (
         <StepRow step={step} open={verbose} running={running} />
       )}
     </Entry>
-  )
+  );
 }
 
 /**
@@ -569,80 +751,138 @@ function RunFold({
   until,
   live = false,
   ...props
-}: EntryProps & { entries: HistoryEntry[]; until: number | null; live?: boolean }) {
-  const verbose = useContext(TranscriptDetail) === 'verbose'
-  const thoughts = useContext(ThoughtsOpen)
-  const items = runItems(entries, until)
-  const steps = items.flatMap((item) => (item.kind === 'step' ? [item.step] : []))
-  const current = live ? steps.find((step) => step.call && !step.result) : undefined
-  const thought = thoughtTotal(items)
+}: EntryProps & {
+  entries: HistoryEntry[];
+  until: number | null;
+  live?: boolean;
+}) {
+  const verbose = useContext(TranscriptDetail) === "verbose";
+  const thoughts = useContext(ThoughtsOpen);
+  const items = runItems(entries, until);
+  const steps = items.flatMap((item) =>
+    item.kind === "step" ? [item.step] : [],
+  );
+  const current = live
+    ? steps.find((step) => step.call && !step.result)
+    : undefined;
+  const thought = thoughtTotal(items);
   if (steps.length === 0) {
     return (
       <>
         {items.map(
           (item) =>
-            item.kind === 'thought' && <Thought key={item.entries[0].index} entries={item.entries} took={item.took} {...props} />,
+            item.kind === "thought" && (
+              <Thought
+                key={item.entries[0].index}
+                entries={item.entries}
+                took={item.took}
+                {...props}
+              />
+            ),
         )}
       </>
-    )
+    );
   }
-  const tools = entries.filter((entry) => entry.kind !== 'thinking')
-  const failed = failedIn(tools)
-  const only = steps.length === 1 && !current ? steps[0] : null
+  const tools = entries.filter((entry) => entry.kind !== "thinking");
+  const failed = failedIn(tools);
+  const only = steps.length === 1 && !current ? steps[0] : null;
   const led =
     current &&
     [
       ...items.slice(
         0,
-        items.findIndex((item) => item.kind === 'step' && item.step === current),
+        items.findIndex(
+          (item) => item.kind === "step" && item.step === current,
+        ),
       ),
     ]
       .reverse()
-      .find((item) => item.kind === 'thought')
-  const open = verbose || (thoughts.open && items.some((item) => item.kind === 'thought'))
-  if (current && steps.length === 1 && !items.some((item) => item.kind === 'thought')) {
+      .find((item) => item.kind === "thought");
+  const open =
+    verbose || (thoughts.open && items.some((item) => item.kind === "thought"));
+  if (
+    current &&
+    steps.length === 1 &&
+    !items.some((item) => item.kind === "thought")
+  ) {
     return (
-      <div data-testid="run" className="rounded-md border border-line bg-elevated px-3 py-1.5 text-xs">
+      <div
+        data-testid="run"
+        className="rounded-md border border-line bg-elevated px-3 py-1.5 text-xs"
+      >
         <StepItem step={current} running {...props} />
       </div>
-    )
+    );
   }
   return (
-    <div data-testid="run" className="rounded-md border border-line bg-elevated text-xs">
-      <details key={`${verbose}-${thoughts.times}`} open={open} data-testid="tools" className="group/tools">
+    <div
+      data-testid="run"
+      className="rounded-md border border-line bg-elevated text-xs"
+    >
+      <details
+        key={`${verbose}-${thoughts.times}`}
+        open={open}
+        data-testid="tools"
+        className="group/tools"
+      >
         <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-fg-2 hover:text-fg-1 max-md:min-h-11">
-          <Icon name="chevronRight" className="h-3 w-3 shrink-0 transition-transform group-open/tools:rotate-90" />
+          <Icon
+            name="chevronRight"
+            className="h-3 w-3 shrink-0 transition-transform group-open/tools:rotate-90"
+          />
           {/* A run that is so far only thoughts and the step under way is named by its thinking; the step shows below. */}
           {current && steps.length === 1 ? (
-            <span className="min-w-0 truncate">{thought ? `Thought for ${thought}` : 'Thought'}</span>
+            <span className="min-w-0 truncate">
+              {thought ? `Thought for ${thought}` : "Thought"}
+            </span>
           ) : (
             <>
-              <span className="min-w-0 truncate">{only ? stepLabel(only) : toolSummary(tools, live, 3)}</span>
-              {thought && <span className="shrink-0 text-fg-3">· thought for {thought}</span>}
+              <span className="min-w-0 truncate">
+                {only ? stepLabel(only) : toolSummary(tools, live, 3)}
+              </span>
+              {thought && (
+                <span className="shrink-0 text-fg-3">
+                  · thought for {thought}
+                </span>
+              )}
             </>
           )}
-          {failed > 0 && <span className="shrink-0 text-danger">· {failed} failed</span>}
+          {failed > 0 && (
+            <span className="shrink-0 text-danger">· {failed} failed</span>
+          )}
         </summary>
         <div className="flex flex-col gap-1.5 border-t border-line-subtle px-3 py-2">
           {items.map((item) =>
-            item.kind === 'thought' ? (
-              <Thought key={item.entries[0].index} entries={item.entries} took={item.took} {...props} />
+            item.kind === "thought" ? (
+              <Thought
+                key={item.entries[0].index}
+                entries={item.entries}
+                took={item.took}
+                {...props}
+              />
             ) : item.step === current ? null : (
-              <StepItem key={(item.step.call ?? item.step.result!).index} step={item.step} running={false} {...props} />
+              <StepItem
+                key={(item.step.call ?? item.step.result!).index}
+                step={item.step}
+                running={false}
+                {...props}
+              />
             ),
           )}
         </div>
       </details>
       {current && (
         <div className="flex flex-col gap-1.5 border-t border-line-subtle px-3 py-2">
-          {led?.kind === 'thought' && (
-            <p className="line-clamp-2 text-xs text-fg-2 italic">{headline(led.entries.map((entry) => entry.text).join(' '))}</p>
+          {led?.kind === "thought" && (
+            <p className="line-clamp-2 text-xs text-fg-2 italic">
+              {headline(led.entries.map((entry) => entry.text).join(" "))}
+            </p>
           )}
           <StepItem step={current} running {...props} />
         </div>
       )}
     </div>
-  )
+  );
 }
 
 /**
@@ -650,35 +890,44 @@ function RunFold({
  * that work did, the thought that led to the step under way, the last few steps and the one running; the rest
  * opens from it. Once the turn ends, the turn folds under "Worked for".
  */
-function ActivityCard({ entries, wrote, ...props }: EntryProps & { entries: HistoryEntry[]; wrote: boolean }) {
-  const verbose = useContext(TranscriptDetail) === 'verbose'
-  const thinking = useContext(LiveThought)
-  const [all, setAll] = useState(false)
-  const items = runItems(entries, null)
-  const steps = items.flatMap((item) => (item.kind === 'step' ? [item.step] : []))
-  const current = steps.find((step) => step.call && !step.result)
-  const done = steps.filter((step) => step !== current)
-  const thought = thoughtTotal(items)
+function ActivityCard({
+  entries,
+  wrote,
+  ...props
+}: EntryProps & { entries: HistoryEntry[]; wrote: boolean }) {
+  const verbose = useContext(TranscriptDetail) === "verbose";
+  const thinking = useContext(LiveThought);
+  const [all, setAll] = useState(false);
+  const items = runItems(entries, null);
+  const steps = items.flatMap((item) =>
+    item.kind === "step" ? [item.step] : [],
+  );
+  const current = steps.find((step) => step.call && !step.result);
+  const done = steps.filter((step) => step !== current);
+  const thought = thoughtTotal(items);
   const before = current
     ? items.slice(
         0,
-        items.findIndex((item) => item.kind === 'step' && item.step === current),
+        items.findIndex(
+          (item) => item.kind === "step" && item.step === current,
+        ),
       )
-    : items
-  const led = [...before].reverse().find((item) => item.kind === 'thought')
-  const tools = entries.filter((entry) => entry.kind !== 'thinking')
-  const failed = failedIn(tools)
-  const shown = verbose || all
-  const recent = done.slice(-3)
-  const thoughts = items.filter((item) => item.kind === 'thought').length
+    : items;
+  const led = [...before].reverse().find((item) => item.kind === "thought");
+  const tools = entries.filter((entry) => entry.kind !== "thinking");
+  const failed = failedIn(tools);
+  const shown = verbose || all;
+  const recent = done.slice(-3);
+  const thoughts = items.filter((item) => item.kind === "thought").length;
   // The thought under way is the newest, so it heads the card until it is recorded and becomes the one that led.
   const said = thinking
     ? headline(thinking)
-    : led?.kind === 'thought'
-      ? headline(led.entries.map((entry) => entry.text).join(' '))
-      : null
+    : led?.kind === "thought"
+      ? headline(led.entries.map((entry) => entry.text).join(" "))
+      : null;
   // What the card leaves out: earlier steps, and thoughts other than the headline it shows.
-  const hidden = done.length - recent.length + thoughts - (led && !thinking ? 1 : 0)
+  const hidden =
+    done.length - recent.length + thoughts - (led && !thinking ? 1 : 0);
   return (
     <section
       data-testid="activity"
@@ -686,26 +935,43 @@ function ActivityCard({ entries, wrote, ...props }: EntryProps & { entries: Hist
       className="flex flex-col gap-2 rounded-md border border-line bg-elevated px-3 py-2 text-xs"
     >
       <p className="flex min-w-0 items-center gap-1.5 text-fg-2">
-        <span className="shrink-0 font-medium text-fg-1">{wrote ? 'Since it last wrote' : 'So far'}</span>
+        <span className="shrink-0 font-medium text-fg-1">
+          {wrote ? "Since it last wrote" : "So far"}
+        </span>
         {done.length > 0 && (
           <span className="min-w-0 truncate">
-            ·{' '}
+            ·{" "}
             {toolSummary(
-              tools.filter((entry) => !current || (entry !== current.call && entry !== current.result)),
+              tools.filter(
+                (entry) =>
+                  !current ||
+                  (entry !== current.call && entry !== current.result),
+              ),
               false,
               3,
             )}
           </span>
         )}
-        {thought && <span className="shrink-0 text-fg-3">· thought for {thought}</span>}
-        {failed > 0 && <span className="shrink-0 text-danger">· {failed} failed</span>}
+        {thought && (
+          <span className="shrink-0 text-fg-3">· thought for {thought}</span>
+        )}
+        {failed > 0 && (
+          <span className="shrink-0 text-danger">· {failed} failed</span>
+        )}
       </p>
-      {said && !shown && <p className="line-clamp-2 text-fg-2 italic">{said}</p>}
+      {said && !shown && (
+        <p className="line-clamp-2 text-fg-2 italic">{said}</p>
+      )}
       <div className="flex flex-col gap-1">
         {shown
           ? items.map((item) =>
-              item.kind === 'thought' ? (
-                <Thought key={item.entries[0].index} entries={item.entries} took={item.took} {...props} />
+              item.kind === "thought" ? (
+                <Thought
+                  key={item.entries[0].index}
+                  entries={item.entries}
+                  took={item.took}
+                  {...props}
+                />
               ) : (
                 <StepItem
                   key={(item.step.call ?? item.step.result!).index}
@@ -717,35 +983,59 @@ function ActivityCard({ entries, wrote, ...props }: EntryProps & { entries: Hist
             )
           : [
               ...recent.map((step) => (
-                <div key={(step.call ?? step.result!).index} className="opacity-80">
+                <div
+                  key={(step.call ?? step.result!).index}
+                  className="opacity-80"
+                >
                   <StepItem step={step} running={false} {...props} />
                 </div>
               )),
-              current && <StepItem key={current.call!.index} step={current} running {...props} />,
+              current && (
+                <StepItem
+                  key={current.call!.index}
+                  step={current}
+                  running
+                  {...props}
+                />
+              ),
             ]}
-        {shown && thinking && <p className="border-l-2 border-line pl-3 whitespace-pre-wrap text-fg-2 italic">{thinking}</p>}
+        {shown && thinking && (
+          <p className="border-l-2 border-line pl-3 whitespace-pre-wrap text-fg-2 italic">
+            {thinking}
+          </p>
+        )}
       </div>
       {!verbose && hidden > 0 && (
-        <button type="button" onClick={() => setAll(!all)} className="w-fit text-accent-fg hover:text-fg-1 max-md:min-h-11">
+        <button
+          type="button"
+          onClick={() => setAll(!all)}
+          className="w-fit text-accent-fg hover:text-fg-1 max-md:min-h-11"
+        >
           {all
-            ? 'Show only the latest'
-            : `Show everything · ${steps.length} ${steps.length === 1 ? 'step' : 'steps'}${thoughts > 0 ? `, ${thoughts} ${thoughts === 1 ? 'thought' : 'thoughts'}` : ''}`}
+            ? "Show only the latest"
+            : `Show everything · ${steps.length} ${steps.length === 1 ? "step" : "steps"}${thoughts > 0 ? `, ${thoughts} ${thoughts === 1 ? "thought" : "thoughts"}` : ""}`}
         </button>
       )}
     </section>
-  )
+  );
 }
 
 /** What one step did, as a run of one says it: a command's purpose or the command, else what the tool did. */
 function stepLabel(step: ToolStep): string {
-  const call = step.call
-  if (!call) return "A tool's output"
-  if (kindOf(call) === 'execute') return call.tool?.detail?.trim() || shortCommand(call.tool?.subject ?? toolOf(call.text).name)
-  return toolSummary(entriesOfStep(step))
+  const call = step.call;
+  if (!call) return "A tool's output";
+  if (kindOf(call) === "execute")
+    return (
+      call.tool?.detail?.trim() ||
+      shortCommand(call.tool?.subject ?? toolOf(call.text).name)
+    );
+  return toolSummary(entriesOfStep(step));
 }
 
 function entriesOfStep(step: ToolStep): HistoryEntry[] {
-  return [step.call, step.result].filter((entry): entry is HistoryEntry => entry !== null)
+  return [step.call, step.result].filter(
+    (entry): entry is HistoryEntry => entry !== null,
+  );
 }
 
 /** The thread's files this machine leaves off its disk: names its file system can't hold, such as `aux.txt` on Windows, or that differ only in case (ADR 0045). */
@@ -755,17 +1045,21 @@ function Unwritten({ thread }: { thread: string }) {
     queryFn: () => api.unwritten(thread),
     enabled: !hosted(),
     retry: false,
-  })
-  const paths = unwritten.data ?? []
-  if (paths.length === 0) return null
+  });
+  const paths = unwritten.data ?? [];
+  if (paths.length === 0) return null;
   return (
-    <p role="note" className="mb-4 rounded-md border border-line-subtle px-3 py-2 text-xs text-fg-2">
-      {paths.length === 1 ? 'One file' : `${paths.length} files`} of this thread {paths.length === 1 ? "isn't" : "aren't"} written
-      on this machine, as its file system can't hold {paths.length === 1 ? 'its name' : 'their names'}:{' '}
-      <span className="font-mono">{paths.join(', ')}</span>. The thread keeps {paths.length === 1 ? 'it' : 'them'} for machines
-      that can.
+    <p
+      role="note"
+      className="mb-4 rounded-md border border-line-subtle px-3 py-2 text-xs text-fg-2"
+    >
+      {paths.length === 1 ? "One file" : `${paths.length} files`} of this thread{" "}
+      {paths.length === 1 ? "isn't" : "aren't"} written on this machine, as its
+      file system can't hold {paths.length === 1 ? "its name" : "their names"}:{" "}
+      <span className="font-mono">{paths.join(", ")}</span>. The thread keeps{" "}
+      {paths.length === 1 ? "it" : "them"} for machines that can.
     </p>
-  )
+  );
 }
 
 /** Under a turn: what it did, in numbers, and what can be done from it (ADR 0029, 0031). */
@@ -776,65 +1070,76 @@ function TurnBar({
   rewound,
   settled,
 }: {
-  thread: string
-  turn: TurnInfo
-  row: Extract<Row, { kind: 'turn' }>
-  rewound: boolean
+  thread: string;
+  turn: TurnInfo;
+  row: Extract<Row, { kind: "turn" }>;
+  rewound: boolean;
   /** A later turn began, so what this one changed won't change. */
-  settled: boolean
+  settled: boolean;
 }) {
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const [open, setOpen] = useState(false)
-  const [reverting, setReverting] = useState(false)
-  const [hideGit] = useHideGit()
-  const [hideOthers] = useHideOthers()
-  const of = { turn: turn.number, hideGit, hideOthers }
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [reverting, setReverting] = useState(false);
+  const [hideGit] = useHideGit();
+  const [hideOthers] = useHideOthers();
+  const of = { turn: turn.number, hideGit, hideOthers };
   // Counted from the files' stats; the lines are read only once asked for, and file by file when too many.
   const stats = useQuery({
-    queryKey: settled ? keys.settledTurnStats(thread, of) : keys.diffStats(thread, of),
+    queryKey: settled
+      ? keys.settledTurnStats(thread, of)
+      : keys.diffStats(thread, of),
     queryFn: () => api.diffStats(thread, of),
     staleTime: Infinity,
-  })
-  const files = stats.data ?? null
-  const whole = files !== null && readWhole(files)
+  });
+  const files = stats.data ?? null;
+  const whole = files !== null && readWhole(files);
   const diff = useQuery({
-    queryKey: settled ? keys.settledTurnDiff(thread, of) : keys.diff(thread, of),
+    queryKey: settled
+      ? keys.settledTurnDiff(thread, of)
+      : keys.diff(thread, of),
     queryFn: () => api.diff(thread, of),
     staleTime: Infinity,
     enabled: open && whole,
-  })
-  const tools = row.entries.filter((entry) => entry.kind === 'tool_call').length
-  const last = row.entries[row.entries.length - 1]
-  const took = row.prompt && last ? duration(row.prompt.time_ms, last.time_ms) : null
+  });
+  const tools = row.entries.filter(
+    (entry) => entry.kind === "tool_call",
+  ).length;
+  const last = row.entries[row.entries.length - 1];
+  const took =
+    row.prompt && last ? duration(row.prompt.time_ms, last.time_ms) : null;
   const facts = [
     `turn ${turn.number}`,
-    tools > 0 && `${tools} tool ${tools === 1 ? 'call' : 'calls'}`,
-    files && files.length > 0 && `${files.length} ${files.length === 1 ? 'file' : 'files'}`,
-  ].filter(Boolean)
+    tools > 0 && `${tools} tool ${tools === 1 ? "call" : "calls"}`,
+    files &&
+      files.length > 0 &&
+      `${files.length} ${files.length === 1 ? "file" : "files"}`,
+  ].filter(Boolean);
   const forkHere = () =>
     api.fork(thread, turn.number).then(
-      (made) => void navigate({ to: '/t/$id', params: { id: made.thread } }),
-      (failure: unknown) => toast(message(failure), 'danger'),
-    )
+      (made) => void navigate({ to: "/t/$id", params: { id: made.thread } }),
+      (failure: unknown) => toast(message(failure), "danger"),
+    );
   const revertHere = () =>
     api.revert(thread, turn.number).then(
       (reverted) => {
-        setReverting(false)
-        toast(`Reverted to turn ${reverted.turn}: ${reverted.files.length} files written back`)
-        void queryClient.invalidateQueries()
+        setReverting(false);
+        toast(
+          `Reverted to turn ${reverted.turn}: ${reverted.files.length} files written back`,
+        );
+        void queryClient.invalidateQueries();
       },
-      (failure: unknown) => toast(message(failure), 'danger'),
-    )
-  const ghost = cx(buttonClass('ghost', 'sm'), 'font-normal')
+      (failure: unknown) => toast(message(failure), "danger"),
+    );
+  const ghost = cx(buttonClass("ghost", "sm"), "font-normal");
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-2">
         <span className="font-mono text-2xs">
-          {facts.join(' · ')}
+          {facts.join(" · ")}
           {files && files.length > 0 && (
             <>
-              {' · '}
+              {" · "}
               <Counts
                 added={files.reduce((sum, file) => sum + file.added, 0)}
                 removed={files.reduce((sum, file) => sum + file.removed, 0)}
@@ -847,11 +1152,11 @@ function TurnBar({
         {files && files.length > 0 && (
           <button
             type="button"
-            aria-label={`${open ? 'hide' : 'show'} what turn ${turn.number} changed`}
+            aria-label={`${open ? "hide" : "show"} what turn ${turn.number} changed`}
             className="text-accent-fg hover:text-fg-1 max-md:min-h-11"
             onClick={() => setOpen(!open)}
           >
-            {open ? 'Hide what this turn changed' : 'What this turn changed'}
+            {open ? "Hide what this turn changed" : "What this turn changed"}
           </button>
         )}
         {/* A toolbar of the turn's, in sight while the pointer or focus is in the turn (or on a touch screen), so a long
@@ -860,19 +1165,29 @@ function TurnBar({
           role="toolbar"
           aria-label={`turn ${turn.number}`}
           className={cx(
-            'ml-auto flex flex-wrap gap-0.5 rounded-md border border-line bg-elevated p-0.5 shadow-raised transition-opacity duration-150',
-            !reverting && 'md:opacity-0 md:group-hover/turn:opacity-100 md:focus-within:opacity-100 pointer-coarse:opacity-100',
+            "ml-auto flex flex-wrap gap-0.5 rounded-md border border-line bg-elevated p-0.5 shadow-raised transition-opacity duration-150",
+            !reverting &&
+              "md:opacity-0 md:group-hover/turn:opacity-100 md:focus-within:opacity-100 pointer-coarse:opacity-100",
           )}
         >
           {!hosted() &&
             !rewound &&
             (reverting ? (
               <span className="flex items-center gap-2">
-                Files go back to how turn {turn.number} left them; later turns stay, marked rewound.
-                <Button variant="danger" size="sm" onClick={() => void revertHere()}>
+                Files go back to how turn {turn.number} left them; later turns
+                stay, marked rewound.
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={() => void revertHere()}
+                >
                   Revert
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => setReverting(false)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setReverting(false)}
+                >
                   Cancel
                 </Button>
               </span>
@@ -909,10 +1224,14 @@ function TurnBar({
           />
         </span>
       </div>
-      {open && whole && diff.data !== undefined && <DiffView text={diff.data} viewFiles={thread} />}
-      {open && files !== null && !whole && <FilesByStats thread={thread} stats={files} of={of} />}
+      {open && whole && diff.data !== undefined && (
+        <DiffView text={diff.data} viewFiles={thread} />
+      )}
+      {open && files !== null && !whole && (
+        <FilesByStats thread={thread} stats={files} of={of} />
+      )}
     </div>
-  )
+  );
 }
 
 /** Where the history moves to another thread's part: the source before a fork, or upstream work pulled in. Named by its title, as people know it. */
@@ -922,26 +1241,34 @@ function OriginDivider({
   folded,
   onUnfold,
 }: {
-  origin: string
-  thread: string
-  folded?: number
-  onUnfold?: () => void
+  origin: string;
+  thread: string;
+  folded?: number;
+  onUnfold?: () => void;
 }) {
-  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
-  const title = threads.data?.find((candidate) => candidate.id === thread || candidate.id.endsWith(thread))?.title
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads });
+  const title = threads.data?.find(
+    (candidate) => candidate.id === thread || candidate.id.endsWith(thread),
+  )?.title;
   return (
     <div
       role="separator"
-      aria-label={origin === 'own' ? 'this fork starts here' : `from ${title ?? short(thread)}`}
+      aria-label={
+        origin === "own"
+          ? "this fork starts here"
+          : `from ${title ?? short(thread)}`
+      }
       className="flex items-center gap-2.5 py-2 text-xs text-fg-2"
     >
       <span className="h-px flex-1 bg-line" />
-      {origin === 'own' ? (
-        <span className="text-2xs font-medium text-fg-1">This fork starts here</span>
+      {origin === "own" ? (
+        <span className="text-2xs font-medium text-fg-1">
+          This fork starts here
+        </span>
       ) : (
         <>
           <span className="min-w-0 truncate text-2xs">
-            {origin === 'inherited' ? 'From ' : 'Upstream progress from '}
+            {origin === "inherited" ? "From " : "Upstream progress from "}
             <Link
               to="/t/$id"
               params={{ id: thread }}
@@ -951,7 +1278,7 @@ function OriginDivider({
             >
               {title ?? short(thread)}
             </Link>
-            {origin === 'inherited' && ', before this fork'}
+            {origin === "inherited" && ", before this fork"}
           </span>
           {/* Outside the cut title, so a long one never hides it. */}
           {folded !== undefined && folded > 0 && (
@@ -960,31 +1287,35 @@ function OriginDivider({
               className="shrink-0 text-2xs whitespace-nowrap text-accent-fg hover:underline"
               onClick={onUnfold}
             >
-              Show {folded} {folded === 1 ? 'turn' : 'turns'}
+              Show {folded} {folded === 1 ? "turn" : "turns"}
             </button>
           )}
         </>
       )}
       <span className="h-px flex-1 bg-line" />
     </div>
-  )
+  );
 }
 
 /** What the person decided, a question they answered or a plan put to them, stays out of the fold, as does what the agent showed them. */
 function decided(piece: Piece): boolean {
-  if (piece.kind === 'entry') return piece.entry.kind === 'artifact'
+  if (piece.kind === "entry") return piece.entry.kind === "artifact";
   return (
-    piece.kind === 'step' &&
+    piece.kind === "step" &&
     Boolean(piece.step.call) &&
-    (kindOf(piece.step.call!) === 'question' || Boolean(proposedPlan(piece.step.call!)))
-  )
+    (kindOf(piece.step.call!) === "question" ||
+      Boolean(proposedPlan(piece.step.call!)))
+  );
 }
 
 /** What an agent showed the person where it showed it: an image, or a card opening an artifact beside the conversation. */
 function ShownArtifact({ entry }: { entry: HistoryEntry }) {
-  const actions = useContext(ArtifactActions)
-  if (entry.artifact?.inline) return actions ? <ShownImage thread={actions.thread} entry={entry} /> : null
-  return <ArtifactCard entry={entry} />
+  const actions = useContext(ArtifactActions);
+  if (entry.artifact?.inline)
+    return actions ? (
+      <ShownImage thread={actions.thread} entry={entry} />
+    ) : null;
+  return <ArtifactCard entry={entry} />;
 }
 
 /**
@@ -992,19 +1323,32 @@ function ShownArtifact({ entry }: { entry: HistoryEntry }) {
  * what waits on the person stay outside it. `activity` is the card's entries, empty when there is no card.
  */
 function sinceWrote(pieces: Piece[], tasks: Tasks) {
-  const wrote = pieces.findLastIndex((piece) => piece.kind === 'entry' && piece.entry.kind === 'assistant')
-  const since = pieces.slice(wrote + 1)
+  const wrote = pieces.findLastIndex(
+    (piece) => piece.kind === "entry" && piece.entry.kind === "assistant",
+  );
+  const since = pieces.slice(wrote + 1);
   const carded = since.filter(
-    (piece) => piece.kind === 'tools' || (piece.kind === 'step' && !decided(piece) && !tasked(piece.step, tasks)),
-  )
+    (piece) =>
+      piece.kind === "tools" ||
+      (piece.kind === "step" && !decided(piece) && !tasked(piece.step, tasks)),
+  );
   const activity = carded.some(
-    (piece) => piece.kind === 'step' || (piece.kind === 'tools' && piece.entries.some((entry) => entry.kind !== 'thinking')),
+    (piece) =>
+      piece.kind === "step" ||
+      (piece.kind === "tools" &&
+        piece.entries.some((entry) => entry.kind !== "thinking")),
   )
     ? carded
-        .flatMap((piece) => (piece.kind === 'tools' ? piece.entries : piece.kind === 'step' ? entriesOfStep(piece.step) : []))
+        .flatMap((piece) =>
+          piece.kind === "tools"
+            ? piece.entries
+            : piece.kind === "step"
+              ? entriesOfStep(piece.step)
+              : [],
+        )
         .sort((a, b) => a.index - b.index)
-    : []
-  return { wrote, since, carded, activity }
+    : [];
+  return { wrote, since, carded, activity };
 }
 
 /** `running`: the turn is still under way, so it has no totals or actions yet. `last`: no turn follows it yet.
@@ -1016,28 +1360,40 @@ const TranscriptRow = memo(function TranscriptRow({
   last: lastRow = false,
   onUnfold,
   ...props
-}: EntryProps & { row: Row; running?: boolean; last?: boolean; onUnfold?: () => void }) {
-  const [summary, setSummary] = useState(false)
-  const tasks = useContext(TasksContext)
-  const grouping = useContext(TranscriptGrouping)
-  const verbose = useContext(TranscriptDetail) === 'verbose'
-  const thoughts = useContext(ThoughtsOpen)
-  if (row.kind === 'origin')
-    return <OriginDivider origin={row.origin} thread={row.thread} folded={row.folded} onUnfold={onUnfold} />
-  if (row.kind === 'compaction') {
+}: EntryProps & {
+  row: Row;
+  running?: boolean;
+  last?: boolean;
+  onUnfold?: () => void;
+}) {
+  const [summary, setSummary] = useState(false);
+  const tasks = useContext(TasksContext);
+  const grouping = useContext(TranscriptGrouping);
+  const verbose = useContext(TranscriptDetail) === "verbose";
+  const thoughts = useContext(ThoughtsOpen);
+  if (row.kind === "origin")
+    return (
+      <OriginDivider
+        origin={row.origin}
+        thread={row.thread}
+        folded={row.folded}
+        onUnfold={onUnfold}
+      />
+    );
+  if (row.kind === "compaction") {
     return (
       // A point in time rather than a message, so a line with its label in it.
       <div className="py-2">
         <div
           role="separator"
-          data-testid={row.marker ? 'compaction' : undefined}
+          data-testid={row.marker ? "compaction" : undefined}
           className="flex items-center gap-2.5 text-xs text-fg-2"
         >
           <span className="h-px flex-1 bg-line" />
           <span className="min-w-0 text-center">
             {row.marker
-              ? 'Context compacted · earlier messages stay in the history, for you, the agent and search'
-              : 'The agent summarized its context here'}
+              ? "Context compacted · earlier messages stay in the history, for you, the agent and search"
+              : "The agent summarized its context here"}
           </span>
           {row.summary && (
             <button
@@ -1046,7 +1402,7 @@ const TranscriptRow = memo(function TranscriptRow({
               aria-expanded={summary}
               onClick={() => setSummary(!summary)}
             >
-              {summary ? 'Hide summary' : 'Show summary'}
+              {summary ? "Hide summary" : "Show summary"}
             </button>
           )}
           <span className="h-px flex-1 bg-line" />
@@ -1057,34 +1413,57 @@ const TranscriptRow = memo(function TranscriptRow({
           </p>
         )}
       </div>
-    )
+    );
   }
-  const pieces = piecesOf(row.entries, tasks)
-  const rewound = row.prompt?.rewound ?? row.entries.some((entry) => entry.rewound)
+  const pieces = piecesOf(row.entries, tasks);
+  const rewound =
+    row.prompt?.rewound ?? row.entries.some((entry) => entry.rewound);
   // Grouped by turn, a finished turn's work folds under one line, leaving its last reply showing (ADR 0049).
-  const last = pieces.findLastIndex((piece) => piece.kind === 'entry' && piece.entry.kind === 'assistant')
-  const folded = grouping === 'turn' && !running && Boolean(row.turn) && last >= 0 && pieces.length > 1
+  const last = pieces.findLastIndex(
+    (piece) => piece.kind === "entry" && piece.entry.kind === "assistant",
+  );
+  const folded =
+    grouping === "turn" &&
+    !running &&
+    Boolean(row.turn) &&
+    last >= 0 &&
+    pieces.length > 1;
   // A subagent or background command stays in sight while it runs; once done it folds with the rest of the work.
   const runs = (piece: Piece) => {
-    if (piece.kind !== 'step' || !tasked(piece.step, tasks)) return false
-    const id = piece.step.call?.tool?.id
-    const task = id ? tasks.byCall.get(id) : undefined
-    return task ? task.status === 'running' : !piece.step.result
-  }
-  const work = folded ? pieces.filter((piece, index) => index !== last && !decided(piece) && !runs(piece)) : []
-  const reply = folded ? [...pieces.filter((piece) => decided(piece) || runs(piece)), pieces[last]] : []
+    if (piece.kind !== "step" || !tasked(piece.step, tasks)) return false;
+    const id = piece.step.call?.tool?.id;
+    const task = id ? tasks.byCall.get(id) : undefined;
+    return task ? task.status === "running" : !piece.step.result;
+  };
+  const work = folded
+    ? pieces.filter(
+        (piece, index) => index !== last && !decided(piece) && !runs(piece),
+      )
+    : [];
+  const reply = folded
+    ? [...pieces.filter((piece) => decided(piece) || runs(piece)), pieces[last]]
+    : [];
   const { wrote, since, carded, activity } =
-    grouping === 'turn' && running ? sinceWrote(pieces, tasks) : { wrote: -1, since: [], carded: [], activity: [] }
-  const final = row.entries[row.entries.length - 1]
-  const worked = row.prompt && final ? duration(row.prompt.time_ms, final.time_ms) : null
+    grouping === "turn" && running
+      ? sinceWrote(pieces, tasks)
+      : { wrote: -1, since: [], carded: [], activity: [] };
+  const final = row.entries[row.entries.length - 1];
+  const worked =
+    row.prompt && final ? duration(row.prompt.time_ms, final.time_ms) : null;
   const drawn = (piece: Piece) =>
-    piece.kind === 'tools' ? (
-      <RunFold key={piece.entries[0].index} entries={piece.entries} until={piece.until} live={running} {...props} />
-    ) : piece.kind === 'plan' ? (
+    piece.kind === "tools" ? (
+      <RunFold
+        key={piece.entries[0].index}
+        entries={piece.entries}
+        until={piece.until}
+        live={running}
+        {...props}
+      />
+    ) : piece.kind === "plan" ? (
       <Entry key={piece.entry.index} entry={piece.entry} {...props}>
         <PlanSteps entry={piece.entry} />
       </Entry>
-    ) : piece.kind === 'step' ? (
+    ) : piece.kind === "step" ? (
       <Entry key={piece.step.call!.index} entry={piece.step.call!} {...props}>
         <StepCard step={piece.step} {...props} />
       </Entry>
@@ -1092,17 +1471,24 @@ const TranscriptRow = memo(function TranscriptRow({
       <Entry key={piece.entry.index} entry={piece.entry} {...props}>
         <EntryText entry={piece.entry} />
       </Entry>
-    )
+    );
   return (
-    <div id={row.turn ? `turn-${row.turn.number}` : undefined} className="group/turn py-[calc(12px*var(--density))]">
+    <div
+      id={row.turn ? `turn-${row.turn.number}` : undefined}
+      className="group/turn py-[calc(12px*var(--density))]"
+    >
       <div className="flex min-w-0 flex-col gap-[calc(14px*var(--density))]">
-        {row.prompt?.kind === 'user' && (
+        {row.prompt?.kind === "user" && (
           <Entry entry={row.prompt} turn={row.turn?.number} {...props}>
             <EntryText entry={row.prompt} />
             {row.images.length > 0 && (
               <div className="mt-1.5 flex flex-wrap justify-end gap-2">
                 {row.images.map((image) => (
-                  <ImageThumb key={image.index} entry={image} from="in the prompt" />
+                  <ImageThumb
+                    key={image.index}
+                    entry={image}
+                    from="in the prompt"
+                  />
                 ))}
               </div>
             )}
@@ -1112,7 +1498,11 @@ const TranscriptRow = memo(function TranscriptRow({
           <>
             <details
               key={`${verbose}-${thoughts.times}`}
-              open={verbose || (thoughts.open && row.entries.some((entry) => entry.kind === 'thinking'))}
+              open={
+                verbose ||
+                (thoughts.open &&
+                  row.entries.some((entry) => entry.kind === "thinking"))
+              }
               data-testid="worked"
               className="group/worked text-xs text-fg-2"
             >
@@ -1121,11 +1511,20 @@ const TranscriptRow = memo(function TranscriptRow({
                   name="chevronRight"
                   className="mr-1.5 inline h-3 w-3 align-[-1px] transition-transform group-open/worked:rotate-90"
                 />
-                <span className="text-fg-1">{worked ? `Worked for ${worked}` : 'Worked'}</span> ·{' '}
-                {toolSummary(row.entries, false, 2)}
-                {failedIn(row.entries) > 0 && <span className="text-danger"> · {failedIn(row.entries)} failed on the way</span>}
+                <span className="text-fg-1">
+                  {worked ? `Worked for ${worked}` : "Worked"}
+                </span>{" "}
+                · {toolSummary(row.entries, false, 2)}
+                {failedIn(row.entries) > 0 && (
+                  <span className="text-danger">
+                    {" "}
+                    · {failedIn(row.entries)} failed on the way
+                  </span>
+                )}
               </summary>
-              <div className="mt-3 flex flex-col gap-3.5 border-l-2 border-line pl-3 text-sm text-fg-1">{work.map(drawn)}</div>
+              <div className="mt-3 flex flex-col gap-3.5 border-l-2 border-line pl-3 text-sm text-fg-1">
+                {work.map(drawn)}
+              </div>
             </details>
             {reply.map(drawn)}
           </>
@@ -1135,7 +1534,12 @@ const TranscriptRow = memo(function TranscriptRow({
             {/* The card stands where its first piece was; what isn't in it keeps its place. */}
             {since.map((piece) =>
               piece === carded[0] ? (
-                <ActivityCard key="activity" entries={activity} wrote={wrote >= 0} {...props} />
+                <ActivityCard
+                  key="activity"
+                  entries={activity}
+                  wrote={wrote >= 0}
+                  {...props}
+                />
               ) : carded.includes(piece) ? null : (
                 drawn(piece)
               ),
@@ -1144,31 +1548,51 @@ const TranscriptRow = memo(function TranscriptRow({
         ) : (
           pieces.map(drawn)
         )}
-        {row.turn && !running && <TurnBar thread={props.thread} turn={row.turn} row={row} rewound={rewound} settled={!lastRow} />}
+        {row.turn && !running && (
+          <TurnBar
+            thread={props.thread}
+            turn={row.turn}
+            row={row}
+            rewound={rewound}
+            settled={!lastRow}
+          />
+        )}
       </div>
     </div>
-  )
-})
+  );
+});
 
 function ThreadStateActions({ summary }: { summary: ThreadSummary }) {
-  const items = useThreadState(summary)
-  useActions(items.map((item) => ({ id: `state:${item.label}`, label: `${item.label} this thread`, run: item.onSelect })))
-  return null
+  const items = useThreadState(summary);
+  useActions(
+    items.map((item) => ({
+      id: `state:${item.label}`,
+      label: `${item.label} this thread`,
+      run: item.onSelect,
+    })),
+  );
+  return null;
 }
 
 /** A fork's work offered back to its source as a merge request, by its title. */
-function OfferForm({ thread, onError }: { thread: string; onError: (failure: unknown) => void }) {
-  const navigate = useNavigate()
-  const [title, setTitle] = useState('')
+function OfferForm({
+  thread,
+  onError,
+}: {
+  thread: string;
+  onError: (failure: unknown) => void;
+}) {
+  const navigate = useNavigate();
+  const [title, setTitle] = useState("");
   return (
     <form
       className="flex items-center gap-2 [&>input]:min-w-0 [&>input]:flex-1"
       onSubmit={(event) => {
-        event.preventDefault()
+        event.preventDefault();
         api.offerMergeRequest(thread, title).then((mr) => {
-          toast(`Offered "${mr.title}"`, 'ok')
-          void navigate({ to: '/mr/$id', params: { id: mr.id } })
-        }, onError)
+          toast(`Offered "${mr.title}"`, "ok");
+          void navigate({ to: "/mr/$id", params: { id: mr.id } });
+        }, onError);
       }}
     >
       <Input
@@ -1182,7 +1606,7 @@ function OfferForm({ thread, onError }: { thread: string; onError: (failure: unk
         Offer
       </Button>
     </form>
-  )
+  );
 }
 
 /** What the thread changed, over the composer: how much, a way to review it, a pull request on the forge, and for a fork, offering it back. */
@@ -1194,39 +1618,45 @@ function ChangesBar({
   forge,
   onReview,
 }: {
-  thread: string
-  files: number
-  totals: { added: number; removed: number }
-  forked: boolean
+  thread: string;
+  files: number;
+  totals: { added: number; removed: number };
+  forked: boolean;
   /** The forge the project's remote is on, by name, when it is a known one. */
-  forge: string | undefined
-  onReview: () => void
+  forge: string | undefined;
+  onReview: () => void;
 }) {
-  const [offering, setOffering] = useState(false)
-  const [pushing, setPushing] = useState(false)
+  const [offering, setOffering] = useState(false);
+  const [pushing, setPushing] = useState(false);
   // Asked again with the changes, as a commit or a branch can lift what stood in the way.
   const blocker = useQuery({
-    queryKey: [...keys.thread(thread), 'pull-request', files, totals.added, totals.removed],
+    queryKey: [
+      ...keys.thread(thread),
+      "pull-request",
+      files,
+      totals.added,
+      totals.removed,
+    ],
     queryFn: () => api.pullRequestBlocker(thread),
     enabled: !hosted(),
-  })
+  });
   // The tab opens on the click, so no popup blocker stops it, and goes to the forge once the push is done.
   const createPr = () => {
-    const tab = window.open('', '_blank')
-    setPushing(true)
+    const tab = window.open("", "_blank");
+    setPushing(true);
     api.openPullRequest(thread).then(
       (url) => {
-        setPushing(false)
-        if (tab) tab.location.href = url
-        else window.location.assign(url)
+        setPushing(false);
+        if (tab) tab.location.href = url;
+        else window.location.assign(url);
       },
       (failure: unknown) => {
-        setPushing(false)
-        tab?.close()
-        toast(message(failure), 'danger')
+        setPushing(false);
+        tab?.close();
+        toast(message(failure), "danger");
       },
-    )
-  }
+    );
+  };
   return (
     <div
       role="group"
@@ -1235,7 +1665,7 @@ function ChangesBar({
     >
       <Icon name="file" className="h-3.5 w-3.5 text-fg-2" />
       <span>
-        {files} {files === 1 ? 'file' : 'files'} changed
+        {files} {files === 1 ? "file" : "files"} changed
       </span>
       <Counts added={totals.added} removed={totals.removed} />
       <span className="ml-auto flex items-center gap-1.5">
@@ -1244,43 +1674,69 @@ function ChangesBar({
         </Button>
         {forked &&
           (offering ? (
-            <OfferForm thread={thread} onError={(failure) => toast(message(failure), 'danger')} />
+            <OfferForm
+              thread={thread}
+              onError={(failure) => toast(message(failure), "danger")}
+            />
           ) : (
-            <Button size="sm" variant={hosted() ? 'primary' : 'secondary'} icon="merge" onClick={() => setOffering(true)}>
+            <Button
+              size="sm"
+              variant={hosted() ? "primary" : "secondary"}
+              icon="merge"
+              onClick={() => setOffering(true)}
+            >
               Offer as merge request
             </Button>
           ))}
         {!hosted() && !offering && (
           <Button
             size="sm"
-            variant={blocker.data ? 'secondary' : 'primary'}
+            variant={blocker.data ? "secondary" : "primary"}
             icon="external"
             disabled={pushing || Boolean(blocker.data)}
             onClick={createPr}
             title={
               blocker.data
                 ? `No pull request yet: ${blocker.data}`
-                : `Pushes the thread's branch to origin and opens ${forge ?? 'the forge'}'s page for its pull request`
+                : `Pushes the thread's branch to origin and opens ${forge ?? "the forge"}'s page for its pull request`
             }
           >
-            {pushing ? 'Pushing…' : forge ? `Create PR on ${forge}` : 'Create PR on the forge'}
+            {pushing
+              ? "Pushing…"
+              : forge
+                ? `Create PR on ${forge}`
+                : "Create PR on the forge"}
           </Button>
         )}
       </span>
     </div>
-  )
+  );
 }
 
 function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
-  const navigate = useNavigate()
+  const navigate = useNavigate();
   // Each time the palette asks, the offer opens again.
-  const [offered, setOffered] = useState(0)
-  const failed = (failure: unknown) => toast(message(failure), 'danger')
-  const fork = () => api.fork(thread).then((made) => void navigate({ to: '/t/$id', params: { id: made.thread } }), failed)
+  const [offered, setOffered] = useState(0);
+  const failed = (failure: unknown) => toast(message(failure), "danger");
+  const fork = () =>
+    api
+      .fork(thread)
+      .then(
+        (made) => void navigate({ to: "/t/$id", params: { id: made.thread } }),
+        failed,
+      );
   useActions([
-    { id: 'fork', label: 'Fork this thread', run: () => void fork() },
-    ...(forked ? [{ id: 'offer', label: 'Offer as merge request', run: () => setOffered((count) => count + 1) }] : []),
-  ])
+    { id: "fork", label: "Fork this thread", run: () => void fork() },
+    ...(forked
+      ? [
+          {
+            id: "offer",
+            label: "Offer as merge request",
+            run: () => setOffered((count) => count + 1),
+          },
+        ]
+      : []),
+  ]);
   return (
     <>
       <Button
@@ -1301,9 +1757,14 @@ function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
           triggerClassName={buttonClass()}
           panelClassName="w-80 p-2"
           trigger={
-            <span className="inline-flex items-center gap-1.5" title="Offer this fork's work back to its source">
+            <span
+              className="inline-flex items-center gap-1.5"
+              title="Offer this fork's work back to its source"
+            >
               <Icon name="merge" className="h-3.5 w-3.5" />
-              <span className="@max-3xl/head:sr-only">Offer as merge request</span>
+              <span className="@max-3xl/head:sr-only">
+                Offer as merge request
+              </span>
             </span>
           }
         >
@@ -1311,7 +1772,7 @@ function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
         </Popover>
       )}
     </>
-  )
+  );
 }
 
 /** The header's More (ADR 0044): the commands that pick the thread up in a terminal, with which agent, Join live, the graph and the details. */
@@ -1320,25 +1781,27 @@ function ThreadMore({
   summary,
   here,
   onDetails,
+  onAccess,
   detail,
   onDetail,
   grouping,
   onGrouping,
 }: {
-  thread: string
-  summary: ThreadSummary | undefined
-  here: number
-  onDetails: () => void
-  detail: Detail
-  onDetail: (detail: Detail) => void
-  grouping: Grouping
-  onGrouping: (grouping: Grouping) => void
+  thread: string;
+  summary: ThreadSummary | undefined;
+  here: number;
+  onDetails: () => void;
+  onAccess?: () => void;
+  detail: Detail;
+  onDetail: (detail: Detail) => void;
+  grouping: Grouping;
+  onGrouping: (grouping: Grouping) => void;
 }) {
-  const [agent, setAgent] = useState('')
+  const [agent, setAgent] = useState("");
   const commands = [
-    `silt resume ${short(thread)}${agent ? ` --agent ${agent}` : ''}`,
-    `silt fork ${short(thread)}${agent ? ` --agent ${agent}` : ''}`,
-  ]
+    `silt resume ${short(thread)}${agent ? ` --agent ${agent}` : ""}`,
+    `silt fork ${short(thread)}${agent ? ` --agent ${agent}` : ""}`,
+  ];
   return (
     <Popover
       label="more for this thread"
@@ -1350,8 +1813,14 @@ function ThreadMore({
     >
       {(close) => (
         <>
-          <p className="px-1 pb-0.5 text-2xs text-fg-2">Group the agent&apos;s work</p>
-          <span role="radiogroup" aria-label="transcript grouping" className="mx-1 flex rounded-sm border border-line p-0.5">
+          <p className="px-1 pb-0.5 text-2xs text-fg-2">
+            Group the agent&apos;s work
+          </p>
+          <span
+            role="radiogroup"
+            aria-label="transcript grouping"
+            className="mx-1 flex rounded-sm border border-line p-0.5"
+          >
             {GROUPINGS.map((choice) => (
               <button
                 key={choice.id}
@@ -1361,16 +1830,24 @@ function ThreadMore({
                 title={choice.says}
                 onClick={() => onGrouping(choice.id)}
                 className={cx(
-                  'flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11',
-                  grouping === choice.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1',
+                  "flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11",
+                  grouping === choice.id
+                    ? "bg-surface-2 text-fg-1"
+                    : "text-fg-2 hover:text-fg-1",
                 )}
               >
                 {choice.label}
               </button>
             ))}
           </span>
-          <p className="px-1 pt-1 pb-0.5 text-2xs text-fg-2">How much each step shows</p>
-          <span role="radiogroup" aria-label="transcript detail" className="mx-1 flex rounded-sm border border-line p-0.5">
+          <p className="px-1 pt-1 pb-0.5 text-2xs text-fg-2">
+            How much each step shows
+          </p>
+          <span
+            role="radiogroup"
+            aria-label="transcript detail"
+            className="mx-1 flex rounded-sm border border-line p-0.5"
+          >
             {DETAILS.map((choice) => (
               <button
                 key={choice.id}
@@ -1380,8 +1857,10 @@ function ThreadMore({
                 title={choice.says}
                 onClick={() => onDetail(choice.id)}
                 className={cx(
-                  'flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11',
-                  detail === choice.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1',
+                  "flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11",
+                  detail === choice.id
+                    ? "bg-surface-2 text-fg-1"
+                    : "text-fg-2 hover:text-fg-1",
                 )}
               >
                 {choice.label}
@@ -1398,8 +1877,8 @@ function ThreadMore({
           <EraseThread thread={thread} summary={summary} onDone={close} />
           <p className="px-1 pb-0.5 text-2xs text-fg-2">
             {summary && isChat(summary.repo)
-              ? 'Continue in a terminal, anywhere'
-              : 'Continue in a terminal, in a clone of the repository'}
+              ? "Continue in a terminal, anywhere"
+              : "Continue in a terminal, in a clone of the repository"}
           </p>
           <label className="flex items-center gap-2 px-1 text-xs text-fg-2">
             with
@@ -1409,7 +1888,7 @@ function ThreadMore({
               onChange={(event) => setAgent(event.target.value)}
               className="rounded-sm border border-line bg-elevated px-2 py-1 font-mono text-xs text-fg-1"
             >
-              <option value="">{summary?.agent ?? 'its agent'}</option>
+              <option value="">{summary?.agent ?? "its agent"}</option>
               {AGENTS.filter((name) => name !== summary?.agent).map((name) => (
                 <option key={name} value={name}>
                   {name}
@@ -1421,11 +1900,16 @@ function ThreadMore({
             <button
               key={command}
               type="button"
-              className={cx(buttonClass('ghost'), 'justify-start font-mono font-normal text-fg-1')}
+              className={cx(
+                buttonClass("ghost"),
+                "justify-start font-mono font-normal text-fg-1",
+              )}
               onClick={() => {
-                void navigator.clipboard?.writeText(command).catch(() => undefined)
-                toast(`Copied: ${command}`, 'ok')
-                close()
+                void navigator.clipboard
+                  ?.writeText(command)
+                  .catch(() => undefined);
+                toast(`Copied: ${command}`, "ok");
+                close();
               }}
             >
               <Icon name="copy" />
@@ -1437,70 +1921,111 @@ function ThreadMore({
             <Link
               to="/t/$id/live"
               params={{ id: thread }}
-              className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
+              className={cx(
+                buttonClass("ghost"),
+                "justify-start font-normal text-fg-1",
+              )}
             >
-              <Dot tone={here > 0 ? 'ok' : 'idle'} />
+              <Dot tone={here > 0 ? "ok" : "idle"} />
               Join live{here > 0 && ` · ${here} here`}
             </Link>
           )}
-          <Link to="/graph" className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}>
+          <Link
+            to="/graph"
+            className={cx(
+              buttonClass("ghost"),
+              "justify-start font-normal text-fg-1",
+            )}
+          >
             <Icon name="graph" />
             History graph
           </Link>
           <button
             type="button"
-            className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
+            className={cx(
+              buttonClass("ghost"),
+              "justify-start font-normal text-fg-1",
+            )}
             onClick={() => {
-              close()
-              onDetails()
+              close();
+              onDetails();
             }}
           >
             <Icon name="info" />
             Details
           </button>
+          {onAccess && (
+            <button
+              type="button"
+              className={cx(
+                buttonClass("ghost"),
+                "justify-start font-normal text-fg-1",
+              )}
+              onClick={() => {
+                close();
+                onAccess();
+              }}
+            >
+              <Icon name="shield" />
+              Access
+            </button>
+          )}
         </>
       )}
     </Popover>
-  )
+  );
 }
 
 /**
  * What a chat can become (ADR 0059): a project of its own, its folder as it is, or a new thread in a project that starts from the
  * chat's conversation, with its files copied in.
  */
-function ChatToProject({ thread, summary, onDone }: { thread: string; summary: ThreadSummary; onDone: () => void }) {
-  const navigate = useNavigate()
-  const queries = useQueryClient()
-  const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
-  const clones = choices.data?.clones ?? []
-  const agents = choices.data?.agents ?? []
-  const [making, setMaking] = useState(false)
-  const [continuing, setContinuing] = useState(false)
-  const [clone, setClone] = useState('')
-  const [copy, setCopy] = useState(true)
-  const [copyTo, setCopyTo] = useState(`notes/chat-${short(thread)}`)
-  const [prompt, setPrompt] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string>()
-  const chosen = clone || clones[0]?.path || ''
+function ChatToProject({
+  thread,
+  summary,
+  onDone,
+}: {
+  thread: string;
+  summary: ThreadSummary;
+  onDone: () => void;
+}) {
+  const navigate = useNavigate();
+  const queries = useQueryClient();
+  const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents });
+  const clones = choices.data?.clones ?? [];
+  const agents = choices.data?.agents ?? [];
+  const [making, setMaking] = useState(false);
+  const [continuing, setContinuing] = useState(false);
+  const [clone, setClone] = useState("");
+  const [copy, setCopy] = useState(true);
+  const [copyTo, setCopyTo] = useState(`notes/chat-${short(thread)}`);
+  const [prompt, setPrompt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const chosen = clone || clones[0]?.path || "";
   const agent =
-    agents.find((candidate) => candidate.name === summary.agent || candidate.id === summary.agent)?.id ?? agents[0]?.id ?? ''
-  const failed = (failure: unknown) => setError(message(failure))
+    agents.find(
+      (candidate) =>
+        candidate.name === summary.agent || candidate.id === summary.agent,
+    )?.id ??
+    agents[0]?.id ??
+    "";
+  const failed = (failure: unknown) => setError(message(failure));
   const makeProject = () => {
-    setBusy(true)
+    setBusy(true);
     api
       .makeProject(thread)
       .then((project) => {
-        toast(`The chat is now the project ${projectName(project)}`, 'ok')
-        void queries.invalidateQueries({ queryKey: keys.threads })
-        void queries.invalidateQueries({ queryKey: keys.projects })
-        void queries.invalidateQueries({ queryKey: keys.agents })
-        onDone()
+        toast(`The chat is now the project ${projectName(project)}`, "ok");
+        void queries.invalidateQueries({ queryKey: keys.threads });
+        void queries.invalidateQueries({ queryKey: keys.projects });
+        void queries.invalidateQueries({ queryKey: keys.agents });
+        onDone();
       }, failed)
-      .finally(() => setBusy(false))
-  }
+      .finally(() => setBusy(false));
+  };
   const continueIn = () => {
-    setBusy(true)
+    setBusy(true);
     api
       .startAgent(
         agent,
@@ -1509,23 +2034,28 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
           here: true,
           continues: thread,
           copy_to: copy ? copyTo.trim() : null,
-          prompt: prompt.trim() || 'Carry on from the chat.',
+          prompt: prompt.trim() || "Carry on from the chat.",
         },
       )
       .then((started) => {
-        void queries.invalidateQueries({ queryKey: keys.threads })
-        onDone()
-        void navigate({ to: '/t/$id', params: { id: started } })
+        void queries.invalidateQueries({ queryKey: keys.threads });
+        onDone();
+        void navigate({ to: "/t/$id", params: { id: started } });
       }, failed)
-      .finally(() => setBusy(false))
-  }
+      .finally(() => setBusy(false));
+  };
   return (
     <div className="flex flex-col gap-1.5">
-      <p className="px-1 pb-0.5 text-2xs text-fg-2">This chat belongs to no project</p>
+      <p className="px-1 pb-0.5 text-2xs text-fg-2">
+        This chat belongs to no project
+      </p>
       {!making ? (
         <button
           type="button"
-          className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
+          className={cx(
+            buttonClass("ghost"),
+            "justify-start font-normal text-fg-1",
+          )}
           onClick={() => setMaking(true)}
         >
           <Icon name="folder" />
@@ -1534,7 +2064,8 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
       ) : (
         <div className="flex flex-col gap-1.5 rounded-sm border border-line p-2 text-xs">
           <p className="text-fg-2">
-            Its folder becomes a project of its own, with this chat and its files in it. Add a remote later to share it.
+            Its folder becomes a project of its own, with this chat and its
+            files in it. Add a remote later to share it.
           </p>
           <span className="flex justify-end gap-1.5">
             <Button variant="ghost" onClick={() => setMaking(false)}>
@@ -1549,7 +2080,10 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
       {!continuing ? (
         <button
           type="button"
-          className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
+          className={cx(
+            buttonClass("ghost"),
+            "justify-start font-normal text-fg-1",
+          )}
           onClick={() => setContinuing(true)}
         >
           <Icon name="branch" />
@@ -1559,23 +2093,33 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
         <form
           className="flex flex-col gap-1.5 rounded-sm border border-line p-2 text-xs"
           onSubmit={(event) => {
-            event.preventDefault()
-            continueIn()
+            event.preventDefault();
+            continueIn();
           }}
         >
           {clones.length === 0 ? (
             <p className="text-fg-2">No project on this machine yet.</p>
           ) : (
-            <Select aria-label="project to continue in" value={chosen} onChange={(event) => setClone(event.target.value)}>
+            <Select
+              aria-label="project to continue in"
+              value={chosen}
+              onChange={(event) => setClone(event.target.value)}
+            >
               {clones.map((candidate) => (
                 <option key={candidate.path} value={candidate.path}>
-                  {candidate.repo ? projectName(candidate.repo) : candidate.path}
+                  {candidate.repo
+                    ? projectName(candidate.repo)
+                    : candidate.path}
                 </option>
               ))}
             </Select>
           )}
           <label className="flex items-center gap-1.5 text-fg-2">
-            <input type="checkbox" checked={copy} onChange={(event) => setCopy(event.target.checked)} />
+            <input
+              type="checkbox"
+              checked={copy}
+              onChange={(event) => setCopy(event.target.checked)}
+            />
             Copy the chat&apos;s files to
           </label>
           {copy && (
@@ -1592,12 +2136,19 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
           />
-          <p className="text-fg-2">A new thread in your clone, its agent starting from this chat&apos;s conversation.</p>
+          <p className="text-fg-2">
+            A new thread in your clone, its agent starting from this chat&apos;s
+            conversation.
+          </p>
           <span className="flex justify-end gap-1.5">
             <Button variant="ghost" onClick={() => setContinuing(false)}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary" disabled={busy || !chosen || !agent}>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={busy || !chosen || !agent}
+            >
               Start there
             </Button>
           </span>
@@ -1605,10 +2156,10 @@ function ChatToProject({ thread, summary, onDone }: { thread: string; summary: T
       )}
       {error && <p className="px-1 text-xs text-danger">{error}</p>}
     </div>
-  )
+  );
 }
 
-/** The thread's header (ADR 0044): its title and where it is, then Fork, Share, Changes, and the rest behind More. */
+/** The thread's header (ADR 0044): its title, a pill when it needs the person, then Fork, Share, More and the panel's toggle. */
 export function ThreadHeader({
   thread,
   summary,
@@ -1618,129 +2169,54 @@ export function ThreadHeader({
   waiting,
   onChanges,
   onDetails,
+  onAccess,
   detail,
   onDetail,
   grouping,
   onGrouping,
   onConversation,
-  onExpand,
-  agent,
 }: {
-  thread: string
-  summary: ThreadSummary | undefined
-  /** The agent the web UI runs in it, for what its sandbox reaches. */
-  agent?: AgentStatus | null
-  detail: Detail
-  onDetail: (detail: Detail) => void
-  grouping: Grouping
-  onGrouping: (grouping: Grouping) => void
-  people: { user: string; device: string }[]
-  changes: { added: number; removed: number } | null
-  panelOpen: boolean
+  thread: string;
+  summary: ThreadSummary | undefined;
+  detail: Detail;
+  onDetail: (detail: Detail) => void;
+  grouping: Grouping;
+  onGrouping: (grouping: Grouping) => void;
+  people: { user: string; device: string }[];
+  changes: { added: number; removed: number } | null;
+  panelOpen: boolean;
   /** The agent waits on the person: a plan to approve or a permission. */
-  waiting: boolean
-  onChanges: () => void
+  waiting: boolean;
+  onChanges: () => void;
   /** Opens the details, beside the conversation or as a sheet on a phone. */
-  onDetails: () => void
+  onDetails: () => void;
+  /** Opens what the agent reaches, in the panel's Access tab. */
+  onAccess?: () => void;
   /** Back to the conversation, from the expanded review, in place of the panel's toggle. */
-  onConversation?: () => void
-  /** Opens the review across the page, beside the panel's toggle. */
-  onExpand?: () => void
+  onConversation?: () => void;
 }) {
-  const commits = useQuery({ queryKey: keys.commits(thread), queryFn: () => api.commits(thread), retry: false })
-  const branch = commits.data?.findLast((commit) => commit.branch)?.branch
-  const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
-  const where = summary ? whereSaid(summary, status.data?.servers?.[0]?.name ?? null) : null
-  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
-  const source = summary?.forked_from ? threads.data?.find((candidate) => candidate.id === summary.forked_from) : undefined
-  const asked = askedIn(useAsks(), thread)
   return (
     <header className="@container/head sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2.5 border-b border-line-subtle bg-bg px-4 md:pr-3 md:pl-5">
       <DrawerButton />
-      {/* Two lines, as ADR 0044 draws it: the title keeps the room, what it is goes under it. */}
-      <div className="flex min-w-0 flex-1 flex-col justify-center">
-        <div className="flex min-w-0 items-center gap-2">
-          <h1 className="min-w-0 truncate text-heading leading-tight font-medium" title={summary?.title ?? undefined}>
-            {summary?.title ?? 'Thread'}
-          </h1>
-          {waiting ? (
-            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-warn-tint px-2 py-0.5 text-2xs whitespace-nowrap max-md:hidden">
-              <Dot tone="warn" />
-              Waiting on you
-            </span>
-          ) : (
-            summary && <StatePill summary={summary} />
-          )}
-          {summary?.local_only && (
-            <span
-              className="shrink-0 max-md:hidden"
-              title="Its project keeps new threads off every server; choose a server on the Projects page to move it"
-            >
-              <Tag>This machine only</Tag>
-            </span>
-          )}
-        </div>
-        {/* What people know it by first: its project, branch, where it runs and its agent; the id last. */}
-        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs leading-tight whitespace-nowrap text-fg-2">
-          {summary && <span className="shrink-0 font-mono">{projectName(summary.repo || 'no remote')}</span>}
-          {branch && !isChat(summary?.repo) && (
-            <span
-              className="inline-flex min-w-0 shrink items-center gap-1"
-              title={`The branch its latest commit went on: ${branch}`}
-            >
-              · <Icon name="branch" className="h-3 w-3 shrink-0" />
-              <span className="max-w-[16ch] truncate font-mono">{branch}</span>
-            </span>
-          )}
-          {where && (
-            <span className="inline-flex shrink-0 items-center gap-1">
-              · <Icon name={where.icon} className="h-3 w-3 shrink-0" />
-              <span className="truncate">{where.label}</span>
-            </span>
-          )}
-          {summary?.agent && (
-            <span
-              className="inline-flex shrink-0 items-center gap-1"
-              title={`${agentName(summary.agent)} · recorded its latest session`}
-            >
-              · <AgentMark agent={summary.agent} labelled className="h-[13px] w-[13px]" />
-            </span>
-          )}
-          {asked && (
-            <span className="inline-flex min-w-0 shrink items-center gap-1" data-testid="asked-by">
-              · asked by{' '}
-              <AgentMark
-                agent={asked.caller_agent_id || asked.caller_agent}
-                name={asked.caller_agent}
-                className="h-[13px] w-[13px]"
-              />
-              <Link className="min-w-0 truncate text-accent-fg" to="/t/$id" params={{ id: asked.caller }} data-volatile>
-                {source?.title ?? short(asked.caller)}
-              </Link>
-            </span>
-          )}
-          {summary?.forked_from && !asked && !summary.title?.startsWith('Fork of ') && (
-            <span className="inline-flex min-w-0 shrink items-center gap-1">
-              · fork of
-              <Link
-                className="min-w-0 truncate text-accent-fg"
-                to="/t/$id"
-                params={{ id: summary.forked_from }}
-                title={summary.forked_from}
-                data-volatile
-              >
-                {source?.title ?? short(summary.forked_from)}
-              </Link>
-            </span>
-          )}
-          <span className="shrink-0 font-mono text-2xs text-fg-3" data-volatile>
-            · {short(thread)}
+      {/* Only the title: the project, branch, machine, agent and id are in the sidebar and the panel already. */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <h1
+          className="min-w-0 truncate text-heading leading-tight font-medium"
+          title={summary?.title ?? undefined}
+        >
+          {summary?.title ?? "Thread"}
+        </h1>
+        {waiting ? (
+          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-warn-tint px-2 py-0.5 text-2xs whitespace-nowrap max-md:hidden">
+            <Dot tone="warn" />
+            Waiting on you
           </span>
-        </div>
+        ) : (
+          summary && <StatePill summary={summary} />
+        )}
       </div>
       <Here people={people} />
       <span className="flex shrink-0 items-center gap-1">
-        <SandboxShield thread={thread} summary={summary} agent={agent} />
         <ForkActions thread={thread} forked={Boolean(summary?.forked_from)} />
         {summary && <ShareDialog thread={summary} />}
         <ThreadMore
@@ -1748,23 +2224,18 @@ export function ThreadHeader({
           summary={summary}
           here={people.length}
           onDetails={onDetails}
+          onAccess={onAccess}
           detail={detail}
           onDetail={onDetail}
           grouping={grouping}
           onGrouping={onGrouping}
         />
-        {onExpand && (
-          <Button
-            variant="ghost"
-            aria-label="Expand the review"
-            onClick={onExpand}
-            title="The changes across the page, to review (⇧D)"
-          >
-            <Icon name="expand" className="h-4 w-4" />
-          </Button>
-        )}
         {onConversation ? (
-          <Button icon="collapse" onClick={onConversation} title="Back to the conversation (Esc)">
+          <Button
+            icon="collapse"
+            onClick={onConversation}
+            title="Back to the conversation (Esc)"
+          >
             Conversation <Kbd>Esc</Kbd>
           </Button>
         ) : (
@@ -1778,66 +2249,67 @@ export function ThreadHeader({
             className="aria-pressed:text-accent-fg"
           >
             <Icon name="panel" className="h-4 w-4" />
-            {changes && !panelOpen && (changes.added > 0 || changes.removed > 0) && (
-              <Counts added={changes.added} removed={changes.removed} />
-            )}
+            {changes &&
+              !panelOpen &&
+              (changes.added > 0 || changes.removed > 0) && (
+                <Counts added={changes.added} removed={changes.removed} />
+              )}
           </Button>
         )}
       </span>
       {summary && <ThreadStateActions summary={summary} />}
     </header>
-  )
+  );
 }
 
-/** Where the thread's work is, for its header: this machine by name, the server, or another device. */
-function whereSaid(summary: ThreadSummary, device: string | null): { label: string; icon: IconName } {
-  if (summary.location === 'moved') return { label: `moved to ${summary.machine ?? 'another device'}`, icon: 'handoff' }
-  if (summary.location === 'remote')
-    return summary.machine ? { label: `on ${summary.machine}`, icon: 'monitor' } : { label: 'on the server', icon: 'cloud' }
-  return { label: device ?? 'this machine', icon: 'monitor' }
-}
-
-/** The thread's state beside its title, in words, when its agent is doing something; waiting on the person has its own pill. */
+/** An agent that stopped with an error, beside the title; waiting on the person has its own pill, and working shows in the sidebar. */
 function StatePill({ summary }: { summary: ThreadSummary }) {
-  const state = summary.agent_state
-  if (state === 'working' || state === 'starting' || inBackground(summary)) {
-    return (
-      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-ok-tint px-2 py-0.5 text-2xs whitespace-nowrap text-ok max-md:hidden">
-        <Dot tone="ok" />
-        {state === 'starting' ? 'Starting' : state === 'working' ? 'Working' : 'In the background'}
-      </span>
-    )
-  }
-  if (state === 'error') {
-    return (
-      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-danger-tint px-2 py-0.5 text-2xs whitespace-nowrap text-danger max-md:hidden">
-        <Dot tone="danger" />
-        Stopped with an error
-      </span>
-    )
-  }
-  return null
+  if (summary.agent_state !== "error") return null;
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-danger-tint px-2 py-0.5 text-2xs whitespace-nowrap text-danger max-md:hidden">
+      <Dot tone="danger" />
+      Stopped with an error
+    </span>
+  );
 }
 
 /** The thread's lineage: what it was forked from, and its forks. */
-function Lineage({ summary, threads }: { summary: ThreadSummary; threads: ThreadSummary[] }) {
-  const mrs = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests })
-  const above: ThreadSummary[] = []
-  for (let source = summary.forked_from; source;) {
-    const found = threads.find((thread) => thread.id === source)
-    if (!found || above.includes(found)) break
-    above.unshift(found)
-    source = found.forked_from
+function Lineage({
+  summary,
+  threads,
+}: {
+  summary: ThreadSummary;
+  threads: ThreadSummary[];
+}) {
+  const mrs = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests });
+  const above: ThreadSummary[] = [];
+  for (let source = summary.forked_from; source; ) {
+    const found = threads.find((thread) => thread.id === source);
+    if (!found || above.includes(found)) break;
+    above.unshift(found);
+    source = found.forked_from;
   }
-  const forks = threads.filter((thread) => thread.forked_from === summary.id)
-  const openFrom = (fork: string) => (mrs.data ?? []).find((mr) => mr.fork === fork && mr.status === 'open')
-  const row = (thread: ThreadSummary, depth: number, note: ReactNode, current = false) => (
+  const forks = threads.filter((thread) => thread.forked_from === summary.id);
+  const openFrom = (fork: string) =>
+    (mrs.data ?? []).find((mr) => mr.fork === fork && mr.status === "open");
+  const row = (
+    thread: ThreadSummary,
+    depth: number,
+    note: ReactNode,
+    current = false,
+  ) => (
     <li
       key={thread.id}
       style={{ paddingLeft: depth * 16 }}
-      className={cx('flex min-w-0 items-center gap-2 rounded-sm py-1 text-xs', current && 'bg-accent-tint pr-1.5')}
+      className={cx(
+        "flex min-w-0 items-center gap-2 rounded-sm py-1 text-xs",
+        current && "bg-accent-tint pr-1.5",
+      )}
     >
-      <Dot tone={current ? 'accent' : threadTone(thread)} className={current ? 'ml-1.5' : undefined} />
+      <Dot
+        tone={current ? "accent" : threadTone(thread)}
+        className={current ? "ml-1.5" : undefined}
+      />
       {current ? (
         <span className="font-mono" data-volatile>
           {short(thread.id)}
@@ -1854,27 +2326,35 @@ function Lineage({ summary, threads }: { summary: ThreadSummary; threads: Thread
       )}
       <span className="min-w-0 truncate text-fg-2">{note}</span>
     </li>
-  )
+  );
   return (
     <ul className="flex flex-col gap-0.5">
-      {above.map((thread, depth) => row(thread, depth, thread.title ?? 'Untitled thread'))}
-      {row(summary, above.length, 'this thread', true)}
+      {above.map((thread, depth) =>
+        row(thread, depth, thread.title ?? "Untitled thread"),
+      )}
+      {row(summary, above.length, "this thread", true)}
       {forks.map((fork) => {
-        const mr = openFrom(fork.id)
+        const mr = openFrom(fork.id);
         return row(
           fork,
           above.length + 1,
           mr ? (
-            <Link to="/mr/$id" params={{ id: mr.id }} className="text-accent-fg">
-              {fork.owner || 'fork'} · MR open
+            <Link
+              to="/mr/$id"
+              params={{ id: mr.id }}
+              className="text-accent-fg"
+            >
+              {fork.owner || "fork"} · MR open
             </Link>
           ) : (
-            [fork.owner, fork.title ?? 'Untitled thread'].filter(Boolean).join(' · ')
+            [fork.owner, fork.title ?? "Untitled thread"]
+              .filter(Boolean)
+              .join(" · ")
           ),
-        )
+        );
       })}
     </ul>
-  )
+  );
 }
 
 function InspectorSection({
@@ -1883,28 +2363,54 @@ function InspectorSection({
   aside,
   children,
 }: {
-  title: string
-  label?: string
-  aside?: ReactNode
-  children: ReactNode
+  title: string;
+  label?: string;
+  aside?: ReactNode;
+  children: ReactNode;
 }) {
   return (
-    <section aria-label={label ?? title.toLowerCase()} className="flex flex-col gap-2">
+    <section
+      aria-label={label ?? title.toLowerCase()}
+      className="flex flex-col gap-2"
+    >
       <h2 className="flex items-center font-mono text-2xs tracking-[0.06em] text-fg-2 uppercase">
         {title}
-        {aside && <span className="ml-auto font-sans text-xs tracking-normal normal-case">{aside}</span>}
+        {aside && (
+          <span className="ml-auto font-sans text-xs tracking-normal normal-case">
+            {aside}
+          </span>
+        )}
       </h2>
       {children}
     </section>
-  )
+  );
 }
 
 /** The commits the thread made, each with the turn it came in (ADR 0030). */
 function ThreadCommits({ thread }: { thread: string }) {
-  const commits = useQuery({ queryKey: keys.commits(thread), queryFn: () => api.commits(thread), retry: false })
-  if (!commits.data?.length) return null
+  const commits = useQuery({
+    queryKey: keys.commits(thread),
+    queryFn: () => api.commits(thread),
+    retry: false,
+  });
+  if (!commits.data?.length) return null;
+  const branch = commits.data.findLast((commit) => commit.branch)?.branch;
   return (
-    <InspectorSection title="Commits from this thread" label="commits">
+    <InspectorSection
+      title="Commits from this thread"
+      label="commits"
+      aside={
+        branch && (
+          <span
+            className="inline-flex min-w-0 items-center gap-1 text-fg-2"
+            title={`The branch its latest commit went on: ${branch}`}
+          >
+            <Icon name="branch" className="h-3 w-3 shrink-0" />
+            <span className="max-w-[20ch] truncate font-mono">{branch}</span>
+          </span>
+        )
+      }
+    >
       <ul className="flex flex-col gap-1.5 text-xs">
         {commits.data.map((commit) => (
           <li key={commit.commit} className="flex flex-col gap-0.5">
@@ -1912,10 +2418,15 @@ function ThreadCommits({ thread }: { thread: string }) {
               <code className="mr-1.5 font-mono text-fg-2" data-volatile>
                 {commit.commit.slice(0, 7)}
               </code>
-              {commit.subject ?? ''}
+              {commit.subject ?? ""}
             </span>
             {commit.turn !== null && (
-              <Link className="text-2xs text-accent-fg" to="/t/$id" params={{ id: thread }} hash={`turn-${commit.turn}`}>
+              <Link
+                className="text-2xs text-accent-fg"
+                to="/t/$id"
+                params={{ id: thread }}
+                hash={`turn-${commit.turn}`}
+              >
                 made in turn {commit.turn}
               </Link>
             )}
@@ -1923,11 +2434,11 @@ function ThreadCommits({ thread }: { thread: string }) {
         ))}
       </ul>
     </InspectorSection>
-  )
+  );
 }
 
 /** How many of the thread's files Details lists before More. */
-const LISTED_FILES = 200
+const LISTED_FILES = 200;
 
 /** The Thread board's inspector: handoff, lineage, files, commits and comments on code. */
 function Details({
@@ -1940,44 +2451,48 @@ function Details({
   onChanged,
   onCommentLines,
 }: {
-  thread: string
-  summary: ThreadSummary | undefined
-  total: number
-  files: DiffStat[] | null
-  codeComments: CommentView[]
-  anchor: Anchor
-  onChanged: () => Promise<unknown>
-  onCommentLines: () => void
+  thread: string;
+  summary: ThreadSummary | undefined;
+  total: number;
+  files: DiffStat[] | null;
+  codeComments: CommentView[];
+  anchor: Anchor;
+  onChanged: () => Promise<unknown>;
+  onCommentLines: () => void;
 }) {
-  const now = useNow()
-  const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
-  const device = status.data?.servers?.[0]?.name ?? 'this machine'
-  const [listed, setListed] = useState(LISTED_FILES)
+  const now = useNow();
+  const status = useQuery({
+    queryKey: keys.status,
+    queryFn: api.status,
+    enabled: !hosted(),
+  });
+  const device = status.data?.servers?.[0]?.name ?? "this machine";
+  const [listed, setListed] = useState(LISTED_FILES);
   const liveOn =
-    summary?.location === 'moved'
-      ? 'another device'
-      : summary?.location === 'remote'
-        ? 'the server only'
+    summary?.location === "moved"
+      ? "another device"
+      : summary?.location === "remote"
+        ? "the server only"
         : hosted()
-          ? 'its machine'
-          : device
+          ? "its machine"
+          : device;
   return (
     <div className="flex flex-col gap-6 px-5 py-5">
       <InspectorSection title="Handoff">
         <KeyValue
           rows={[
-            ['Live on', liveOn],
+            ["Live on", liveOn],
             // Rows with nothing to say yet are left out rather than shown blank.
             ...(mocksOn
               ? ([
                   [
-                    'Before',
+                    "Before",
                     <Mock key="before" id="thread.handoff-before">
                       laptop · 2h ago
                     </Mock>,
                   ],
                   [
-                    'Synced',
+                    "Synced",
                     <Mock key="synced" id="thread.synced">
                       all {total} entries
                     </Mock>,
@@ -1987,7 +2502,7 @@ function Details({
             ...(summary
               ? ([
                   [
-                    'Last moved',
+                    "Last moved",
                     <span key="moved" data-volatile>
                       {ago(summary.last_ms, now)}
                     </span>,
@@ -1997,12 +2512,15 @@ function Details({
           ]}
         />
         <p className="text-xs leading-normal text-fg-2">
-          Picking it up on another machine moves the agent session there. This one stops writing.
+          Picking it up on another machine moves the agent session there. This
+          one stops writing.
         </p>
       </InspectorSection>
       <InspectorSection title="Files changed">
         {files === null && <Skeleton className="h-10" />}
-        {files?.length === 0 && <p className="text-xs text-fg-2">No changes yet.</p>}
+        {files?.length === 0 && (
+          <p className="text-xs text-fg-2">No changes yet.</p>
+        )}
         <ul className="flex flex-col gap-0.5 font-mono text-2xs">
           {files?.slice(0, listed).map((file) => (
             <li key={file.path} className="flex items-center gap-2 py-0.5">
@@ -2013,12 +2531,21 @@ function Details({
               >
                 {file.path}
               </a>
-              <Counts added={file.added} removed={file.removed} binary={file.binary} />
+              <Counts
+                added={file.added}
+                removed={file.removed}
+                binary={file.binary}
+              />
             </li>
           ))}
         </ul>
         {files && files.length > listed && (
-          <Button variant="ghost" size="sm" className="self-start" onClick={() => setListed(listed + LISTED_FILES)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="self-start"
+            onClick={() => setListed(listed + LISTED_FILES)}
+          >
             {(files.length - listed).toLocaleString()} more files
           </Button>
         )}
@@ -2026,30 +2553,43 @@ function Details({
       <ThreadCommits thread={thread} />
       <InspectorSection title="Comments on code">
         <ul data-testid="code-comments" className="flex flex-col gap-2">
-          {codeComments.length === 0 && <li className="text-xs text-fg-2">None yet.</li>}
+          {codeComments.length === 0 && (
+            <li className="text-xs text-fg-2">None yet.</li>
+          )}
           {codeComments.map((comment) => (
             <li
               key={comment.id}
               id={`comment-${comment.id}`}
               className={cx(
-                'flex flex-col gap-1 rounded-md border border-line bg-elevated px-2.5 py-2',
-                comment.resolved && 'opacity-60',
+                "flex flex-col gap-1 rounded-md border border-line bg-elevated px-2.5 py-2",
+                comment.resolved && "opacity-60",
               )}
             >
               <p className="font-mono text-2xs text-fg-2">
-                {comment.location.at === 'lines' ? (
+                {comment.location.at === "lines" ? (
                   <a
                     className="text-accent-fg"
-                    href={appHref(filePath(thread, comment.location.path, undefined, comment.location))}
+                    href={appHref(
+                      filePath(
+                        thread,
+                        comment.location.path,
+                        undefined,
+                        comment.location,
+                      ),
+                    )}
                     title="The file as the thread has it now"
                   >
                     {comment.location.path}:{comment.location.start}
-                    {comment.location.end !== comment.location.start ? `–${comment.location.end}` : ''}
+                    {comment.location.end !== comment.location.start
+                      ? `–${comment.location.end}`
+                      : ""}
                   </a>
                 ) : (
-                  'unknown place'
+                  "unknown place"
                 )}
-                {comment.location.at === 'lines' && comment.location.outdated && ' (outdated)'}
+                {comment.location.at === "lines" &&
+                  comment.location.outdated &&
+                  " (outdated)"}
               </p>
               <CommentThread
                 thread={thread}
@@ -2063,7 +2603,9 @@ function Details({
                   size="sm"
                   className="self-start"
                   aria-label="resolve"
-                  onClick={() => void api.resolveComment(thread, comment.id).then(onChanged)}
+                  onClick={() =>
+                    void api.resolveComment(thread, comment.id).then(onChanged)
+                  }
                 >
                   Resolve
                 </Button>
@@ -2076,12 +2618,12 @@ function Details({
         </Button>
       </InspectorSection>
     </div>
-  )
+  );
 }
 
 /** People here, as avatars, for the header's Join live. */
 function Here({ people }: { people: { user: string; device: string }[] }) {
-  if (people.length === 0) return null
+  if (people.length === 0) return null;
   return (
     <span className="flex -space-x-1.5" aria-label={`${people.length} here`}>
       {people.slice(0, 4).map((person) => (
@@ -2090,30 +2632,42 @@ function Here({ people }: { people: { user: string; device: string }[] }) {
         </span>
       ))}
     </span>
-  )
+  );
 }
 
-type InspectorTab = 'design' | 'changes' | 'artifacts' | 'details' | 'lineage' | 'access'
+type InspectorTab =
+  | "design"
+  | "changes"
+  | "artifacts"
+  | "details"
+  | "lineage"
+  | "access";
 
-const NO_PEOPLE: Presence[] = []
-const NO_TURNS: TurnInfo[] = []
-const NO_COMMENTS: CommentView[] = []
+const NO_PEOPLE: Presence[] = [];
+const NO_TURNS: TurnInfo[] = [];
+const NO_COMMENTS: CommentView[] = [];
 
 /** The thread's tasks, the same object until the entries they're read from change: those held, after the news of tasks
  * from before them, so a task started before what's held shows as it is (ADR 0117). */
-function useStableTasks(entries: HistoryEntry[], before: HistoryEntry[]): Tasks {
-  const from = useMemo(() => taskEntries(before.concat(entries)), [entries, before])
+function useStableTasks(
+  entries: HistoryEntry[],
+  before: HistoryEntry[],
+): Tasks {
+  const from = useMemo(
+    () => taskEntries(before.concat(entries)),
+    [entries, before],
+  );
   // What they were last read from, for the next render to compare with.
-  const [kept, setKept] = useState<{ from: HistoryEntry[]; tasks: Tasks }>()
-  if (kept && sameList(kept.from, from)) return kept.tasks
-  const tasks = tasksOf(from)
-  setKept({ from, tasks })
-  return tasks
+  const [kept, setKept] = useState<{ from: HistoryEntry[]; tasks: Tasks }>();
+  if (kept && sameList(kept.from, from)) return kept.tasks;
+  const tasks = tasksOf(from);
+  setKept({ from, tasks });
+  return tasks;
 }
 
 /** What the page asks of its history's list: to go to its end, and stay there, as a prompt is sent. */
 interface HistoryControls {
-  follow: () => void
+  follow: () => void;
 }
 
 /**
@@ -2137,31 +2691,34 @@ const HistoryList = memo(function HistoryList({
   onUnfold,
   controls,
 }: {
-  thread: string
-  rows: Row[]
+  thread: string;
+  rows: Row[];
   /** Every page of the history has loaded. */
-  complete: boolean
+  complete: boolean;
   /** What's held reaches the history's end. */
-  atEnd: boolean
+  atEnd: boolean;
   /** The index of the first entry held; those before it load as the person scrolls up to them (ADR 0117). */
-  start: number
-  loadingEarlier: boolean
-  onEarlier: () => void
+  start: number;
+  loadingEarlier: boolean;
+  onEarlier: () => void;
   /** The last turn is still under way. */
-  running: boolean
-  entryProps: EntryProps
-  scroll: RefObject<HTMLElement | null>
+  running: boolean;
+  entryProps: EntryProps;
+  scroll: RefObject<HTMLElement | null>;
   /** What waits below the history, which the page keeps in view too as it grows. */
-  below: RefObject<HTMLElement | null>
-  hash: string
-  anchor: Anchor | undefined
-  onUnfold: () => void
-  controls: RefObject<HistoryControls | null>
+  below: RefObject<HTMLElement | null>;
+  hash: string;
+  anchor: Anchor | undefined;
+  onUnfold: () => void;
+  controls: RefObject<HistoryControls | null>;
 }) {
-  const list = useRef<HTMLDivElement>(null)
+  const list = useRef<HTMLDivElement>(null);
   // Sizes are kept by row rather than by place: an earlier page put before the rows shown moves them to new places
   // without measuring them again, and by place each took the size of whichever row was there before, drawn over the next.
-  const keyOf = useCallback((index: number) => rows[index]?.key ?? index, [rows])
+  const keyOf = useCallback(
+    (index: number) => rows[index]?.key ?? index,
+    [rows],
+  );
   const virtual = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroll.current,
@@ -2169,60 +2726,73 @@ const HistoryList = memo(function HistoryList({
     estimateSize: () => 96,
     overscan: 6,
     scrollMargin: list.current?.offsetTop ?? 0,
-  })
-  const scrollTo = useCallback((row: number) => virtual.scrollToIndex(row, { align: 'center' }), [virtual])
+  });
+  const scrollTo = useCallback(
+    (row: number) => virtual.scrollToIndex(row, { align: "center" }),
+    [virtual],
+  );
   // The column that scrolls is the page's, an element above this one, whose ref is set only after this list's own
   // layout effects ran: the list looks for it again once it's there, or a history already loaded drew no rows.
-  const [, lookAgain] = useState(0)
+  const [, lookAgain] = useState(0);
   useEffect(() => {
-    if (scroll.current && virtual.scrollElement !== scroll.current) lookAgain((times) => times + 1)
-  }, [scroll, virtual])
+    if (scroll.current && virtual.scrollElement !== scroll.current)
+      lookAgain((times) => times + 1);
+  }, [scroll, virtual]);
   // After a prompt is sent, the page follows to its turn, which arrives a moment later.
-  const following = useRef(false)
-  const follow = useFollow(scroll, [list, below], thread)
+  const following = useRef(false);
+  const follow = useFollow(scroll, [list, below], thread);
   const toEnd = useCallback(() => {
-    follow.landed.current = true
-    follow.atBottom.current = true
-    if (rows.length > 0) virtual.scrollToIndex(rows.length - 1, { align: 'end' })
+    follow.landed.current = true;
+    follow.atBottom.current = true;
+    if (rows.length > 0)
+      virtual.scrollToIndex(rows.length - 1, { align: "end" });
     // What waits below the history, a permission or a plan, comes into view too.
     requestAnimationFrame(() => {
-      if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight
-    })
-  }, [virtual, rows.length, scroll, follow])
+      if (scroll.current)
+        scroll.current.scrollTop = scroll.current.scrollHeight;
+    });
+  }, [virtual, rows.length, scroll, follow]);
   useEffect(() => {
     controls.current = {
       follow: () => {
-        following.current = true
-        toEnd()
+        following.current = true;
+        toEnd();
       },
-    }
-  }, [controls, toEnd])
+    };
+  }, [controls, toEnd]);
   useEffect(() => {
-    if (!following.current) return
-    following.current = false
-    toEnd()
-  }, [rows.length, toEnd])
-  useFollowAnchor(rows, complete, hash, anchor, scrollTo, scroll)
+    if (!following.current) return;
+    following.current = false;
+    toEnd();
+  }, [rows.length, toEnd]);
+  useFollowAnchor(rows, complete, hash, anchor, scrollTo, scroll);
   // A link to an entry before what's held reads earlier pages until it's in.
   useEffect(() => {
-    if (anchor?.entry !== undefined && anchor.entry < start && !loadingEarlier) onEarlier()
-  }, [anchor, start, loadingEarlier, onEarlier])
-  useEarlierOnScroll(scroll, start, loadingEarlier, onEarlier)
-  useKeptInPlace(rows, virtual, scroll)
+    if (anchor?.entry !== undefined && anchor.entry < start && !loadingEarlier)
+      onEarlier();
+  }, [anchor, start, loadingEarlier, onEarlier]);
+  useEarlierOnScroll(scroll, start, loadingEarlier, onEarlier);
+  useKeptInPlace(rows, virtual, scroll);
   // A thread opens where it is now, its latest turn, unless a link names a place in it: as soon as its last page is in.
-  const landed = useRef<string | null>(null)
-  const linked = anchor !== undefined && (anchor.entry !== undefined || anchor.comment !== undefined)
+  const landed = useRef<string | null>(null);
+  const linked =
+    anchor !== undefined &&
+    (anchor.entry !== undefined || anchor.comment !== undefined);
   useEffect(() => {
-    if (landed.current === thread || !atEnd || rows.length === 0) return
-    landed.current = thread
+    if (landed.current === thread || !atEnd || rows.length === 0) return;
+    landed.current = thread;
     // Linked, the page stays where the link put it until the person scrolls to its end.
-    if (linked) follow.landed.current = true
-    else toEnd()
-  }, [thread, atEnd, rows.length, linked, toEnd, follow])
+    if (linked) follow.landed.current = true;
+    else toEnd();
+  }, [thread, atEnd, rows.length, linked, toEnd, follow]);
   return (
     <>
       {start > 0 && (
-        <div className="flex flex-col gap-2 py-3" data-testid="earlier" aria-busy={loadingEarlier}>
+        <div
+          className="flex flex-col gap-2 py-3"
+          data-testid="earlier"
+          aria-busy={loadingEarlier}
+        >
           {loadingEarlier ? (
             <>
               <Skeleton className="h-4 w-1/2" />
@@ -2233,64 +2803,93 @@ const HistoryList = memo(function HistoryList({
           )}
         </div>
       )}
-      <div ref={list} className="relative" style={{ height: virtual.getTotalSize() }} data-testid="history">
+      <div
+        ref={list}
+        className="relative"
+        style={{ height: virtual.getTotalSize() }}
+        data-testid="history"
+      >
         {virtual.getVirtualItems().map((item) => {
-          const row = rows[item.index]
-          const last = item.index === rows.length - 1
+          const row = rows[item.index];
+          const last = item.index === rows.length - 1;
           return (
             <div
               key={row.key}
               data-index={item.index}
               ref={virtual.measureElement}
               // What a fork inherited, once shown, reads as the source's rather than its own.
-              className={cx('absolute left-0 w-full', row.kind !== 'origin' && originOf(row) === 'inherited' && 'opacity-60')}
-              style={{ transform: `translateY(${item.start - virtual.options.scrollMargin}px)` }}
+              className={cx(
+                "absolute left-0 w-full",
+                row.kind !== "origin" &&
+                  originOf(row) === "inherited" &&
+                  "opacity-60",
+              )}
+              style={{
+                transform: `translateY(${item.start - virtual.options.scrollMargin}px)`,
+              }}
             >
-              <TranscriptRow row={row} running={running && last} last={last} onUnfold={onUnfold} {...entryProps} />
+              <TranscriptRow
+                row={row}
+                running={running && last}
+                last={last}
+                onUnfold={onUnfold}
+                {...entryProps}
+              />
             </div>
-          )
+          );
         })}
       </div>
     </>
-  )
-})
+  );
+});
 
 /** How far above what's shown an earlier page starts to load, so it's there by the time the person reaches it. */
-const EARLIER_AHEAD = 1200
+const EARLIER_AHEAD = 1200;
 
 /** Reads the page before what's held as the person scrolls near the top of what's held. */
-function useEarlierOnScroll(scroll: RefObject<HTMLElement | null>, start: number, loading: boolean, onEarlier: () => void) {
+function useEarlierOnScroll(
+  scroll: RefObject<HTMLElement | null>,
+  start: number,
+  loading: boolean,
+  onEarlier: () => void,
+) {
   useEffect(() => {
-    const element = scroll.current
-    if (!element || start === 0 || loading) return
+    const element = scroll.current;
+    if (!element || start === 0 || loading) return;
     const check = () => {
-      if (element.scrollTop < EARLIER_AHEAD) onEarlier()
-    }
+      if (element.scrollTop < EARLIER_AHEAD) onEarlier();
+    };
     // Before the page lands at its end it's at its top: only what doesn't fill it asks for more by itself.
-    if (element.scrollHeight <= element.clientHeight) onEarlier()
-    element.addEventListener('scroll', check, { passive: true })
-    return () => element.removeEventListener('scroll', check)
-  }, [scroll, start, loading, onEarlier])
+    if (element.scrollHeight <= element.clientHeight) onEarlier();
+    element.addEventListener("scroll", check, { passive: true });
+    return () => element.removeEventListener("scroll", check);
+  }, [scroll, start, loading, onEarlier]);
 }
 
 /**
  * Keeps the rows the person looks at where they are as earlier ones are put before them: the page moves down by as
  * much as the row that was first moved. The list then keeps them in place itself as the new rows are measured.
  */
-function useKeptInPlace(rows: Row[], virtual: { measurementsCache: { start: number }[] }, scroll: RefObject<HTMLElement | null>) {
-  const before = useRef<{ key: string; start: number } | null>(null)
+function useKeptInPlace(
+  rows: Row[],
+  virtual: { measurementsCache: { start: number }[] },
+  scroll: RefObject<HTMLElement | null>,
+) {
+  const before = useRef<{ key: string; start: number } | null>(null);
   useLayoutEffect(() => {
-    const was = before.current
-    const first = rows[0]
-    const element = scroll.current
+    const was = before.current;
+    const first = rows[0];
+    const element = scroll.current;
     if (was && first && first.key !== was.key && element) {
-      const moved = rows.findIndex((row) => row.key === was.key)
-      const now = moved > 0 ? virtual.measurementsCache[moved]?.start : undefined
-      if (now !== undefined) element.scrollBy(0, now - was.start)
+      const moved = rows.findIndex((row) => row.key === was.key);
+      const now =
+        moved > 0 ? virtual.measurementsCache[moved]?.start : undefined;
+      if (now !== undefined) element.scrollBy(0, now - was.start);
     }
-    const start = virtual.measurementsCache[0]?.start
-    before.current = first && start !== undefined ? { key: first.key, start } : null
-  }, [rows, virtual, scroll])
+    const start = virtual.measurementsCache[0]?.start;
+    before.current =
+      first && start !== undefined ? { key: first.key, start } : null;
+  }, [rows, virtual, scroll]);
 }
 
 /** The composer, with the draft it keeps: typing draws it alone, and tells the others here what's typed. */
@@ -2299,16 +2898,24 @@ function ThreadComposer({
   lastPrompt,
   onPeople,
   ...dock
-}: Omit<ComponentProps<typeof AgentDock>, 'draft' | 'onDraft' | 'people'> & {
+}: Omit<ComponentProps<typeof AgentDock>, "draft" | "onDraft" | "people"> & {
   /** The thread's last prompt, which clears a draft it took in. */
-  lastPrompt: string | undefined
-  onPeople: (people: Presence[]) => void
+  lastPrompt: string | undefined;
+  onPeople: (people: Presence[]) => void;
 }) {
-  const [draft, setDraft] = useDraft(threadDraft(thread))
-  const people = usePresence(thread, null, null, draft, onPeople, !hosted())
-  const clearDraft = useCallback(() => setDraft(''), [setDraft])
-  useClearSentDraft(lastPrompt, draft, clearDraft)
-  return <AgentDock thread={thread} {...dock} draft={draft} onDraft={setDraft} people={people} />
+  const [draft, setDraft] = useDraft(threadDraft(thread));
+  const people = usePresence(thread, null, null, draft, onPeople, !hosted());
+  const clearDraft = useCallback(() => setDraft(""), [setDraft]);
+  useClearSentDraft(lastPrompt, draft, clearDraft);
+  return (
+    <AgentDock
+      thread={thread}
+      {...dock}
+      draft={draft}
+      onDraft={setDraft}
+      people={people}
+    />
+  );
 }
 
 function ThreadBody({
@@ -2321,107 +2928,161 @@ function ThreadBody({
   onEarlier,
   loadingEarlier,
 }: {
-  thread: string
+  thread: string;
   /** The id in the address, maybe short. */
-  id: string
+  id: string;
   /** The entries held, from the `start`th on (ADR 0117). */
-  entries: HistoryEntry[]
-  total: number
-  start: number
+  entries: HistoryEntry[];
+  total: number;
+  start: number;
   /** The news of tasks from the entries before `start`. */
-  tasksBefore: HistoryEntry[]
-  onEarlier: () => void
-  loadingEarlier: boolean
+  tasksBefore: HistoryEntry[];
+  onEarlier: () => void;
+  loadingEarlier: boolean;
 }) {
-  const queries = useQueryClient()
-  const turns = useQuery({ queryKey: keys.turns(id), queryFn: () => api.turns(id) })
-  const comments = useQuery({ queryKey: keys.comments(id), queryFn: () => api.comments(id) })
-  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
+  const queries = useQueryClient();
+  const turns = useQuery({
+    queryKey: keys.turns(id),
+    queryFn: () => api.turns(id),
+  });
+  const comments = useQuery({
+    queryKey: keys.comments(id),
+    queryFn: () => api.comments(id),
+  });
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads });
   // The thread's files and counts, without their lines: a thread that took in thousands of files must still open.
   // They leave out what the Changes panel's boxes hide, so the counts match the diff below them.
-  const [hideGit] = useHideGit()
-  const [hideOthersSetting] = useHideOthers()
-  const shared = useShared(thread)
-  const hideOthers = hideOthersSetting && shared
-  const statsOf = { base: '', hideGit, hideOthers }
-  const stats = useQuery({ queryKey: keys.diffStats(thread, statsOf), queryFn: () => api.diffStats(thread, statsOf) })
-  const reloadComments = useCallback(() => queries.invalidateQueries({ queryKey: keys.comments(id) }), [queries, id])
-  const summary = threads.data?.find((candidate) => candidate.id === thread)
-  const askedHere = askedIn(useAsks(), thread)
-  const [tab, setTab] = useState<InspectorTab>('changes')
+  const [hideGit] = useHideGit();
+  const [hideOthersSetting] = useHideOthers();
+  const shared = useShared(thread);
+  const hideOthers = hideOthersSetting && shared;
+  const statsOf = { base: "", hideGit, hideOthers };
+  const stats = useQuery({
+    queryKey: keys.diffStats(thread, statsOf),
+    queryFn: () => api.diffStats(thread, statsOf),
+  });
+  const reloadComments = useCallback(
+    () => queries.invalidateQueries({ queryKey: keys.comments(id) }),
+    [queries, id],
+  );
+  const summary = threads.data?.find((candidate) => candidate.id === thread);
+  const askedHere = askedIn(useAsks(), thread);
+  const [tab, setTab] = useState<InspectorTab>("changes");
   // A thread started to make or change a design system shows it beside the conversation first (ADR 0088).
   const design = useQuery({
     queryKey: keys.threadDesign(thread),
     queryFn: () => api.threadDesign(thread),
     enabled: !hosted(),
     staleTime: 30_000,
-  })
-  const designTitle = design.data?.title ?? null
-  const shownDesign = useRef(false)
+  });
+  const designTitle = design.data?.title ?? null;
+  const shownDesign = useRef(false);
   useEffect(() => {
     if (designTitle && !shownDesign.current) {
-      shownDesign.current = true
-      setTab('design')
+      shownDesign.current = true;
+      setTab("design");
     }
-  }, [designTitle])
+  }, [designTitle]);
   // Beside the conversation on a desktop, open on Changes (ADR 0044) until closed.
-  const [panel, setPanel] = useState(true)
+  const [panel, setPanel] = useState(true);
   // The panel sits beside the conversation only on a desktop; a phone opens it as a sheet.
-  const desktop = useMedia('(min-width: 1024px)')
-  const [sheet, setSheet] = useState(false)
+  const desktop = useMedia("(min-width: 1024px)");
+  const [sheet, setSheet] = useState(false);
   // The artifact the panel shows (ADR 0068), and whether it takes the conversation's space too.
-  const [opened, setOpened] = useState<Opened | null>(null)
-  const [full, setFull] = useState(false)
-  const [detail, setDetail] = useDetailChoice()
-  const [grouping, setGrouping] = useGroupingChoice()
-  const [thoughts, setThoughts] = useState({ open: false, times: 0 })
+  const [opened, setOpened] = useState<Opened | null>(null);
+  const [full, setFull] = useState(false);
+  const [detail, setDetail] = useDetailChoice();
+  const [grouping, setGrouping] = useGroupingChoice();
+  const [thoughts, setThoughts] = useState({ open: false, times: 0 });
   const toggleThoughts = () => {
-    const open = !thoughts.open
-    setThoughts({ open, times: thoughts.times + 1 })
-    toast(open ? `Every thought open · ${formatKeys('shift+t')} closes them` : 'Every thought closed')
-  }
-  const navigate = useNavigate()
-  const hash = useRouterState({ select: (state) => state.location.hash })
+    const open = !thoughts.open;
+    setThoughts({ open, times: thoughts.times + 1 });
+    toast(
+      open
+        ? `Every thought open · ${formatKeys("shift+t")} closes them`
+        : "Every thought closed",
+    );
+  };
+  const navigate = useNavigate();
+  const hash = useRouterState({ select: (state) => state.location.hash });
   // A short id in the address becomes the full one, so the sidebar marks the thread.
   useEffect(() => {
     if (id !== thread)
-      void navigate({ to: '/t/$id', params: { id: thread }, hash: hash.replace(/^#/, '') || undefined, replace: true })
-  }, [id, thread, hash, navigate])
-  const { agent: status, heard, tool, preset, setPreset, said, began } = useLive(thread, total)
+      void navigate({
+        to: "/t/$id",
+        params: { id: thread },
+        hash: hash.replace(/^#/, "") || undefined,
+        replace: true,
+      });
+  }, [id, thread, hash, navigate]);
+  const {
+    agent: status,
+    heard,
+    tool,
+    preset,
+    setPreset,
+    said,
+    began,
+  } = useLive(thread, total);
   // What the agent said stays where it was until the history has it, rather than blink out and come back above,
   // and goes once the history has it, rather than show twice.
-  const pending = useMemo(() => unrecorded(said, entries), [said, entries])
+  const pending = useMemo(() => unrecorded(said, entries), [said, entries]);
   const agent = useMemo(() => {
-    if (!status) return status
-    const words = shown(status, said, began, entries)
-    return { ...status, streaming: words.text, thinking: words.thought }
-  }, [status, said, began, entries])
+    if (!status) return status;
+    const words = shown(status, said, began, entries);
+    return { ...status, streaming: words.text, thinking: words.thought };
+  }, [status, said, began, entries]);
   // Heard by the composer, which sends the draft as it's typed: typing draws the composer, not the page.
-  const [people, setPeople] = useState<Presence[]>(NO_PEOPLE)
-  const lastPrompt = entries.findLast((entry) => entry.kind === 'user')?.text
-  const sending = useSending(thread)
-  const landedPrompts = useMemo(() => arrived(sending, entries), [sending, entries])
-  const waitingPrompts = sending.filter((item) => !landedPrompts.includes(item.id))
+  const [people, setPeople] = useState<Presence[]>(NO_PEOPLE);
+  const lastPrompt = entries.findLast((entry) => entry.kind === "user")?.text;
+  const sending = useSending(thread);
+  const landedPrompts = useMemo(
+    () => arrived(sending, entries),
+    [sending, entries],
+  );
+  const waitingPrompts = sending.filter(
+    (item) => !landedPrompts.includes(item.id),
+  );
   useEffect(() => {
-    if (landedPrompts.length > 0) dropSending(thread, landedPrompts)
-  }, [thread, landedPrompts])
+    if (landedPrompts.length > 0) dropSending(thread, landedPrompts);
+  }, [thread, landedPrompts]);
   // An agent that fails before it takes a prompt gives the prompt back to the draft rather than leave it shown as sent.
-  const agentState = agent?.state
-  const stateBefore = useRef(agentState)
+  const agentState = agent?.state;
+  const stateBefore = useRef(agentState);
   useEffect(() => {
-    const before = stateBefore.current
-    stateBefore.current = agentState
-    if (agentState !== 'error' || before === 'error' || waitingPrompts.length === 0) return
+    const before = stateBefore.current;
+    stateBefore.current = agentState;
+    if (
+      agentState !== "error" ||
+      before === "error" ||
+      waitingPrompts.length === 0
+    )
+      return;
     dropSending(
       thread,
       waitingPrompts.map((item) => item.id),
-    )
-    const key = threadDraft(thread)
-    if (!draftOf(key).trim()) keepDraft(key, waitingPrompts.map((item) => item.text).join('\n\n'))
-  }, [agentState, thread, waitingPrompts])
+    );
+    const key = threadDraft(thread);
+    if (!draftOf(key).trim())
+      keepDraft(key, waitingPrompts.map((item) => item.text).join("\n\n"));
+  }, [agentState, thread, waitingPrompts]);
   useActions([
-    { id: 'changes', label: panel ? 'Hide the changes panel' : 'Show changes', keys: 'd', run: () => setPanel(!panel) },
-    ...(desktop && !hosted() ? [{ id: 'review', label: 'Expand the review', keys: 'shift+d', run: () => openReview() }] : []),
+    {
+      id: "changes",
+      label: panel ? "Hide the changes panel" : "Show changes",
+      keys: "d",
+      run: () => setPanel(!panel),
+    },
+    ...(desktop && !hosted()
+      ? [
+          {
+            id: "review",
+            label: "Expand the review",
+            keys: "shift+d",
+            run: () => openReview(),
+          },
+        ]
+      : []),
     ...DETAILS.filter((choice) => choice.id !== detail).map((choice) => ({
       id: `detail:${choice.id}`,
       label: `Transcript: ${choice.label}`,
@@ -2432,132 +3093,178 @@ function ThreadBody({
       label: `Group the work ${choice.label.toLowerCase()}`,
       run: () => setGrouping(choice.id),
     })),
-    { id: 'thoughts', label: thoughts.open ? 'Close every thought' : 'Open every thought', keys: 'shift+t', run: toggleThoughts },
+    {
+      id: "thoughts",
+      label: thoughts.open ? "Close every thought" : "Open every thought",
+      keys: "shift+t",
+      run: toggleThoughts,
+    },
     ...(opened && desktop
       ? [
           {
-            id: 'artifact-full',
-            label: full ? 'Leave the full view' : 'Full view of the artifact',
-            keys: 'f',
+            id: "artifact-full",
+            label: full ? "Leave the full view" : "Full view of the artifact",
+            keys: "f",
             run: () => setFull(!full),
           },
         ]
       : []),
-  ])
-  const groups = useMemo(() => artifactsOf(entries), [entries])
-  const images = useMemo(() => shownImagesOf(entries), [entries])
+  ]);
+  const groups = useMemo(() => artifactsOf(entries), [entries]);
+  const images = useMemo(() => shownImagesOf(entries), [entries]);
   const openArtifact = useCallback(
     (id: string, version: number | null = null) => {
-      const group = groups.find((candidate) => candidate.id === id)
-      const newest = group?.versions[group.versions.length - 1]?.artifact.version
-      setOpened({ id, version: version === newest ? null : version })
-      setTab('artifacts')
-      if (window.matchMedia('(max-width: 1023px)').matches) setSheet(true)
-      else setPanel(true)
+      const group = groups.find((candidate) => candidate.id === id);
+      const newest =
+        group?.versions[group.versions.length - 1]?.artifact.version;
+      setOpened({ id, version: version === newest ? null : version });
+      setTab("artifacts");
+      if (window.matchMedia("(max-width: 1023px)").matches) setSheet(true);
+      else setPanel(true);
     },
     [groups],
-  )
+  );
   const backFromArtifact = useCallback(() => {
-    setOpened(null)
-    setFull(false)
-  }, [])
+    setOpened(null);
+    setFull(false);
+  }, []);
   const closeArtifactPanel = useCallback(() => {
-    setOpened(null)
-    setFull(false)
-    setSheet(false)
-    setPanel(false)
-  }, [])
-  const toggleFull = useCallback(() => setFull((was) => !was), [])
-  const artifactActions = useMemo(() => ({ thread, open: openArtifact, opened }), [thread, openArtifact, opened])
+    setOpened(null);
+    setFull(false);
+    setSheet(false);
+    setPanel(false);
+  }, []);
+  const toggleFull = useCallback(() => setFull((was) => !was), []);
+  const artifactActions = useMemo(
+    () => ({ thread, open: openArtifact, opened }),
+    [thread, openArtifact, opened],
+  );
   // A link to an artifact opens it; one made while the person watches opens by itself on a desktop, unless another is open.
-  const seenArtifacts = useRef<number | null>(null)
+  const seenArtifacts = useRef<number | null>(null);
   useEffect(() => {
-    if (start + entries.length < total) return
-    const newest = groups[0] && groups[0].versions[groups[0].versions.length - 1].entry.index
-    const before = seenArtifacts.current
-    seenArtifacts.current = newest ?? -1
+    if (start + entries.length < total) return;
+    const newest =
+      groups[0] &&
+      groups[0].versions[groups[0].versions.length - 1].entry.index;
+    const before = seenArtifacts.current;
+    seenArtifacts.current = newest ?? -1;
     if (before === null) {
-      const linked = /^#?artifact-([0-9a-f]{12})(?:-v(\d+))?$/.exec(hash)
-      if (linked && groups.some((group) => group.id === linked[1])) openArtifact(linked[1], linked[2] ? Number(linked[2]) : null)
-      return
+      const linked = /^#?artifact-([0-9a-f]{12})(?:-v(\d+))?$/.exec(hash);
+      if (linked && groups.some((group) => group.id === linked[1]))
+        openArtifact(linked[1], linked[2] ? Number(linked[2]) : null);
+      return;
     }
-    if (newest === undefined || newest <= before || !desktop) return
-    if (opened && opened.id !== groups[0].id) return
-    openArtifact(groups[0].id)
-  }, [start, entries.length, total, groups, hash, desktop, opened, openArtifact])
+    if (newest === undefined || newest <= before || !desktop) return;
+    if (opened && opened.id !== groups[0].id) return;
+    openArtifact(groups[0].id);
+  }, [
+    start,
+    entries.length,
+    total,
+    groups,
+    hash,
+    desktop,
+    opened,
+    openArtifact,
+  ]);
 
   // Looking at the thread marks it seen, again whenever something new happens in it.
-  const unseen = summary !== undefined && (summary.mine.seen_ms === null || summary.last_ms > summary.mine.seen_ms)
+  const unseen =
+    summary !== undefined &&
+    (summary.mine.seen_ms === null || summary.last_ms > summary.mine.seen_ms);
   useEffect(() => {
     if (unseen)
       void api
-        .setThreadState(thread, { pinned: null, snooze: null, settled: null, seen: true, reviewed_turn: null })
-        .catch(() => undefined)
-  }, [thread, unseen])
+        .setThreadState(thread, {
+          pinned: null,
+          snooze: null,
+          settled: null,
+          seen: true,
+          reviewed_turn: null,
+        })
+        .catch(() => undefined);
+  }, [thread, unseen]);
 
   // A plan call's own output is the plan again, then the agent's note that it was approved; the plan card shows it once.
-  const planCalls = useRef(new Set<string>())
-  for (const asked of agent?.permissions ?? []) if (asked.plan && asked.tool_call) planCalls.current.add(asked.tool_call)
-  const [unfolded, setUnfolded] = useState<string | null>(null)
-  const turnList = turns.data ?? NO_TURNS
-  const history = useMemo(() => rowsOf(entries, turnList), [entries, turnList])
-  const tasks = useStableTasks(entries, tasksBefore)
-  const now = useNow()
-  const lastSaid = entries.length > 0 ? entries[entries.length - 1].time_ms : 0
+  const planCalls = useRef(new Set<string>());
+  for (const asked of agent?.permissions ?? [])
+    if (asked.plan && asked.tool_call) planCalls.current.add(asked.tool_call);
+  const [unfolded, setUnfolded] = useState<string | null>(null);
+  const turnList = turns.data ?? NO_TURNS;
+  const history = useMemo(() => rowsOf(entries, turnList), [entries, turnList]);
+  const tasks = useStableTasks(entries, tasksBefore);
+  const now = useNow();
+  const lastSaid = entries.length > 0 ? entries[entries.length - 1].time_ms : 0;
   const live = mayRun(
     Math.max(summary?.last_ms ?? 0, lastSaid),
-    agent !== null && agent !== undefined && agent.state !== 'stopped' && agent.state !== 'error',
+    agent !== null &&
+      agent !== undefined &&
+      agent.state !== "stopped" &&
+      agent.state !== "error",
     now,
-  )
+  );
   // The background commands Stop ends: only while the agent that started them runs here.
-  const stoppableCalls = agent?.stoppable
+  const stoppableCalls = agent?.stoppable;
   const stoppable = useMemo<Stoppable>(
     () => ({
       calls: new Set(stoppableCalls ?? []),
-      stop: (call) => void api.stopTask(thread, call).catch((failure: unknown) => toast(message(failure), 'danger')),
+      stop: (call) =>
+        void api
+          .stopTask(thread, call)
+          .catch((failure: unknown) => toast(message(failure), "danger")),
     }),
     [stoppableCalls, thread],
-  )
+  );
   // A running task's line names it as its card does.
-  const calls = useMemo(() => callsById(entries), [entries])
+  const calls = useMemo(() => callsById(entries), [entries]);
   const taskLabels = (task: TaskState) => {
-    const call = task.call ? calls.get(task.call) : undefined
+    const call = task.call ? calls.get(task.call) : undefined;
     const said =
-      call?.tool?.kind === 'subagent' || task.kind === 'subagent'
+      call?.tool?.kind === "subagent" || task.kind === "subagent"
         ? call?.tool?.subject
-        : (call?.tool?.detail ?? call?.tool?.subject)
-    const title = said?.split('\n')[0] ?? task.summary?.split('\n')[0] ?? task.ids[0] ?? 'A task'
-    return { title, name: (task.resumes ?? call)?.tool?.subagent ?? null }
-  }
+        : (call?.tool?.detail ?? call?.tool?.subject);
+    const title =
+      said?.split("\n")[0] ??
+      task.summary?.split("\n")[0] ??
+      task.ids[0] ??
+      "A task";
+    return { title, name: (task.resumes ?? call)?.tool?.subagent ?? null };
+  };
   // A link into the history may name an inherited turn, so it shows them all.
   const folded = useMemo(
     () => (unfolded === thread || hash ? history : foldInherited(history)),
     [unfolded, thread, hash, history],
-  )
+  );
   // The rows last drawn, for the next render to keep what's unchanged of.
-  const [shownRows, setShownRows] = useState<{ from: Row[]; rows: Row[] }>()
-  let rows: Row[]
-  if (shownRows?.from === folded) rows = shownRows.rows
+  const [shownRows, setShownRows] = useState<{ from: Row[]; rows: Row[] }>();
+  let rows: Row[];
+  if (shownRows?.from === folded) rows = shownRows.rows;
   else {
-    rows = keepRows(shownRows?.rows, folded)
-    setShownRows({ from: folded, rows })
+    rows = keepRows(shownRows?.rows, folded);
+    setShownRows({ from: folded, rows });
   }
   // Beside the open panel the history scrolls in the page's own column (see Page), not the main one.
-  const outer = useContext(MainScroll)
-  const column = useRef<HTMLDivElement>(null)
-  const scroll = (panel || sheet) && desktop ? column : outer
-  const below = useRef<HTMLDivElement>(null)
-  const list = useRef<HistoryControls | null>(null)
-  const { hash: named, named: anchorNamed } = useNamedAnchor(turns.data, comments.data)
-  const anchor = anchorNamed ?? NO_ANCHOR
-  const unfold = useCallback(() => setUnfolded(thread), [thread])
-  const codeComments = (comments.data ?? []).filter((comment) => comment.location.at !== 'entry' && comment.location.at !== 'doc')
-  const files = stats.data ?? null
+  const outer = useContext(MainScroll);
+  const column = useRef<HTMLDivElement>(null);
+  const scroll = (panel || sheet) && desktop ? column : outer;
+  const below = useRef<HTMLDivElement>(null);
+  const list = useRef<HistoryControls | null>(null);
+  const { hash: named, named: anchorNamed } = useNamedAnchor(
+    turns.data,
+    comments.data,
+  );
+  const anchor = anchorNamed ?? NO_ANCHOR;
+  const unfold = useCallback(() => setUnfolded(thread), [thread]);
+  const codeComments = (comments.data ?? []).filter(
+    (comment) =>
+      comment.location.at !== "entry" && comment.location.at !== "doc",
+  );
+  const files = stats.data ?? null;
   const totals = files && {
     added: files.reduce((sum, file) => sum + file.added, 0),
     removed: files.reduce((sum, file) => sum + file.removed, 0),
-  }
-  const allComments = comments.data ?? NO_COMMENTS
+  };
+  const allComments = comments.data ?? NO_COMMENTS;
   const entryProps = useMemo<EntryProps>(
     () => ({
       thread,
@@ -2565,21 +3272,24 @@ function ThreadBody({
       anchor,
       onChanged: reloadComments,
       onComment: async (index, text) => {
-        await api.addComment(thread, { on: 'entry', index }, text)
-        await reloadComments()
+        await api.addComment(thread, { on: "entry", index }, text);
+        await reloadComments();
       },
     }),
     [thread, allComments, anchor, reloadComments],
-  )
+  );
   const liveTool = useMemo(
-    () => (tool.id !== null && planCalls.current.has(tool.id) ? { id: null, text: '' } : tool),
+    () =>
+      tool.id !== null && planCalls.current.has(tool.id)
+        ? { id: null, text: "" }
+        : tool,
     // `planCalls` only grows as the agent asks, which changes `agent`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [tool, agent?.permissions],
-  )
-  const permissions = agent?.permissions
-  const questions = agent?.questions
-  const agentName = agent?.agent
+  );
+  const permissions = agent?.permissions;
+  const questions = agent?.questions;
+  const agentName = agent?.agent;
   const liveQuestions = useMemo(
     () =>
       agentName !== undefined && permissions
@@ -2587,43 +3297,49 @@ function ThreadBody({
             thread,
             agent: agentName,
             questions: questions ?? [],
-            awaiting: permissions.flatMap((asked) => (asked.tool_call ? [asked.tool_call] : [])),
+            awaiting: permissions.flatMap((asked) =>
+              asked.tool_call ? [asked.tool_call] : [],
+            ),
           }
         : null,
     [thread, agentName, questions, permissions],
-  )
+  );
 
   // The review across the page, where there's room for it and a daemon to read the diff from.
-  const openReview = () => void navigate({ to: '/t/$id/review', params: { id: thread } })
-  const roomy = desktop && !hosted()
+  const openReview = () =>
+    void navigate({ to: "/t/$id/review", params: { id: thread } });
+  const roomy = desktop && !hosted();
   // Where the changes panel puts what it compares and how, so the inspector keeps one row of tabs.
-  const [diffControls, setDiffControls] = useState<HTMLElement | null>(null)
+  const [diffControls, setDiffControls] = useState<HTMLElement | null>(null);
   const showChanges = () => {
-    const phone = window.matchMedia('(max-width: 1023px)').matches
+    const phone = window.matchMedia("(max-width: 1023px)").matches;
     if (phone) {
-      setTab('changes')
-      setSheet(true)
-      return
+      setTab("changes");
+      setSheet(true);
+      return;
     }
-    if (!panel || tab !== 'changes') {
-      setTab('changes')
-      setPanel(true)
-    } else setPanel(false)
-  }
-  const busy = agent?.state === 'working' || agent?.state === 'awaiting_permission' || agent?.state === 'starting'
+    if (!panel || tab !== "changes") {
+      setTab("changes");
+      setPanel(true);
+    } else setPanel(false);
+  };
+  const busy =
+    agent?.state === "working" ||
+    agent?.state === "awaiting_permission" ||
+    agent?.state === "starting";
   // A plan waiting for approval is still that turn's to finish.
   const turnRunning =
-    agent?.state === 'working' ||
-    agent?.state === 'awaiting_permission' ||
-    agent?.state === 'awaiting_input' ||
-    pending.text !== ''
+    agent?.state === "working" ||
+    agent?.state === "awaiting_permission" ||
+    agent?.state === "awaiting_input" ||
+    pending.text !== "";
   // The running turn's card shows the thought under way where it will be recorded, so the tail doesn't show it too.
-  const lastRow = rows[rows.length - 1]
+  const lastRow = rows[rows.length - 1];
   const thoughtCarded =
-    agent?.state === 'working' &&
-    grouping === 'turn' &&
-    lastRow?.kind === 'turn' &&
-    sinceWrote(piecesOf(lastRow.entries, tasks), tasks).activity.length > 0
+    agent?.state === "working" &&
+    grouping === "turn" &&
+    lastRow?.kind === "turn" &&
+    sinceWrote(piecesOf(lastRow.entries, tasks), tasks).activity.length > 0;
 
   return (
     <ArtifactActions.Provider value={artifactActions}>
@@ -2634,7 +3350,9 @@ function ThreadBody({
               <TranscriptGrouping.Provider value={grouping}>
                 <ThoughtsOpen.Provider value={thoughts}>
                   <LiveTool.Provider value={liveTool}>
-                    <LiveThought.Provider value={thoughtCarded ? agent.thinking : ''}>
+                    <LiveThought.Provider
+                      value={thoughtCarded ? agent.thinking : ""}
+                    >
                       <LiveQuestions.Provider value={liveQuestions}>
                         <Page
                           flush
@@ -2642,11 +3360,15 @@ function ThreadBody({
                           inspectorLabel="thread details"
                           inspectorWidth={480}
                           columnRef={column}
-                          sheet={{ open: sheet, onClose: () => setSheet(false), bare: tab === 'artifacts' && opened !== null }}
-                          full={full && tab === 'artifacts' && opened !== null}
+                          sheet={{
+                            open: sheet,
+                            onClose: () => setSheet(false),
+                            bare: tab === "artifacts" && opened !== null,
+                          }}
+                          full={full && tab === "artifacts" && opened !== null}
                           inspector={
                             (panel || sheet) &&
-                            (tab === 'artifacts' && opened ? (
+                            (tab === "artifacts" && opened ? (
                               <Suspense fallback={null}>
                                 <ArtifactViewer
                                   thread={thread}
@@ -2668,49 +3390,92 @@ function ThreadBody({
                                   <Tabs
                                     label="inspector"
                                     tabs={[
-                                      ...(designTitle ? [{ id: 'design' as const, label: designTitle }] : []),
+                                      ...(designTitle
+                                        ? [
+                                            {
+                                              id: "design" as const,
+                                              label: designTitle,
+                                            },
+                                          ]
+                                        : []),
                                       {
-                                        id: 'changes',
+                                        id: "changes",
                                         label: (
                                           <>
-                                            {isChat(summary?.repo) ? 'Files' : 'Changes'}{' '}
-                                            {totals && (totals.added > 0 || totals.removed > 0) && (
-                                              <Counts added={totals.added} removed={totals.removed} />
-                                            )}
+                                            {isChat(summary?.repo)
+                                              ? "Files"
+                                              : "Changes"}{" "}
+                                            {totals &&
+                                              (totals.added > 0 ||
+                                                totals.removed > 0) && (
+                                                <Counts
+                                                  added={totals.added}
+                                                  removed={totals.removed}
+                                                />
+                                              )}
                                           </>
                                         ),
                                       },
                                       ...(groups.length > 0 || images.length > 0
                                         ? [
                                             {
-                                              id: 'artifacts' as const,
+                                              id: "artifacts" as const,
                                               label: (
                                                 <>
-                                                  Artifacts{' '}
+                                                  Artifacts{" "}
                                                   <span className="font-mono text-2xs text-accent-fg">
-                                                    {groups.length + images.length}
+                                                    {groups.length +
+                                                      images.length}
                                                   </span>
                                                 </>
                                               ),
                                             },
                                           ]
                                         : []),
-                                      { id: 'details', label: 'Details' },
-                                      { id: 'lineage', label: 'Lineage' },
-                                      ...(hosted() ? [] : [{ id: 'access' as const, label: 'Access' }]),
+                                      { id: "details", label: "Details" },
+                                      { id: "lineage", label: "Lineage" },
+                                      ...(hosted()
+                                        ? []
+                                        : [
+                                            {
+                                              id: "access" as const,
+                                              label: "Access",
+                                            },
+                                          ]),
                                     ]}
                                     value={tab}
                                     onChange={setTab}
                                   />
-                                  {tab === 'changes' && (
-                                    <span ref={setDiffControls} className="ml-auto flex items-center gap-2" />
+                                  {tab === "changes" && (
+                                    <span className="ml-auto flex items-center gap-2">
+                                      <span
+                                        ref={setDiffControls}
+                                        className="flex items-center gap-2"
+                                      />
+                                      {roomy && (
+                                        <Button
+                                          variant="ghost"
+                                          aria-label="Expand the review"
+                                          onClick={openReview}
+                                          title="The changes across the page, to review (⇧D)"
+                                        >
+                                          <Icon
+                                            name="expand"
+                                            className="h-4 w-4"
+                                          />
+                                        </Button>
+                                      )}
+                                    </span>
                                   )}
                                 </div>
-                                {tab === 'design' ? (
+                                {tab === "design" ? (
                                   <Suspense fallback={null}>
-                                    <ThreadDesignPanel thread={thread} working={busy} />
+                                    <ThreadDesignPanel
+                                      thread={thread}
+                                      working={busy}
+                                    />
                                   </Suspense>
-                                ) : tab === 'artifacts' ? (
+                                ) : tab === "artifacts" ? (
                                   <Suspense fallback={null}>
                                     <ArtifactList
                                       thread={thread}
@@ -2719,24 +3484,30 @@ function ThreadBody({
                                       onOpen={(id) => openArtifact(id)}
                                     />
                                   </Suspense>
-                                ) : tab === 'access' ? (
+                                ) : tab === "access" ? (
                                   <AccessPanel thread={thread} agent={agent} />
-                                ) : tab === 'lineage' ? (
+                                ) : tab === "lineage" ? (
                                   <div className="flex flex-col gap-6 px-5 py-5">
                                     {summary && (
                                       <InspectorSection
                                         title="Lineage"
                                         aside={
-                                          <Link to="/graph" className="text-accent-fg hover:text-fg-1">
+                                          <Link
+                                            to="/graph"
+                                            className="text-accent-fg hover:text-fg-1"
+                                          >
                                             View graph
                                           </Link>
                                         }
                                       >
-                                        <Lineage summary={summary} threads={threads.data ?? []} />
+                                        <Lineage
+                                          summary={summary}
+                                          threads={threads.data ?? []}
+                                        />
                                       </InspectorSection>
                                     )}
                                   </div>
-                                ) : tab === 'details' ? (
+                                ) : tab === "details" ? (
                                   <Details
                                     thread={thread}
                                     summary={summary}
@@ -2745,7 +3516,7 @@ function ThreadBody({
                                     codeComments={codeComments}
                                     anchor={anchor}
                                     onChanged={reloadComments}
-                                    onCommentLines={() => setTab('changes')}
+                                    onCommentLines={() => setTab("changes")}
                                   />
                                 ) : (
                                   <div className="px-4 py-4">
@@ -2770,19 +3541,35 @@ function ThreadBody({
                             people={people}
                             changes={totals}
                             panelOpen={panel && desktop}
-                            waiting={agent?.state === 'awaiting_input' || agent?.state === 'awaiting_permission'}
-                            agent={agent}
+                            waiting={
+                              agent?.state === "awaiting_input" ||
+                              agent?.state === "awaiting_permission"
+                            }
                             detail={detail}
                             onDetail={setDetail}
                             grouping={grouping}
                             onGrouping={setGrouping}
                             onChanges={showChanges}
-                            onExpand={roomy ? openReview : undefined}
                             onDetails={() => {
-                              setTab('details')
-                              setPanel(true)
-                              setSheet(window.matchMedia('(max-width: 1023px)').matches)
+                              setTab("details");
+                              setPanel(true);
+                              setSheet(
+                                window.matchMedia("(max-width: 1023px)")
+                                  .matches,
+                              );
                             }}
+                            onAccess={
+                              hosted()
+                                ? undefined
+                                : () => {
+                                    setTab("access");
+                                    setPanel(true);
+                                    setSheet(
+                                      window.matchMedia("(max-width: 1023px)")
+                                        .matches,
+                                    );
+                                  }
+                            }
                           />
                           <div className="mx-auto flex w-full max-w-(--read-width) flex-1 flex-col px-4 md:px-6">
                             {askedHere && (
@@ -2812,11 +3599,20 @@ function ThreadBody({
                               onUnfold={unfold}
                               controls={list}
                             />
-                            <div ref={below} className="flex flex-col gap-3 pt-2 pb-4">
+                            <div
+                              ref={below}
+                              className="flex flex-col gap-3 pt-2 pb-4"
+                            >
                               {waitingPrompts.map((item) => (
                                 <SendingPrompt key={item.id} item={item} />
                               ))}
-                              {agent?.sign_in && <SignInCard thread={thread} asked={agent.sign_in} agent={agent.agent} />}
+                              {agent?.sign_in && (
+                                <SignInCard
+                                  thread={thread}
+                                  asked={agent.sign_in}
+                                  agent={agent.agent}
+                                />
+                              )}
                               {agent?.permissions.map((asked, index) => (
                                 <PermissionCard
                                   key={asked.id}
@@ -2827,15 +3623,23 @@ function ThreadBody({
                                 />
                               ))}
                               <Approvals thread={thread} />
-                              {agent?.state === 'awaiting_input' && (
-                                <PlanCard thread={thread} preset={preset} onPreset={setPreset} />
+                              {agent?.state === "awaiting_input" && (
+                                <PlanCard
+                                  thread={thread}
+                                  preset={preset}
+                                  onPreset={setPreset}
+                                />
                               )}
                               {agent && (
                                 <AgentTail
                                   status={agent}
                                   thoughtShown={thoughtCarded}
                                   onCancel={() =>
-                                    void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))
+                                    void api
+                                      .cancelTurn(thread)
+                                      .catch((failure: unknown) =>
+                                        toast(message(failure), "danger"),
+                                      )
                                   }
                                 />
                               )}
@@ -2854,7 +3658,9 @@ function ThreadBody({
                                 lastPrompt={lastPrompt}
                                 onPeople={setPeople}
                                 onSent={() => list.current?.follow()}
-                                onSending={(text, files) => addSending(thread, text, files, total)}
+                                onSending={(text, files) =>
+                                  addSending(thread, text, files, total)
+                                }
                                 // Docked on the composer's top edge: what the thread changed and what the next prompt adds to it are one object.
                                 top={
                                   files &&
@@ -2866,8 +3672,10 @@ function ThreadBody({
                                       files={files.length}
                                       totals={totals}
                                       forked={Boolean(summary?.forked_from)}
-                                      forge={forgeOf(summary?.repo ?? '')}
-                                      onReview={roomy ? openReview : showChanges}
+                                      forge={forgeOf(summary?.repo ?? "")}
+                                      onReview={
+                                        roomy ? openReview : showChanges
+                                      }
                                     />
                                   )
                                 }
@@ -2885,23 +3693,26 @@ function ThreadBody({
         </StoppableTasks.Provider>
       </TasksContext.Provider>
     </ArtifactActions.Provider>
-  )
+  );
 }
 
 /** How long a thread's full id is; a link may name it by its end. */
-const FULL_ID = 32
+const FULL_ID = 32;
 
 export function ThreadView({ id }: { id: string }) {
   // A short id is read as the full one the list knows, so the history read for it isn't read again once the address
   // becomes the full id.
-  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
-  const short = id.length < FULL_ID
-  const full = short ? threads.data?.find((thread) => thread.id.endsWith(id))?.id : id
-  const history = useHistory(short && threads.isPending ? null : (full ?? id))
-  useTopic('threads')
-  useWarm(history.data?.thread ?? null)
-  useTopic(history.data ? `thread:${history.data.thread}` : null)
-  if (history.error) return <p className="p-6 text-danger">{message(history.error)}</p>
+  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads });
+  const short = id.length < FULL_ID;
+  const full = short
+    ? threads.data?.find((thread) => thread.id.endsWith(id))?.id
+    : id;
+  const history = useHistory(short && threads.isPending ? null : (full ?? id));
+  useTopic("threads");
+  useWarm(history.data?.thread ?? null);
+  useTopic(history.data ? `thread:${history.data.thread}` : null);
+  if (history.error)
+    return <p className="p-6 text-danger">{message(history.error)}</p>;
   if (!history.data)
     return (
       <div className="flex flex-col gap-3 p-6">
@@ -2909,7 +3720,7 @@ export function ThreadView({ id }: { id: string }) {
         <Skeleton className="h-4 w-1/2" />
         <Skeleton className="h-40" />
       </div>
-    )
+    );
   return (
     <ThreadBody
       thread={history.data.thread}
@@ -2921,5 +3732,5 @@ export function ThreadView({ id }: { id: string }) {
       onEarlier={history.earlier}
       loadingEarlier={history.loadingEarlier}
     />
-  )
+  );
 }
