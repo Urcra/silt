@@ -122,16 +122,25 @@ function fetcher(id: string, signal?: AbortSignal): Fetch {
       : api.history(id, ask.offset, ask.limit, { known: ask.known, signal })
 }
 
+/** The query holding a thread's history as the page reads it. */
+export function historyKey(id: string) {
+  return [...keys.history(id), 'loaded'] as const
+}
+
+/** How long a thread's history not shown is kept, unless let go of sooner as no longer kept warm (`bus.ts`). */
+const KEPT_MS = 30 * 60_000
+
 /**
  * A thread's history from its last page, kept up to date, and `earlier` to read the page before what's held, once the
  * person scrolls up to it.
  */
 export function useHistory(id: string | null) {
   const queries = useQueryClient()
-  const queryKey = [...keys.history(id ?? ''), 'loaded']
+  const queryKey = historyKey(id ?? '')
   const history = useQuery({
     queryKey,
     enabled: id !== null,
+    gcTime: KEPT_MS,
     queryFn: async ({ signal }) => {
       const before = queries.getQueryData<Loaded>(queryKey)
       const updated = await loadHistory(fetcher(id!, signal), before, (loaded) => queries.setQueryData(queryKey, loaded), signal)

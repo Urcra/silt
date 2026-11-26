@@ -85,6 +85,35 @@ async fn a_long_family_reads_the_same_once_packed_into_chunks() {
 }
 
 #[tokio::test]
+async fn a_family_large_enough_to_decode_on_several_threads_reads_the_same() {
+    let (_dir, store) = store_with_thread().await;
+    // Text that barely compresses, so its chunks pass the size decoded on several threads.
+    let mut seed = 7_u64;
+    let mut noise = |length: usize| -> String {
+        (0..length)
+            .map(|_| {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                char::from(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[(seed >> 58) as usize])
+            })
+            .collect()
+    };
+    let mut family = Family::new();
+    let appended: Vec<_> = (0..6_300)
+        .map(|_| {
+            let op = Op::Conv(silt_log::ConvOp::Title(noise(1_500)));
+            let delta = family.delta(ActorId(1), THREAD, Author::User, 5, family.thread_head(THREAD), op);
+            family.apply(delta.clone(), &mut std::collections::HashMap::new()).expect("applies");
+            delta
+        })
+        .collect();
+    store.append_deltas(FAMILY, &appended).await.expect("appends");
+    let stored = store.stored_deltas(FAMILY).await.expect("reads");
+    for range in [0..6_300, 1..6_299, 999..5_001, 2_000..2_001] {
+        assert_eq!(stored.decode(range.clone()).expect("decodes"), appended[range.clone()], "{range:?}");
+    }
+}
+
+#[tokio::test]
 async fn deltas_are_read_by_id_from_chunks_and_rows_alike() {
     let (_dir, store) = store_with_thread().await;
     let appended = titles(1_200);

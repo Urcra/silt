@@ -32,7 +32,7 @@ import {
 } from '../api'
 import { isChat } from '../chats'
 import { CloudSession } from './Cloud'
-import { useTopic } from '../bus'
+import { useTopic, useWarm } from '../bus'
 import { readWhole } from '../diffParse'
 import { useHideGit, useHideOthers, useShared } from '../hideGit'
 import { useHistory } from '../historyLoad'
@@ -2899,6 +2899,7 @@ export function ThreadView({ id }: { id: string }) {
   const full = short ? threads.data?.find((thread) => thread.id.endsWith(id))?.id : id
   const history = useHistory(short && threads.isPending ? null : (full ?? id))
   useTopic('threads')
+  useWarm(history.data?.thread ?? null)
   useTopic(history.data ? `thread:${history.data.thread}` : null)
   if (history.error) return <p className="p-6 text-danger">{message(history.error)}</p>
   if (!history.data)

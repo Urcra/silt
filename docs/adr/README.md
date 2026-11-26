@@ -23,10 +23,10 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0015](0015-secret-overlay.md) | Secret redaction with a local overlay | accepted; amended by 0016, 0017, 0019, 0123 |
 | [0016](0016-untrusted-peer-content.md) | Content from other people is untrusted input | accepted; amended by 0017, 0019, 0045 |
 | [0017](0017-acp-agents-only.md) | ACP agents only, no native harness | accepted; amended by 0092, 0093 |
-| [0018](0018-daemon-optional-capture.md) | Capture works without the daemon | accepted; amended by 0034, 0036, 0089 |
+| [0018](0018-daemon-optional-capture.md) | Capture works without the daemon | accepted; amended by 0034, 0036, 0089, 0128 |
 | [0019](0019-redact-to-gits-threat-model.md) | Redact to git's threat model | accepted; amended by 0060 |
 | [0020](0020-next-generation-web-ui.md) | The next-generation web UI | accepted; amended by 0039, 0041 |
-| [0021](0021-browser-event-bus.md) | The browser event bus | accepted; amended by 0101 |
+| [0021](0021-browser-event-bus.md) | The browser event bus | accepted; amended by 0101, 0127 |
 | [0022](0022-agent-runtime.md) | The agent runtime | accepted; amended by 0044, 0093 |
 | [0023](0023-projects.md) | Projects as first-class records | accepted; amended by 0044, 0053, 0059, 0065 |
 | [0024](0024-per-person-state.md) | Per-person state on the server | accepted; amended by 0067 |
@@ -122,7 +122,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0114](0114-one-set-of-permissions-and-agents-by-their-marks.md) | One set of permissions, and agents shown by their marks | accepted; amended by 0118 |
 | [0115](0115-the-sidebar-names-the-workspace-and-the-machine.md) | The sidebar names the workspace at its top and the machine at its bottom | accepted |
 | [0116](0116-memory-that-follows-the-work.md) | Memory that follows the work | accepted |
-| [0117](0117-conversations-open-at-their-end.md) | Conversations open at their end | accepted |
+| [0117](0117-conversations-open-at-their-end.md) | Conversations open at their end | accepted; amended by 0127 |
 | [0118](0118-an-agents-own-modes-in-the-permissions-menu.md) | An agent's own modes in the permissions menu | accepted |
 | [0119](0119-no-windows-ci-or-releases.md) | No Windows CI or Windows releases | accepted |
 | [0120](0120-agents-ask-other-agents.md) | Agents ask other agents | accepted |
@@ -132,4 +132,6 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0124](0124-an-agents-own-allow-all-follows-the-preset.md) | An agent's own allow-all follows the preset | accepted; amended by 0118 |
 | [0125](0125-antigravity-resumes-from-its-own-store.md) | Antigravity CLI resumes from its own store, and starts primed elsewhere | accepted |
 | [0126](0126-budgets-for-a-github-actions-runner.md) | Budgets for a GitHub Actions runner | accepted |
-| [0127](0127-the-whole-gate-on-every-pull-request.md) | The whole gate on every pull request | accepted |
+| [0127](0127-switching-threads-waits-for-nothing-else.md) | Switching threads waits for nothing else | accepted; amended by 0128 |
+| [0128](0128-a-pages-views-go-ahead-of-an-agents-capture.md) | A page's views go ahead of an agent's capture | accepted |
+| [0129](0129-the-whole-gate-on-every-pull-request.md) | The whole gate on every pull request | accepted |

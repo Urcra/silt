@@ -78,6 +78,10 @@ pub struct Repo {
 /// index's size.
 type FilterKey = (Option<std::time::SystemTime>, Option<(std::time::SystemTime, u64)>);
 
+/// What a [`Repo`] keeps of its walks of the worktree, to move to another.
+#[derive(Debug, Default)]
+pub struct Walks(Option<untracked::Cache>);
+
 /// Now, in nanoseconds since the epoch, as file modification times are.
 fn now_ns() -> i64 {
     std::time::SystemTime::now()
@@ -319,6 +323,18 @@ impl Repo {
     /// process that lists it again and again, as the daemon does.
     pub fn keep_walks(&self) {
         self.untracked.borrow_mut().get_or_insert_with(untracked::Cache::default);
+    }
+
+    /// The walks kept since [`Repo::keep_walks`], taken out, for another
+    /// `Repo` of this worktree to list it with on another thread. This one
+    /// walks it as if it kept none until they're given back.
+    pub fn take_walks(&self) -> Walks {
+        Walks(self.untracked.borrow_mut().take())
+    }
+
+    /// Walks taken from a `Repo` of this worktree, kept here from now on.
+    pub fn give_walks(&self, walks: Walks) {
+        *self.untracked.borrow_mut() = walks.0;
     }
 
     /// `worktree_files_under`, with what each file's `stat` found.

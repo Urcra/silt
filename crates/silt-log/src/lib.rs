@@ -19,7 +19,7 @@ pub use delta::{
 pub use family::{
     Applied, BaseText, ChangesRequested, Comment, Family, FileView, HistoryItem, HistorySource, LogError, MemoryFiles,
     MergeRequest, MrStatus, NewFile, ReadCovered, ReadFile, Reply, SNAPSHOT_FORMAT, SnapshotError, TakenSnapshot, ThreadState,
-    ThreadView, comments_in, doc_crdt_in, doc_text_in, file_hash, has_lineage_in, history_in, is_readable_format,
+    ThreadView, ViewKey, comments_in, doc_crdt_in, doc_text_in, file_hash, has_lineage_in, history_in, is_readable_format,
     merge_requests_in, page_documents_in, rewound_in, sheet_cells_in, sheet_count_in, snapshot_files, thread_head_in,
     turn_end_by, turn_point, turn_point_by,
 };

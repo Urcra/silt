@@ -16,11 +16,12 @@ use std::time::{Duration, Instant};
 use silt_git::Repo;
 use silt_log::{Delta, Family};
 use silt_store::Store;
-use silt_types::FamilyId;
+use silt_types::{FamilyId, ThreadId};
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
 
 use crate::core::CoreError;
+use crate::history::{WholeRead, read_whole};
 use crate::load::{self, Loaded};
 
 /// A family as held: projected, or, without a clone to read git's texts
@@ -269,7 +270,7 @@ impl Families {
         if let Some(held) = slot.held.get() {
             return Some(held);
         }
-        let Fetched { result, size } = self.load_now(*family, slot.root.clone())?;
+        let Fetched { result, size, .. } = self.load_now(*family, slot.root.clone())?;
         if let Some(size) = size {
             slot.size.store(size.min(UNSIZED - 1), Ordering::Relaxed);
         }
@@ -284,7 +285,7 @@ impl Families {
     fn load_now(&self, family: FamilyId, root: Option<PathBuf>) -> Option<Fetched<Loaded>> {
         let loader = self.loader.as_ref()?;
         match loader.load_blocking(family, root) {
-            Ok(Fetched { result: Ok(loaded), size }) => Some(Fetched { result: loaded, size }),
+            Ok(Fetched { result: Ok(loaded), size, histories }) => Some(Fetched { result: loaded, size, histories }),
             Ok(Fetched { result: Err(error), .. }) | Err(error) => {
                 warn!(%error, %family, "could not load the family");
                 None
@@ -327,6 +328,9 @@ pub(crate) struct Loader {
 struct Job {
     family: FamilyId,
     root: Option<PathBuf>,
+    /// Threads whose histories to read whole in the family loaded, so the
+    /// core needn't (ADR 0127).
+    threads: Vec<ThreadId>,
     reply: Reply,
 }
 
@@ -342,6 +346,8 @@ enum Reply {
 pub(crate) struct Fetched<T = Result<Loaded, CoreError>> {
     pub(crate) result: T,
     pub(crate) size: Option<u64>,
+    /// The histories the job asked for, read in the family loaded.
+    pub(crate) histories: Vec<WholeRead>,
 }
 
 impl Loader {
@@ -370,7 +376,13 @@ impl Loader {
                         (Ok(store), Ok(_)) => store.family_size(job.family).await.ok(),
                         _ => None,
                     };
-                    let fetched = Fetched { result: loaded, size };
+                    let histories = match &loaded {
+                        Ok(Loaded::Projected { family, .. }) => {
+                            job.threads.iter().map(|thread| read_whole(family, *thread)).collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                    let fetched = Fetched { result: loaded, size, histories };
                     match job.reply {
                         Reply::Waiting(reply) => {
                             let _ = reply.send(fetched);
@@ -389,15 +401,21 @@ impl Loader {
     fn load_blocking(&self, family: FamilyId, root: Option<PathBuf>) -> Result<Fetched, CoreError> {
         let (reply, answer) = std::sync::mpsc::sync_channel(1);
         self.jobs
-            .send(Job { family, root, reply: Reply::Waiting(reply) })
+            .send(Job { family, root, threads: Vec::new(), reply: Reply::Waiting(reply) })
             .map_err(|_| CoreError::Invalid("the loader stopped".into()))?;
         answer.recv().map_err(|_| CoreError::Invalid("the loader stopped".into()))
     }
 
-    /// Loads the family, answering when done.
-    pub(crate) fn load_later(&self, family: FamilyId, root: Option<PathBuf>) -> oneshot::Receiver<Fetched> {
+    /// Loads the family and reads the `threads`' histories in it, answering
+    /// when done.
+    pub(crate) fn load_later(
+        &self,
+        family: FamilyId,
+        root: Option<PathBuf>,
+        threads: Vec<ThreadId>,
+    ) -> oneshot::Receiver<Fetched> {
         let (reply, answer) = oneshot::channel();
-        let _ = self.jobs.send(Job { family, root, reply: Reply::Later(reply) });
+        let _ = self.jobs.send(Job { family, root, threads, reply: Reply::Later(reply) });
         answer
     }
 }
