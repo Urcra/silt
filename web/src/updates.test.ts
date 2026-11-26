@@ -7,7 +7,7 @@ const NEW = 'f00ba12f00ba12f00ba12f00ba12f00ba12f00b'
 
 function view(changes: Partial<UpdateView> = {}): UpdateView {
   return {
-    build: { version: '0.0.1', channel: 'nightly', commit: OLD, branch: 'main', dirty: false, source: '/src/silt' },
+    build: { version: '0.0.1', channel: 'dev', commit: OLD, branch: 'main', dirty: false, source: '/src/silt' },
     availability: { kind: 'up_to_date' },
     checked_ms: 0,
     checking: false,
@@ -37,6 +37,14 @@ test('main ahead shows the Update button; up to date or off shows none', () => {
   expect(pillOf(view())).toBeUndefined()
   expect(pillOf(view({ availability: { kind: 'off', reason: { kind: 'local_changes' } } }))).toBeUndefined()
   expect(pillOf(view({ availability: { kind: 'release', tag: 'v0.3.0', url: 'https://example.com' } }))?.kind).toBe('update')
+})
+
+test('a newer nightly release shows the Update button on a nightly build', () => {
+  const build = { ...view().build, channel: 'nightly' as const, source: null }
+  const nightly: Availability = { kind: 'nightly', ahead: 2, commits: [], url: 'https://example.com' }
+  expect(updateState(view({ build, availability: nightly }))).toBe('nightly')
+  expect(pillOf(view({ build, availability: nightly }))?.kind).toBe('update')
+  expect(pillOf(view({ build }))).toBeUndefined()
 })
 
 test('a finished update asks for a relaunch only when the app changed', () => {

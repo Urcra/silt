@@ -48,7 +48,7 @@ fn check_tools() -> Result<(), String> {
             .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
     };
     output("node", &["--version"]).ok_or("Node.js isn't installed")?;
-    output("pnpm", &["--version"]).ok_or("pnpm isn't installed")?;
+    output("pnpm", &["--version"]).ok_or("pnpm isn't installed or doesn't run, as `sh scripts/check-pnpm.sh` explains")?;
     let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
     let sysroot = output(&rustc, &["--print", "sysroot"]).ok_or("rustc can't be run")?;
     if !Path::new(&sysroot).join("lib/rustlib/wasm32-unknown-unknown").is_dir() {

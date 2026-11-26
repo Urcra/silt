@@ -39,7 +39,7 @@ Silt is an open-source (AGPL-3.0), self-hostable workspace for coding with agent
   - `silt-shipped`: the plugins shipped with Silt (`plugins/`), built for `wasm32-wasip2` by its build script and embedded (`SILT_SKIP_PLUGIN_BUILD=1` skips them, ADR 0104);
   - `silt-vendor`: the CDN files artifacts load through Silt, fetched and kept (ADR 0071);
   - `silt-media`: what an image or a video is, images' previews, and a blob served by range (ADR 0121);
-  - `silt-update`: which build this is (commit, clone, stable or nightly channel), whether a newer one is out, and an update's steps and state (ADR 0100);
+  - `silt-update`: which build this is (commit, clone, and its channel: stable, nightly or dev), whether a newer one is out, and an update's steps and state (ADR 0100, ADR 0129);
   - `silt-os`: what each OS does its own way (Windows' pipe and DACLs, detaching, links, WSL paths). The only crate with `unsafe`; platform code goes here rather than as `cfg`s in the others (ADR 0045).
 - **Wiring:**
   - `silt-web`: the embedded web UI; its `build.rs` builds `web/dist` when missing (`SILT_SKIP_WEB_BUILD=1` skips it);
@@ -63,7 +63,7 @@ Silt is an open-source (AGPL-3.0), self-hostable workspace for coding with agent
 - **`web/`:** React + Vite + TypeScript. It's embedded in the binary from `web/dist`, and served by the daemon at `/` and by the server at `/app/`.
 - **`docs/`:** the site's pages (`guide/`, `self-hosting.md`, `reference/`, `architecture.md`, `contributing.md`), the ADRs and the research notes.
 - **`templates/plugin/`:** a plugin to start one from, built and tested against this repository by `silt-plugin-test`'s tests.
-- **`scripts/`:** `gate.sh`, `commit.sh`, `tree-id.sh`, which names the tree the gate checked, `fetch-traces.sh`, `selfhost-walkthrough.sh`, which checks self-hosting.md on fresh containers, `wsl-handoff.sh`, which hands threads between Windows and a WSL distribution, `install-windows.sh`, which `just install-wsl` runs to build and install the Windows side from WSL, `cloud-setup.sh`, which installs the gate's tools in a Claude Code cloud container, `local-model-probe.sh`, which reports on a machine's GPU, llama.cpp's builds and Claude Code on a local model, for whoever wants to check theirs (ADR 0092), and `build-sandbox-tools.sh`, which builds the static bubblewrap and pasta that go beside `silt` in release archives, once there are releases.
+- **`scripts/`:** `gate.sh`, `fetch-traces.sh`, `selfhost-walkthrough.sh`, which checks self-hosting.md on fresh containers, `wsl-handoff.sh`, which hands threads between Windows and a WSL distribution, `install-windows.sh`, which `just install-wsl` runs to build and install the Windows side from WSL, `cloud-setup.sh`, which installs the gate's tools in a Claude Code cloud container, `local-model-probe.sh`, which reports on a machine's GPU, llama.cpp's builds and Claude Code on a local model, for whoever wants to check theirs (ADR 0092), and `build-sandbox-tools.sh`, which builds the static bubblewrap and pasta that go beside `silt` in release archives, once there are releases.
 
 ## Generated files
 Each one fails a test while it's out of date. Never edit them by hand.
@@ -97,10 +97,10 @@ Each one fails a test while it's out of date. Never edit them by hand.
 - **The protocol version.** A change to the wire format bumps `silt_proto::PROTOCOL`, and CHANGELOG says to update every machine and the server together.
 - **Capture without a daemon.** Capture must stay correct with no daemon running. Put capture logic in the shared step, never only in the daemon's path (ADR 0018).
 - **Peer content is untrusted.** Deltas come from possibly hostile peers. Writes to disk go through `silt_checkout::is_writable`, and ids are checked before they become file names or arguments (ADR 0016).
-- **`scripts/commit.sh` commits everything** (`git add -A`), and only a tree the gate passed on: it refuses one edited while the gate ran. A full `scripts/gate.sh` that passes records its tree in `target/gate-passed`, so committing right after it doesn't run the gate again. `scripts/gate.sh --quick` is for iterating and records nothing.
+- **The gate runs on the pull request** (ADR 0130, ADR 0131): CI runs the whole gate on every push, and `/claude merge` merges once it passed. Running `scripts/gate.sh` locally is optional; `scripts/gate.sh --quick` takes a few minutes and catches most of what CI would.
 - **Screen references** are compared against the perf build, as the gate runs them: take them with `pnpm -C web e2e:update` and `SILT` set to the perf binary's absolute path, since the debug build renders some screens differently.
 - **A fresh worktree's first gate is slow:** it builds the `perf` profile and wasm too.
-- **In a Claude Code cloud session,** check the setup ran before the first gate: `cargo nextest --version`, `bwrap --version`, and `debug = "line-tables-only"` in `~/.cargo/config.toml`. If not, run `sh silt/scripts/cloud-setup.sh` from the folder above the checkout. Run the gate in the background with its output in a file; it takes 20 to 30 minutes. Out of disk, delete `target/debug` and `target/perf`. docs/contributing.md has the rest.
+- **In a Claude Code cloud session,** check the setup ran before running the gate there: `cargo nextest --version`, `bwrap --version`, and `debug = "line-tables-only"` in `~/.cargo/config.toml`. If not, run `sh silt/scripts/cloud-setup.sh` from the folder above the checkout. Run the gate in the background with its output in a file; it takes 20 to 30 minutes. Out of disk, delete `target/debug` and `target/perf`. docs/contributing.md has the rest.
 - **Tests that start daemons** use a temporary `SILT_HOME`. Never point one at `~/.local/share/silt`.
 - **The docs site** fails when a page under `docs/guide/` isn't in `PAGES` (`crates/silt-site/src/lib.rs`) or isn't linked from the guide. It also fails when a doc names a `silt` command the reference lacks.
 - **The desktop app is its own workspace.** `cargo build --workspace` skips it; run `cargo` in `crates/silt-desktop`. The gate checks it only when `webkit2gtk-4.1` is installed. So is `crates/silt-voice`, which the gate checks on Linux.
@@ -115,14 +115,13 @@ Each one fails a test while it's out of date. Never edit them by hand.
    - They describe the change itself and never mention milestone or task ids (M1, M1-07, …).
    - Push after every commit.
    - Pull requests follow `.github/pull_request_template.md`. A UI change needs screenshots of each new or changed screen in its description, uploaded to the PR rather than committed.
-   - Commit with `scripts/commit.sh "<message>"`. It runs the gate first, unless it already passed on this tree, and refuses to commit if the gate fails.
-   - A commit that changes only Markdown skips the gate; `commit.sh` sees that itself. The generated `docs/reference/cli.md` still goes through it.
+   - Commit with git. No local gate is required before committing or pushing: CI runs the whole gate on the pull request.
 3. **UI work starts with mockups:** before writing code for a feature that touches the UI, make artifact mockups of the finished feature, and share them so it can be seen and agreed on first.
    - Make one for each new or changed screen and state: empty, loading, error and full.
    - Build them from Silt as it actually looks, not from the Silt or Nous design system alone. Take the app's real CSS (`web/src/nous.css`, `web/src/index.css`) and the markup its components render. Check against the running app (`target/debug/silt` on a `web/e2e/*fixture.sh` fixture).
    - Put the new parts in the real screen around them: sidebar, breadcrumbs, panels and realistic data. The mockup should show exactly how the feature will look in the app.
    - Show light and dark, and phone width where the screen works there.
-4. **Finishing a task:** a task is done only after the gate passes (`scripts/gate.sh`, or build + clippy -D warnings + tests). Then:
+4. **Finishing a task:** a task is done only after its pull request's gate passes (CI, and `/claude merge`, which merges only then). Then:
    - its pull request closes the issue (`Fixes #<n>`);
    - update `CHANGELOG.md` when behaviour changed.
 5. **New work:** open an issue for newly discovered work, with the labels and milestone it fits; don't do it silently. Label what's blocked `blocked`, saying what unblocks it.

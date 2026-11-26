@@ -1,6 +1,7 @@
 //! Which build this is, whether a newer one is out, and the update that
-//! installs it (ADR 0100): a nightly build pulls its clone's `main` and runs
-//! `just update` there; a stable one learns of newer releases.
+//! installs it (ADR 0100, ADR 0129): a dev build pulls its clone's `main` and
+//! runs `just update` there; a nightly one learns of newer nightlies, and a
+//! stable one of newer releases.
 
 pub mod check;
 pub mod info;

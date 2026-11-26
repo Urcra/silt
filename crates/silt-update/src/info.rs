@@ -1,22 +1,24 @@
 //! Which build this is: its channel, commit and the clone it was built
-//! from, as the build script found them (ADR 0100).
+//! from, as the build script found them (ADR 0100, ADR 0129).
 
 use std::fmt;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-/// `silt --version`'s answer: `0.0.1 (nightly a1b2c3d)`.
+/// `silt --version`'s answer: `0.0.1 (dev a1b2c3d)`.
 pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("SILT_BUILD_LABEL"), ")");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum Channel {
-    /// A release, installed from its binaries.
+    /// A tagged release, installed from its binaries.
     Stable,
-    /// A build of a clone, updated by pulling and building it again.
+    /// The `nightly` release, built from `main` each night.
     Nightly,
+    /// A build of a clone, updated by pulling and building it again.
+    Dev,
 }
 
 impl Channel {
@@ -24,6 +26,7 @@ impl Channel {
         match text.trim() {
             "stable" => Some(Self::Stable),
             "nightly" => Some(Self::Nightly),
+            "dev" => Some(Self::Dev),
             _ => None,
         }
     }
@@ -76,7 +79,7 @@ impl fmt::Display for Commit {
     }
 }
 
-/// Where a nightly build's clone is: on this machine, or, for a Windows
+/// Where a dev build's clone is: on this machine, or, for a Windows
 /// build made by install-windows.sh, in a WSL distribution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
@@ -120,6 +123,7 @@ pub struct BuildInfo {
     pub branch: Option<String>,
     /// Tracked files had changes when it was built.
     pub dirty: bool,
+    /// The clone a dev build came from; other channels have none.
     pub source: Option<Source>,
     /// A debug build, from `cargo build` or a test, that nothing pointed at
     /// a clone: updating `cargo install`'s copy from it would be a surprise.
@@ -143,8 +147,9 @@ impl BuildInfo {
         };
         let debug = cfg!(debug_assertions);
         let given = |name: &str| if debug { std::env::var(name).ok().filter(|value| !value.is_empty()) } else { None };
-        // Pointed at another clone, it's another build: nothing baked in holds.
-        let pointed = given("SILT_BUILD_SOURCE").is_some();
+        // Pointed at another clone or channel, it's another build: nothing
+        // baked in holds.
+        let pointed = given("SILT_BUILD_SOURCE").is_some() || given("SILT_BUILD_CHANNEL").is_some();
         let mut info = if pointed { Self::from_vars(given) } else { Self::from_vars(baked) };
         info.debug = debug && !pointed;
         info
@@ -154,14 +159,16 @@ impl BuildInfo {
     pub fn from_vars(var: impl Fn(&str) -> Option<String>) -> Self {
         let commit = var("SILT_BUILD_COMMIT").and_then(|commit| Commit::parse(&commit));
         let source = var("SILT_BUILD_SOURCE").and_then(|source| Source::parse(&source));
-        let fallback = if commit.is_some() && source.is_some() { Channel::Nightly } else { Channel::Stable };
+        let fallback = if commit.is_some() && source.is_some() { Channel::Dev } else { Channel::Stable };
+        let channel = var("SILT_BUILD_CHANNEL").and_then(|channel| Channel::parse(&channel)).unwrap_or(fallback);
         Self {
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            channel: var("SILT_BUILD_CHANNEL").and_then(|channel| Channel::parse(&channel)).unwrap_or(fallback),
+            channel,
             commit,
             branch: var("SILT_BUILD_BRANCH").filter(|branch| !branch.trim().is_empty()),
             dirty: var("SILT_BUILD_DIRTY").is_some_and(|dirty| matches!(dirty.trim(), "1" | "true" | "yes")),
-            source,
+            // A release is built in CI's checkout, which no one updates.
+            source: source.filter(|_| channel == Channel::Dev),
             debug: false,
         }
     }
@@ -200,17 +207,25 @@ mod tests {
     }
 
     #[test]
-    fn a_build_of_a_clone_is_nightly_and_one_without_is_stable() {
-        let nightly = BuildInfo::from_vars(vars(&[("SILT_BUILD_COMMIT", "a1b2c3d4e5f6"), ("SILT_BUILD_SOURCE", "/src/silt")]));
-        assert_eq!(nightly.channel, Channel::Nightly);
-        assert_eq!(nightly.source, Some(Source::Local("/src/silt".into())));
+    fn a_build_of_a_clone_is_dev_and_one_without_is_stable() {
+        let dev = BuildInfo::from_vars(vars(&[("SILT_BUILD_COMMIT", "a1b2c3d4e5f6"), ("SILT_BUILD_SOURCE", "/src/silt")]));
+        assert_eq!(dev.channel, Channel::Dev);
+        assert_eq!(dev.source, Some(Source::Local("/src/silt".into())));
         assert_eq!(BuildInfo::from_vars(vars(&[])).channel, Channel::Stable);
-        let named = BuildInfo::from_vars(vars(&[
-            ("SILT_BUILD_COMMIT", "a1b2c3d4e5f6"),
-            ("SILT_BUILD_SOURCE", "/src/silt"),
-            ("SILT_BUILD_CHANNEL", "stable"),
-        ]));
-        assert_eq!(named.channel, Channel::Stable);
+    }
+
+    #[test]
+    fn a_release_names_its_channel_and_keeps_no_clone() {
+        for (name, channel) in [("stable", Channel::Stable), ("nightly", Channel::Nightly)] {
+            let built = BuildInfo::from_vars(vars(&[
+                ("SILT_BUILD_COMMIT", "a1b2c3d4e5f6"),
+                ("SILT_BUILD_SOURCE", "/home/runner/work/silt/silt"),
+                ("SILT_BUILD_CHANNEL", name),
+            ]));
+            assert_eq!(built.channel, channel);
+            assert_eq!(built.source, None, "{name}: CI's checkout isn't a clone to update");
+            assert!(built.commit.is_some());
+        }
     }
 
     #[test]
