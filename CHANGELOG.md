@@ -15,6 +15,7 @@ Protocol version 24.
 - **Agents from the web UI** over ACP, agents asking other agents, artifacts, themes, workspaces with their own rules, Silt's sandbox on Linux, plugins, and local models.
 
 ### Added
+- The desktop app lists every connected machine's threads in one sidebar, with **All machines** in the machine menu: threads on a machine over SSH or in WSL show beside this computer's, marked with their machine, without switching to see what moved. Opening one switches there, pin, snooze and settle reach it from here, New thread asks which machine to start on, and each machine's row says what runs and waits there. Settings › Machines picks how threads are marked, a chip by default, and each machine's colour.
 - Nightly releases: `main` is built each night for Linux, macOS and Windows, as `silt` archives and the desktop app's packages, into the rolling [nightly release](https://github.com/Urcra/silt/releases/tag/nightly). Nothing in it is signed yet.
 - Three channels: stable, nightly and dev. A build of your own clone is now a dev build, and `silt --version` says `dev` where it said `nightly`. A nightly build says when a newer nightly is out and links to it; a dev build updates its clone as before. The desktop window's title names the channel, as `Silt (dev)`, and plain `Silt` on stable.
 

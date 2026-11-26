@@ -21,7 +21,7 @@ With a server, a thread from another device is already listed (`On homelab · 2d
 - Each machine's row in the menu says how it stands: `over SSH · 1 needs you · 3 running`.
 - How the machines stand is said in the sidebar's foot, not in the list: `Getting nuc's threads…` above the machine while they load, as `Opening it on nuc…` is, and `2 connected · lost nuc` when one drops. A dropped machine's threads leave the list, and the app reconnects as it does now. With only This computer connected, the list is its own and the foot says `1 connected`.
 
-**The desktop app gathers the listings.** It holds each connected backend's address and token already. It follows each one's `/api/threads`, and its `/api/events` for the `threads` topic, over the tunnel. It hands every page the result:
+**The desktop app gathers the listings.** It holds each connected backend's address and token already. While All machines is picked, it asks each one it doesn't show for `/api/threads` every 3 seconds, over the tunnel, and sooner after a change it passed on. It hands every page the result:
 - `window.__siltThreads`, with a `silt-threads` event when it changes: per backend, its id, `loading`, `ready` or `lost`, and its `ThreadSummary` list as that daemon gave it.
 - Another machine may run another build. The page reads a summary's fields it knows and ignores the rest, and a missing field reads as absent.
 - Every machine's page gets them, This computer's, a distribution's and an SSH machine's alike: they are all the person's. A page still can't make the app connect anywhere new.
@@ -36,7 +36,7 @@ With a server, a thread from another device is already listed (`On homelab · 2d
 - the machine's initial on its colour;
 - nothing.
 
-Only another machine's threads are marked, unless **Mark This computer's threads too** is on. Each machine has a colour, from six that read on light and dark and stay apart from amber, rust and olive, which mark a thread's state. They are assigned in the order machines are added, and can be changed on the machine's row. The app keeps the colours in `machines.json`, and the list choice, the marking and the toggle beside it, so they hold on every machine's page. Each page gets them in `window.__siltBackends` and `window.__siltDesktop`, and changes them with a `silt://machines/` link carrying the app's key, as it edits machines.
+Only another machine's threads are marked, unless **Mark the shown machine's threads too** is on. Each machine has a colour, from six that read on light and dark and stay apart from amber, rust and olive, which mark a thread's state. They are assigned in the order machines are added, and can be changed on the machine's row. The app keeps the colours, the list choice, the marking and the toggle beside it in `view.json` in its data dir, so they hold on every machine's page. Each page gets them in `window.__siltBackends` and `window.__siltDesktop.view`, and changes them with a `silt://view/` link carrying the app's key, as it edits machines.
 
 **An agent run from a terminal reads as working.** Capture already records a terminal session's turn (`idle`, from `UserPromptSubmit` and `Stop`), which ADR 0090's peers read.
 - A thread whose terminal session is mid-turn reads as working in its own machine's listing, so All machines shows it too.
@@ -52,6 +52,7 @@ Only another machine's threads are marked, unless **Mark This computer's threads
 - A terminal agent's permission prompts are answered in its terminal, so they show as `Waiting on you` only once a hook reports them.
 
 ## Alternatives considered
+- **Following each daemon's `/api/events`.** It would tell the page sooner, but needs a WebSocket client in the app, which only speaks plain HTTP to daemons. A listing every 3 seconds is small next to what the page itself asks.
 - **The page asks the other daemons itself.** It would need each daemon's token, and each daemon would have to accept another origin. The app already holds both and stays the only thing that reaches other machines.
 - **The daemon on This computer gathers them.** It knows no other machine; the app owns the tunnels. And it would make This computer's page special, when any machine's should do.
 - **A section per machine.** It splits a project worked on from two machines, and the list stops being one order of what moved last.
