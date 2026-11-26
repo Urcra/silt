@@ -49,7 +49,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0041](0041-the-desktop-app.md) | The desktop app | accepted; amended by 0045, 0108 |
 | [0042](0042-git-and-forge-interop.md) | Git notes, the forge bridge and the Agent SDK session store | accepted |
 | [0043](0043-history-from-day-one.md) | Your history from day one: release binaries, importing old sessions, sending them | accepted |
-| [0044](0044-the-standard-agent-workspace.md) | The standard agent workspace: open on the composer, one shell for every screen | accepted; amended by 0054, 0048, 0049, 0053, 0059, 0062, 0067, 0114, 0115 |
+| [0044](0044-the-standard-agent-workspace.md) | The standard agent workspace: open on the composer, one shell for every screen | accepted; amended by 0054, 0048, 0049, 0053, 0059, 0062, 0067, 0114, 0115, 0132 |
 | [0045](0045-windows-natively-and-in-wsl.md) | Windows, natively and in WSL | accepted; amended by 0119, 0046, 0064, 0108, 0115 |
 | [0046](0046-no-server-needed-on-one-computer.md) | No server needed on one computer | accepted |
 | [0047](0047-your-clone-between-agents.md) | Your clone between agents | accepted; amended by 0089 |
@@ -98,7 +98,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0090](0090-agents-aware-of-each-other.md) | Agents in one project know about each other | accepted |
 | [0091](0091-a-faster-gate-and-a-pass-that-stands.md) | A faster gate, and a pass that stands | accepted; amended by 0131 |
 | [0092](0092-local-models.md) | Local models, run by Silt, and workspaces that stay on the machine | accepted |
-| [0093](0093-silt-sandboxes-the-agents-it-starts.md) | Silt sandboxes the agents it starts, and production is reached through plugins | accepted; amended by 0094, 0102, 0103, 0104, 0106 |
+| [0093](0093-silt-sandboxes-the-agents-it-starts.md) | Silt sandboxes the agents it starts, and production is reached through plugins | accepted; amended by 0094, 0102, 0103, 0104, 0106, 0132 |
 | [0094](0094-silt-s-sandbox-is-its-own-rule.md) | Silt's sandbox is a workspace rule of its own | accepted |
 | [0095](0095-an-agent-s-plan-usage-in-the-composer.md) | An agent's plan usage in the composer | accepted |
 | [0096](0096-design-systems-made-in-a-thread-or-a-chat.md) | Design systems made in a thread's own words, or in a chat | accepted |
@@ -119,7 +119,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0111](0111-steering-without-stopping.md) | Steering without stopping | accepted |
 | [0112](0112-phones-on-the-local-network.md) | Phones on the local network | accepted; amended by 0113 |
 | [0113](0113-pairing-a-phone-without-its-certificate.md) | Pairing a phone without its certificate | accepted |
-| [0114](0114-one-set-of-permissions-and-agents-by-their-marks.md) | One set of permissions, and agents shown by their marks | accepted; amended by 0118 |
+| [0114](0114-one-set-of-permissions-and-agents-by-their-marks.md) | One set of permissions, and agents shown by their marks | accepted; amended by 0118, 0132 |
 | [0115](0115-the-sidebar-names-the-workspace-and-the-machine.md) | The sidebar names the workspace at its top and the machine at its bottom | accepted |
 | [0116](0116-memory-that-follows-the-work.md) | Memory that follows the work | accepted |
 | [0117](0117-conversations-open-at-their-end.md) | Conversations open at their end | accepted; amended by 0127 |
@@ -137,3 +137,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0129](0129-nightly-releases-and-three-channels.md) | Nightly releases, and three channels: stable, nightly and dev | accepted |
 | [0130](0130-the-whole-gate-on-every-pull-request.md) | The whole gate on every pull request | accepted |
 | [0131](0131-the-gate-runs-on-the-pull-request.md) | The gate runs on the pull request | accepted |
+| [0132](0132-a-threads-header-holds-its-title-and-actions.md) | A thread's header holds its title and actions, and its menu is a right-click | accepted |

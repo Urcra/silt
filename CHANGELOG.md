@@ -18,6 +18,11 @@ Protocol version 24.
 - Nightly releases: `main` is built each night for Linux, macOS and Windows, as `silt` archives and the desktop app's packages, into the rolling [nightly release](https://github.com/Urcra/silt/releases/tag/nightly). Nothing in it is signed yet.
 - Three channels: stable, nightly and dev. A build of your own clone is now a dev build, and `silt --version` says `dev` where it said `nightly`. A nightly build says when a newer nightly is out and links to it; a dev build updates its clone as before. The desktop window's title names the channel, as `Silt (dev)`, and plain `Silt` on stable.
 
+### Changed
+- A thread's header is one line: its title, a pill when the agent waits on you or stopped with an error, then Fork, Share and the panel's toggle. The meta line, This machine only, the sandbox shield and the More menu are gone, as is the bar over the composer and its Create PR on the forge (ADR 0132).
+- Right-click a thread in the sidebar or on All threads for its menu: pin, snooze and settle, Copy thread ID for `silt resume` and `silt fork`, Fork, History graph, Join live, and for a chat or a Local only thread, moving it to a project or erasing it.
+- How the transcript groups the agent's work and how much each step shows are set in Settings › Text and layout, and from the palette. A thread's Access tab says what the workspace gives the next run, as the shield did; Expand the review is in the Changes panel's header.
+
 ### Fixed
 - `just install` and `just update` no longer fail where corepack's default pnpm isn't the one the web UI names: corepack looked for it at the repository's root, found none, and ran its own default, which then refused the web UI.
 - An agent writing many files, as an asset import does, no longer holds up the web UI: recording each new file listed every path of its thread, so 500 files in a large checkout took 20 s, now about 1 s, and pages are answered between files and while a checkout is listed, waiting at most for one file. A long thread opens for the first time in about half the time.
