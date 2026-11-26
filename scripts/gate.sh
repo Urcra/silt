@@ -1,18 +1,16 @@
 #!/bin/sh
 # Decides whether a change is done (docs/contributing.md). The cheap checks
 # come first, so most mistakes fail in a minute rather than after the tests.
-# A pass records the tree it checked in target/gate-passed, which lets
-# scripts/commit.sh commit that tree without running the gate again.
+# It runs on every pull request before a merge (.github/workflows/claude.yml);
+# running it locally is optional (ADR 0131).
 #
 # Usage: scripts/gate.sh [--quick | --part checks|tests|perf]
-#   --quick  formatting, lints and the workspace's tests only: for iterating,
-#            as it records no pass.
+#   --quick  formatting, lints and the workspace's tests only: for iterating.
 #   --part   one third of the gate, for running the thirds on separate
 #            machines at once (.github/workflows/claude.yml): checks is
 #            formatting, licences, lints, clippy and the wasm, web, desktop
 #            and speech checks; tests is the build and the tests; perf is the
-#            perf build, the budgets and the end-to-end tests. A part records
-#            no pass.
+#            perf build, the budgets and the end-to-end tests.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -39,12 +37,9 @@ in_part() {
 }
 
 started=$(date +%s)
-tree=$(scripts/tree-id.sh)
-$quick || [ -n "$part" ] || rm -f target/gate-passed
 
-# Each step is named on stdout, and on fd 3 when the caller opened it, as
-# scripts/commit.sh does to show progress while it keeps the rest for its
-# log. The summary at the end says where the time went.
+# Each step is named on stdout. The summary at the end says where the time
+# went.
 summary=
 current=
 since=$started
@@ -62,11 +57,7 @@ step() {
     done_step
     current=$1
     since=$(date +%s)
-    line="gate: [$(elapsed "$started")] $1"
-    echo "$line"
-    if { true >&3; } 2>/dev/null; then
-        echo "$line" >&3
-    fi
+    echo "gate: [$(elapsed "$started")] $1"
 }
 skip() {
     echo "gate: skipping $1" >&2
@@ -77,11 +68,7 @@ skip() {
 # out fails a step ten minutes in, with an error that doesn't say why.
 free_gb=$(df -Pk . | awk 'NR == 2 {print int($4 / 1048576)}')
 if [ "${free_gb:-10}" -lt 10 ]; then
-    low="gate: only $free_gb GB of disk free, which a full gate may run out of; deleting target/debug/incremental and target/perf, which rebuild, frees the most"
-    echo "$low" >&2
-    if { true >&3; } 2>/dev/null; then
-        echo "$low" >&3
-    fi
+    echo "gate: only $free_gb GB of disk free, which a full gate may run out of; deleting target/debug/incremental and target/perf, which rebuild, frees the most" >&2
 fi
 
 has_web=false
@@ -89,6 +76,7 @@ has_web=false
 
 if $has_web; then
     step "web dependencies"
+    sh scripts/check-pnpm.sh
     # Corepack reads the root's, which `pnpm -C web` starts from; pnpm reads web's.
     node -e 'const [r, w] = ["./package.json", "./web/package.json"].map((p) => require(p).packageManager);
         if (r !== w) { console.error(`package.json names ${r} but web/package.json ${w}; make them the same`); process.exit(1); }'
@@ -228,8 +216,7 @@ fi
 # Performance budgets (ADR 0034), timed on an optimized build. Their limits
 # are set for the machines Silt is developed on, with looser ones for a
 # cloud session's (ADR 0037) and a GitHub Actions runner's (ADR 0126). Any
-# other slower machine reports them with SILT_BENCH_ENFORCE=0, and that pass
-# isn't recorded for scripts/commit.sh.
+# other slower machine reports them with SILT_BENCH_ENFORCE=0.
 enforce_budgets=true
 [ "${SILT_BENCH_ENFORCE:-1}" = 0 ] && enforce_budgets=false
 if in_part perf; then
@@ -258,18 +245,10 @@ fi
 
 done_step
 printf '%s' "$summary"
-# Only a tree that stayed as it was while the whole gate ran, with its
-# budgets held, has passed.
 if [ -n "$part" ]; then
-    echo "gate: the $part part passed in $(elapsed "$started"); a part isn't recorded"
+    echo "gate: the $part part passed in $(elapsed "$started")"
 elif ! $enforce_budgets; then
-    echo "gate: passed in $(elapsed "$started") with the budgets only reported, so this pass isn't recorded"
-elif [ "$(scripts/tree-id.sh)" = "$tree" ]; then
-    echo "$tree" >target/gate-passed
-    echo "gate: passed in $(elapsed "$started")"
+    echo "gate: passed in $(elapsed "$started") with the budgets only reported"
 else
-    echo "gate: passed in $(elapsed "$started"), but the tree changed while it ran, so this pass isn't recorded" >&2
-fi
-if { true >&3; } 2>/dev/null; then
-    echo "gate: passed in $(elapsed "$started")" >&3
+    echo "gate: passed in $(elapsed "$started")"
 fi

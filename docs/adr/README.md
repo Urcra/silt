@@ -57,7 +57,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0049](0049-the-agents-work-grouped-by-turn-or-by-run.md) | The agent's work, grouped by turn or by run | accepted; amended by 0051, 0107 |
 | [0050](0050-acp-v2-and-turns-the-agent-opens.md) | ACP v2 where the agent speaks it, and turns the agent opens itself | accepted |
 | [0051](0051-subagents-and-background-tasks.md) | Subagents and background tasks | accepted; amended by 0057 |
-| [0052](0052-commits-tolerate-a-slower-machine.md) | Commits tolerate a slower machine, and say so | accepted; amended by 0091 |
+| [0052](0052-commits-tolerate-a-slower-machine.md) | Commits tolerate a slower machine, and say so | accepted; amended by 0091, 0131 |
 | [0053](0053-projects-without-a-remote.md) | Projects without a remote | accepted; amended by 0059 |
 | [0054](0054-the-desktop-ui-review.md) | The desktop UI review | accepted; amended by 0058 |
 | [0055](0055-reviewing-a-threads-changes.md) | Reviewing a thread's changes | accepted; amended by 0066, 0077, 0068 |
@@ -96,7 +96,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0088](0088-design-systems-in-settings.md) | Design systems in Settings, made by an agent | accepted; amended by 0096 |
 | [0089](0089-a-checkout-per-thread-in-a-shared-clone.md) | A checkout per thread in a shared clone | accepted |
 | [0090](0090-agents-aware-of-each-other.md) | Agents in one project know about each other | accepted |
-| [0091](0091-a-faster-gate-and-a-pass-that-stands.md) | A faster gate, and a pass that stands | accepted |
+| [0091](0091-a-faster-gate-and-a-pass-that-stands.md) | A faster gate, and a pass that stands | accepted; amended by 0131 |
 | [0092](0092-local-models.md) | Local models, run by Silt, and workspaces that stay on the machine | accepted |
 | [0093](0093-silt-sandboxes-the-agents-it-starts.md) | Silt sandboxes the agents it starts, and production is reached through plugins | accepted; amended by 0094, 0102, 0103, 0104, 0106 |
 | [0094](0094-silt-s-sandbox-is-its-own-rule.md) | Silt's sandbox is a workspace rule of its own | accepted |
@@ -136,3 +136,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0128](0128-a-pages-views-go-ahead-of-an-agents-capture.md) | A page's views go ahead of an agent's capture | accepted |
 | [0129](0129-nightly-releases-and-three-channels.md) | Nightly releases, and three channels: stable, nightly and dev | accepted |
 | [0130](0130-the-whole-gate-on-every-pull-request.md) | The whole gate on every pull request | accepted |
+| [0131](0131-the-gate-runs-on-the-pull-request.md) | The gate runs on the pull request | accepted |

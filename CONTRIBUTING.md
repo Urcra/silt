@@ -8,11 +8,11 @@ The short version:
 ```sh
 pnpm -C web install && pnpm -C web build   # the web UI is embedded in the binary
 cargo build --workspace
-scripts/gate.sh                            # what every change must pass; SILT_BENCH_ENFORCE=0 on a slower machine
+scripts/gate.sh --quick                    # optional: lints and tests; CI runs the whole gate on the PR
 git commit -s -m "feat(scope): what changed"   # Conventional Commits, signed off
 ```
 
-Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md). Open a pull request against `main`. CI runs formatting, lints, the licence check and the tests on it; the full gate, with the end-to-end tests and the performance budgets, runs before a merge. Say in the PR what you ran and what you couldn't. For a change to the UI, put screenshots of each changed screen in the PR's description. For a bigger change, open an issue first to agree on the approach.
+Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md). Open a pull request against `main`. CI runs the whole gate on it: formatting, lints, the licence check, the tests, the end-to-end tests and the performance budgets. Say in the PR what you ran and what you couldn't. For a change to the UI, put screenshots of each changed screen in the PR's description. For a bigger change, open an issue first to agree on the approach.
 
 Never copy code or assets from closed-source products; open-source code may be used under its licence, credited in [NOTICE](NOTICE).
 
