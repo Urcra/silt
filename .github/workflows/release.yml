@@ -1,37 +1,84 @@
-# Builds `silt` from a tag and publishes it, with checksums, on the tag's
-# release: static binaries for Linux (ADR 0043). Unused until every platform
-# can be built. Windows isn't built here (ADR 0119).
+# Builds Silt for every platform and publishes it (ADR 0043, ADR 0129):
+# - a `v*` tag is a stable release, which needs every asset;
+# - each night, and when run by hand, `main` is built into the rolling
+#   `nightly` prerelease, which needs Linux's assets and leaves out a macOS or
+#   Windows one that failed, saying so in its notes. A night `main` didn't
+#   move is skipped.
+# Nothing is signed yet.
 name: release
 
 on:
   push:
     tags: ["v*"]
+  schedule:
+    - cron: "37 2 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# A release is the stable channel: it learns of newer releases rather than
-# following `main` (ADR 0100).
-env:
-  SILT_BUILD_CHANNEL: stable
+concurrency:
+  group: release-${{ github.event_name == 'push' && github.ref || 'nightly' }}
+  cancel-in-progress: false
 
 jobs:
-  # The web UI is embedded in each binary and is the same for all of them,
-  # so it's built once.
-  web:
+  # What this run builds: its channel, the release it publishes to and the
+  # commit, or that tonight's nightly would be last night's.
+  meta:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      channel: ${{ steps.what.outputs.channel }}
+      tag: ${{ steps.what.outputs.tag }}
+      sha: ${{ steps.what.outputs.sha }}
+      skip: ${{ steps.what.outputs.skip }}
     steps:
-      - uses: actions/checkout@v4
+      - name: What to build
+        id: what
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          skip=false
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            channel=stable tag=$GITHUB_REF_NAME
+          else
+            if [ "$GITHUB_REF" != refs/heads/main ]; then
+              echo "::error::the nightly is built from main, not $GITHUB_REF"
+              exit 1
+            fi
+            channel=nightly tag=nightly
+            last=$(gh api "repos/$GITHUB_REPOSITORY/commits/nightly" --jq .sha 2>/dev/null || true)
+            if [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$last" = "$GITHUB_SHA" ]; then
+              echo "The nightly is already at $GITHUB_SHA."
+              skip=true
+            fi
+          fi
+          {
+            echo "channel=$channel"
+            echo "tag=$tag"
+            echo "sha=$GITHUB_SHA"
+            echo "skip=$skip"
+          } | tee -a "$GITHUB_OUTPUT"
 
-      - name: Toolchain
+  # What every build embeds or carries, made once: the web UI, and the Rust
+  # crates' licence notices for each target.
+  common:
+    needs: meta
+    if: needs.meta.outputs.skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.meta.outputs.sha }}
+      - name: Rust
         run: rustup show
-
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
-          version: 10.28.0
-      - uses: actions/setup-node@v4
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
@@ -40,81 +87,298 @@ jobs:
           pnpm -C web install --frozen-lockfile
           pnpm -C web build
 
-      - uses: actions/upload-artifact@v4
+      - name: Notices
+        run: |
+          cargo install --locked cargo-about --features cli --version 0.9.3
+          mkdir notices
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc; do
+            cargo about generate --locked --target "$target" -m crates/silt-cli/Cargo.toml about.hbs -o "notices/THIRD-PARTY-NOTICES-rust-$target.txt"
+          done
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-dist
           path: web/dist/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notices
+          path: notices/
 
-  build:
-    needs: web
+  # `silt` for each target, archived with its notices: static on Linux, with
+  # the sandbox's bubblewrap and pasta beside it (ADR 0093).
+  cli:
+    needs: [meta, common]
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-24.04
+            runs: true
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
+            runs: true
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            runs: true
+          - target: x86_64-apple-darwin
+            runner: macos-15
+            runs: false
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+            runs: true
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      SILT_BUILD_CHANNEL: ${{ needs.meta.outputs.channel }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.meta.outputs.sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: web-dist
           path: web/dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: notices
+          path: notices
 
       - name: Tools
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q musl-tools meson ninja-build libcap-dev
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q musl-tools meson ninja-build libcap-dev
+          fi
           rustup show
           rustup target add ${{ matrix.target }}
-          cargo install --locked cargo-about --features cli --version 0.9.3
 
-      - name: silt
+      - name: silt (Linux)
+        if: runner.os == 'Linux'
         env:
           CC: musl-gcc
           RUSTFLAGS: -C target-feature=+crt-static
         run: cargo build --locked --release -p silt-cli --target ${{ matrix.target }}
 
+      - name: silt (macOS)
+        if: runner.os == 'macOS'
+        run: cargo build --locked --release -p silt-cli --target ${{ matrix.target }}
+
+      - name: silt (Windows)
+        if: runner.os == 'Windows'
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --locked --release -p silt-cli --target ${{ matrix.target }}
+
       - name: Archive
         run: |
-          bin=target/${{ matrix.target }}/release/silt
-          strip "$bin"
-          file "$bin" | grep -Eq 'static-pie linked|statically linked'
-          "$bin" --version
-          # Silt's sandbox needs bubblewrap and pasta, shipped beside it (ADR 0093).
-          mkdir dist package
-          cp "$bin" package/silt
-          scripts/build-sandbox-tools.sh package
+          target=${{ matrix.target }}
+          exe=silt
+          [ "$RUNNER_OS" = Windows ] && exe=silt.exe
+          bin=target/$target/release/$exe
+          if [ "$RUNNER_OS" != Windows ]; then strip "$bin"; fi
+          if [ "$RUNNER_OS" = Linux ]; then file "$bin" | grep -Eq 'static-pie linked|statically linked'; fi
+          if [ "${{ matrix.runs }}" = true ]; then "$bin" --version; fi
+          mkdir dist package sidecar
+          cp "$bin" "package/$exe"
+          cp "$bin" "sidecar/$exe"
+          # Silt's sandbox needs bubblewrap and pasta, shipped beside it on Linux.
+          if [ "$RUNNER_OS" = Linux ]; then scripts/build-sandbox-tools.sh package; fi
           # Silt's licence and notices, and those of everything built into it.
           cp LICENSE NOTICE package/
           cp web/dist/THIRD-PARTY-NOTICES.txt package/THIRD-PARTY-NOTICES-web.txt
-          cargo about generate --locked --target ${{ matrix.target }} -m crates/silt-cli/Cargo.toml about.hbs -o package/THIRD-PARTY-NOTICES-rust.txt
-          tar -czf dist/silt-${{ matrix.target }}.tar.gz -C package .
+          cp "notices/THIRD-PARTY-NOTICES-rust-$target.txt" package/THIRD-PARTY-NOTICES-rust.txt
+          if [ "$RUNNER_OS" = Windows ]; then
+            (cd package && 7z a -tzip "../dist/silt-$target.zip" . >/dev/null)
+          else
+            tar -czf "dist/silt-$target.tar.gz" -C package .
+          fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: silt-${{ matrix.target }}
           path: dist/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sidecar-${{ matrix.target }}
+          path: sidecar/
+
+  # The desktop app's packages, each carrying the `silt` built above, which
+  # the app runs (ADR 0041). Linux's are built on the oldest runner, so the
+  # AppImage runs on older distributions too.
+  desktop:
+    needs: [meta, cli]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            silt: x86_64-unknown-linux-musl
+            runner: ubuntu-22.04
+            bundles: appimage,deb,rpm
+          - target: aarch64-apple-darwin
+            silt: aarch64-apple-darwin
+            runner: macos-15
+            bundles: dmg
+          - target: x86_64-apple-darwin
+            silt: x86_64-apple-darwin
+            runner: macos-15
+            bundles: dmg
+          - target: x86_64-pc-windows-msvc
+            silt: x86_64-pc-windows-msvc
+            runner: windows-2025
+            bundles: nsis,msi
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      SILT_BUILD_CHANNEL: ${{ needs.meta.outputs.channel }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.meta.outputs.sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sidecar-${{ matrix.silt }}
+          path: sidecar
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Tools
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q pkg-config libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf
+          fi
+          rustup show
+          rustup target add ${{ matrix.target }}
+
+      - name: Sidecar
+        run: |
+          ext=
+          [ "$RUNNER_OS" = Windows ] && ext=.exe
+          mkdir -p crates/silt-desktop/binaries
+          cp "sidecar/silt$ext" "crates/silt-desktop/binaries/silt-${{ matrix.target }}$ext"
+          chmod +x "crates/silt-desktop/binaries/silt-${{ matrix.target }}$ext"
+
+      - name: Packages
+        working-directory: crates/silt-desktop
+        run: npx --yes @tauri-apps/cli@2.12.6 build --config tauri.release.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Archive
+        run: |
+          target=${{ matrix.target }}
+          bundle=crates/silt-desktop/target/$target/release/bundle
+          mkdir dist
+          # Each bundle has one file, named for the version: the glob finds it.
+          # shellcheck disable=SC2086
+          one() { set -- $1; [ -f "$1" ] || { echo "::error::no $1"; exit 1; }; cp "$1" "dist/$2"; }
+          case "$RUNNER_OS" in
+            Linux)
+              one "$bundle/appimage/*.AppImage silt-desktop-$target.AppImage"
+              one "$bundle/deb/*.deb silt-desktop-$target.deb"
+              one "$bundle/rpm/*.rpm silt-desktop-$target.rpm"
+              ;;
+            macOS)
+              one "$bundle/dmg/*.dmg silt-desktop-$target.dmg"
+              ;;
+            Windows)
+              one "$bundle/nsis/*.exe silt-desktop-$target-setup.exe"
+              one "$bundle/msi/*.msi silt-desktop-$target.msi"
+              ;;
+          esac
+          ls -l dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: silt-desktop-${{ matrix.target }}
+          path: dist/
 
   publish:
-    needs: build
+    needs: [meta, cli, desktop]
+    if: ${{ !cancelled() && needs.meta.result == 'success' && needs.meta.outputs.skip != 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHANNEL: ${{ needs.meta.outputs.channel }}
+      TAG: ${{ needs.meta.outputs.tag }}
+      SHA: ${{ needs.meta.outputs.sha }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: silt-*
           path: dist
           merge-multiple: true
+
+      # Linux's assets, and for a stable release every one, or nothing is
+      # published. A nightly leaves out the others that didn't build.
+      - name: Check
+        run: |
+          linux="silt-x86_64-unknown-linux-musl.tar.gz silt-aarch64-unknown-linux-musl.tar.gz
+            silt-desktop-x86_64-unknown-linux-gnu.AppImage silt-desktop-x86_64-unknown-linux-gnu.deb silt-desktop-x86_64-unknown-linux-gnu.rpm"
+          others="silt-aarch64-apple-darwin.tar.gz silt-x86_64-apple-darwin.tar.gz silt-x86_64-pc-windows-msvc.zip
+            silt-desktop-aarch64-apple-darwin.dmg silt-desktop-x86_64-apple-darwin.dmg
+            silt-desktop-x86_64-pc-windows-msvc-setup.exe silt-desktop-x86_64-pc-windows-msvc.msi"
+          required=$linux
+          [ "$CHANNEL" = stable ] && required="$linux $others"
+          missing=
+          for asset in $linux $others; do
+            [ -f "dist/$asset" ] || missing="$missing $asset"
+          done
+          for asset in $required; do
+            [ -f "dist/$asset" ] || { echo "::error::$asset didn't build"; failed=1; }
+          done
+          [ -z "${failed:-}" ] || exit 1
+          echo "MISSING=$missing" >> "$GITHUB_ENV"
+          ls -l dist
+
       - name: Checksums
         run: cd dist && sha256sum silt-* > SHA256SUMS && cat SHA256SUMS
-      - name: Release
-        env:
-          GH_TOKEN: ${{ github.token }}
+
+      - name: Stable release
+        if: needs.meta.outputs.channel == 'stable'
         run: |
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes
+          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+
+      # The one `nightly` prerelease: its assets replaced, any left from an
+      # earlier night removed, and its tag moved to the commit built.
+      - name: Nightly release
+        if: needs.meta.outputs.channel == 'nightly'
+        run: |
+          repo=$GITHUB_REPOSITORY
+          short=${SHA:0:7}
+          day=$(date -u +%Y-%m-%d)
+          {
+            echo "Built from \`main\` at $SHA on $day. A nightly build: it updates from this release, and Settings › Updates says when a newer one is out."
+            echo
+            echo "Nothing here is signed yet, so macOS's Gatekeeper and Windows' SmartScreen warn before opening it."
+            if [ -n "$MISSING" ]; then
+              echo
+              echo "Not built tonight:"
+              for asset in $MISSING; do echo "- \`$asset\`"; done
+            fi
+          } > notes.md
+          if ! gh api "repos/$repo/git/ref/tags/nightly" >/dev/null 2>&1; then
+            gh api -X POST "repos/$repo/git/refs" -f ref=refs/tags/nightly -f sha="$SHA" >/dev/null
+          fi
+          gh release view nightly --repo "$repo" >/dev/null 2>&1 ||
+            gh release create nightly --repo "$repo" --prerelease --verify-tag --title "Nightly" --notes-file notes.md
+          gh release upload nightly dist/* --repo "$repo" --clobber
+          for asset in $(gh release view nightly --repo "$repo" --json assets --jq '.assets[].name'); do
+            [ -f "dist/$asset" ] || gh release delete-asset nightly "$asset" --repo "$repo" --yes
+          done
+          gh api -X PATCH "repos/$repo/git/refs/tags/nightly" -f sha="$SHA" -F force=true >/dev/null
+          gh release edit nightly --repo "$repo" --prerelease --title "Nightly $day ($short)" --notes-file notes.md

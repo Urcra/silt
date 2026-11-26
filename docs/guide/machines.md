@@ -24,7 +24,7 @@ The window then shows that machine's own web UI: its threads, its agents and its
 ## Install or update Silt there
 When adding a machine finds no `silt` there, **Install Silt on …** puts this computer's build on it, then adds it and connects; a machine already in the list has **Install Silt there** on its row. When a connected machine runs another build than this computer's, its row says which this computer has, and **Update …**, or **Update Silt there** in its menu, puts this computer's build in place of the one it has. The app never does either by itself.
 
-The machine gets the same build as this computer, nightly or not, so the window and the machine agree:
+The machine gets the same build as this computer, whichever channel it's on, so the window and the machine agree:
 - When it runs the same OS and CPU, the app copies its own `silt`, with `silt-bwrap` and `silt-pasta` when they're beside it, over SSH, showing how much has gone.
 - Otherwise it says what differs, and how to build it there with `cargo install --locked --git https://github.com/Urcra/silt silt-cli`.
 

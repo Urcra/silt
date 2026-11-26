@@ -105,7 +105,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0097](0097-wasm-bindings-from-xtask.md) | The browser replica's bindings come from xtask | accepted |
 | [0098](0098-themes-for-silts-ui.md) | Themes for Silt's UI | accepted; amended by 0099, 0107 |
 | [0099](0099-themes-sync-ship-fonts-and-reach-the-window.md) | Themes sync, ship fonts, and reach the desktop window | accepted |
-| [0100](0100-update-channels.md) | Updating from the app, on a stable or a nightly channel | accepted; amended by 0109, 0115 |
+| [0100](0100-update-channels.md) | Updating from the app, on a stable or a nightly channel | accepted; amended by 0109, 0115, 0129 |
 | [0101](0101-the-ui-under-heavy-load.md) | The web UI under heavy load | accepted |
 | [0102](0102-agents-ask-for-folders.md) | A sandboxed agent asks for more folders | accepted; amended by 0104 |
 | [0103](0103-the-github-plugin.md) | The GitHub plugin | accepted; amended by 0104 |
@@ -124,7 +124,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0116](0116-memory-that-follows-the-work.md) | Memory that follows the work | accepted |
 | [0117](0117-conversations-open-at-their-end.md) | Conversations open at their end | accepted; amended by 0127 |
 | [0118](0118-an-agents-own-modes-in-the-permissions-menu.md) | An agent's own modes in the permissions menu | accepted |
-| [0119](0119-no-windows-ci-or-releases.md) | No Windows CI or Windows releases | accepted |
+| [0119](0119-no-windows-ci-or-releases.md) | No Windows CI or Windows releases | accepted; amended by 0129 |
 | [0120](0120-agents-ask-other-agents.md) | Agents ask other agents | accepted |
 | [0121](0121-videos-and-images-without-a-size-limit.md) | Videos, and images without a size limit | accepted |
 | [0122](0122-the-plugin-sdk-is-mit.md) | The plugin SDK is MIT | accepted |
@@ -134,3 +134,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0126](0126-budgets-for-a-github-actions-runner.md) | Budgets for a GitHub Actions runner | accepted |
 | [0127](0127-switching-threads-waits-for-nothing-else.md) | Switching threads waits for nothing else | accepted; amended by 0128 |
 | [0128](0128-a-pages-views-go-ahead-of-an-agents-capture.md) | A page's views go ahead of an agent's capture | accepted |
+| [0129](0129-nightly-releases-and-three-channels.md) | Nightly releases, and three channels: stable, nightly and dev | accepted |
