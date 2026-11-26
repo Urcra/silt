@@ -1,4 +1,4 @@
-# 0132: A thread's header holds its title and actions, and its menu is a right-click
+# 0135: A thread's header holds its title and actions, and its menu is a right-click
 
 - Status: accepted
 - Date: 2026-11-26
