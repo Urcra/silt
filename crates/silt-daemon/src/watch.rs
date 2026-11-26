@@ -12,7 +12,7 @@ use notify_debouncer_full::{DebounceEventResult, DebouncedEvent, Debouncer, NoCa
 const DEBOUNCE: Duration = Duration::from_millis(100);
 /// How often the debouncer looks for events that have settled; notify's
 /// default is a quarter of `DEBOUNCE`.
-const TICK: Option<Duration> = Some(DEBOUNCE);
+const TICK: Duration = DEBOUNCE;
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 type OnChange = Box<dyn Fn(Vec<PathBuf>) + Send>;
@@ -82,14 +82,15 @@ impl Watchers {
             return Ok(watched);
         }
         let config = notify::Config::default().with_follow_symlinks(false);
+        let debouncing = |config| notify_debouncer_full::Config::default().with_timeout(DEBOUNCE).with_tick_rate(TICK).with_notify_config(config);
         let result = if mode == WatchMode::Polled {
             let config = config.with_poll_interval(POLL_INTERVAL).with_compare_contents(true);
-            started(&mut lock(&self.polled), || new_debouncer_opt(DEBOUNCE, TICK, handler(&self.routes), NoCache, config))
+            started(&mut lock(&self.polled), || new_debouncer_opt(debouncing(config), handler(&self.routes), NoCache))
                 .and_then(|debouncer| debouncer.watch(root, RecursiveMode::Recursive))
         } else {
             // inotify pairs renames itself; a file-id cache would walk the
             // linked trees anyway.
-            started(&mut lock(&self.native), || new_debouncer_opt(DEBOUNCE, TICK, handler(&self.routes), NoCache, config))
+            started(&mut lock(&self.native), || new_debouncer_opt(debouncing(config), handler(&self.routes), NoCache))
                 .and_then(|debouncer| debouncer.watch(root, RecursiveMode::Recursive))
         };
         if result.as_ref().is_err_and(|error| matches!(error.kind, notify::ErrorKind::MaxFilesWatch)) {
