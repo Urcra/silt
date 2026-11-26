@@ -44,7 +44,7 @@ pub(crate) struct AcpRun {
     /// The run's token, for its MCP server and its gateway.
     pub(crate) token: String,
     /// Auto's check of its calls, where it has no auto mode of its own
-    /// (ADR 0129).
+    /// (ADR 0132).
     pub(crate) auto: crate::judges::AutoState,
     /// What to tell it once it's restarted with other folders.
     resume_note: Option<String>,
@@ -253,7 +253,7 @@ impl AcpRun {
     }
 
     /// Whether it has an auto mode of its own, which Auto moves it into
-    /// rather than Silt's check (ADR 0114, ADR 0129).
+    /// rather than Silt's check (ADR 0114, ADR 0132).
     pub(crate) fn has_own_auto(&self) -> bool {
         self.modes.as_ref().is_some_and(|modes| modes.available.iter().any(|mode| mode_key(&mode.id) == "auto"))
     }
@@ -1289,7 +1289,7 @@ impl Core {
 
     /// Answers a permission request by the thread's preset when it can, puts
     /// it to Auto's check for an agent without an auto mode of its own
-    /// (ADR 0129), and leaves the rest to the person (ADR 0022).
+    /// (ADR 0132), and leaves the rest to the person (ADR 0022).
     async fn permission_asked(&mut self, thread: ThreadId, permission: Permission) {
         let preset = self.capped_preset(thread, self.preset(thread));
         let run = self.acp.get_mut(&thread).expect("caller checked");

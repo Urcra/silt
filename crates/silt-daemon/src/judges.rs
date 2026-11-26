@@ -1,4 +1,4 @@
-//! Auto's check for an agent without an auto mode of its own (ADR 0129):
+//! Auto's check for an agent without an auto mode of its own (ADR 0132):
 //! the judge's session, what its verdict does, refusals handed back to the
 //! agent, and the person's answers to `silt_escalate`.
 

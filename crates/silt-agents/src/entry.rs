@@ -58,7 +58,7 @@ pub enum Entry {
     Task(Task),
     /// What the agent showed the person through Silt (ADR 0068).
     Artifact(Box<silt_proto::view::ArtifactView>),
-    /// Auto's verdict on one of its calls (ADR 0129).
+    /// Auto's verdict on one of its calls (ADR 0132).
     Auto(silt_proto::view::AutoView),
     /// Anything else the agent records (hooks, settings, file snapshots).
     Other {

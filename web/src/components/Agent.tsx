@@ -94,7 +94,7 @@ function statePhrase(status: AgentStatus): string {
   if (status.sign_in) return `${status.agent} needs you to sign in`
   const asking = (status.questions?.length ?? 0) > 0 && status.state === 'awaiting_permission'
   if (asking) return `${status.agent} is asking you a question`
-  // A call Auto refused that the agent asks the person to allow, or one Auto is still checking (ADR 0129).
+  // A call Auto refused that the agent asks the person to allow, or one Auto is still checking (ADR 0132).
   if (status.state === 'awaiting_permission' && status.permissions.length === 0 && (status.escalations?.length ?? 0) > 0)
     return `${status.agent} is waiting for you to allow what Auto refused`
   if (status.state === 'working' && (status.checking?.length ?? 0) > 0) return `${status.agent} is waiting for Auto’s check`
@@ -157,7 +157,7 @@ export function PermissionCard({
           {asked.title}
         </pre>
       )}
-      {/* Auto's check couldn't judge it, so it's the person's, as on Ask before commands (ADR 0129). */}
+      {/* Auto's check couldn't judge it, so it's the person's, as on Ask before commands (ADR 0132). */}
       {asked.unchecked && (
         <p className="flex items-start gap-1.5 text-xs text-warn-fg">
           <Icon name="alert" className="mt-px h-3.5 w-3.5 shrink-0" />
@@ -203,7 +203,7 @@ export function PermissionCard({
 }
 
 /**
- * A call Auto's check refused that the agent asks the person to allow (ADR 0129): the call, why Auto refused it and
+ * A call Auto's check refused that the agent asks the person to allow (ADR 0132): the call, why Auto refused it and
  * why the agent says it's needed, with words for the agent. Allowed, the same call goes through once; ⏎ allows, Esc
  * stops the turn.
  */

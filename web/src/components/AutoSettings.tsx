@@ -28,7 +28,7 @@ function judgeOf(id: string): Judge {
 }
 
 /**
- * Settings › Auto (ADR 0129): for each workspace, who checks the commands of an agent without an auto mode of its own,
+ * Settings › Auto (ADR 0132): for each workspace, who checks the commands of an agent without an auto mode of its own,
  * from the agents that workspace allows, and what Auto does for each of them.
  */
 export function AutoSettings() {

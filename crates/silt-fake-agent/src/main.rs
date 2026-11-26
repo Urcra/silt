@@ -331,7 +331,7 @@ async fn agent() -> Result<()> {
                     notify(&worker, &session, SessionUpdate::AgentThoughtChunk(text("Thinking about the prompt.")))?;
                     notify(&worker, &session, SessionUpdate::UsageUpdate(UsageUpdate::new(53_000, 200_000)))?;
                     if prompt.starts_with("You are Silt's Auto check") {
-                        // As the judge of Silt's Auto check (ADR 0129).
+                        // As the judge of Silt's Auto check (ADR 0132).
                         notify(&worker, &session, SessionUpdate::AgentMessageChunk(text(judge(&prompt, &model))))?;
                         return responder.respond(PromptResponse::new(StopReason::EndTurn));
                     }
@@ -860,7 +860,7 @@ document.getElementById('add').onclick=function(){db.collection('tasks').add({do
 }
 
 /// The fake judge's verdict on the call in Silt's Auto check's prompt
-/// (ADR 0129): `rm -rf` and `--force` refused, `unreadable` no verdict at all,
+/// (ADR 0132): `rm -rf` and `--force` refused, `unreadable` no verdict at all,
 /// anything else allowed, each saying the model that judged.
 fn judge(prompt: &str, model: &str) -> String {
     let data = prompt

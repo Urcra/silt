@@ -1,4 +1,4 @@
-//! Auto for an agent without an auto mode of its own (ADR 0129): a fake
+//! Auto for an agent without an auto mode of its own (ADR 0132): a fake
 //! agent with no `auto` mode asks to run commands, and another session of
 //! it judges them.
 

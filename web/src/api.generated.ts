@@ -276,7 +276,7 @@ stoppable: Array<string>,
 sandbox: Reach | null, 
 /**
  * Who checks its commands on Auto, for an agent without an auto mode of
- * its own (ADR 0129).
+ * its own (ADR 0132).
  */
 auto_check: AutoCheck | null, 
 /**
@@ -1010,7 +1010,7 @@ side: string | null,
  */
 task: TaskView | null, 
 /**
- * On an `auto`: Auto's verdict on a call (ADR 0129).
+ * On an `auto`: Auto's verdict on a call (ADR 0132).
  */
 auto: AutoView | null, 
 /**
@@ -1709,7 +1709,7 @@ plan: string | null,
 tool_call: string | null, 
 /**
  * Why Auto's check couldn't judge it, which leaves it to the person
- * (ADR 0129).
+ * (ADR 0132).
  */
 unchecked: string | null, };
 
@@ -2069,7 +2069,7 @@ agents?: { [key in string]: AgentDefaults },
 design_system?: string | null, 
 /**
  * Who checks commands on Auto for an agent without an auto mode; the
- * thread's own agent when unset (ADR 0129).
+ * thread's own agent when unset (ADR 0132).
  */
 auto_judge?: Judge | null, };
 
@@ -2186,7 +2186,7 @@ plugins?: PluginPolicy,
 asks?: AskPolicy, 
 /**
  * Who checks commands on Auto for an agent without an auto mode,
- * whatever a thread or the workspace's defaults choose (ADR 0129).
+ * whatever a thread or the workspace's defaults choose (ADR 0132).
  */
 auto_judge?: Judge | null, };
 

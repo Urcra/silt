@@ -183,7 +183,7 @@ pub fn tool_result(id: &str, status: &str, output: Option<&str>) -> String {
     json!({"t": "tool_result", "id": id, "status": status, "output": output}).to_string()
 }
 
-/// Auto's verdict on the call `call` (ADR 0129): see
+/// Auto's verdict on the call `call` (ADR 0132): see
 /// [`silt_proto::view::AutoView`].
 pub fn auto(call: &str, verdict: &str, reason: &str, judge: Option<&str>, ms: Option<i64>) -> String {
     json!({"t": "auto", "call": call, "verdict": verdict, "reason": reason, "judge": judge, "ms": ms}).to_string()

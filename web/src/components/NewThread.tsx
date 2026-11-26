@@ -762,7 +762,7 @@ export function NewThread() {
   const settingValue = (setting: AgentSetting) =>
     startingValue(setting, chosenSettings[setting.id], agentDefaults?.settings?.[setting.id])
   // The preset is the one control for every agent; the agent starts in the mode that does what it says (ADR 0114).
-  // One without an auto mode has Silt check its commands on Auto (ADR 0129).
+  // One without an auto mode has Silt check its commands on Auto (ADR 0132).
   const refusedPreset = (id: Preset) => presetRefused(workspace, id)
   const preset: Preset = refusedPreset(capped) && capped === 'auto' ? 'ask_before_commands' : capped
   const own = ownModes(seen?.modes)

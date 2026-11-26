@@ -191,7 +191,7 @@ pub struct Defaults {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design_system: Option<String>,
     /// Who checks commands on Auto for an agent without an auto mode; the
-    /// thread's own agent when unset (ADR 0129).
+    /// thread's own agent when unset (ADR 0132).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_judge: Option<crate::Judge>,
 }

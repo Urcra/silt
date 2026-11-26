@@ -125,7 +125,7 @@ pub enum Event {
         run: u64,
         event: crate::acp::AcpEvent,
     },
-    /// What a judge of Auto's check answered (ADR 0129).
+    /// What a judge of Auto's check answered (ADR 0132).
     Judged(Box<crate::judges::Judged>),
     /// An agent's `silt_escalate` waited as long as it may.
     EscalationWaited {
@@ -384,7 +384,7 @@ pub struct Core {
     pub(crate) agent_runs: HashMap<ThreadId, silt_store::AgentRunRecord>,
     /// Agents asking other agents (ADR 0120).
     pub(crate) asks: crate::asks::Asks,
-    /// The judges threads chose for Auto's check (ADR 0129).
+    /// The judges threads chose for Auto's check (ADR 0132).
     pub(crate) judges: crate::judges::Judges,
     /// What each thread's summary reads from its log, with the family's log
     /// length it was read at.

@@ -1,5 +1,5 @@
 //! Who checks the commands of an agent on Auto that has no auto mode of its
-//! own (ADR 0129).
+//! own (ADR 0132).
 
 use serde::{Deserialize, Serialize};
 

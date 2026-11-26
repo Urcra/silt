@@ -177,7 +177,7 @@ pub struct Policy {
     #[serde(default, skip_serializing_if = "crate::AskPolicy::is_empty")]
     pub asks: crate::AskPolicy,
     /// Who checks commands on Auto for an agent without an auto mode,
-    /// whatever a thread or the workspace's defaults choose (ADR 0129).
+    /// whatever a thread or the workspace's defaults choose (ADR 0132).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_judge: Option<crate::Judge>,
 }

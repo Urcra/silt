@@ -68,7 +68,7 @@ version. silt_artifact_read gives back a version's source, to revise it after a 
 
 /// The tools that change something beyond the session: a message another
 /// agent then hears (ADR 0090), asking another agent (ADR 0120), and asking
-/// the person to allow a call Auto refused (ADR 0129).
+/// the person to allow a call Auto refused (ADR 0132).
 pub const WRITING_TOOLS: &[&str] = &["silt_message", "silt_ask", "silt_ask_stop", "silt_ask_take", "silt_escalate"];
 
 /// The tools only a run watched in the web UI gets.

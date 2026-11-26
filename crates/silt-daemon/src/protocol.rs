@@ -1302,7 +1302,7 @@ pub enum Request {
         option: Option<String>,
     },
     /// `thread`'s agent asks the person to allow a call Auto's check refused
-    /// (ADR 0129); answered once they do, or when the wait runs out.
+    /// (ADR 0132); answered once they do, or when the wait runs out.
     Escalate {
         thread: String,
         call: String,
@@ -1317,7 +1317,7 @@ pub enum Request {
         words: Option<String>,
     },
     /// Who checks the thread's commands on Auto; the workspace's default
-    /// when none (ADR 0129).
+    /// when none (ADR 0132).
     SetJudge {
         thread: String,
         #[serde(default)]
@@ -2256,7 +2256,7 @@ pub struct AgentStatus {
     #[serde(default)]
     pub sandbox: Option<silt_workspace::Reach>,
     /// Who checks its commands on Auto, for an agent without an auto mode of
-    /// its own (ADR 0129).
+    /// its own (ADR 0132).
     #[serde(default)]
     pub auto_check: Option<AutoCheck>,
     /// The calls Auto's check is judging now, by their tool call ids.
@@ -2267,7 +2267,7 @@ pub struct AgentStatus {
     pub escalations: Vec<EscalationAsked>,
 }
 
-/// Who checks a thread's commands on Auto (ADR 0129).
+/// Who checks a thread's commands on Auto (ADR 0132).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct AutoCheck {
@@ -2613,7 +2613,7 @@ pub struct PermissionAsked {
     #[serde(default)]
     pub tool_call: Option<String>,
     /// Why Auto's check couldn't judge it, which leaves it to the person
-    /// (ADR 0129).
+    /// (ADR 0132).
     #[serde(default)]
     pub unchecked: Option<String>,
 }

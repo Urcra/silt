@@ -1,4 +1,4 @@
-//! Auto's check for an agent without an auto mode of its own (ADR 0129):
+//! Auto's check for an agent without an auto mode of its own (ADR 0132):
 //! what the judge is asked, how its answer reads, the hash a verdict or a
 //! person's grant is bound to, and what a refused agent is told.
 

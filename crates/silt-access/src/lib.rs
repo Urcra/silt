@@ -2,7 +2,7 @@
 //! 0093): its requests classified as reads or changes, the canonical form
 //! an approval is bound to, the data rules a result must pass, and what of
 //! adb one device's relay lets through. Also Auto's check of an agent's call
-//! (ADR 0129). Pure: the daemon runs the plugins, relays and checks, and
+//! (ADR 0132). Pure: the daemon runs the plugins, relays and checks, and
 //! enforces what this decides.
 
 pub mod adb;

@@ -32,9 +32,9 @@ export function PermissionChip({
   presets?: typeof PRESETS
   ghost?: boolean
   label?: string
-  /** Silt checks the agent's commands on Auto, as it has no auto mode of its own (ADR 0129). */
+  /** Silt checks the agent's commands on Auto, as it has no auto mode of its own (ADR 0132). */
   checked?: boolean
-  /** Under Auto, who checks for it, for a running thread's agent (ADR 0129). */
+  /** Under Auto, who checks for it, for a running thread's agent (ADR 0132). */
   judge?: ReactNode
   /** The agent's own modes, from `ownModes`, and the one it's in, if any. */
   own?: {

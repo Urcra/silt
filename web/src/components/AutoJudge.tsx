@@ -23,7 +23,7 @@ const GROUP =
   'mt-1 flex items-center gap-1.5 border-t border-line-subtle px-2 pt-2 pb-1 text-2xs tracking-[0.06em] text-fg-3 uppercase'
 
 /**
- * Under Auto in the permissions menu, who checks the commands of an agent without an auto mode of its own (ADR 0129):
+ * Under Auto in the permissions menu, who checks the commands of an agent without an auto mode of its own (ADR 0132):
  * the thread's own agent and model, or another agent its workspace allows. A desktop opens the list beside the menu; a
  * phone opens it in the menu's place.
  */

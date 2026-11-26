@@ -399,7 +399,7 @@ pub struct HistoryEntry {
     /// On a `task`: news of a subagent or background command.
     #[serde(default)]
     pub task: Option<TaskView>,
-    /// On an `auto`: Auto's verdict on a call (ADR 0129).
+    /// On an `auto`: Auto's verdict on a call (ADR 0132).
     #[serde(default)]
     pub auto: Option<AutoView>,
     /// What a page of history left out of the entry, read whole with `whole`:
@@ -468,7 +468,7 @@ pub struct TaskView {
 }
 
 /// Auto's verdict on a call of an agent without an auto mode of its own
-/// (ADR 0129).
+/// (ADR 0132).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AutoView {

@@ -52,7 +52,7 @@ export function ChipMenu({
   footer?: ReactNode
   /** Under everything, something to do rather than pick, such as stopping the agent. */
   action?: ChipAction
-  /** A row of its own under one choice, by its id, such as who checks for Auto (ADR 0129). */
+  /** A row of its own under one choice, by its id, such as who checks for Auto (ADR 0132). */
   extra?: { after: string; node: ReactNode }
   /** Borderless until hovered, in the composer's row; else bordered, as in a form. */
   ghost?: boolean

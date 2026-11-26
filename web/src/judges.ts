@@ -1,7 +1,7 @@
 import type { AgentChoice, Judge } from './api'
 import { isModel } from './agentSettings'
 
-/** Whether two judges of Auto's check are the same agent on the same model (ADR 0129). */
+/** Whether two judges of Auto's check are the same agent on the same model (ADR 0132). */
 export function sameJudge(a: Judge, b: Judge): boolean {
   if (a.kind === 'thread' || b.kind === 'thread') return a.kind === b.kind
   return a.agent === b.agent && (a.model ?? null) === (b.model ?? null)

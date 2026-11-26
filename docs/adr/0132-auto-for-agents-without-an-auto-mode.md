@@ -1,4 +1,4 @@
-# 0129: Auto for agents without an auto mode
+# 0132: Auto for agents without an auto mode
 
 - Status: accepted
 - Date: 2026-11-25

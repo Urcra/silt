@@ -138,7 +138,7 @@ function stands(step: ToolStep, tasks: Tasks): boolean {
   return (
     kind === 'question' ||
     Boolean(proposedPlan(step.call)) ||
-    // A call Auto refused never ran: it stays in its run, its reason under it (ADR 0129).
+    // A call Auto refused never ran: it stays in its run, its reason under it (ADR 0132).
     (kind === 'execute' && Boolean(step.result?.outcome?.failed) && step.auto?.verdict !== 'refuse') ||
     tasked(step, tasks)
   )
@@ -369,7 +369,7 @@ export interface ToolStep {
   result: HistoryEntry | null
   /** The pictures its result carried. */
   images: HistoryEntry[]
-  /** Auto's verdict on the call, for an agent without an auto mode of its own (ADR 0129). */
+  /** Auto's verdict on the call, for an agent without an auto mode of its own (ADR 0132). */
   auto?: AutoView | null
 }
 

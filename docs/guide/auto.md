@@ -1,6 +1,6 @@
 # Auto for every agent
 
-Auto is the permissions preset between Ask before commands and Full access: it lets what's safe through and asks about the rest. Claude Code has an auto mode of its own, and Auto moves it into that mode. Most agents have none, so Silt checks their commands itself. The decision behind this is [ADR 0129](https://github.com/Urcra/silt/blob/main/docs/adr/0129-auto-for-agents-without-an-auto-mode.md).
+Auto is the permissions preset between Ask before commands and Full access: it lets what's safe through and asks about the rest. Claude Code has an auto mode of its own, and Auto moves it into that mode. Most agents have none, so Silt checks their commands itself. The decision behind this is [ADR 0132](https://github.com/Urcra/silt/blob/main/docs/adr/0132-auto-for-agents-without-an-auto-mode.md).
 
 This works for agents the web UI runs. An agent in your terminal keeps its own prompts.
 

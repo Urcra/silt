@@ -1,4 +1,4 @@
-// Auto for an agent without an auto mode of its own (ADR 0129): a fake agent with no `auto` mode asks to run commands,
+// Auto for an agent without an auto mode of its own (ADR 0132): a fake agent with no `auto` mode asks to run commands,
 // another session of it judges them, and the thread shows each verdict, a refusal's reason, and the agent asking the
 // person to allow what Auto refused. With SILT_SCREENSHOTS set to a folder, it keeps pictures of each for the pull
 // request.

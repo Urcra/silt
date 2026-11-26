@@ -37,12 +37,12 @@ export function nextPreset(preset: Preset, refused: (preset: Preset) => string |
   return undefined
 }
 
-/** Whether Auto is Silt's check for an agent, as it has no auto mode of its own, or its modes aren't known (ADR 0129). */
+/** Whether Auto is Silt's check for an agent, as it has no auto mode of its own, or its modes aren't known (ADR 0132). */
 export function checkedBySilt(modes: AgentChoiceItem[] | null | undefined): boolean {
   return !(modes ?? []).some((mode) => (mode.id.split('#').pop() ?? mode.id) === 'auto')
 }
 
-/** What Auto does for an agent Silt checks (ADR 0129). */
+/** What Auto does for an agent Silt checks (ADR 0132). */
 export const SILT_AUTO_SAYS = 'edits apply; Silt checks each command first, and what it refuses goes back to the agent'
 
 /** The presets a project can start its threads with: Plan is chosen per thread. */

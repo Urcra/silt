@@ -483,7 +483,7 @@ function Thought({ entries, took, ...props }: EntryProps & { entries: HistoryEnt
 
 /** How many of a run's tool calls failed. */
 function failedIn(entries: HistoryEntry[]): number {
-  // A call Auto refused never ran, so it didn't fail (ADR 0129).
+  // A call Auto refused never ran, so it didn't fail (ADR 0132).
   const refused = new Set(entries.flatMap((entry) => (entry.auto?.verdict === 'refuse' ? [entry.auto.call] : [])))
   return entries.filter((entry) => entry.kind === 'tool_result' && entry.outcome?.failed && !refused.has(entry.outcome.call))
     .length

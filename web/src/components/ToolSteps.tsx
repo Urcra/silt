@@ -61,7 +61,7 @@ export function ImageThumb({ entry: given, from }: { entry: HistoryEntry; from: 
   )
 }
 
-/** Auto's verdicts as a row's tag says them (ADR 0129). */
+/** Auto's verdicts as a row's tag says them (ADR 0132). */
 const VERDICT: Record<string, { label: string; tone: Tone; said: string }> = {
   allow: { label: 'Auto allowed', tone: 'ok', said: 'Auto allowed' },
   refuse: { label: 'Auto refused', tone: 'danger', said: 'Auto refused' },

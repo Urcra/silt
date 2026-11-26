@@ -2154,7 +2154,7 @@ struct EscalationAnswer {
 }
 
 /// The person's answer to a call Auto refused that the agent asks them to
-/// allow (ADR 0129).
+/// allow (ADR 0132).
 async fn agent_escalation(
     State(web): State<Web>,
     Path(thread): Path<String>,
@@ -2170,7 +2170,7 @@ struct JudgeChoice {
 }
 
 /// Who checks the thread's commands on Auto; the workspace's default when
-/// none (ADR 0129).
+/// none (ADR 0132).
 async fn agent_judge(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<JudgeChoice>) -> HttpResponse {
     ask(&web, Request::SetJudge { thread, judge: body.judge }).await
 }
