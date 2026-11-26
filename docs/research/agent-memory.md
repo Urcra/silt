@@ -41,6 +41,25 @@ Research for a memory viewer, and for sharing what agents remember across agents
 - **Silt's sandbox** keeps `~/.claude/CLAUDE.md` read-only and lets a run write its own `projects/<slug>/` (`ProjectState::own`), so auto memory works sandboxed; a moved `autoMemoryDirectory` needs to be writable in the sandbox as well.
 - **Capture:** a memory write is a Write or Edit tool call outside the checkout, so it's already in the thread's transcript, but not in its files.
 
+## Gemini CLI 0.71.1 (source, google-gemini/gemini-cli@v0.71.1)
+- **`save_memory` is gone** since 0.44. The system prompt says "There is no `save_memory` tool": the agent edits markdown with its ordinary `write_file` and `replace`, and puts each fact in exactly one of four places, asking when it fits several (`prompts/snippets.ts`):
+  - `./GEMINI.md`, the team's, committed;
+  - a subfolder's `GEMINI.md`, for that part of the project;
+  - **private project memory,** `~/.gemini/tmp/<slug>/memory/MEMORY.md`, an index of one-line pointers to sibling `*.md` files, as Claude Code's (`config/storage.ts` `getProjectMemoryDir`; a `GEMINI.md` there is read when `MEMORY.md` is missing);
+  - the person's `~/.gemini/GEMINI.md`.
+- **The private memory is keyed by the cwd,** not the git root: `Storage` takes `targetDir`, the cwd, and `projects.json` gives it a slug from its basename ([agents.md](agents.md#gemini-cli-0640-compared-with-0430)). **So a Gemini thread in a managed checkout gets its own private memory too,** under a slug made from the thread's id.
+- 0.43 and older: `save_memory {fact, scope: global | project}` appended `- <fact>` under `## Gemini Added Memories` in `~/.gemini/GEMINI.md`, after a diff to confirm. Those lines are still read as part of the file.
+- **Loading** (`context/memoryContextManager.ts`, `utils/memoryDiscovery.ts`): `~/.gemini/GEMINI.md`, extensions' files, each `context.fileName` from every workspace folder up to `context.memoryBoundaryMarkers` (`.git` by default; project files only in a trusted folder), and the private `MEMORY.md`. Subfolders' files load when a file tool touches them. Each goes in the prompt in `<global_context>`, `<user_project_memory>`, `<extension_context>` or `<project_context>`, wrapped in `--- Context from: <path> ---`. `@path` imports five deep.
+  - `context.fileName` can be `["AGENTS.md", "GEMINI.md"]`; the default is `GEMINI.md` alone.
+- **`experimental.autoMemory`** (off by default): a background agent reads sessions idle 3 h with 10 user messages and writes unified diffs to `<memory dir>/.inbox/{private,global}/*.patch`, applied only once accepted in `/memory inbox`; never to a project's `GEMINI.md`. `.extraction.lock` and `.extraction-state.json` beside it (`services/memoryService.ts`).
+- `/memory show | reload | list | inbox`. `GEMINI_CLI_HOME` moves `~/.gemini`. Under its Seatbelt sandbox `tmp/`, and so private memory, is in `~/.cache/.gemini`.
+
+## Antigravity CLI 1.5.9 (docs; closed source)
+- **No memory of its own, and no `/memory`.** Its docs say "Agents don't remember conversations". An open request asks for project memory (google-antigravity/antigravity-cli#1585).
+- **`/learn`** is how something is kept: the agent drafts `learning_proposal.md`, the person comments and approves, and it writes a rule (`AGENTS.md`, `GEMINI.md`, `.agents/rules/<name>.md`, `~/.gemini/config/rules/<name>.md` and the like) or a skill (`.agents/skills/<name>/SKILL.md`) ([docs](https://antigravity.google/docs/commands/learn/)).
+- **Rules it reads** ([docs](https://antigravity.google/docs/rules.md)): `AGENTS.md`, `GEMINI.md`, `.agents/{AGENTS,GEMINI}.md` and `.agents/rules/*.md` (frontmatter with a `trigger`) from the cwd up to the repository root; `~/.gemini/{,config/}{AGENTS,GEMINI}.md` and `~/.gemini/config/rules/*.md`. Each is cut at 24,000 bytes, and always-on rules share 20k tokens, past which the largest become pointers read on demand.
+- The Antigravity IDE has "Knowledge Items" (`~/.gemini/antigravity/knowledge/<name>/` with `metadata.json`, `timestamps.json` and `artifacts/*.md`, distilled after conversations), according to community write-ups only; whether the CLI makes them is unverified, and `/context` lists a "Knowledge files" section. Not probed.
+
 ## GitHub Copilot CLI 1.0.116 (docs; the CLI is closed source)
 - **Copilot Memory lives on GitHub, not on the machine.** Two stores: repository facts, shared with the repository's collaborators, not copied to forks, each cited to code that Copilot checks against the current branch; and the person's own preferences, which follow them across repositories ([concepts](https://docs.github.com/en/copilot/concepts/agents/copilot-memory)).
   - A memory expires 90 days after it was made or last upvoted (7 to 180 for repository facts, set by an org). Asking Copilot to forget one only downvotes it. "Copilot Dreaming" merges duplicates in the background and proposes changes to checked-in instructions as pull requests.
