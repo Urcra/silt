@@ -228,3 +228,88 @@ test('the sidebar names the workspace at its top, and at its bottom the machine,
   expect(within(menu).queryByRole('button', { name: 'Add a machine' })).toBeNull()
   expect(within(menu).getByRole('button', { name: /Devices and sync/ })).toHaveTextContent('silt.example.dev')
 })
+
+test('All machines lists every connected machine’s threads, marked with their machine, and the menu says how each stands', async () => {
+  const summary = (id: string, title: string, overrides: Partial<ThreadSummary>) => ({
+    id,
+    repo: 'github.com/u/r',
+    title,
+    agent: 'claude',
+    created_ms: 1,
+    messages: 2,
+    edits: 0,
+    shared: false,
+    location: 'here',
+    forked_from: null,
+    owner: '',
+    collaborators: [],
+    last_ms: Date.now(),
+    merged: false,
+    review: false,
+    mine: {
+      pinned: false,
+      snoozed_until: null,
+      snoozed_at: null,
+      wake_on_activity: false,
+      settled: false,
+      seen_ms: null,
+      reviewed_turn: null,
+    },
+    machine: null,
+    ...overrides,
+  })
+  window.__siltBackends = [
+    { id: 'native', label: 'This computer', kind: 'native', colour: 'ink' },
+    { id: 'ssh:nuc', label: 'nuc', kind: 'ssh', state: 'connected', colour: 'teal' },
+    { id: 'ssh:vps', label: 'vps', kind: 'ssh', state: 'idle', colour: 'plum' },
+  ]
+  window.__siltBackend = 'native'
+  window.__siltDesktop = { commit: 'abc', key: 'k', view: { list: 'all', mark: 'chip', markHere: false } }
+  window.__siltThreads = [
+    {
+      id: 'ssh:nuc',
+      state: 'ready',
+      threads: [
+        summary('1111111111111111', 'Faster replica load', { agent_state: 'working' }),
+        summary('2222222222222222', 'Retry the TLS check', { agent_state: 'awaiting_permission' }),
+      ] as ThreadSummary[],
+    },
+  ]
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) => {
+      const body = path.startsWith('/api/threads')
+        ? [summary('0123456789abcdef0123456789abcdef', 'Fix the lexer', {})]
+        : path.startsWith('/api/status')
+          ? { servers: [], sync_error: null }
+          : []
+      return new Response(JSON.stringify(body), { status: 200 })
+    }),
+  )
+  try {
+    render(<App />)
+    const project = await screen.findByRole('region', { name: 'github.com/u/r' })
+    await waitFor(() => expect(within(project).getByText('Faster replica load')).toBeInTheDocument())
+    expect(within(project).getByText('Fix the lexer')).toBeInTheDocument()
+    const there = within(project).getByRole('link', { name: /Faster replica load/ })
+    expect(there).toHaveTextContent('nucWorking')
+    expect(there).toHaveAccessibleName(/on nuc/)
+    expect(within(project).getByRole('link', { name: /Fix the lexer/ })).not.toHaveTextContent('nuc')
+    // Needs you gathers from every machine.
+    const waiting = screen.getByRole('region', { name: 'needs you' })
+    expect(within(waiting).getByText('Retry the TLS check')).toBeInTheDocument()
+
+    const machine = screen.getByRole('button', { name: 'machine: All machines' })
+    expect(machine).toHaveTextContent('All machines2 connected · showing This computer')
+    fireEvent.click(machine)
+    const menu = screen.getByRole('dialog', { name: 'Switch machine' })
+    expect(within(menu).getByRole('button', { name: /^All machines/ })).toHaveTextContent('2 connected · 1 needs you · 1 running')
+    expect(within(menu).getByRole('button', { name: /^nuc/ })).toHaveTextContent('over SSH · 1 needs you · 1 running')
+    expect(within(menu).getByRole('button', { name: /^vps/ })).toHaveTextContent('over SSH · not connected')
+  } finally {
+    delete window.__siltBackends
+    delete window.__siltBackend
+    delete window.__siltDesktop
+    delete window.__siltThreads
+  }
+})

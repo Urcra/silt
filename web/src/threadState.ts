@@ -1,5 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { api, type StateChange, type ThreadSummary } from './api'
+import { changeElsewhere } from './desktop'
+import { backendOf } from './elsewhere'
 import { useNow } from './now'
 import { keys, message } from './query'
 import { snoozed, tomorrowMorning } from './sections'
@@ -10,10 +12,16 @@ const HOUR_MS = 60 * 60 * 1000
 const UNTIL_ACTIVITY_MS = 365 * 24 * HOUR_MS
 const NOTHING: StateChange = { pinned: null, snooze: null, settled: null, seen: false, reviewed_turn: null }
 
-/** Pin, snooze or settle a thread for this person (ADR 0024), as menu items. */
+/** Pin, snooze or settle a thread for this person (ADR 0024), as menu items; on another machine, through the desktop app (ADR 0132). */
 export function useThreadState(thread: ThreadSummary): { label: string; onSelect: () => void }[] {
   const queries = useQueryClient()
-  const change = (what: Partial<StateChange>, said: string) => () =>
+  const backend = backendOf(thread)
+  const change = (what: Partial<StateChange>, said: string) => () => {
+    if (backend) {
+      changeElsewhere(backend, thread.id, { ...NOTHING, ...what })
+      toast(said)
+      return
+    }
     void api.setThreadState(thread.id, { ...NOTHING, ...what }).then(
       () => {
         toast(said)
@@ -21,6 +29,7 @@ export function useThreadState(thread: ThreadSummary): { label: string; onSelect
       },
       (failure: unknown) => toast(message(failure), 'danger'),
     )
+  }
   const now = useNow()
   // Until when is worked out at the click, not when the menu was drawn.
   const snooze = (until: (now: number) => number, said: string) => () =>

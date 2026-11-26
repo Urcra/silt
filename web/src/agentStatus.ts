@@ -3,13 +3,15 @@ import { api, type AgentStatus } from './api'
 import { useBusEvents, useTopic } from './bus'
 
 /** How the thread's agent stands here: fetched once, then followed on the event bus. */
-export function useAgentStatus(thread: string): AgentStatus | null {
+export function useAgentStatus(thread: string, here = true): AgentStatus | null {
   const [status, setStatus] = useState<AgentStatus | null>(null)
   const [round, setRound] = useState(0)
   // Subscribed before the fetch, so what changes once the daemon has answered it is heard.
   useTopic(`thread:${thread}`)
   const heard = useRef(0)
   useEffect(() => {
+    // A thread on another machine (ADR 0132) has no status here.
+    if (!here) return
     let current = true
     const before = heard.current
     api.live(thread).then(
@@ -20,7 +22,7 @@ export function useAgentStatus(thread: string): AgentStatus | null {
     return () => {
       current = false
     }
-  }, [thread, round])
+  }, [thread, round, here])
   useBusEvents((event) => {
     if (event.event === 'lagged') setRound((value) => value + 1)
     if (event.event === 'agent' && event.thread === thread) {
