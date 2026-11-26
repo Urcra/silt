@@ -15,6 +15,7 @@ Protocol version 24.
 - **Agents from the web UI** over ACP, agents asking other agents, artifacts, themes, workspaces with their own rules, Silt's sandbox on Linux, plugins, and local models.
 
 ### Added
+- The sidebar's Chats section folds by its name, as a project does, showing how many chats it holds or how many are working while folded. It stays folded after a reload, in the browser or the desktop app.
 - Settings › Network, with a switch for everything Silt connects to on its own: update checks, plan usage, the agent registry, and artifacts' libraries. **Offline**, at the top, turns them all off, so Silt connects only to your own servers; `SILT_OFFLINE=1` does the same from the environment. Silt sends no telemetry, and the README and [What Silt sends over the network](docs/guide/network.md) now say so.
 - Auto for every agent the web UI runs (ADR 0132). An agent without an auto mode of its own, such as GitHub Copilot, Codex or OpenCode, no longer greys Auto out: Silt checks each of its commands first, with a judge. See [Auto for every agent](docs/guide/auto.md).
   - The judge is by default the thread's own agent on its model, in a session of its own and in the thread's sandbox. It's given the call and your last prompts, never the agent's own words.
