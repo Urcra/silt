@@ -699,6 +699,8 @@ jobs:
           GUARD2: ${{ needs.fix2.outputs.ok }}
           TOUCHED1: ${{ needs.fix1.outputs.touched }}
           TOUCHED2: ${{ needs.fix2.outputs.touched }}
+          MOVED1: ${{ needs.fix1.outputs.moved }}
+          MOVED2: ${{ needs.fix2.outputs.moved }}
         run: '"$HELPER" passed'
       - name: CI
         id: ci
