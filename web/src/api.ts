@@ -682,10 +682,6 @@ export const api = {
   /** Passes a code from the sign-in's page on to the sign-in. */
   signInCode: (id: string, code: string) => request<string>('POST', `${thread(id)}/agent/sign-in/code`, { code }),
   cancelSignIn: (id: string) => request<string>('POST', `${thread(id)}/agent/sign-in/cancel`),
-  /** Pushes the thread's branch; answers the forge's page for its new pull request. */
-  openPullRequest: (id: string) => request<string>('POST', `${thread(id)}/pull-request`),
-  /** Why the thread can't open a pull request now, or `null` when it can. */
-  pullRequestBlocker: (id: string) => request<string | null>('GET', `${thread(id)}/pull-request`),
   stopAgent: (id: string) => request<string>('POST', `${thread(id)}/agent/stop`),
   steer: (id: string, text: string) => request<string>('POST', `${thread(id)}/agent/steer`, { text }),
   setPreset: (id: string, preset: Preset) => request<string>('POST', `${thread(id)}/agent/preset`, { preset }),

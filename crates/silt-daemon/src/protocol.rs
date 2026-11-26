@@ -1324,15 +1324,6 @@ pub enum Request {
     AcpSignInCancel {
         thread: String,
     },
-    /// Pushes the thread's branch and answers the forge's page for a new
-    /// pull request of it.
-    OpenPullRequest {
-        thread: String,
-    },
-    /// Why the thread can't open a pull request now, or none when it can.
-    PullRequestBlocker {
-        thread: String,
-    },
     /// Compresses chunks stored uncompressed and gives the space deleted
     /// rows left back to the disk, holding the store meanwhile.
     Compact,

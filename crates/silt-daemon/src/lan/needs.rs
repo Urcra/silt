@@ -125,7 +125,6 @@ impl Request {
             | Self::ThreadLinks { .. }
             | Self::Workspaces { .. }
             | Self::Queue { .. }
-            | Self::PullRequestBlocker { .. }
             | Self::Models { .. }
             | Self::ChatSettings { .. }
             | Self::Update { .. }
@@ -262,7 +261,6 @@ impl Request {
             | Self::SetWorkspaces { .. }
             | Self::AssignProject { .. }
             | Self::ProjectHome { .. }
-            | Self::OpenPullRequest { .. }
             | Self::Compact { .. }
             | Self::Shutdown { .. }
             | Self::LanStatus { .. }
