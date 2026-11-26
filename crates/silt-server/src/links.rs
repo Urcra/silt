@@ -526,7 +526,7 @@ pub(crate) async fn vendor_file(
     if !server.config().artifact_proxy {
         return StatusCode::NOT_FOUND.into_response();
     }
-    match server.shared.vendor.get(&host, &format!("/{path}"), uri.query()).await {
+    match server.shared.vendor.get(silt_vendor::Reach::Cdn, &host, &format!("/{path}"), uri.query()).await {
         Ok(fetched) => {
             let mut response = (StatusCode::OK, fetched.bytes).into_response();
             let headers = response.headers_mut();

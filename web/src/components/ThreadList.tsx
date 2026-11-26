@@ -37,7 +37,7 @@ function threadState(
       return { label: 'Stopped', tone: 'danger' }
     case 'working':
     case 'starting':
-      return { label: 'Working', tone: 'ok' }
+      return { label: thread.terminal ? 'Working in a terminal' : 'Working', tone: 'ok' }
   }
   if (inBackground(thread)) return { label: 'In the background', tone: 'ok' }
   if (thread.review) return { label: 'Review requested', tone: 'accent' }

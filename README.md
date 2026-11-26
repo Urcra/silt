@@ -8,6 +8,14 @@ A self-hostable, open-source layer under your coding agents. It records every ag
 
 You keep your own agent CLI: Claude Code, Codex (or its fork Qudiks), Gemini CLI, Antigravity CLI, OpenCode or GitHub Copilot CLI. Silt records underneath, and syncs through a server you host, or keeps a project on your machine alone.
 
+## Your data is yours
+- **No telemetry, now or in the future.** Silt collects no usage data, analytics or crash reports. There is no Silt service to send them to.
+- **You own all of it.** Threads, code and conversations live on your machines and on the servers you run. Silt never sends them to a third party.
+- **It works fully offline.** Turn on Offline in Settings › Network, or set `SILT_OFFLINE=1`, and Silt connects only to your own servers. A project kept on one machine needs no server at all.
+- **What leaves is what your agent sends its model provider:** Claude Code to Anthropic, Codex to OpenAI, and so on, through their own CLIs, SDKs and ACP. That traffic is between you and your provider, outside Silt's control. With a [local model](docs/guide/local-models.md) in a Local only workspace, the conversation never leaves your machine.
+
+[What Silt sends over the network](docs/guide/network.md) lists every connection Silt makes, what it carries, and how to turn it off.
+
 > **Status: alpha.** Silt is usable by small teams that run their own server, but it has no releases yet, and its sync protocol still changes: when it does, every machine and the server need updating together (the changelog says when).
 >
 > **Platforms:** Linux and WSL 2 are what it's built and tested on. Windows runs natively, built from source, though no CI checks it. macOS isn't supported yet: its code is written, but hasn't been tried on a Mac. Silt's own sandbox is Linux only for now.

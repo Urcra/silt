@@ -9,7 +9,7 @@ import { useNow } from '../now'
 import { useHasServer } from '../hasServer'
 import { keys, message } from '../query'
 import { ago } from '../time'
-import { Button, Dot, type DotTone, EmptyState, Icon, type IconName, Skeleton, Tabs, buttonClass, cx, toast } from '../ui'
+import { Button, Dot, type DotTone, EmptyState, Icon, type IconName, Skeleton, Switch, Tabs, buttonClass, toast } from '../ui'
 import { ListColumn, Page } from './Page'
 
 const TONE: Record<string, DotTone> = {
@@ -111,33 +111,6 @@ const GROUPS: [string, [kind: string, label: string][]][] = [
 
 /** What also puts its thread under Needs you, not only in the inbox. */
 const NEEDS_YOU = new Set(['permission', 'plan', 'mr_opened'])
-
-function Switch({ on, label, onChange }: { on: boolean; label: string; onChange: (on: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      onClick={() => onChange(!on)}
-      className="inline-flex h-11 w-11 items-center justify-center md:h-6"
-    >
-      <span
-        className={cx(
-          'relative inline-block h-4 w-7 rounded-full transition-colors duration-100',
-          on ? 'bg-accent' : 'bg-surface-3',
-        )}
-      >
-        <span
-          className={cx(
-            'absolute top-0.5 h-3 w-3 rounded-full bg-elevated transition-[left] duration-100',
-            on ? 'left-3.5' : 'left-0.5',
-          )}
-        />
-      </span>
-    </button>
-  )
-}
 
 /**
  * Which kinds notify the browser, by subject. Everything lands in the inbox

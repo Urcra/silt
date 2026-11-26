@@ -196,6 +196,7 @@ impl Core {
                         .filter(|holder| matches!(location, "moved" | "remote") && Some(*holder) != self.device_for(record.id))
                         .and_then(|holder| self.machine_name(holder))
                         .map(str::to_owned),
+                    terminal: self.shown_in_terminal(record.id),
                     agent_settings: self
                         .agent_runs
                         .get(&record.id)

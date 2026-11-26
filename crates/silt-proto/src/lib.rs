@@ -39,7 +39,7 @@ pub mod view;
 /// the machine holding each thread in its summary (ADR 0115). 24: blobs
 /// uploaded in chunks and read by range, videos, and images' previews
 /// (ADR 0121).
-pub const PROTOCOL: u32 = 24;
+pub const PROTOCOL: u32 = 25;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 
@@ -1328,6 +1328,10 @@ pub struct AgentReport {
     /// Commands and subagents it left running, which go on after its turn.
     #[serde(default)]
     pub background: u32,
+    /// It runs in a terminal, mid-turn, where it's answered: nothing is
+    /// passed on to it (ADR 0026).
+    #[serde(default)]
+    pub terminal: bool,
 }
 
 /// An agent that needs signing in, as its card shows it (ADR 0056). What

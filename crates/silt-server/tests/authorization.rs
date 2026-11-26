@@ -537,6 +537,7 @@ async fn the_hosted_app_directs_an_agent_only_through_its_owners_machine() {
             preset: "ask_for_everything".into(),
             sign_in: None,
             background: 0,
+            terminal: false,
         }],
         startable: Vec::new(),
     };
@@ -610,6 +611,7 @@ async fn people_see_their_devices_what_runs_on_each_and_choose_what_each_may_do(
             preset: String::new(),
             sign_in: None,
             background: 0,
+            terminal: false,
         }],
         startable: vec![Startable { id: "fake".into(), name: "Fake agent".into() }],
     };
@@ -689,6 +691,7 @@ async fn a_thread_continues_only_on_an_online_device_of_ones_own_once_its_agent_
             preset: String::new(),
             sign_in: None,
             background: 0,
+            terminal: false,
         }],
         startable: Vec::new(),
     };
@@ -851,6 +854,7 @@ async fn what_a_device_reports_reaches_its_persons_inbox_with_what_to_do() {
             preset: String::new(),
             sign_in: None,
             background: 0,
+            terminal: false,
         }],
         startable: Vec::new(),
     };
@@ -991,6 +995,7 @@ async fn notifying_notifications_are_pushed_encrypted_to_the_persons_browsers() 
             preset: String::new(),
             sign_in: None,
             background: 0,
+            terminal: false,
         }],
         startable: Vec::new(),
     };
