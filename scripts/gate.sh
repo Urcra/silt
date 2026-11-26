@@ -2,7 +2,7 @@
 # Decides whether a change is done (docs/contributing.md). The cheap checks
 # come first, so most mistakes fail in a minute rather than after the tests.
 # It runs on every pull request before a merge (.github/workflows/claude.yml);
-# running it locally is optional (ADR 0130).
+# running it locally is optional (ADR 0131).
 #
 # Usage: scripts/gate.sh [--quick | --part checks|tests|perf]
 #   --quick  formatting, lints and the workspace's tests only: for iterating.
@@ -76,6 +76,9 @@ has_web=false
 
 if $has_web; then
     step "web dependencies"
+    # Corepack reads the root's, which `pnpm -C web` starts from; pnpm reads web's.
+    node -e 'const [r, w] = ["./package.json", "./web/package.json"].map((p) => require(p).packageManager);
+        if (r !== w) { console.error(`package.json names ${r} but web/package.json ${w}; make them the same`); process.exit(1); }'
     pnpm -C web install --frozen-lockfile
 fi
 

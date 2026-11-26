@@ -97,7 +97,7 @@ Each one fails a test while it's out of date. Never edit them by hand.
 - **The protocol version.** A change to the wire format bumps `silt_proto::PROTOCOL`, and CHANGELOG says to update every machine and the server together.
 - **Capture without a daemon.** Capture must stay correct with no daemon running. Put capture logic in the shared step, never only in the daemon's path (ADR 0018).
 - **Peer content is untrusted.** Deltas come from possibly hostile peers. Writes to disk go through `silt_checkout::is_writable`, and ids are checked before they become file names or arguments (ADR 0016).
-- **The gate runs on the pull request** (ADR 0130): CI on every push, and the full gate through `/claude gate` or `/claude merge` before a merge. Running `scripts/gate.sh` locally is optional; `scripts/gate.sh --quick` takes a few minutes and catches most of what CI would.
+- **The gate runs on the pull request** (ADR 0130, ADR 0131): CI runs the whole gate on every push, and `/claude merge` merges once it passed. Running `scripts/gate.sh` locally is optional; `scripts/gate.sh --quick` takes a few minutes and catches most of what CI would.
 - **Screen references** are compared against the perf build, as the gate runs them: take them with `pnpm -C web e2e:update` and `SILT` set to the perf binary's absolute path, since the debug build renders some screens differently.
 - **A fresh worktree's first gate is slow:** it builds the `perf` profile and wasm too.
 - **In a Claude Code cloud session,** check the setup ran before running the gate there: `cargo nextest --version`, `bwrap --version`, and `debug = "line-tables-only"` in `~/.cargo/config.toml`. If not, run `sh silt/scripts/cloud-setup.sh` from the folder above the checkout. Run the gate in the background with its output in a file; it takes 20 to 30 minutes. Out of disk, delete `target/debug` and `target/perf`. docs/contributing.md has the rest.
@@ -115,13 +115,13 @@ Each one fails a test while it's out of date. Never edit them by hand.
    - They describe the change itself and never mention milestone or task ids (M1, M1-07, …).
    - Push after every commit.
    - Pull requests follow `.github/pull_request_template.md`. A UI change needs screenshots of each new or changed screen in its description, uploaded to the PR rather than committed.
-   - Commit with git. No local gate is required before committing or pushing: CI runs on the pull request, and the full gate runs before it merges.
+   - Commit with git. No local gate is required before committing or pushing: CI runs the whole gate on the pull request.
 3. **UI work starts with mockups:** before writing code for a feature that touches the UI, make artifact mockups of the finished feature, and share them so it can be seen and agreed on first.
    - Make one for each new or changed screen and state: empty, loading, error and full.
    - Build them from Silt as it actually looks, not from the Silt or Nous design system alone. Take the app's real CSS (`web/src/nous.css`, `web/src/index.css`) and the markup its components render. Check against the running app (`target/debug/silt` on a `web/e2e/*fixture.sh` fixture).
    - Put the new parts in the real screen around them: sidebar, breadcrumbs, panels and realistic data. The mockup should show exactly how the feature will look in the app.
    - Show light and dark, and phone width where the screen works there.
-4. **Finishing a task:** a task is done only after its pull request's CI and the full gate pass (`/claude gate`, or `/claude merge`, which merges only then). Then:
+4. **Finishing a task:** a task is done only after its pull request's gate passes (CI, and `/claude merge`, which merges only then). Then:
    - its pull request closes the issue (`Fixes #<n>`);
    - update `CHANGELOG.md` when behaviour changed.
 5. **New work:** open an issue for newly discovered work, with the labels and milestone it fits; don't do it silently. Label what's blocked `blocked`, saying what unblocks it.

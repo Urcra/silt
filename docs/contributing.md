@@ -4,7 +4,7 @@ How to build Silt, check a change and work on it day to day. How the pieces fit 
 
 ## What you need
 - **Rust**, as `rust-toolchain.toml` pins it, with clippy, rustfmt and the `wasm32-unknown-unknown` and `wasm32-wasip2` targets. rustup installs them on the first build in the checkout.
-- **Node and pnpm**, for `web/`: Node 22 or newer (`.nvmrc`), and the pnpm `web/package.json` names (`packageManager`), which `corepack enable pnpm` gives you. `web/pnpm-workspace.yaml` takes no package published less than a day ago (`minimumReleaseAge`), so a lockfile resolved anywhere also passes a pnpm that checks the lockfile against that policy.
+- **Node and pnpm**, for `web/`: Node 22 or newer (`.nvmrc`), and the pnpm `web/package.json` names (`packageManager`), which `corepack enable pnpm` gives you. The root `package.json` names the same pnpm, as corepack looks where pnpm starts, and `pnpm -C web` starts at the root; the gate checks that the two agree. `web/pnpm-workspace.yaml` takes no package published less than a day ago (`minimumReleaseAge`), so a lockfile resolved anywhere also passes a pnpm that checks the lockfile against that policy.
 - **git**, which Silt runs for its own writes.
 - **sqlx-cli**, only to add migrations or change queries: `cargo install sqlx-cli --locked`.
 - **WebKitGTK 4.1**, only for the desktop app: on Debian and Ubuntu, `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev`. Without it the gate skips `crates/silt-desktop`.
@@ -46,7 +46,7 @@ The `justfile` does release builds of both the CLI and the desktop app: `just bu
 ## The gate
 The sandbox's bubblewrap and pasta can go beside `silt` (ADR 0093), as the release workflow puts them in its archives: `scripts/build-sandbox-tools.sh <dir>` builds them statically, from versions pinned by checksum, as `silt-bwrap` and `silt-pasta`, with their licenses. It needs meson, ninja, make and `libcap-dev`. `silt` finds them beside itself, else `SILT_BWRAP` and `SILT_PASTA`, else the system's.
 
-`scripts/gate.sh` decides whether a change is done. It runs on every pull request before a merge, so nobody has to run it locally ([ADR 0130](adr/0130-the-gate-runs-on-the-pull-request.md)). It runs the cheap checks first, so most mistakes fail within a minute or two ([ADR 0091](adr/0091-a-faster-gate-and-a-pass-that-stands.md)):
+`scripts/gate.sh` decides whether a change is done. CI runs it on every pull request, so nobody has to run it locally ([ADR 0131](adr/0131-the-gate-runs-on-the-pull-request.md)). It runs the cheap checks first, so most mistakes fail within a minute or two ([ADR 0091](adr/0091-a-faster-gate-and-a-pass-that-stands.md)):
 1. `cargo fmt --check`, here and in `crates/silt-voice` and `crates/silt-desktop` where they're built, the web UI's formatting (`pnpm -C web fmt:check`, oxfmt), and its lint (`pnpm -C web lint`, oxlint, where a warning fails), then every Rust dependency's licence against `deny.toml` (`cargo deny check licenses`) in each workspace;
 2. the web UI's build, which the binary embeds. It fails on a bundled package under a licence `web/vite.config.ts` doesn't allow, and writes `THIRD-PARTY-NOTICES.txt` beside the UI with every bundled package's licence;
 3. `cargo clippy --all-targets -- -D warnings` on the whole workspace, and again for Windows (`x86_64-pc-windows-gnu`) when that target and MinGW are installed;
@@ -60,14 +60,15 @@ Format the web UI with `pnpm -C web fmt`. A commit that only reformats goes in `
 
 It names each step as it starts, with the time so far, and ends with how long each took. `scripts/gate.sh --quick` runs only steps 1 to 3, the web UI's unit tests and the tests, in a few minutes, for while you iterate.
 
-Commit however you like, maintainers included: a pull request's CI runs the checks on every push, and the full gate runs on the pull request merged with its base before a merge (`/claude gate`, `/claude merge`). Running it locally first is up to you, for a change likely to fail a part CI doesn't run, such as the end-to-end tests or the budgets. Messages are Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `chore:`, `build:`, with an optional scope such as `feat(crdt):`), and say what changed rather than which task it was.
+Commit however you like, maintainers included: a pull request's CI runs the whole gate, its three parts on runners of their own (`scripts/gate.sh --part`), forks' pull requests included (ADR 0130). Running it locally first is up to you ([ADR 0131](adr/0131-the-gate-runs-on-the-pull-request.md)). Messages are Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `chore:`, `build:`, with an optional scope such as `feat(crdt):`), and say what changed rather than which task it was.
 
 People with write access can have Claude work on an issue or pull request from a comment (`.github/workflows/claude.yml`). It runs in GitHub Actions, and what it writes comes from `claude[bot]`. Notes after the command steer it.
 - On a pull request:
   - `/claude fix` merges the base in if it conflicts, makes the changes open reviews and comments ask for, replies and resolves them, and pushes. It never merges.
-  - `/claude merge` runs the full gate on the PR merged with its base, fixes conflicts and failures (up to two rounds), waits for CI, and merges with a merge commit. It refuses while review threads or change requests are open.
+  - `/claude merge` runs the full gate on the PR merged with its base, fixes conflicts and failures (up to two rounds), waits for CI, and merges with a merge commit. It skips its own first gate when CI already passed the whole gate on the same head and base, and the PR doesn't change `.github/`. It refuses while review threads or change requests are open.
   - `/claude gate` does the same without the merge, and says whether the gate passed.
   - `/claude review` posts a review; `/claude review fix` also fixes what it found.
+  - On a pull request from a fork, only `/claude review` and `/claude ask` run, and Claude's token there can read the code and post comments and reviews but not push or merge. The owner can have `/claude review dangerously full` give it the token and tools it has on members' pull requests (ADR 0130).
 - On an issue:
   - `/claude fix` opens a pull request that fixes it, with screenshots of any screen it changes, or asks questions when the issue is unclear.
   - `/claude plan` comments a plan: the approach, the files, tests, risks and open questions.
