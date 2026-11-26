@@ -49,9 +49,20 @@ fn an_offline_machine_connects_nowhere_on_its_own() {
             .to_string(),
     )
     .expect("credentials");
+    // Claude's CLI on the PATH, whatever this machine has, for the built-in
+    // registry to offer it.
+    let bin = root.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    fs::copy(common::fake_claude(), bin.join(format!("claude{}", std::env::consts::EXE_SUFFIX))).expect("claude");
+    let path =
+        std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())))
+            .expect("PATH");
+    let path = path.to_string_lossy();
     laptop.run(&["daemon", "stop"]);
-    laptop
-        .silt_with(&["open", "--no-browser"], &[("SILT_OFFLINE", "1"), ("SILT_CLAUDE_USAGE_URL", &format!("{provider}/claude"))]);
+    laptop.silt_with(
+        &["open", "--no-browser"],
+        &[("SILT_OFFLINE", "1"), ("SILT_CLAUDE_USAGE_URL", &format!("{provider}/claude")), ("PATH", &path)],
+    );
 
     let usage = laptop.web("GET", "/api/agents/claude-code/usage", None);
     assert!(usage["unavailable"].as_str().is_some_and(|why| why.contains("offline")), "{usage}");
