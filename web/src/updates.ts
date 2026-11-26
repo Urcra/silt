@@ -1,5 +1,6 @@
-// What Settings › Updates and the sidebar show of an update (ADR 0100), from
-// what the daemon says: the build, the last check and the last run.
+// What Settings › Updates and the sidebar show of an update (ADR 0100,
+// ADR 0129), from what the daemon says: the build, the last check and the
+// last run.
 
 import { useQuery } from '@tanstack/react-query'
 import { api, type OffReason, type RunView, type UpdateView } from './api'
@@ -14,6 +15,7 @@ export type UpdateState =
   | 'relaunch'
   | 'behind'
   | 'release'
+  | 'nightly'
   | 'done'
   | 'off'
   | 'up-to-date'
@@ -40,6 +42,7 @@ export function updateState(view: UpdateView | undefined): UpdateState {
   if (view.relaunch && !behind) return 'relaunch'
   if (behind) return 'behind'
   if (availability?.kind === 'release') return 'release'
+  if (availability?.kind === 'nightly') return 'nightly'
   if (run?.outcome.kind === 'done' && sameCommit(run.to, build.commit)) return 'done'
   if (availability?.kind === 'off') return 'off'
   if (availability?.kind === 'up_to_date') return 'up-to-date'
@@ -54,6 +57,7 @@ export function pillOf(view: UpdateView | undefined): Pill | undefined {
   switch (state) {
     case 'behind':
     case 'release':
+    case 'nightly':
       return { kind: 'update', text: 'Update' }
     case 'running':
       return { kind: 'running', text: `Updating · ${view?.run?.percent ?? 0}%` }

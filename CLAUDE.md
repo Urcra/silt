@@ -39,7 +39,7 @@ Silt is an open-source (AGPL-3.0), self-hostable workspace for coding with agent
   - `silt-shipped`: the plugins shipped with Silt (`plugins/`), built for `wasm32-wasip2` by its build script and embedded (`SILT_SKIP_PLUGIN_BUILD=1` skips them, ADR 0104);
   - `silt-vendor`: the CDN files artifacts load through Silt, fetched and kept (ADR 0071);
   - `silt-media`: what an image or a video is, images' previews, and a blob served by range (ADR 0121);
-  - `silt-update`: which build this is (commit, clone, stable or nightly channel), whether a newer one is out, and an update's steps and state (ADR 0100);
+  - `silt-update`: which build this is (commit, clone, and its channel: stable, nightly or dev), whether a newer one is out, and an update's steps and state (ADR 0100, ADR 0130);
   - `silt-os`: what each OS does its own way (Windows' pipe and DACLs, detaching, links, WSL paths). The only crate with `unsafe`; platform code goes here rather than as `cfg`s in the others (ADR 0045).
 - **Wiring:**
   - `silt-web`: the embedded web UI; its `build.rs` builds `web/dist` when missing (`SILT_SKIP_WEB_BUILD=1` skips it);
@@ -97,7 +97,7 @@ Each one fails a test while it's out of date. Never edit them by hand.
 - **The protocol version.** A change to the wire format bumps `silt_proto::PROTOCOL`, and CHANGELOG says to update every machine and the server together.
 - **Capture without a daemon.** Capture must stay correct with no daemon running. Put capture logic in the shared step, never only in the daemon's path (ADR 0018).
 - **Peer content is untrusted.** Deltas come from possibly hostile peers. Writes to disk go through `silt_checkout::is_writable`, and ids are checked before they become file names or arguments (ADR 0016).
-- **The gate runs on the pull request** (ADR 0129): CI on every push, and the full gate through `/claude gate` or `/claude merge` before a merge. Running `scripts/gate.sh` locally is optional; `scripts/gate.sh --quick` takes a few minutes and catches most of what CI would.
+- **The gate runs on the pull request** (ADR 0130): CI on every push, and the full gate through `/claude gate` or `/claude merge` before a merge. Running `scripts/gate.sh` locally is optional; `scripts/gate.sh --quick` takes a few minutes and catches most of what CI would.
 - **Screen references** are compared against the perf build, as the gate runs them: take them with `pnpm -C web e2e:update` and `SILT` set to the perf binary's absolute path, since the debug build renders some screens differently.
 - **A fresh worktree's first gate is slow:** it builds the `perf` profile and wasm too.
 - **In a Claude Code cloud session,** check the setup ran before running the gate there: `cargo nextest --version`, `bwrap --version`, and `debug = "line-tables-only"` in `~/.cargo/config.toml`. If not, run `sh silt/scripts/cloud-setup.sh` from the folder above the checkout. Run the gate in the background with its output in a file; it takes 20 to 30 minutes. Out of disk, delete `target/debug` and `target/perf`. docs/contributing.md has the rest.

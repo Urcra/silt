@@ -2,7 +2,7 @@
 # Decides whether a change is done (docs/contributing.md). The cheap checks
 # come first, so most mistakes fail in a minute rather than after the tests.
 # It runs on every pull request before a merge (.github/workflows/claude.yml);
-# running it locally is optional (ADR 0129).
+# running it locally is optional (ADR 0130).
 #
 # Usage: scripts/gate.sh [--quick | --part checks|tests|perf]
 #   --quick  formatting, lints and the workspace's tests only: for iterating.

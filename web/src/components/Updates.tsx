@@ -1,6 +1,6 @@
-// Settings › Updates (ADR 0100): which build this is, whether a newer one is
-// out, and an update's progress, as the runner writes it, through the
-// daemon's restart.
+// Settings › Updates (ADR 0100, ADR 0129): which build this is and its
+// channel, whether a newer one is out, and a dev build's update progress, as
+// the runner writes it, through the daemon's restart.
 
 import { useQueryClient } from '@tanstack/react-query'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
@@ -36,15 +36,21 @@ function Code({ children }: { children: ReactNode }) {
   return <code className="rounded-sm border border-line-subtle bg-surface-1 px-1 font-mono text-xs text-fg-1">{children}</code>
 }
 
+const CHANNEL = {
+  stable: { label: 'Stable', tone: 'neutral' },
+  nightly: { label: 'Nightly', tone: 'accent' },
+  dev: { label: 'Dev', tone: 'info' },
+} as const
+
 function BuildCard({ build }: { build: BuildView }) {
-  const stable = build.channel === 'stable'
+  const channel = CHANNEL[build.channel]
   return (
     <div className="flex flex-col gap-1 rounded-md border border-line bg-elevated px-4 py-3 text-sm" data-testid="update-build">
       <div className="flex flex-wrap items-center gap-2">
-        <Tag tone={stable ? 'neutral' : 'accent'} className="font-sans">
-          {stable ? 'Stable' : 'Nightly'}
+        <Tag tone={channel.tone} className="font-sans">
+          {channel.label}
         </Tag>
-        {stable ? (
+        {build.channel === 'stable' ? (
           <span>
             <Code>v{build.version}</Code> · installed from a release
           </span>
@@ -58,22 +64,23 @@ function BuildCard({ build }: { build: BuildView }) {
               </>
             )}
             {build.dirty && ' with local changes'}
+            {build.channel === 'nightly' && ' · installed from the nightly release'}
           </span>
         )}
       </div>
-      {!stable && build.source && <span className="font-mono text-2xs text-fg-3">{build.source}</span>}
+      {build.channel === 'dev' && build.source && <span className="font-mono text-2xs text-fg-3">{build.source}</span>}
     </div>
   )
 }
 
-function Commits({ commits, ahead, now }: { commits: NewCommit[]; ahead: number; now: number }) {
+function Commits({ commits, ahead, now, lead }: { commits: NewCommit[]; ahead: number; now: number; lead: ReactNode }) {
   const [all, setAll] = useState(false)
   const shown = all ? commits : commits.slice(0, 5)
   const more = ahead - shown.length
   return (
     <div className="flex flex-col rounded-md border border-line bg-elevated text-sm" data-testid="update-commits">
       <div className="px-4 pt-3 pb-2 font-medium">
-        <Code>main</Code> is {ahead} {ahead === 1 ? 'commit' : 'commits'} ahead
+        {lead} {ahead} {ahead === 1 ? 'commit' : 'commits'} ahead
       </div>
       <ul className="flex flex-col pb-1.5">
         {shown.map((commit) => (
@@ -323,6 +330,8 @@ export function UpdatesSettings() {
           <span>
             {view.build.channel === 'stable' ? (
               'This is the latest release.'
+            ) : view.build.channel === 'nightly' ? (
+              'This is the latest nightly.'
             ) : (
               <>
                 Up to date with <Code>main</Code>
@@ -334,7 +343,16 @@ export function UpdatesSettings() {
 
       {state === 'behind' && availability?.kind === 'behind' && (
         <>
-          <Commits commits={availability.commits} ahead={availability.ahead} now={now} />
+          <Commits
+            commits={availability.commits}
+            ahead={availability.ahead}
+            now={now}
+            lead={
+              <>
+                <Code>main</Code> is
+              </>
+            }
+          />
           <div className="flex flex-col gap-2 px-0.5 text-sm">
             <p className="text-xs font-medium text-fg-2">What happens</p>
             <ul className="flex flex-col gap-1.5">
@@ -512,12 +530,54 @@ export function UpdatesSettings() {
               target="_blank"
               rel="noreferrer"
             >
-              <Icon name="download" />
-              Download
+              <Icon name="arrowUp" />
+              Update
             </a>
           </div>
           <p className="text-2xs text-fg-3">
-            A stable release installs with its installer for now. Updating in place comes with signed releases.
+            Update opens the release: install it with its installer. Updating in place comes with signed releases.
+          </p>
+        </>
+      )}
+
+      {state === 'nightly' && availability?.kind === 'nightly' && (
+        <>
+          <Commits
+            commits={availability.commits}
+            ahead={availability.ahead}
+            now={now}
+            lead={
+              <>
+                The <Code>nightly</Code> release is
+              </>
+            }
+          />
+          <div className="flex flex-wrap items-center gap-3 rounded-md border border-line bg-elevated px-4 py-3.5 text-sm">
+            <div className="flex min-w-[240px] flex-1 flex-col gap-0.5">
+              <span className="font-medium">
+                {availability.commits[0] ? (
+                  <>
+                    Nightly <Code>{short(availability.commits[0].hash)}</Code> is out
+                  </>
+                ) : (
+                  'A newer nightly is out'
+                )}
+              </span>
+              <span className="text-2xs text-fg-3">you have {short(view.build.commit)}</span>
+            </div>
+            <a
+              className="inline-flex items-center gap-1.5 rounded-sm border border-transparent bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-hover"
+              href={availability.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <Icon name="arrowUp" />
+              Update
+            </a>
+          </div>
+          <p className="text-2xs text-fg-3">
+            Update opens the nightly release: install the build for this computer as you did this one. Updating in place comes
+            with signed releases.
           </p>
         </>
       )}
