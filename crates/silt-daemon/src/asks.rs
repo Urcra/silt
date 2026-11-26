@@ -17,6 +17,7 @@ use silt_workspace::{AgentKey, AskPolicy, agent_key};
 use tokio::sync::{oneshot, watch};
 
 use crate::CoreError;
+use crate::acp::Prompter;
 use crate::core::{Core, now_ms, to_response};
 use crate::protocol::{
     AgentChoice, AgentSetting, AskCheckout, AskInput, AskMode, AskState, AskView, Askable, BusEvent, Request, Response,
@@ -437,7 +438,7 @@ impl Core {
         });
         let started = match self.acp.get(&asked).map(|run| run.working()) {
             Some(false) if self.agent_state(asked) == Some(silt_proto::AgentState::Idle) => {
-                self.send_prompt(asked, &author, &text, crate::acp::Given::default()).await
+                self.send_prompt(asked, Prompter::Person(&author), &text, crate::acp::Given::default()).await
             }
             Some(_) => self.enqueue(asked, &text, false).await.map(|_| ()),
             None => {
@@ -591,7 +592,8 @@ impl Core {
             return Ok(());
         }
         self.asks.reports_waiting.remove(&caller);
-        self.send_prompt(caller, "Silt", "The agents you asked reported back.", crate::acp::Given::default()).await
+        let from = Prompter::Silt { cause: "The agents it asked reported back" };
+        self.send_prompt(caller, from, "The agents you asked reported back.", crate::acp::Given::default()).await
     }
 
     /// Answers one of the ask requests: from `caller`'s agent, or from the

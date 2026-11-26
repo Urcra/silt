@@ -171,19 +171,20 @@ fn a_report_that_comes_after_the_wait_wakes_its_caller() {
             said = history(laptop, &caller);
             let answered = said.iter().any(|entry| entry["text"].as_str().is_some_and(|text| text.contains("is still working")));
             // The prompt Silt woke it with carries the report, which the fake repeats.
-            let woken =
-                said.iter().any(|entry| entry["kind"] == "user" && entry["text"] == "The agents you asked reported back.")
-                    && said.iter().any(|entry| {
-                        entry["kind"] == "assistant"
-                            && entry["text"].as_str().is_some_and(|text| text.contains("Fake other reported back on ask"))
-                    });
+            let woken = said.iter().any(|entry| {
+                entry["kind"] == "wake"
+                    && entry["text"] == "The agents it asked reported back, and Silt passed it on to the agent."
+            }) && said.iter().any(|entry| {
+                entry["kind"] == "assistant"
+                    && entry["text"].as_str().is_some_and(|text| text.contains("Fake other reported back on ask"))
+            });
             answered && woken && idle(laptop, &caller)
         }),
         "the call answers at once, and the report wakes the caller later: {said:#?}\n{}",
         laptop.daemon_log()
     );
-    let woken = said.iter().filter(|entry| entry["kind"] == "user").count();
-    assert_eq!(woken, 2, "its prompt, then the report, once: {said:#?}");
+    let count = |kind: &str| said.iter().filter(|entry| entry["kind"] == kind).count();
+    assert_eq!((count("user"), count("wake")), (1, 1), "its prompt, then the report, once and not as the person's: {said:#?}");
 }
 
 #[test]

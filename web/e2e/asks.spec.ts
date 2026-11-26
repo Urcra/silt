@@ -69,7 +69,7 @@ test("an agent asks another, and the ask's card, the asked thread and its report
   const card = page.getByTestId('ask')
   if (!(await card.isVisible())) await page.locator('summary', { hasText: 'Worked' }).first().click()
   await expect(card).toBeVisible()
-  await expect(card).toContainText('Fake other')
+  await expect(card.getByRole('img', { name: 'Fake other' })).toBeVisible()
   await expect(card).toContainText('Review the change')
   await expect(card.getByText('done', { exact: true })).toBeVisible()
   await card.getByRole('button', { name: /Fake other/ }).click()
@@ -108,7 +108,8 @@ test('the person stops an ask that runs past its caller, from the strip above th
   await page.goto(`${new URL(fixture.url).origin}/t/${thread}`)
   const strip = page.getByTestId('running-asks')
   await expect(strip).toBeVisible({ timeout: 30_000 })
-  await expect(strip).toContainText('Fake other')
+  await expect(strip.getByRole('img', { name: 'Fake other' })).toBeVisible()
+  await expect(strip).not.toContainText('Fake other')
   await page.locator('summary', { hasText: 'Worked' }).first().click()
   await page
     .getByTestId('ask')

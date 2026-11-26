@@ -1,13 +1,12 @@
 import { Link } from '@tanstack/react-router'
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { useAgentStatus } from '../agentStatus'
 import { api } from '../api'
-import type { AskView, HistoryEntry } from '../api.generated'
+import type { AskView } from '../api.generated'
 import { type AskCall, askFor, useAsks } from '../asks'
-import { useHistory } from '../historyLoad'
 import { useNow } from '../now'
 import { message } from '../query'
-import { type ToolStep, duration, kindOf } from '../transcript'
+import { type ToolStep, duration } from '../transcript'
 import { Button, Icon, Spinner, Tag, cx, toast } from '../ui'
 import { AgentMark } from './AgentMark'
 import { Markdown } from './Markdown'
@@ -17,55 +16,6 @@ const STATE: Record<AskView['state'], { label: string; tone: 'ok' | 'danger' | '
   done: { label: 'done', tone: 'ok' },
   failed: { label: 'failed', tone: 'danger' },
   stopped: { label: 'stopped', tone: 'neutral' },
-}
-
-const VERB: Record<string, string> = {
-  read: 'Read',
-  edit: 'Edited',
-  execute: 'Ran',
-  search: 'Searched',
-  fetch: 'Fetched',
-  subagent: 'Started',
-  other: 'Used',
-}
-
-/** The asked thread's own steps as it takes them: its tool calls since it was forked, the last few. */
-function AskedSteps({ ask }: { ask: AskView }) {
-  const history = useHistory(ask.asked)
-  const calls = (history.data?.entries ?? []).filter(
-    (entry) => entry.thread === ask.asked && entry.kind === 'tool_call' && entry.time_ms >= ask.started_ms,
-  )
-  const answered = new Set(
-    (history.data?.entries ?? []).flatMap((entry) => (entry.kind === 'tool_result' && entry.outcome ? [entry.outcome.call] : [])),
-  )
-  if (calls.length === 0) return null
-  const shown = calls.slice(-6)
-  return (
-    <div className="flex flex-col gap-1" data-testid="ask-steps">
-      {calls.length > shown.length && <span className="text-2xs text-fg-3">{calls.length - shown.length} earlier steps</span>}
-      {shown.map((call) => (
-        <AskedStep key={call.index} call={call} running={ask.state === 'running' && !answered.has(call.tool?.id ?? '')} />
-      ))}
-    </div>
-  )
-}
-
-function AskedStep({ call, running }: { call: HistoryEntry; running: boolean }) {
-  const kind = kindOf(call)
-  const subject = call.tool?.subject?.split('\n')[0] ?? call.text.split(' {')[0]
-  return (
-    <div className="flex min-w-0 items-start gap-2 py-px">
-      {running ? (
-        <Spinner className="mt-1" />
-      ) : (
-        <Icon name={kind === 'execute' ? 'terminal' : 'file'} className="mt-0.5 h-3.5 w-3.5 shrink-0 text-fg-2" />
-      )}
-      <span className="min-w-0 flex-1">
-        <span className="text-fg-2">{running ? 'Running' : (VERB[kind] ?? 'Used')}</span>{' '}
-        <span className="font-mono break-all text-fg-1">{subject}</span>
-      </span>
-    </div>
-  )
 }
 
 /** Where the asked agent works and what it may do, and its thread. */
@@ -135,10 +85,21 @@ function TakeRow({ ask }: { ask: AskView }) {
 }
 
 /**
- * A call that asked another agent (ADR 0120): one card led by the asked agent's mark, name and model, opening to
- * where it works, what it was asked, its steps as it takes them, and its report.
+ * A call that asked another agent (ADR 0120): one card led by the asked agent's mark and model, opening to where it
+ * works, what it was asked, what it did in its thread (`transcript`), and its report. Its mark stays put as it runs, as a
+ * subagent's kind does; its tag says how it stands.
  */
-export function AskCard({ step, thread, asked }: { step: ToolStep; thread: string; asked: AskCall }) {
+export function AskCard({
+  step,
+  thread,
+  asked,
+  transcript,
+}: {
+  step: ToolStep
+  thread: string
+  asked: AskCall
+  transcript: (ask: AskView) => ReactNode
+}) {
   const asks = useAsks()
   const call = step.call!
   const ask = askFor(asks, thread, call)
@@ -179,14 +140,9 @@ export function AskCard({ step, thread, asked }: { step: ToolStep; thread: strin
           className="group/row flex w-full min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left max-md:min-h-11"
         >
           <Icon name="chevronRight" className={cx('h-3 w-3 shrink-0 text-fg-2 transition-transform', open && 'rotate-90')} />
-          {running || (!ask && !step.result && !waiting) ? (
-            <Spinner />
-          ) : (
-            <span className="text-fg-2">
-              <AgentMark agent={agent} name={name} className="h-3.5 w-3.5" />
-            </span>
-          )}
-          <span className="max-w-[40%] shrink-0 truncate font-medium text-fg-1">{name}</span>
+          <span className="text-fg-1" title={name}>
+            <AgentMark agent={agent} name={name} labelled className="h-3.5 w-3.5" />
+          </span>
           {ask && <span className="shrink-0 text-fg-2 max-md:hidden">{[ask.model, ask.mode].filter(Boolean).join(' · ')}</span>}
           <span className="min-w-0 flex-1 truncate text-fg-1 group-hover/row:text-accent-fg">{title}</span>
           {took && (
@@ -218,7 +174,7 @@ export function AskCard({ step, thread, asked }: { step: ToolStep; thread: strin
             <span className="text-2xs text-fg-2">Asked</span>
             <p className="border-l-2 border-line pl-3 text-sm whitespace-pre-wrap text-fg-1">{asked.prompt}</p>
           </div>
-          {ask && <AskedSteps ask={ask} />}
+          {ask && transcript(ask)}
           {why && <p className="text-fg-2">{why}</p>}
           {ask?.report && (
             <div className="flex flex-col gap-1">
@@ -256,9 +212,8 @@ export function AskStrip({ thread }: { thread: string }) {
           >
             <Spinner />
             <span className="shrink-0 text-fg-2">Asked</span>
-            <span className="inline-flex max-w-[40%] shrink-0 items-center gap-1 truncate font-medium">
-              <AgentMark agent={ask.agent} name={ask.agent_name} className="h-3 w-3" />
-              {ask.agent_name}
+            <span className="text-fg-1" title={ask.agent_name}>
+              <AgentMark agent={ask.agent} name={ask.agent_name} labelled className="h-3.5 w-3.5" />
             </span>
             <span className="min-w-0 flex-1 truncate">{ask.title}</span>
             <span className="shrink-0 font-mono text-fg-3 tabular-nums" data-volatile>

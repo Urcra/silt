@@ -88,6 +88,7 @@ import {
 import { RunningStrip, TaskCard } from './Tasks'
 import { AskCard, AskStrip, AskedNote } from './Asks'
 import { askOfCall, askedIn, useAsks } from '../asks'
+import type { AskView } from '../api.generated'
 import {
   Avatar,
   Button,
@@ -494,8 +495,64 @@ function SideTranscript({ task, side, ...props }: EntryProps & { task: TaskState
     (entry) => (from_ms === null || entry.time_ms >= from_ms) && (until_ms === null || entry.time_ms < until_ms),
   )
   if (entries.length === 0) return null
+  return <TranscriptPieces testId="subagent-transcript" entries={entries} tasks={tasks} {...props} />
+}
+
+/**
+ * What an asked agent did in its own thread since it was asked (ADR 0120), as its thread shows it: its words, thoughts
+ * and steps. The prompt that asked shows above it as what was asked, and its report below it, so neither shows twice.
+ */
+function AskTranscript({ ask }: { ask: AskView }) {
+  const queries = useQueryClient()
+  const history = useHistory(ask.asked)
+  const comments = useQuery({ queryKey: keys.comments(ask.asked), queryFn: () => api.comments(ask.asked) })
+  const held = history.data?.entries
+  const entries = useMemo(() => {
+    const own = (held ?? []).filter(
+      (entry) =>
+        entry.thread === ask.asked && entry.time_ms >= ask.started_ms && (ask.ended_ms === null || entry.time_ms <= ask.ended_ms),
+    )
+    const first = own.findIndex((entry) => entry.kind === 'user')
+    if (first >= 0 && own.slice(0, first).every((entry) => entry.kind !== 'assistant')) own.splice(first, 1)
+    const report = ask.report?.trim()
+    const last = own.findLastIndex((entry) => entry.kind === 'assistant')
+    if (report && last >= 0 && own[last].text.trim() === report) own.splice(last, 1)
+    return own
+  }, [held, ask.asked, ask.started_ms, ask.ended_ms, ask.report])
+  const tasks = useMemo(() => tasksOf(entries), [entries])
+  const reload = useCallback(() => queries.invalidateQueries({ queryKey: keys.comments(ask.asked) }), [queries, ask.asked])
+  const props = useMemo<EntryProps>(
+    () => ({
+      thread: ask.asked,
+      comments: comments.data ?? NO_COMMENTS,
+      anchor: NO_ANCHOR,
+      onChanged: reload,
+      onComment: async (index, text) => {
+        await api.addComment(ask.asked, { on: 'entry', index }, text)
+        await reload()
+      },
+    }),
+    [ask.asked, comments.data, reload],
+  )
+  if (entries.length === 0) {
+    return ask.state === 'running' ? <p className="text-fg-2">Its steps show here as it takes them.</p> : null
+  }
   return (
-    <div data-testid="subagent-transcript" className="flex flex-col gap-2 border-l-2 border-line pl-3 text-sm">
+    <TasksContext.Provider value={tasks}>
+      <TranscriptPieces testId="ask-transcript" entries={entries} tasks={tasks} {...props} />
+    </TasksContext.Provider>
+  )
+}
+
+/** A transcript inside a card: its folds of work, the steps that stand on their own, and its words. */
+function TranscriptPieces({
+  testId,
+  entries,
+  tasks,
+  ...props
+}: EntryProps & { testId: string; entries: HistoryEntry[]; tasks: Tasks }) {
+  return (
+    <div data-testid={testId} className="flex flex-col gap-2 border-l-2 border-line pl-3 text-sm">
       {piecesOf(entries, tasks).map((piece) =>
         piece.kind === 'tools' ? (
           <RunFold key={piece.entries[0].index} entries={piece.entries} until={piece.until} {...props} />
@@ -526,7 +583,7 @@ function StepCard({ step, ...props }: EntryProps & { step: ToolStep }) {
   const tasks = useContext(TasksContext)
   const call = step.call!
   const asked = askOfCall(call)
-  if (asked) return <AskCard step={step} thread={props.thread} asked={asked} />
+  if (asked) return <AskCard step={step} thread={props.thread} asked={asked} transcript={(ask) => <AskTranscript ask={ask} />} />
   if (proposedPlan(call)) return <ProposedPlan step={step} />
   if (kindOf(call) === 'question') return <QuestionCard step={step} />
   if (tasked(step, tasks)) {

@@ -196,6 +196,23 @@ struct First {
     author: Option<String>,
 }
 
+/// Who a prompt is from: someone, by name, or Silt itself, which the
+/// history shows as a turn nobody typed, saying why it began.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Prompter<'a> {
+    Person(&'a str),
+    Silt { cause: &'a str },
+}
+
+impl<'a> Prompter<'a> {
+    fn author(self) -> &'a str {
+        match self {
+            Self::Person(author) => author,
+            Self::Silt { .. } => "Silt",
+        }
+    }
+}
+
 /// The files a prompt came with: sent in it, or uploaded first (ADR 0121).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Given {
@@ -957,14 +974,14 @@ impl Core {
             send(run, Command::SetMode(mode));
         }
         let me = self.own_user(thread);
-        self.send_prompt(thread, &me, text, attachments).await?;
+        self.send_prompt(thread, Prompter::Person(&me), text, attachments).await?;
         Ok("sent")
     }
 
     /// Sends the prompt the agent was started with.
     async fn send_first(&mut self, thread: ThreadId, first: First) -> Result<(), CoreError> {
         match first.author {
-            Some(author) => self.send_prompt(thread, &author, &first.prompt, first.attachments).await?,
+            Some(author) => self.send_prompt(thread, Prompter::Person(&author), &first.prompt, first.attachments).await?,
             None => {
                 self.acp_prompt_with(&thread.to_string(), &first.prompt, first.plan, first.attachments).await?;
             }
@@ -1049,23 +1066,23 @@ impl Core {
         };
         if let Some(note) = run.resume_note.take() {
             let me = self.own_user(thread);
-            return self.send_prompt(thread, &me, &note, Given::default()).await;
+            return self.send_prompt(thread, Prompter::Person(&me), &note, Given::default()).await;
         }
         if let Some(steer) = run.steering.take() {
             let me = self.own_user(thread);
             let said = format!("I interrupted your last turn to say: {steer}");
-            return self.send_prompt(thread, &me, &said, Given::default()).await;
+            return self.send_prompt(thread, Prompter::Person(&me), &said, Given::default()).await;
         }
         if !run.steered.is_empty() {
             let steer = run.steered.remove(0);
             let me = self.own_user(thread);
-            return self.send_prompt(thread, &me, &steer, Given::default()).await;
+            return self.send_prompt(thread, Prompter::Person(&me), &steer, Given::default()).await;
         }
         let Some(next) = self.store.take_next(thread).await? else {
             return Ok(());
         };
         self.announce(crate::protocol::BusEvent::Queue { thread: thread.to_string() });
-        self.send_prompt(thread, &next.author, &next.text, Given::default()).await
+        self.send_prompt(thread, Prompter::Person(&next.author), &next.text, Given::default()).await
     }
 
     /// Records and sends a prompt by `author`, with teammates' drafts, the
@@ -1073,11 +1090,11 @@ impl Core {
     pub(crate) async fn send_prompt(
         &mut self,
         thread: ThreadId,
-        author: &str,
+        from: Prompter<'_>,
         text: &str,
         attachments: Given,
     ) -> Result<(), CoreError> {
-        let mut authors = vec![author.to_owned()];
+        let mut authors = vec![from.author().to_owned()];
         let mut said = text.trim().to_owned();
         for (user, draft) in self.teammates_draft_list(thread).await {
             said.push_str(&format!("\n\n{user}: {draft}"));
@@ -1125,7 +1142,12 @@ impl Core {
             })
             .collect();
         media.extend(taken.media);
-        self.record_acp(thread, &acp::prompt(&said, &authors.join(", "), &attached, &media)).await?;
+        let record = match from {
+            // Nobody typed it, so it shows as a turn the agent was set going on, unless a teammate's draft went with it.
+            Prompter::Silt { cause } if authors.len() == 1 && attached.is_empty() && media.is_empty() => acp::silt_woke(cause),
+            _ => acp::prompt(&said, &authors.join(", "), &attached, &media),
+        };
+        self.record_acp(thread, &record).await?;
         let accepts = self.running(thread)?.accepts;
         sent.extend(taken.for_agent);
         let (attachments, as_files): (Vec<_>, Vec<_>) = sent.into_iter().partition(|attachment| accepts.inline(attachment));
@@ -2287,7 +2309,7 @@ impl Core {
         }
         self.acp.get_mut(&request.fork).expect("checked above").guiding = Some((request.id, String::new()));
         let me = self.own_user(request.fork);
-        self.send_prompt(request.fork, &me, GUIDE_PROMPT, Given::default()).await?;
+        self.send_prompt(request.fork, Prompter::Person(&me), GUIDE_PROMPT, Given::default()).await?;
         Ok("asked")
     }
 

@@ -78,6 +78,13 @@ pub fn wake(cause: Option<&str>, stopped: Option<Stopped>) -> String {
     record.to_string()
 }
 
+/// Silt set the agent going itself, as when the agents it asked reported
+/// back: a turn opens as with a prompt, but the person said nothing.
+/// `cause` says what happened, for the person.
+pub fn silt_woke(cause: &str) -> String {
+    json!({"t": "wake", "cause": cause, "by": "silt"}).to_string()
+}
+
 /// What the person had stopped, so that Silt stopped a turn the agent
 /// opened by itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +287,10 @@ pub fn read_line(line: &str) -> Read {
                     read.entries.push(Entry::Image { media_type, data, stored });
                 }
             }
+        }
+        "wake" if record["by"] == "silt" => {
+            read.marks.push(Mark::PromptSubmitted);
+            read.entries.push(Entry::Woke { text: format!("{}, and Silt passed it on to the agent.", field("cause")) });
         }
         "wake" => {
             read.marks.push(Mark::PromptSubmitted);
@@ -525,6 +536,12 @@ mod tests {
             [Entry::Woke {
                 text: "`npm run dev` was stopped in the background, and the agent went on by itself. Silt stopped it, as you had stopped the command.".into()
             }]
+        );
+        let silt = read_line(&silt_woke("The agents it asked reported back"));
+        assert_eq!(silt.marks, [Mark::PromptSubmitted]);
+        assert_eq!(
+            silt.entries,
+            [Entry::Woke { text: "The agents it asked reported back, and Silt passed it on to the agent.".into() }]
         );
         let read = read_line(&wake(None, None));
         assert_eq!(read.marks, [Mark::PromptSubmitted]);
