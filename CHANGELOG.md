@@ -21,6 +21,8 @@ Protocol version 24.
 ### Fixed
 - On Windows, an agent showing an image or a video Silt hadn't stored yet got "Access is denied", and each try left a temporary file among the blobs.
 - An agent in a chat can show files from the chat's own folder; it was refused as part of Silt's data. An artifact's page reads the chat's files too.
+- `just install`, `just update` and the gate say how to fix a corepack too old for the web UI's pnpm 12, older than 0.34.5 as Node 22.16's is, where the build failed with "Cannot find module …/bin/pnpm.cjs".
+- `just install` and `just update` no longer fail where corepack's default pnpm isn't the one the web UI names: corepack looked for it at the repository's root, found none, and ran its own default, which then refused the web UI.
 - An agent writing many files, as an asset import does, no longer holds up the web UI: recording each new file listed every path of its thread, so 500 files in a large checkout took 20 s, now about 1 s, and pages are answered between files and while a checkout is listed, waiting at most for one file. A long thread opens for the first time in about half the time.
 - Switching threads no longer waits behind a long thread being read: the daemon reads a history it doesn't keep away from everything else, keeps the 16 read most recently rather than forgetting all of them at the 17th, and logs any event that holds it for 250 ms or more. Going back to one of the last 8 threads left shows it as it is now, never as it was when left.
 - A thread just opened, or scrolled up until an earlier part of it loaded, sometimes drew its turns over each other until they scrolled away.
