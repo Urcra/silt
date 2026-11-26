@@ -93,7 +93,6 @@ test("an agent asks another, and the ask's card, the asked thread and its report
   await picture(page, '7-sidebar-opened')
   await fold.click()
   await card.getByRole('link', { name: 'Open its thread' }).click()
-  await expect(page.getByTestId('asked-by')).toContainText('asked by')
   await expect(page.getByTestId('asked-note')).toContainText('Fake v1 asked for this thread')
   // Open, it's listed under its caller's fold even while the fold is closed.
   await expect(nav.getByTestId('asked-mark')).toBeVisible()

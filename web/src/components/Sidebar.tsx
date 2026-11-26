@@ -18,12 +18,27 @@ import { type Section, inListOrder, old, section, sections, unread } from '../se
 import { hosted, serverName } from '../served'
 import { formatKeys } from '../shortcuts'
 import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
-import { useThreadState } from '../threadState'
 import { ago } from '../time'
-import { Button, Dot, type DotTone, Icon, type IconName, Kbd, Menu, Popover, SectionLabel, Skeleton, Spinner, cx } from '../ui'
+import {
+  Button,
+  ContextMenu,
+  Dot,
+  type DotTone,
+  Icon,
+  type IconName,
+  Kbd,
+  Menu,
+  useMenuAt,
+  Popover,
+  SectionLabel,
+  Skeleton,
+  Spinner,
+  cx,
+} from '../ui'
 import { pillOf, useUpdate } from '../updates'
 import { useInWorkspace } from '../workspaceFilter'
 import { AgentMark } from './AgentMark'
+import { useThreadMenu } from './ThreadMenu'
 import { ThreadMark } from './ThreadMark'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 import { SnowDrift } from './Seasonal'
@@ -135,7 +150,8 @@ function ThreadItem({
 }) {
   const now = useNow()
   const title = thread.title ?? 'Untitled thread'
-  const actions = useThreadState(thread)
+  const { items: actions, dialogs } = useThreadMenu(thread)
+  const menu = useMenuAt()
   const item = useRef<HTMLLIElement>(null)
   const open = useRouterState({ select: (state) => state.location.pathname }) === `/t/${thread.id}`
   // The thread open shows in the list however far down its project is.
@@ -143,7 +159,11 @@ function ThreadItem({
     if (open && current) item.current?.scrollIntoView?.({ block: 'nearest' })
   }, [open, current])
   return (
-    <li ref={item} className="group relative flex items-center">
+    <li
+      ref={item}
+      className="group relative flex items-center [-webkit-touch-callout:none] pointer-coarse:select-none"
+      {...menu.handlers}
+    >
       <Link
         to="/t/$id"
         params={{ id: thread.id }}
@@ -182,6 +202,8 @@ function ThreadItem({
       <span className="absolute right-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
         <Menu label={`actions for ${title}`} trigger={<Icon name="more" />} items={actions} />
       </span>
+      {menu.at && <ContextMenu label={`actions for ${title}`} items={actions} at={menu.at} onClose={menu.close} />}
+      {dialogs}
     </li>
   )
 }

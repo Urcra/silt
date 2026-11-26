@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useState } from 'react'
 import { api, short, type GraphQuery, type GraphRow, type ThreadSummary } from '../api'
 import { useTopic } from '../bus'
@@ -226,17 +226,27 @@ export function Graph() {
   useTopic('threads')
   useTopic('mrs')
   const now = useNow()
-  const [which, setWhich] = useState<Which>('all')
+  // Opened for one thread, from its menu or its lineage: its family, with its newest row chosen.
+  const focus = (useSearch({ strict: false }) as { thread?: string }).thread
+  const [which, setWhich] = useState<Which>(focus ? 'family' : 'all')
   const [turns, setTurns] = useState(true)
   const [commits, setCommits] = useState(true)
   const [settled, setSettled] = useState(false)
   const [text, setText] = useState('')
   const [before, setBefore] = useState<number[]>([])
   const [chosen, setChosen] = useState<GraphRow>()
+  // Another thread's history asked for while this page is open starts over on it.
+  const [focused, setFocused] = useState(focus)
+  if (focused !== focus) {
+    setFocused(focus)
+    setWhich(focus ? 'family' : 'all')
+    setChosen(undefined)
+  }
   const kinds = [turns && 'turn', commits && 'commit', 'fork', 'request', 'merge'].filter(Boolean).join(',')
   const query: GraphQuery = {
     project: null,
     family: which === 'family' && chosen ? chosen.family : null,
+    thread: which === 'family' && !chosen && focus ? focus : null,
     mine: which === 'mine',
     kinds,
     settled,
@@ -260,7 +270,8 @@ export function Graph() {
   // The tag already says it forked; its text says from where, by name.
   const describe = (row: GraphRow) =>
     row.kind === 'fork' && row.other ? `from ${threadOf(row.other)?.title ?? short(row.other)}` : plain(row.text)
-  const picked = chosen && rows.find((row) => row.id === chosen.id) ? chosen : rows[0]
+  const picked =
+    chosen && rows.find((row) => row.id === chosen.id) ? chosen : (rows.find((row) => row.thread === focus) ?? rows[0])
   // By the table's own width, not the window's: the details panel beside it takes what the person gives it.
   // When is as wide whatever it says, so a row doesn't reflow as "just now" becomes "2m".
   const grid = 'grid grid-cols-[minmax(0,1fr)_56px] items-center gap-3 @2xl/table:grid-cols-[minmax(0,1fr)_200px_140px_56px]'

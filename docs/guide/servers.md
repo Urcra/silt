@@ -29,7 +29,7 @@ Some work shouldn't reach any server. Keep it local:
 silt project home local
 ```
 
-Its new threads never sync. `silt log` and the thread's page say "this machine only", and sharing them is refused. To move them to a server later, choose one with `silt project home <url>`. They sync there from then on, with all their history.
+Its new threads never sync. `silt log` says "this machine only", and sharing them is refused. To move them to a server later, choose one with `silt project home <url>`. They sync there from then on, with all their history.
 
 ## In the web UI
 The workspace switcher at the top of the sidebar picks what you see:

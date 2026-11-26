@@ -109,6 +109,14 @@ const PATHS = {
       <path d="M12.8 6.5 14.5 6.9v2.2l-1.7.4-.4.8 1 1.5-1.6 1.6-1.5-1-.8.4-.4 1.7H6.9l-.4-1.7-.8-.4-1.5 1-1.6-1.6 1-1.5-.4-.8-1.7-.4V6.9l1.7-.4.4-.8-1-1.5 1.6-1.6 1.5 1 .8-.4.4-1.7h2.2l.4 1.7.8.4 1.5-1 1.6 1.6-1 1.5z" />
     </>
   ),
+  // How a view shows: two sliders, each at its own setting.
+  sliders: (
+    <>
+      <path d="M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6" />
+      <circle cx="10" cy="4.5" r="1.5" />
+      <circle cx="6" cy="11.5" r="1.5" />
+    </>
+  ),
   grid: <path d="M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h4v4H9z" />,
   file: <path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3" />,
   panel: <path d="M2.5 2.5h11v11h-11zM10 2.5v11" />,

@@ -306,7 +306,6 @@ fn api_routes() -> Router<Web> {
         .route("/api/threads/{id}/agent/sign-in", post(agent_sign_in))
         .route("/api/threads/{id}/agent/sign-in/code", post(agent_sign_in_code))
         .route("/api/threads/{id}/agent/sign-in/cancel", post(agent_sign_in_cancel))
-        .route("/api/threads/{id}/pull-request", post(pull_request).get(pull_request_blocker))
         .route("/api/threads/{id}/agent/stop", post(agent_stop))
         .route("/api/threads/{id}/agent/steer", post(agent_steer))
         .route("/api/threads/{id}/agent/preset", post(agent_preset))
@@ -2224,14 +2223,6 @@ async fn agent_sign_in_code(
 
 async fn agent_sign_in_cancel(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
     ask(&web, Request::AcpSignInCancel { thread }).await
-}
-
-async fn pull_request(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
-    ask(&web, Request::OpenPullRequest { thread }).await
-}
-
-async fn pull_request_blocker(State(web): State<Web>, Path(thread): Path<String>) -> HttpResponse {
-    ask(&web, Request::PullRequestBlocker { thread }).await
 }
 
 async fn agent_steer(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentPrompt>) -> HttpResponse {

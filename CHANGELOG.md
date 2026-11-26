@@ -31,6 +31,11 @@ Protocol version 25.
 - Three channels: stable, nightly and dev. A build of your own clone is now a dev build, and `silt --version` says `dev` where it said `nightly`. A nightly build says when a newer nightly is out and links to it; a dev build updates its clone as before. The desktop window's title names the channel, as `Silt (dev)`, and plain `Silt` on stable.
 
 ### Changed
+- A thread's header is one line: its title, a pill when the agent waits on you or stopped with an error, then Fork, Share and the panel's toggle. The meta line, This machine only, the sandbox shield and the More menu are gone, as is the bar over the composer and its Create PR on the forge (ADR 0135).
+- Right-click a thread in the sidebar or on All threads for its menu: pin, snooze and settle, Copy thread ID for `silt resume` and `silt fork`, Fork, History of this thread (the graph on its family, as Details' View graph opens too), History graph, Join live, and for a chat or a Local only thread, moving it to a project or erasing it.
+- How the transcript groups the agent's work and how much each step shows are set in Settings › Text and layout, and from the palette.
+- A thread's panel has Changes, Artifacts and Details: Lineage and Access are part of Details, which no longer lists the files changed. Changes has a toolbar with the files and lines the diff shows, what it compares, and one button for its layout and what it leaves out. Details says what the workspace gives the next run, as the shield did.
+- On a phone, a long press on a thread opens its menu.
 - Artifacts' libraries and fonts load through Silt by default, on each machine and on the server, so a viewer's browser contacts no CDN, Google Fonts included. A page naming a library without an exact version loads it only with the switch off. Turn it off in Settings › Network, or with `artifact_proxy = false` in `server.toml`. The switch moved there from Appearance.
 
 ### Fixed

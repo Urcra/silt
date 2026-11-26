@@ -69,7 +69,7 @@ A Local only thread can be erased from this machine for good:
 silt thread erase <thread>
 silt thread erase <thread> --yes
 ```
-The first says what goes; `--yes` erases it. The web UI has **Erase from this machine** in the thread's More menu. Erasing removes:
+The first says what goes; `--yes` erases it. In the web UI, right-click the thread in the sidebar for **Erase from this machine…**. Erasing removes:
 - the thread and its forks: their history, search entries and files;
 - their managed checkouts, and a chat's own folder;
 - the agents' own copies of the session: the transcripts Silt recorded terminal agents from, and Silt (local model)'s session files;

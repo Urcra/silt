@@ -52,7 +52,6 @@ pub mod plugins;
 mod presets;
 mod projects;
 pub mod protocol;
-mod pull_request;
 mod queue;
 mod recorder;
 mod recovery;
