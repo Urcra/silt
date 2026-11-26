@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-11-16
 - Amends: [ADR 0034](0034-performance-budgets.md) (where the gate runs `web.thread`), [ADR 0052](0052-commits-tolerate-a-slower-machine.md) (how `commit.sh` runs the gate)
+- Amended by: [ADR 0131](0131-the-gate-runs-on-the-pull-request.md): The gate runs on the pull request
 
 ## Context
 Every commit waits for the gate. Timed in a cloud container with 4 cores, an incremental gate took about 16 minutes, and the first in a fresh clone over 20:

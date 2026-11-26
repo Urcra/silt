@@ -29,7 +29,7 @@ Regenerated screen references (`*.spec.ts-snapshots`) don't count: say which cha
 
 <!--
 - The new tests, by crate, and what each one proves. Say if a test fails with the fix reverted.
-- What you ran: CI runs formatting, lints and the tests; say whether you also ran `scripts/gate.sh`, and with `SILT_BENCH_ENFORCE=0` or a step skipped.
+- What you ran: CI runs the whole gate, but not the desktop app or the speech helper; say whether you ran `scripts/gate.sh` for those.
 - What you checked by hand, and what you couldn't check (macOS, Windows, a real agent CLI).
 -->
 
