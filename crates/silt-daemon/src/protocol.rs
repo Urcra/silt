@@ -9,6 +9,41 @@ pub use silt_proto::view::{
 };
 pub use silt_proto::{ChoiceAsked, QuestionAsked, QuestionFieldAsked, SignInAsked, SignInChoice, SignInShown};
 
+impl Request {
+    /// Whether it only reads what a page of the web UI shows. Such a request
+    /// is answered ahead of other events, and between the steps of a long
+    /// one such as recording what an agent wrote, so switching threads never
+    /// waits for an agent's work (ADR 0127).
+    pub(crate) fn is_view(&self) -> bool {
+        matches!(
+            self,
+            Request::Threads
+                | Request::HistoryRead { .. }
+                | Request::Turns { .. }
+                | Request::Commits { .. }
+                | Request::Unwritten { .. }
+                | Request::Comments { .. }
+                | Request::Queue { .. }
+                | Request::Diff { .. }
+                | Request::DiffStats { .. }
+                | Request::DiffTurns { .. }
+                | Request::ThreadSeen { .. }
+                | Request::Status
+                | Request::Asks
+                | Request::Approvals { .. }
+                | Request::MrList { .. }
+                | Request::Projects
+                | Request::Workspaces
+                | Request::Graph { .. }
+                | Request::ThreadDesignSystem { .. }
+                | Request::ArtifactListing
+                | Request::FileAt { .. }
+                | Request::FileHistory { .. }
+                | Request::Show { .. }
+        )
+    }
+}
+
 /// One request per line on the daemon socket, answered by one response line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "request", rename_all = "snake_case")]

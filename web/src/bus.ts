@@ -5,6 +5,7 @@
 import { type QueryClient, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { abortReads, token, type BusEvent } from './api'
+import { historyKey } from './historyLoad'
 import { keys } from './query'
 import { apiUrl, hosted } from './served'
 
@@ -179,6 +180,73 @@ export function useBusConnected(): boolean {
   return useSyncExternalStore(bus.watch, bus.connected)
 }
 
+/** How many threads left lately are kept current; the daemon keeps 16 histories as they are. */
+export const WARM = 8
+
+/**
+ * The threads left lately, their topics kept subscribed and their histories read on as they change while not shown
+ * (ADR 0127). Going back to one shows it as it is, at once. One let go of has its history dropped too, rather than
+ * kept to be shown as it was when left.
+ */
+export class Warm {
+  private readonly kept = new Map<string, () => void>()
+  private readonly bus: Pick<Bus, 'subscribe'>
+
+  constructor(on: Pick<Bus, 'subscribe'>) {
+    this.bus = on
+  }
+
+  /** The thread was left: kept current from now on, the least lately left of too many let go of. */
+  left(thread: string, queries: QueryClient) {
+    // A server has no event socket: it would read each kept history again whole, every few seconds.
+    if (hosted()) {
+      queries.removeQueries({ queryKey: historyKey(thread), exact: true })
+      return
+    }
+    this.kept.get(thread)?.()
+    this.kept.delete(thread)
+    this.kept.set(thread, this.bus.subscribe(`thread:${thread}`))
+    for (const [oldest, unsubscribe] of this.kept) {
+      if (this.kept.size <= WARM) break
+      unsubscribe()
+      this.kept.delete(oldest)
+      queries.removeQueries({ queryKey: historyKey(oldest), exact: true })
+    }
+  }
+
+  /** The thread is shown again, its page subscribed: the page keeps it current now. */
+  shown(thread: string) {
+    const unsubscribe = this.kept.get(thread)
+    if (!unsubscribe) return
+    this.kept.delete(thread)
+    // After the page's own subscription, so no event goes unheard in between.
+    setTimeout(unsubscribe, 0)
+  }
+
+  has(thread: string): boolean {
+    return this.kept.has(thread)
+  }
+
+  threads(): string[] {
+    return [...this.kept.keys()]
+  }
+}
+
+export const warm = new Warm(bus)
+
+/**
+ * Keeps `thread` current while shown, and among the threads kept warm once left. Called before the page's own
+ * `useTopic`, whose subscription is let go of after this one's is taken.
+ */
+export function useWarm(thread: string | null) {
+  const queries = useQueryClient()
+  useEffect(() => {
+    if (!thread) return undefined
+    warm.shown(thread)
+    return () => warm.left(thread, queries)
+  }, [thread, queries])
+}
+
 /** Subscribes to `topic` while the calling component is mounted. */
 export function useTopic(topic: string | null) {
   const queries = useQueryClient()
@@ -216,7 +284,8 @@ export function useBusEvents(listener: Listener) {
  * allows. What changed after it began is fetched once more when it ends, else a turn's last words could miss it.
  */
 export class Refetcher {
-  private readonly again = new Set<string>()
+  /** What to fetch again once its fetch ends: whether inactive queries too. */
+  private readonly again = new Map<string, 'active' | 'all'>()
   private readonly queries: QueryClient
 
   constructor(queries: QueryClient) {
@@ -226,16 +295,26 @@ export class Refetcher {
   /** Watches for fetches ending; answers how to stop. */
   start(): () => void {
     return this.queries.getQueryCache().subscribe(({ query }) => {
-      if (query.state.fetchStatus === 'fetching' || !this.again.delete(query.queryHash)) return
-      void this.queries.invalidateQueries({ queryKey: query.queryKey, exact: true }, { cancelRefetch: false })
+      const refetchType = this.again.get(query.queryHash)
+      if (query.state.fetchStatus === 'fetching' || !refetchType) return
+      this.again.delete(query.queryHash)
+      void this.queries.invalidateQueries({ queryKey: query.queryKey, exact: true, refetchType }, { cancelRefetch: false })
     })
   }
 
-  refetch(queryKey?: readonly unknown[]) {
+  /** Fetches `queryKey` again where shown, or, with `all`, where kept but not shown too. */
+  refetch(queryKey?: readonly unknown[], refetchType: 'active' | 'all' = 'active') {
     for (const query of this.queries.getQueryCache().findAll({ queryKey })) {
-      if (query.state.fetchStatus === 'fetching') this.again.add(query.queryHash)
+      if (query.state.fetchStatus === 'fetching' && this.again.get(query.queryHash) !== 'all') {
+        this.again.set(query.queryHash, refetchType)
+      }
     }
-    void this.queries.invalidateQueries({ queryKey }, { cancelRefetch: false })
+    void this.queries.invalidateQueries({ queryKey, refetchType }, { cancelRefetch: false })
+  }
+
+  /** Reads on the histories of the threads kept warm. */
+  refetchWarm() {
+    for (const thread of warm.threads()) this.refetch(historyKey(thread), 'all')
   }
 }
 
@@ -247,7 +326,10 @@ export async function readAgain(queries: QueryClient) {
   const cancelled = queries.cancelQueries()
   abortReads()
   await cancelled
-  await queries.invalidateQueries()
+  await Promise.all([
+    queries.invalidateQueries(),
+    ...warm.threads().map((thread) => queries.refetchQueries({ queryKey: historyKey(thread), exact: true })),
+  ])
 }
 
 /** How long a burst of `lagged` events counts as one. */
@@ -278,6 +360,7 @@ export function useBusInvalidation() {
         break
       case 'thread':
         refetch(keys.thread(event.thread))
+        if (warm.has(event.thread)) refetcher.refetch(historyKey(event.thread), 'all')
         refetch(['graph'])
         break
       case 'queue':
@@ -310,6 +393,7 @@ export function useBusInvalidation() {
         if (Date.now() - laggedAt.current < LAGGED_MS) break
         laggedAt.current = Date.now()
         refetch()
+        refetcher.refetchWarm()
         break
       default:
         break

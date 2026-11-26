@@ -310,7 +310,7 @@ struct Shape {
 #[derive(Debug, Default)]
 struct Shapes(Mutex<Vec<(ShapeKey, Arc<Shape>)>>);
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ShapeKey {
     /// The family's own tree, after this many changes to it. Most deltas
     /// leave the tree as it was, so its paths are listed again only when
@@ -321,6 +321,11 @@ enum ShapeKey {
 }
 
 const SHAPES_KEPT: usize = 8;
+
+/// Which tree a thread's view shows: the same key, the same paths. Lets a
+/// caller that keeps a thread's paths tell when they changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewKey(ShapeKey);
 
 impl Clone for Shapes {
     fn clone(&self) -> Self {
@@ -1046,6 +1051,21 @@ impl Family {
             Shape { tree: seen.as_ref().map(|seen| self.tree.at(|id| seen.contains(id))), seen, paths: OnceLock::new() }
         });
         ThreadView { family: self, version, shape }
+    }
+
+    /// Which tree `thread`'s view shows now (see [`ViewKey`]).
+    pub fn view_key(&self, thread: ThreadId) -> ViewKey {
+        let version = self.thread_head(thread);
+        if self.threads.len() <= 1 || version == *self.graph.frontier() {
+            ViewKey(ShapeKey::Whole { tree_changes: self.tree_changes })
+        } else {
+            ViewKey(ShapeKey::At(version))
+        }
+    }
+
+    /// How many creates, moves and deletes the family's tree has taken.
+    pub fn tree_changes(&self) -> u64 {
+        self.tree_changes
     }
 
     /// The head a new delta on `thread` should use as its parents.
