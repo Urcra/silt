@@ -182,8 +182,5 @@ No agent reads another's memory, except Codex's import of Claude Code's (in deve
 - **The others** get its index the way they get the skills and rules they don't read natively (`conventions.rs`), and MCP tools to read, search and add entries: `silt_memory_search`, `silt_memory_read`, `silt_memory_write`.
 - **Copilot:** optionally pushed with `copilot memories import`, which writes to GitHub, so only when asked.
 
-### Open questions
-- Personal only, or also a project's memory shared within a team?
-- One shared pool all agents read and write, or each agent's own, with sharing an explicit step?
-- File sync like themes, or a family of its own?
-- Should Silt ever write to GitHub's Copilot Memory?
+### Decided
+[ADR 0135](../adr/0135-agents-memory-follows-the-person.md): personal only; one store all agents share, which the person can turn off; synced as a family of its own; Copilot's GitHub memory written only when turned on.
