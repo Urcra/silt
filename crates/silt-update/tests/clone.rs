@@ -41,7 +41,7 @@ fn clone_of_upstream(root: &Path) -> (std::path::PathBuf, std::path::PathBuf, Co
 fn built(clone: &Path, commit: &Commit) -> BuildInfo {
     BuildInfo {
         version: "0.0.1".into(),
-        channel: Channel::Nightly,
+        channel: Channel::Dev,
         commit: Some(commit.clone()),
         branch: Some("main".into()),
         dirty: false,
@@ -54,11 +54,11 @@ fn built(clone: &Path, commit: &Commit) -> BuildInfo {
 fn main_moving_upstream_is_an_update_that_lists_its_commits() {
     let root = tempfile::tempdir().expect("dir");
     let (upstream, clone, first) = clone_of_upstream(root.path());
-    assert_eq!(check::nightly(&built(&clone, &first), true), Availability::UpToDate);
+    assert_eq!(check::dev(&built(&clone, &first), true), Availability::UpToDate);
 
     commit(&upstream, "a.txt", "a", "feat: a");
     let newest = commit(&upstream, "b.txt", "b", "fix: b");
-    match check::nightly(&built(&clone, &first), true) {
+    match check::dev(&built(&clone, &first), true) {
         Availability::Behind { target, ahead, commits } => {
             assert_eq!(target, newest);
             assert_eq!(ahead, 2);
@@ -68,7 +68,7 @@ fn main_moving_upstream_is_an_update_that_lists_its_commits() {
         other => panic!("expected an update, got {other:?}"),
     }
     // Without a fetch it says what it last fetched.
-    assert!(matches!(check::nightly(&built(&clone, &first), false), Availability::Behind { .. }));
+    assert!(matches!(check::dev(&built(&clone, &first), false), Availability::Behind { .. }));
 }
 
 #[test]
@@ -76,17 +76,17 @@ fn a_clone_off_main_with_changes_or_gone_is_left_alone() {
     let root = tempfile::tempdir().expect("dir");
     let (_upstream, clone, first) = clone_of_upstream(root.path());
     std::fs::write(clone.join("README.md"), "edited").expect("edit");
-    assert_eq!(check::nightly(&built(&clone, &first), true), Availability::Off { reason: OffReason::LocalChanges });
+    assert_eq!(check::dev(&built(&clone, &first), true), Availability::Off { reason: OffReason::LocalChanges });
     git(&clone, &["checkout", "--quiet", "--", "README.md"]);
     commit(&clone, "local.txt", "x", "local");
-    assert_eq!(check::nightly(&built(&clone, &first), true), Availability::Off { reason: OffReason::LocalCommits { count: 1 } });
+    assert_eq!(check::dev(&built(&clone, &first), true), Availability::Off { reason: OffReason::LocalCommits { count: 1 } });
     git(&clone, &["switch", "--quiet", "-c", "feature"]);
     assert_eq!(
-        check::nightly(&built(&clone, &first), true),
+        check::dev(&built(&clone, &first), true),
         Availability::Off { reason: OffReason::OffMain { branch: Some("feature".into()) } }
     );
     let gone = root.path().join("gone");
-    assert!(matches!(check::nightly(&built(&gone, &first), true), Availability::Off { reason: OffReason::CloneGone { .. } }));
+    assert!(matches!(check::dev(&built(&gone, &first), true), Availability::Off { reason: OffReason::CloneGone { .. } }));
 }
 
 #[test]
