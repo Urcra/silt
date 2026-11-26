@@ -46,10 +46,17 @@
       a {
         color: var(--fg);
       }
+      #tree {
+        display: block;
+        width: 110px;
+        height: 140px;
+        margin: 0 auto 4px;
+      }
     </style>
   </head>
   <body>
     <main>
+      <svg id="tree" aria-hidden="true" viewBox="0 0 132 168" hidden></svg>
       <h1>Silt</h1>
       <p id="status" role="status">Finding the Silt daemon…</p>
       <p id="retry" hidden>Trying again in the background.</p>
@@ -66,8 +73,72 @@
         root.setProperty('--muted', `color-mix(in oklab, ${theme.fg} 70%, ${theme.bg})`)
       }
 
+      // December's tree (ADR 0131): a branch graph whose baubles light one
+      // after another while the app connects, and go dark if it can't.
+      const tree = document.getElementById('tree')
+      const inSeason = (date) => date.getMonth() === 11 || (date.getMonth() === 0 && date.getDate() <= 6)
+      const decorated =
+        theme &&
+        Array.isArray(theme.tones) &&
+        (theme.seasonal === 'always' || (theme.seasonal === 'auto' && inSeason(new Date())))
+      let lit = 0
+      let lighting = null
+      function drawTree(dark) {
+        const [danger, ok, warn, info, accent] = theme.tones
+        const tones = [danger, ok, warn, info, accent]
+        const unlit = `color-mix(in oklab, ${theme.fg} 18%, ${theme.bg})`
+        const mid = 66
+        const rows = [
+          [38, 14],
+          [62, 26],
+          [86, 38],
+          [110, 50],
+        ]
+        let branches = `<path d="M${mid} 22 V140" fill="none" stroke="${ok}" stroke-width="2" stroke-linecap="round"/>`
+        let baubles = ''
+        let at = 0
+        rows.forEach(([y, w], row) => {
+          for (const side of [-1, 1]) {
+            const x = mid + side * w
+            branches += `<path d="M${mid} ${y - 14} C ${mid} ${y - 4}, ${x} ${y - 10}, ${x} ${y}" fill="none" stroke="${ok}" stroke-width="2" stroke-linecap="round"/>`
+            branches += `<path d="M${x} ${y} C ${x} ${y + 8}, ${mid} ${y + 6}, ${mid} ${y + 14}" fill="none" stroke="${ok}" stroke-width="2" stroke-linecap="round" opacity=".45"/>`
+            const on = !dark && at++ < lit
+            const tone = tones[(row * 2 + (side > 0 ? 3 : 0)) % tones.length]
+            baubles += `<circle cx="${x}" cy="${y}" r="5" stroke="${theme.bg}" stroke-width="2.5" fill="${on ? tone : unlit}"/>`
+          }
+        })
+        const star = dark ? unlit : accent
+        tree.innerHTML =
+          branches +
+          baubles +
+          `<path d="M${mid} 4 l3.2 6.6 7.2 1 -5.2 5 1.3 7.1 -6.5 -3.4 -6.5 3.4 1.3 -7.1 -5.2 -5 7.2 -1z" fill="${star}"/>` +
+          `<rect x="${mid - 9}" y="140" width="18" height="12" rx="2" fill="${unlit}" stroke="${theme.fg}" stroke-opacity=".5"/>` +
+          `<text x="${mid}" y="165" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="${theme.fg}" fill-opacity=".7">main</text>`
+        tree.hidden = false
+      }
+      function lightTree() {
+        if (!decorated) return
+        clearInterval(lighting)
+        // With less motion it's lit at once.
+        const still = matchMedia('(prefers-reduced-motion: reduce)').matches
+        lit = still ? 8 : 0
+        drawTree(false)
+        if (still) return
+        lighting = setInterval(() => {
+          lit = (lit % 8) + 1
+          drawTree(false)
+        }, 600)
+      }
+      function darkenTree() {
+        if (!decorated) return
+        clearInterval(lighting)
+        drawTree(true)
+      }
+      lightTree()
+
       // Called by the app while it reaches a machine over SSH.
       function showStatus(message) {
+        if (document.getElementById('status').className === 'error') lightTree()
         const status = document.getElementById('status')
         status.textContent = message
         status.className = ''
@@ -84,6 +155,7 @@
         status.className = 'error'
         document.getElementById('retry').hidden = false
         document.getElementById('instead').hidden = !elsewhere
+        darkenTree()
       }
     </script>
   </body>

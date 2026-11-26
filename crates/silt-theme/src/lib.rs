@@ -33,6 +33,7 @@ pub const BUNDLED: &[(&str, &str)] = &[
     ("tokyo-night.json", include_str!("../themes/tokyo-night.json")),
     ("solarized.json", include_str!("../themes/solarized.json")),
     ("nord.json", include_str!("../themes/nord.json")),
+    ("yule.json", include_str!("../themes/yule.json")),
 ];
 
 /// The theme shown when the one picked is gone.

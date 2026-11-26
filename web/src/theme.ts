@@ -21,7 +21,13 @@ const CSS_KEY = 'silt-theme-css'
 const MOVED_KEY = 'silt-theme-moved'
 export const THEMES: Theme[] = ['system', 'light', 'dark']
 
-export const DEFAULT_APPEARANCE: AppearanceSettings = { mode: 'system', light: 'nous-light', dark: 'nous-dark', text: {} }
+export const DEFAULT_APPEARANCE: AppearanceSettings = {
+  mode: 'system',
+  light: 'nous-light',
+  dark: 'nous-dark',
+  text: {},
+  seasonal: { show: 'auto', snow: true },
+}
 
 function read(key: string): string | null {
   try {
@@ -129,7 +135,8 @@ export function useAppearance() {
   // A daemon from before themes answers with no catalog; it shows Nous, and one from before text and layout no text.
   const kept = useSyncExternalStore(hearPick, keptPick)
   const given = hosted() ? hostedPick(kept) : (catalog.data?.appearance ?? DEFAULT_APPEARANCE)
-  const settings = given.text ? given : { ...given, text: {} }
+  // A daemon from before the December decorations answers without them (ADR 0131).
+  const settings = { ...given, text: given.text ?? {}, seasonal: given.seasonal ?? DEFAULT_APPEARANCE.seasonal }
   const save = async (next: AppearanceSettings) => {
     if (hosted()) {
       write(PICK_KEY, JSON.stringify({ light: next.light, dark: next.dark, text: next.text }))
@@ -165,9 +172,9 @@ export function useThemeSync() {
   const shown = useShownTheme()
   useEffect(() => {
     // After the page has drawn in it, so the colours read are the theme's.
-    const frame = requestAnimationFrame(() => tellDesktopTheme(shown))
+    const frame = requestAnimationFrame(() => tellDesktopTheme(shown, settings.seasonal.show))
     return () => cancelAnimationFrame(frame)
-  }, [shown, css.data])
+  }, [shown, css.data, settings.seasonal.show])
   const daemonMode = hosted() ? null : catalog.data?.appearance?.mode
   useEffect(() => {
     if (!daemonMode || previewing) return

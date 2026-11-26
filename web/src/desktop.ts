@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { SeasonalShow } from './api'
 
 /** Where the desktop app can show Silt from: this computer, each WSL distribution (ADR 0045), and each machine over SSH (ADR 0108). */
 export interface Backend {
@@ -162,9 +163,37 @@ export function hexOf(computed: string): string | null {
     .join('')}`
 }
 
-/** The link that tells the desktop app's window which theme the page shows (ADR 0099). */
-export function themeLink(appearance: 'light' | 'dark', bg: string, fg: string): string {
-  return `silt://theme/?${new URLSearchParams({ appearance, bg, fg })}`
+/**
+ * The link that tells the desktop app's window which theme the page shows (ADR 0099), and for its
+ * starting page's tree the theme's tones and when the December decorations show (ADR 0131).
+ */
+export function themeLink(
+  appearance: 'light' | 'dark',
+  bg: string,
+  fg: string,
+  seasonal?: { tones: string[]; show: SeasonalShow },
+): string {
+  const query = new URLSearchParams({ appearance, bg, fg })
+  if (seasonal) {
+    query.set('tones', seasonal.tones.join(','))
+    query.set('seasonal', seasonal.show)
+  }
+  return `silt://theme/?${query}`
+}
+
+/** The tree's tones, in the order Seasonal.tsx's `TONES` takes them, resolved to `#rrggbb`. */
+const TONE_TOKENS = ['--danger', '--ok', '--warn', '--info', '--accent']
+
+function tones(): string[] | null {
+  const probe = document.createElement('span')
+  probe.hidden = true
+  document.body.appendChild(probe)
+  const found = TONE_TOKENS.map((token) => {
+    probe.style.color = `var(${token})`
+    return hexOf(getComputedStyle(probe).color)
+  })
+  probe.remove()
+  return found.every((tone) => tone !== null) ? (found as string[]) : null
 }
 
 let told = ''
@@ -188,13 +217,14 @@ function sendNext() {
 }
 
 /** Tells the desktop app's window the theme shown, so its frame and next start follow it; nothing in a browser. */
-export function tellDesktopTheme(appearance: 'light' | 'dark') {
+export function tellDesktopTheme(appearance: 'light' | 'dark', show: SeasonalShow) {
   if (!window.__siltBackends) return
   const body = getComputedStyle(document.body)
   const bg = hexOf(body.backgroundColor)
   const fg = hexOf(body.color)
   if (!bg || !fg) return
-  const link = themeLink(appearance, bg, fg)
+  const shades = tones()
+  const link = themeLink(appearance, bg, fg, shades ? { tones: shades, show } : undefined)
   if (link === told) return
   told = link
   tellWindow(link)

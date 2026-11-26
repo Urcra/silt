@@ -1230,7 +1230,15 @@ export type AppearanceSettings = { mode: AppearanceMode, light: string, dark: st
 /**
  * Sizes, fonts and spacing over the theme (ADR 0107).
  */
-text: TextSettings, };
+text: TextSettings, 
+/**
+ * December's decorations in the desktop app (ADR 0131).
+ */
+seasonal: SeasonalSettings, };
+
+export type SeasonalSettings = { show: SeasonalShow, snow: boolean, };
+
+export type SeasonalShow = "auto" | "always" | "off";
 
 export type TextSettings = { zoom?: Zoom | null, ui_size?: UiSize | null, chat_size?: ChatSize | null, code_size?: CodeSize | null, ui_font?: FontChoice | null, code_font?: FontChoice | null, 
 /**

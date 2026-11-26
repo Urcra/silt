@@ -1,0 +1,142 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Urcra/silt/main/docs/reference/theme.schema.json",
+  "name": "Yule",
+  "author": "Silt",
+  "license": "AGPL-3.0-only",
+  "themes": [
+    {
+      "id": "yule-light",
+      "name": "Yule Light",
+      "appearance": "light",
+      "colors": {
+        "bg": "#f2f5f0",
+        "bg-elevated": "#fbfcfa",
+        "surface-1": "#e6ece3",
+        "surface-2": "#d9e2d5",
+        "surface-3": "#c8d4c3",
+        "fg-1": "#1d2a22",
+        "fg-2": "#3f4d44",
+        "fg-3": "#54625a",
+        "border": "#c9d4c5",
+        "border-strong": "#728276",
+        "accent": "#1e6b48",
+        "accent-fg": "#17583a",
+        "ok": "#47701b",
+        "warn": "#a87a0a",
+        "warn-fg": "#7f5c06",
+        "danger": "#a62a2f",
+        "info": "#2b5f86"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#a62a2f"
+        },
+        "string": {
+          "color": "#47701b"
+        },
+        "string-special": {
+          "color": "#8f4f12"
+        },
+        "number": {
+          "color": "#7f5c06"
+        },
+        "constant": {
+          "color": "#7f5c06"
+        },
+        "comment": {
+          "color": "#54625a",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#2b5f86"
+        },
+        "macro": {
+          "color": "#17583a"
+        },
+        "definition": {
+          "color": "#2b5f86"
+        },
+        "operator": {
+          "color": "#3f4d44"
+        },
+        "punctuation": {
+          "color": "#3f4d44"
+        },
+        "meta": {
+          "color": "#3f4d44"
+        },
+        "heading": {
+          "color": "#1d2a22",
+          "font_weight": 600
+        }
+      }
+    },
+    {
+      "id": "yule-dark",
+      "name": "Yule Dark",
+      "appearance": "dark",
+      "colors": {
+        "bg": "#121a16",
+        "bg-elevated": "#18221d",
+        "surface-1": "#18221d",
+        "surface-2": "#213029",
+        "surface-3": "#2b3c33",
+        "fg-1": "#eee8da",
+        "fg-2": "#b9b4a4",
+        "fg-3": "#959384",
+        "border": "#283730",
+        "border-strong": "#4a5e53",
+        "accent": "#4fae7c",
+        "accent-fg": "#7cc99c",
+        "ok": "#a3c46a",
+        "warn": "#e2b44c",
+        "warn-fg": "#e2b44c",
+        "danger": "#ec7a74",
+        "info": "#8db8dc"
+      },
+      "syntax": {
+        "keyword": {
+          "color": "#ec7a74"
+        },
+        "string": {
+          "color": "#a3c46a"
+        },
+        "string-special": {
+          "color": "#e0a463"
+        },
+        "number": {
+          "color": "#e2b44c"
+        },
+        "constant": {
+          "color": "#e2b44c"
+        },
+        "comment": {
+          "color": "#959384",
+          "font_style": "italic"
+        },
+        "type": {
+          "color": "#8db8dc"
+        },
+        "macro": {
+          "color": "#7cc99c"
+        },
+        "definition": {
+          "color": "#8db8dc"
+        },
+        "operator": {
+          "color": "#b9b4a4"
+        },
+        "punctuation": {
+          "color": "#b9b4a4"
+        },
+        "meta": {
+          "color": "#b9b4a4"
+        },
+        "heading": {
+          "color": "#eee8da",
+          "font_weight": 600
+        }
+      }
+    }
+  ]
+}
