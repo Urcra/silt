@@ -7,7 +7,7 @@ User-visible changes, newest first. The format follows [Keep a Changelog](https:
 Silt has no releases yet; this section collects what changes until the first one. The git history has everything before this file began.
 
 ### What Silt does so far
-Protocol version 24.
+Protocol version 25.
 - **Recording** Claude Code, Codex, Qudiks, Gemini CLI, Antigravity CLI, OpenCode and GitHub Copilot CLI sessions, run through `silt <agent>`, with or without a daemon, and importing the sessions already on disk.
 - **Handoff, forks and merge requests** between machines and people, through a server you host, or kept on one machine; several servers per machine.
 - **History and search** across compaction, the history graph, forking from and reverting to a turn, and commits linked to turns.
@@ -15,6 +15,7 @@ Protocol version 24.
 - **Agents from the web UI** over ACP, agents asking other agents, artifacts, themes, workspaces with their own rules, Silt's sandbox on Linux, plugins, and local models.
 
 ### Added
+- An agent you run in a terminal, with `silt claude` and the like, shows as working while it's in a turn: in this machine's thread list, which says **Working in a terminal**, and on your other devices and in the hosted app, through the server. A page passes nothing on to it: its terminal answers it. **Protocol 25: update every machine and the server together.**
 - The sidebar's Chats section folds by its name, as a project does, showing how many chats it holds or how many are working while folded. It stays folded after a reload, in the browser or the desktop app.
 - Settings › Network, with a switch for everything Silt connects to on its own: update checks, plan usage, the agent registry, and artifacts' libraries. **Offline**, at the top, turns them all off, so Silt connects only to your own servers; `SILT_OFFLINE=1` does the same from the environment. Silt sends no telemetry, and the README and [What Silt sends over the network](docs/guide/network.md) now say so.
 - Auto for every agent the web UI runs (ADR 0132). An agent without an auto mode of its own, such as GitHub Copilot, Codex or OpenCode, no longer greys Auto out: Silt checks each of its commands first, with a judge. See [Auto for every agent](docs/guide/auto.md).

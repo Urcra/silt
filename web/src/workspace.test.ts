@@ -47,6 +47,7 @@ function thread(
     cloud: null,
     machine: null,
     agent_settings: null,
+    terminal: false,
   }
 }
 

@@ -77,6 +77,10 @@ pub struct ThreadSummary {
     /// the one answering: the device of its lease.
     #[serde(default)]
     pub machine: Option<String>,
+    /// Its agent works in a terminal, which answers it, not this page
+    /// (ADR 0026).
+    #[serde(default)]
+    pub terminal: bool,
     /// The settings the agent the web UI last ran in it here ran with, for
     /// it to start again with; none from a server.
     #[serde(default)]

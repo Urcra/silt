@@ -835,6 +835,7 @@ mod tests {
             preset: "full_access".into(),
             sign_in: None,
             background: 0,
+            terminal: false,
         };
         // A thread Alice doesn't see isn't hers to report.
         let report = AgentsReport { agents: vec![agent(ThreadId(7)), agent(ThreadId(99))], startable: Vec::new() };
@@ -877,6 +878,7 @@ mod tests {
             preset: String::new(),
             sign_in: None,
             background: 0,
+            terminal: false,
         }
     }
 
