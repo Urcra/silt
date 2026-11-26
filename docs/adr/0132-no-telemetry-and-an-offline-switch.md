@@ -5,7 +5,7 @@
 - Amends: [ADR 0071](0071-artifact-design-guidance-design-systems-and-libraries.md) (libraries load through Silt by default), [ADR 0100](0100-update-channels.md) (update checks can be turned off in Settings and are off offline), [ADR 0095](0095-an-agent-s-plan-usage-in-the-composer.md) (plan usage can be turned off), [ADR 0005](0005-acp-registry.md) (the registry fetch can be turned off)
 
 ## Context
-People choose Silt to keep their code and conversations under their own control. Tools in the same space have been found sending usage data home by default, with no way to turn it off, while saying they didn't. Silt has never collected telemetry, but nothing said so where people look first, and nothing promised it would stay that way.
+People choose Silt to keep their code and conversations under their own control. Silt has never collected telemetry, but nothing said so where people look first, and nothing promised it would stay that way.
 
 What Silt does connect to on its own carries none of a person's data, but it isn't nothing:
 - update checks, to GitHub or the clone's remote, every six hours, and plugins' repositories once a day;
