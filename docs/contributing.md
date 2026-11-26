@@ -4,7 +4,7 @@ How to build Silt, check a change and work on it day to day. How the pieces fit 
 
 ## What you need
 - **Rust**, as `rust-toolchain.toml` pins it, with clippy, rustfmt and the `wasm32-unknown-unknown` and `wasm32-wasip2` targets. rustup installs them on the first build in the checkout.
-- **Node and pnpm**, for `web/`: Node 22 or newer (`.nvmrc`), and the pnpm `web/package.json` names (`packageManager`), which `corepack enable pnpm` gives you. `web/pnpm-workspace.yaml` takes no package published less than a day ago (`minimumReleaseAge`), so a lockfile resolved anywhere also passes a pnpm that checks the lockfile against that policy.
+- **Node and pnpm**, for `web/`: Node 22 or newer (`.nvmrc`), and the pnpm `web/package.json` names (`packageManager`), which `corepack enable pnpm` gives you. The root `package.json` names the same pnpm, as corepack looks where pnpm starts, and `pnpm -C web` starts at the root; the gate checks that the two agree. `web/pnpm-workspace.yaml` takes no package published less than a day ago (`minimumReleaseAge`), so a lockfile resolved anywhere also passes a pnpm that checks the lockfile against that policy.
 - **git**, which Silt runs for its own writes.
 - **sqlx-cli**, only to add migrations or change queries: `cargo install sqlx-cli --locked`.
 - **WebKitGTK 4.1**, only for the desktop app: on Debian and Ubuntu, `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev`. Without it the gate skips `crates/silt-desktop`.
