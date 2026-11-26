@@ -89,7 +89,7 @@ Commands stand on their own, as `$ command` with the last lines of their output,
 - **Plan:** every new prompt gets a plan to approve before the agent changes anything. Approving it picks the preset the thread moves to.
 - **Ask for everything.**
 - **Ask before commands**, the default: edits, reads and searches are allowed, and anything else asks.
-- **Auto:** the agent's own auto mode lets safe actions through and asks about risky ones. Only agents with an auto mode offer it, Claude Code among them.
+- **Auto:** what's safe goes through and the rest asks. An agent with an auto mode of its own, such as Claude Code, uses it; for any other, Silt checks each command first, and what it refuses goes back to the agent with why. **Checked by**, under Auto, says which agent checks. See [Auto for every agent](auto.md).
 - **Full access**, for a machine you trust.
 
 When the agent waits on you, the header says so and the composer turns amber.

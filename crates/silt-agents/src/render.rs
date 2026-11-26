@@ -51,6 +51,9 @@ pub fn translated_text(entries: &[Entry]) -> Vec<(Role, String)> {
                     artifact.title, artifact.kind, artifact.id, artifact.version
                 ),
             ),
+            Entry::Auto(auto) if auto.verdict == "refuse" => {
+                push(Role::Assistant, format!("[Silt's Auto check refused that call: {}]", auto.reason));
+            }
             Entry::Compaction { summary: Some(summary) } => {
                 push(Role::User, format!("Summary of the earlier conversation:\n{summary}"));
             }
@@ -60,6 +63,7 @@ pub fn translated_text(entries: &[Entry]) -> Vec<(Role, String)> {
             | Entry::Usage { .. }
             | Entry::Compaction { summary: None }
             | Entry::Task(_)
+            | Entry::Auto(_)
             | Entry::Other { .. } => {}
         }
     }
