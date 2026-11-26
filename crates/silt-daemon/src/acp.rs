@@ -1949,13 +1949,7 @@ impl Core {
                         return Ok(());
                     }
                     track_background(run, &id, &news, None);
-                    if news.kind.as_deref() == Some("subagent") {
-                        if news.status == "running" {
-                            run.subagents.insert(id.clone(), news.id.clone());
-                        } else {
-                            run.subagents.remove(&id);
-                        }
-                    }
+                    track_subagent(&mut run.subagents, &id, &news);
                     // Between turns, what ended is what the agent will likely go on about.
                     if news.status != "running" && run.state == AgentState::Idle {
                         let label = run.labels.get(&id).cloned();
@@ -2220,6 +2214,7 @@ impl Core {
                         return Ok(());
                     }
                     track_background(run, &id, &news, Some(&parent));
+                    track_subagent(&mut run.subagents, &id, &news);
                     let record = acp::task(&id, news.id.as_deref(), news.kind.as_deref(), &news.status);
                     self.record_acp(thread, &acp::within(&record, &parent)).await?;
                 }
@@ -2639,6 +2634,19 @@ fn track_background(run: &mut AcpRun, call: &str, news: &silt_acp::TaskNews, par
     });
 }
 
+/// A subagent that is running counts, and one of a subagent's own subagents counts too:
+/// the task list reports them under their parent's scope, so they all land in this one map.
+fn track_subagent(subagents: &mut HashMap<String, Option<String>>, call: &str, news: &silt_acp::TaskNews) {
+    if news.kind.as_deref() != Some("subagent") {
+        return;
+    }
+    if news.status == "running" {
+        subagents.insert(call.to_owned(), news.id.clone());
+    } else {
+        subagents.remove(call);
+    }
+}
+
 /// The call of the running subagent a task notification names, by its call
 /// or by the agent's id for it: a subagent set running again runs under the
 /// call that woke it.
@@ -3029,6 +3037,20 @@ mod tests {
     use silt_types::{ActorId, FamilyId};
 
     use super::*;
+
+    #[test]
+    fn a_subagents_own_subagents_are_counted_too() {
+        let news = |id: &str, kind: &str, status: &str| silt_acp::TaskNews { id: Some(id.to_owned()), kind: Some(kind.to_owned()), status: status.to_owned() };
+        let mut subagents = HashMap::new();
+        track_subagent(&mut subagents, "call-a", &news("agent-a", "subagent", "running"));
+        track_subagent(&mut subagents, "call-b", &news("agent-b", "subagent", "running"));
+        assert_eq!(subagents.len(), 2, "a subagent under a subagent counts as well");
+        track_subagent(&mut subagents, "call-a", &news("agent-a", "subagent", "completed"));
+        assert_eq!(subagents.len(), 1);
+        assert!(!subagents.contains_key("call-a"));
+        track_subagent(&mut subagents, "call-c", &news("cmd", "background", "running"));
+        assert_eq!(subagents.len(), 1, "only subagents are tracked here");
+    }
 
     #[test]
     fn a_local_model_for_claude_goes_in_its_environment_not_its_settings() {
