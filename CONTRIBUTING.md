@@ -8,7 +8,7 @@ The short version:
 ```sh
 pnpm -C web install && pnpm -C web build   # the web UI is embedded in the binary
 cargo build --workspace
-scripts/gate.sh                            # what every change must pass; SILT_BENCH_ENFORCE=0 on a slower machine
+scripts/gate.sh --quick                    # optional: what CI checks; the full gate runs on the PR before a merge
 git commit -s -m "feat(scope): what changed"   # Conventional Commits, signed off
 ```
 

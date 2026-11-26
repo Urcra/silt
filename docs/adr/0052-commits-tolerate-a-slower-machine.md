@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-10-29
 - Amends: [ADR 0034](0034-performance-budgets.md) (how the gate enforces the budgets)
-- Amended by: [ADR 0091](0091-a-faster-gate-and-a-pass-that-stands.md): A faster gate, and a pass that stands
+- Amended by: [ADR 0091](0091-a-faster-gate-and-a-pass-that-stands.md): A faster gate, and a pass that stands; [ADR 0129](0129-the-gate-runs-on-the-pull-request.md): The gate runs on the pull request
 
 ## Context
 Most budgets are measured on the development machine, and that machine is shared with other work: clusters, databases, other agents' builds. On 2026-10-29, `sync.push` measured 1.04 to 1.08 s against its 1 s limit, run after run. The commit being tested changed only the web UI. Its Rust code was the same as a commit that had passed an hour before. Two k3d clusters had started on the same disk in the meantime.

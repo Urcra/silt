@@ -28,7 +28,7 @@ A cloud container differs from a workstation in two ways the script allows for:
 - **Disk.** A session's disk is a fixed allowance, and a full gate's builds outgrow it with full debug info and incremental caches. The script sets `debug = "line-tables-only"` and `incremental = false` in the container's own `~/.cargo/config.toml`, not the repository's. If a build still fails with "No space left on device", or the linker dies with a bus error, delete `target/debug` and `target/perf`, which the gate builds again; anything else under `target/` is small.
 - **Proxy.** Outbound HTTPS goes through the container's proxy. Tools that ignore it, or don't trust its certificate, fail to download: the speech engine's build script is one, so the setup script fetches its archive with curl first, into `crates/silt-voice/target/sherpa-onnx-prebuilt`, where the build looks.
 
-A full gate from a clean container takes about half an hour, and a later one with nothing to rebuild about twenty minutes, most of it the tests and the end-to-end run. Run it in the background with its output in a file, `scripts/gate.sh > gate.log 2>&1`, and look at the `gate: [m:ss] <step>` lines to follow it. When it passes, `scripts/commit.sh` commits the tree it checked without running it again.
+A full gate from a clean container takes about half an hour, and a later one with nothing to rebuild about twenty minutes, most of it the tests and the end-to-end run. Run it in the background with its output in a file, `scripts/gate.sh > gate.log 2>&1`, and look at the `gate: [m:ss] <step>` lines to follow it.
 
 ## Building
 The web UI is embedded in the binary, so build it first:
@@ -46,7 +46,7 @@ The `justfile` does release builds of both the CLI and the desktop app: `just bu
 ## The gate
 The sandbox's bubblewrap and pasta can go beside `silt` (ADR 0093), as the release workflow puts them in its archives: `scripts/build-sandbox-tools.sh <dir>` builds them statically, from versions pinned by checksum, as `silt-bwrap` and `silt-pasta`, with their licenses. It needs meson, ninja, make and `libcap-dev`. `silt` finds them beside itself, else `SILT_BWRAP` and `SILT_PASTA`, else the system's.
 
-`scripts/gate.sh` decides whether a change is done. It runs the cheap checks first, so most mistakes fail within a minute or two ([ADR 0091](adr/0091-a-faster-gate-and-a-pass-that-stands.md)):
+`scripts/gate.sh` decides whether a change is done. It runs on every pull request before a merge, so nobody has to run it locally ([ADR 0129](adr/0129-the-gate-runs-on-the-pull-request.md)). It runs the cheap checks first, so most mistakes fail within a minute or two ([ADR 0091](adr/0091-a-faster-gate-and-a-pass-that-stands.md)):
 1. `cargo fmt --check`, here and in `crates/silt-voice` and `crates/silt-desktop` where they're built, the web UI's formatting (`pnpm -C web fmt:check`, oxfmt), and its lint (`pnpm -C web lint`, oxlint, where a warning fails), then every Rust dependency's licence against `deny.toml` (`cargo deny check licenses`) in each workspace;
 2. the web UI's build, which the binary embeds. It fails on a bundled package under a licence `web/vite.config.ts` doesn't allow, and writes `THIRD-PARTY-NOTICES.txt` beside the UI with every bundled package's licence;
 3. `cargo clippy --all-targets -- -D warnings` on the whole workspace, and again for Windows (`x86_64-pc-windows-gnu`) when that target and MinGW are installed;
@@ -58,9 +58,9 @@ The sandbox's bubblewrap and pasta can go beside `silt` (ADR 0093), as the relea
 
 Format the web UI with `pnpm -C web fmt`. A commit that only reformats goes in `.git-blame-ignore-revs`, which GitHub's blame skips; `git config blame.ignoreRevsFile .git-blame-ignore-revs` makes `git blame` skip it too.
 
-It names each step as it starts, with the time so far, and ends with how long each took. `scripts/gate.sh --quick` runs only steps 1 to 3, the web UI's unit tests and the tests, in a few minutes, for while you iterate; it records no pass.
+It names each step as it starts, with the time so far, and ends with how long each took. `scripts/gate.sh --quick` runs only steps 1 to 3, the web UI's unit tests and the tests, in a few minutes, for while you iterate.
 
-Commit however you like; a pull request's CI runs the checks, and the full gate runs before a merge. Maintainers commit with `scripts/commit.sh "<message>"`, which commits everything (`git add -A`) and pushes, and only a tree the gate passed on. A full gate that passes records the tree it checked (`scripts/tree-id.sh`, the tree `git add -A` would commit) in `target/gate-passed`, so a commit right after `scripts/gate.sh` doesn't run it again, nor does trying again after a failed push. Otherwise `commit.sh` runs the gate itself, showing each step while the output goes to a log, and refuses to commit when the tree changed while the gate ran, as the gate didn't check those edits. A change to Markdown alone skips the gate, except the generated `docs/reference/cli.md`. Messages are Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `chore:`, `build:`, with an optional scope such as `feat(crdt):`), and say what changed rather than which task it was.
+Commit however you like, maintainers included: a pull request's CI runs the checks on every push, and the full gate runs on the pull request merged with its base before a merge (`/claude gate`, `/claude merge`). Running it locally first is up to you, for a change likely to fail a part CI doesn't run, such as the end-to-end tests or the budgets. Messages are Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `chore:`, `build:`, with an optional scope such as `feat(crdt):`), and say what changed rather than which task it was.
 
 People with write access can have Claude work on an issue or pull request from a comment (`.github/workflows/claude.yml`). It runs in GitHub Actions, and what it writes comes from `claude[bot]`. Notes after the command steer it.
 - On a pull request:
@@ -151,7 +151,7 @@ Built rather than kept:
 - `target/perf/silt-bench check` measures only the enforced ones, and fails naming the budget and what it measured. The gate runs it.
 - The limits are the development machine's, a cloud session's ([ADR 0037](adr/0037-cloud-machine-budgets.md)) or a GitHub Actions runner's ([ADR 0126](adr/0126-budgets-for-a-github-actions-runner.md)), from `SILT_BENCH_MACHINE=dev|cloud|ci`, or else from where it runs. The dev limits stay the targets: elsewhere, a budget over its dev limit prints an `off target:` line without failing, which on a runner is a warning on the job, and the job's summary gets the table.
 - `--only <budget>` measures just that budget.
-- `--tolerance <percent>` passes a budget over its limit by at most that much, printing a `slower than budget:` line for it. The gate takes it from `SILT_BENCH_TOLERANCE`. `scripts/commit.sh` sets it to 50 and repeats those lines with a warning, so a busy machine doesn't block a commit. When you see that warning, check whether the slowdown is expected ([ADR 0052](adr/0052-commits-tolerate-a-slower-machine.md)).
+- `--tolerance <percent>` passes a budget over its limit by at most that much, printing a `slower than budget:` line for it. The gate takes it from `SILT_BENCH_TOLERANCE`, so a busy machine can pass a local gate with `SILT_BENCH_TOLERANCE=50` ([ADR 0052](adr/0052-commits-tolerate-a-slower-machine.md)). When it prints those lines, check whether the slowdown is expected.
 
 The fixtures are cached in `target/silt-bench`.
 
