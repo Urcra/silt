@@ -2983,6 +2983,7 @@ mod tests {
             StateChange::decl(&config),
             TextKind::decl(&config),
             ThreadSummary::decl(&config),
+            silt_proto::view::KeptSettings::decl(&config),
             TurnInfo::decl(&config),
             FoundFolder::decl(&config),
             FoundSessions::decl(&config),

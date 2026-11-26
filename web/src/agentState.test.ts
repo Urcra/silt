@@ -57,6 +57,17 @@ describe('restartChoices', () => {
     expect(restart.value(setting!, 'gpt-6.2-sol')).toBe('gpt-6.2-sol')
   })
 
+  it("keeps the thread's own model once the daemon restarted, over the workspace's and as it last ran anywhere", () => {
+    const kept = { agent: 'GitHub Copilot', settings: { model: 'claude-sonnet-5.5' } }
+    const restart = restartChoices('github-copilot-cli', null, copilot, { model: 'claude-opus-5.5' }, kept)
+    expect(restart.value(restart.settings[0]!, undefined)).toBe('claude-sonnet-5.5')
+    expect(restart.value(restart.settings[0]!, 'gpt-6.2-sol')).toBe('gpt-6.2-sol')
+    const another = restartChoices('github-copilot-cli', null, copilot, { model: 'claude-opus-5.5' }, { ...kept, agent: 'Codex' })
+    expect(another.value(another.settings[0]!, undefined)).toBe('claude-opus-5.5')
+    const gone = restartChoices('github-copilot-cli', null, copilot, undefined, { ...kept, settings: { model: 'retired' } })
+    expect(gone.value(gone.settings[0]!, undefined)).toBe('gpt-6.2-sol')
+  })
+
   it("starts an agent new to the thread on the workspace's default, else as it last ran", () => {
     const restart = restartChoices('github-copilot-cli', null, copilot, { model: 'claude-opus-5.5' })
     expect(restart.value(restart.settings[0]!, undefined)).toBe('claude-opus-5.5')

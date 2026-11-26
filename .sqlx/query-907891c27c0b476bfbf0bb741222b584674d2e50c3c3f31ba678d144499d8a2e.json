@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO agent_runs (thread_id, agent, state, error, preset, mode, settings, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)\n             ON CONFLICT (thread_id) DO UPDATE SET agent = excluded.agent, state = excluded.state, error = excluded.error,\n                 preset = excluded.preset, mode = excluded.mode, settings = excluded.settings, updated_ms = excluded.updated_ms",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "907891c27c0b476bfbf0bb741222b584674d2e50c3c3f31ba678d144499d8a2e"
+}
