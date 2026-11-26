@@ -805,15 +805,9 @@ test('a new thread starts with an agent in a known clone, which edits without as
   await page.getByLabel('draft').press('Enter')
   await expect(page.getByText('Done: hello')).toBeVisible()
   await expect(page.getByRole('group', { name: 'permission' })).toHaveCount(0)
-  // What it changed sits over the composer; with nothing committed on a branch, Create PR is off and says why.
-  const changed = page.getByRole('group', { name: 'what the thread changed' })
-  await expect(changed).toContainText('1 file changed')
-  const createPr = changed.getByRole('button', { name: 'Create PR' })
-  await expect(createPr).toBeDisabled()
-  await expect(createPr).toHaveAttribute(
-    'title',
-    /isn't on a branch|has nothing committed|works on \S+ itself|no origin|isn't on a forge/,
-  )
+  // What it changed is in the panel; nothing sits over the composer.
+  await expect(page.getByRole('region', { name: 'changes' }).getByTestId('diff')).toBeVisible()
+  await expect(page.getByRole('group', { name: 'what the thread changed' })).toHaveCount(0)
 })
 
 test('what an agent shows opens beside the thread: an artifact in a sandbox, its versions, full view, comments to the agent, and images', async ({

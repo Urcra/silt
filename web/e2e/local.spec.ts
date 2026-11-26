@@ -62,7 +62,10 @@ test('a local model answers in a Local only workspace, and its thread can be era
   await expect(page.getByText('Heard: What failed in app.log?')).toBeVisible()
   await stopAgent(page)
 
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: /What failed in app\.log/ }).click({ button: 'right' })
+  await page
+    .getByRole('navigation', { name: 'projects' })
+    .getByRole('link', { name: /What failed in app\.log/ })
+    .click({ button: 'right' })
   await page.getByRole('menuitem', { name: 'Erase from this machine…' }).click()
   const erase = page.getByRole('alertdialog', { name: 'erase this thread' })
   await expect(erase).toContainText('removes thread')

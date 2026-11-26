@@ -33,7 +33,6 @@ import { readWhole } from '../diffParse'
 import { useHideGit, useHideOthers, useShared } from '../hideGit'
 import { useHistory } from '../historyLoad'
 import { appHref, filePath } from '../permalink'
-import { forgeOf } from '../projects'
 import { keys, message } from '../query'
 import { useNow } from '../now'
 import { useMedia } from '../media'
@@ -1157,92 +1156,6 @@ function OfferForm({ thread, onError }: { thread: string; onError: (failure: unk
         Offer
       </Button>
     </form>
-  )
-}
-
-/** What the thread changed, over the composer: how much, a way to review it, a pull request on the forge, and for a fork, offering it back. */
-function ChangesBar({
-  thread,
-  files,
-  totals,
-  forked,
-  forge,
-  onReview,
-}: {
-  thread: string
-  files: number
-  totals: { added: number; removed: number }
-  forked: boolean
-  /** The forge the project's remote is on, by name, when it is a known one. */
-  forge: string | undefined
-  onReview: () => void
-}) {
-  const [offering, setOffering] = useState(false)
-  const [pushing, setPushing] = useState(false)
-  // Asked again with the changes, as a commit or a branch can lift what stood in the way.
-  const blocker = useQuery({
-    queryKey: [...keys.thread(thread), 'pull-request', files, totals.added, totals.removed],
-    queryFn: () => api.pullRequestBlocker(thread),
-    enabled: !hosted(),
-  })
-  // The tab opens on the click, so no popup blocker stops it, and goes to the forge once the push is done.
-  const createPr = () => {
-    const tab = window.open('', '_blank')
-    setPushing(true)
-    api.openPullRequest(thread).then(
-      (url) => {
-        setPushing(false)
-        if (tab) tab.location.href = url
-        else window.location.assign(url)
-      },
-      (failure: unknown) => {
-        setPushing(false)
-        tab?.close()
-        toast(message(failure), 'danger')
-      },
-    )
-  }
-  return (
-    <div
-      role="group"
-      aria-label="what the thread changed"
-      className="flex flex-wrap items-center gap-2 rounded-t-xl border-b border-line bg-bg px-3 py-1.5 text-xs"
-    >
-      <Icon name="file" className="h-3.5 w-3.5 text-fg-2" />
-      <span>
-        {files} {files === 1 ? 'file' : 'files'} changed
-      </span>
-      <Counts added={totals.added} removed={totals.removed} />
-      <span className="ml-auto flex items-center gap-1.5">
-        <Button size="sm" variant="ghost" onClick={onReview}>
-          Review
-        </Button>
-        {forked &&
-          (offering ? (
-            <OfferForm thread={thread} onError={(failure) => toast(message(failure), 'danger')} />
-          ) : (
-            <Button size="sm" variant={hosted() ? 'primary' : 'secondary'} icon="merge" onClick={() => setOffering(true)}>
-              Offer as merge request
-            </Button>
-          ))}
-        {!hosted() && !offering && (
-          <Button
-            size="sm"
-            variant={blocker.data ? 'secondary' : 'primary'}
-            icon="external"
-            disabled={pushing || Boolean(blocker.data)}
-            onClick={createPr}
-            title={
-              blocker.data
-                ? `No pull request yet: ${blocker.data}`
-                : `Pushes the thread's branch to origin and opens ${forge ?? 'the forge'}'s page for its pull request`
-            }
-          >
-            {pushing ? 'Pushing…' : forge ? `Create PR on ${forge}` : 'Create PR on the forge'}
-          </Button>
-        )}
-      </span>
-    </div>
   )
 }
 
@@ -2421,22 +2334,6 @@ function ThreadBody({
                                 onPeople={setPeople}
                                 onSent={() => list.current?.follow()}
                                 onSending={(text, files) => addSending(thread, text, files, total)}
-                                // Docked on the composer's top edge: what the thread changed and what the next prompt adds to it are one object.
-                                top={
-                                  files &&
-                                  files.length > 0 &&
-                                  totals &&
-                                  !busy && (
-                                    <ChangesBar
-                                      thread={thread}
-                                      files={files.length}
-                                      totals={totals}
-                                      forked={Boolean(summary?.forked_from)}
-                                      forge={forgeOf(summary?.repo ?? '')}
-                                      onReview={roomy ? openReview : showChanges}
-                                    />
-                                  )
-                                }
                               />
                             </div>
                           </div>

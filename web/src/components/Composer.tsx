@@ -249,7 +249,6 @@ export function ComposerBox({
   placeholder,
   rows = 3,
   layout = 'stacked',
-  top,
   above,
   below,
   tools,
@@ -278,8 +277,6 @@ export function ComposerBox({
   /** The box's least height, in lines; it grows with the text up to half the pane. */
   rows?: number
   layout?: 'stacked' | 'inline'
-  /** Docked on the box's top edge, set off from the rest: what the thread changed. */
-  top?: ReactNode
   /** Over the text: what's queued, what others are writing. */
   above?: ReactNode
   /** Over the text, under `above`: attached files. */
@@ -547,7 +544,6 @@ export function ComposerBox({
       >
         {offered.length > 0 && <CommandMenu id={id} offered={offered} active={active} onPick={pick} />}
         {!inline && dictation.available && <VoiceOffer dictation={dictation} side="right" />}
-        {top}
         {above}
         {below}
         {onFiles && attach && (

@@ -24,7 +24,9 @@ test.afterAll(() => {
 async function choose(page: Page, group: 'transcript grouping' | 'transcript detail', label: string) {
   await page.keyboard.press('ControlOrMeta+k')
   const palette = page.getByRole('dialog', { name: 'Command palette' })
-  await palette.getByLabel('command').fill(group === 'transcript grouping' ? `Group the work ${label.toLowerCase()}` : `Transcript: ${label}`)
+  await palette
+    .getByLabel('command')
+    .fill(group === 'transcript grouping' ? `Group the work ${label.toLowerCase()}` : `Transcript: ${label}`)
   await page.keyboard.press('Enter')
   await expect(palette).toBeHidden()
   // No hover or focus left over from the menu in the shot.

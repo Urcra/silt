@@ -107,7 +107,11 @@ test('shows a thread with compaction, turn diffs and comments', async ({ page })
   // The agent that recorded it, by its mark (ADR 0114).
   await expect(page.getByRole('main').getByRole('img', { name: 'Claude Code' })).toBeVisible()
   // A right-click on it in the sidebar offers its id, for `silt resume` and `silt fork` in a terminal.
-  await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: /farewell/ }).first().click({ button: 'right' })
+  await page
+    .getByRole('navigation', { name: 'projects' })
+    .getByRole('link', { name: /farewell/ })
+    .first()
+    .click({ button: 'right' })
   await expect(page.getByRole('menuitem', { name: new RegExp(`^Copy thread ID${thread.slice(-12)}$`) })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('menu')).toHaveCount(0)
