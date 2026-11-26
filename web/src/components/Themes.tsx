@@ -3,8 +3,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useSearch } from '@tanstack/react-router'
 import { useRef, useState } from 'react'
-import { type AppearanceSettings, type ThemeSummary, api } from '../api'
+import { type AppearanceSettings, type SeasonalShow, type ThemeSummary, api } from '../api'
+import { useNow } from '../now'
 import { keys, message } from '../query'
+import { DEFAULT_SEASONAL, decorated, seasonalOffered } from '../seasonal'
 import { hosted } from '../served'
 import { SETTINGS_HEADING } from '../settingsContext'
 import { THEMES, useAppearance } from '../theme'
@@ -41,6 +43,75 @@ function Swatch({ colors, size = 'md' }: { colors: string[]; size?: 'sm' | 'md' 
 
 function withSlot(settings: AppearanceSettings, theme: ThemeSummary): AppearanceSettings {
   return theme.appearance === 'light' ? { ...settings, light: theme.id } : { ...settings, dark: theme.id }
+}
+
+const SEASONAL_SHOWS: { id: SeasonalShow; label: string }[] = [
+  { id: 'auto', label: 'Auto' },
+  { id: 'always', label: 'Always' },
+  { id: 'off', label: 'Off' },
+]
+
+/** The desktop app's December decorations (ADR 0133): when they show, and whether snow falls. */
+function SeasonalSettingsRow({
+  settings,
+  choose,
+}: {
+  settings: AppearanceSettings
+  choose: (next: AppearanceSettings) => Promise<unknown>
+}) {
+  const seasonal = settings.seasonal ?? DEFAULT_SEASONAL
+  const showing = decorated(seasonal, new Date(useNow(15 * 60_000)), true)
+  const set = (next: Partial<AppearanceSettings['seasonal']>) => void choose({ ...settings, seasonal: { ...seasonal, ...next } })
+  return (
+    <div className="flex flex-col gap-1.5 pt-2">
+      <span id="seasonal-label" className="text-xs text-fg-2">
+        Seasonal touches
+        {seasonal.show === 'auto' && (
+          <span className="text-fg-3"> · {showing ? 'showing until 6 January' : 'from 1 December to 6 January'}</span>
+        )}
+      </span>
+      <div
+        role="radiogroup"
+        aria-labelledby="seasonal-label"
+        className="inline-flex self-start overflow-hidden rounded-sm border border-line text-xs"
+      >
+        {SEASONAL_SHOWS.map((choice) => (
+          <button
+            key={choice.id}
+            type="button"
+            role="radio"
+            aria-checked={seasonal.show === choice.id}
+            onClick={() => set({ show: choice.id })}
+            className={cx(
+              'px-3 py-1 max-md:min-h-11',
+              seasonal.show === choice.id ? 'bg-accent-tint text-accent-fg' : 'text-fg-2 hover:bg-surface-2',
+            )}
+          >
+            {choice.label}
+          </button>
+        ))}
+      </div>
+      <p className="text-xs text-fg-2">
+        Lights under each page's header, a hat on the workspace, snow resting on the composer, and a tree on empty screens. They
+        take their colours from the theme you use, which stays as it is.
+      </p>
+      <label className="flex items-start gap-2 pt-1 text-sm text-fg-1">
+        <input
+          type="checkbox"
+          checked={seasonal.snow}
+          disabled={seasonal.show === 'off'}
+          onChange={(event) => set({ snow: event.target.checked })}
+          className="mt-1"
+        />
+        <span className="flex flex-col gap-0.5">
+          Falling snow
+          <span className="text-xs text-fg-2">
+            Only on screens with nothing to read yet, such as a new thread. It stays still when you ask for less motion.
+          </span>
+        </span>
+      </label>
+    </div>
+  )
 }
 
 /** The mode, the light and dark theme, and the list to pick from. */
@@ -126,6 +197,7 @@ export function ThemeSettings() {
         {slot('light')}
         {slot('dark')}
       </div>
+      {seasonalOffered() && <SeasonalSettingsRow settings={settings} choose={choose} />}
 
       <div className="flex flex-wrap items-center gap-2 pt-3">
         <p className={cx(LABEL, 'flex-1')}>

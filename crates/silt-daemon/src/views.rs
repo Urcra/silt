@@ -196,6 +196,11 @@ impl Core {
                         .filter(|holder| matches!(location, "moved" | "remote") && Some(*holder) != self.device_for(record.id))
                         .and_then(|holder| self.machine_name(holder))
                         .map(str::to_owned),
+                    agent_settings: self
+                        .agent_runs
+                        .get(&record.id)
+                        .filter(|run| !run.settings.is_empty())
+                        .map(|run| silt_proto::view::KeptSettings { agent: run.agent.clone(), settings: run.settings.clone() }),
                 }
             })
             .collect();

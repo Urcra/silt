@@ -151,6 +151,7 @@ test('threads are grouped by project, newest first', () => {
     workspace: null,
     cloud: null,
     machine: null,
+    agent_settings: null,
   })
   const grouped = projects([thread('a', 'github.com/u/b', 1), thread('b', '', 2), thread('c', 'github.com/u/b', 3)])
   expect(grouped.map(([repo, threads]) => [repo, threads.map((each) => each.id)])).toEqual([
@@ -195,6 +196,7 @@ test('the sidebar names the workspace at its top, and at its bottom the machine,
       reviewed_turn: null,
     },
     machine: null,
+    agent_settings: null,
     ...overrides,
   })
   vi.stubGlobal(

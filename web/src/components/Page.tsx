@@ -5,6 +5,7 @@ import { MainScroll } from '../scroll'
 import { InSettings, SETTINGS_HEADING } from '../settingsContext'
 import { Drawer } from '../shell'
 import { IconButton, cx } from '../ui'
+import { SeasonalLights } from './Seasonal'
 
 const INSPECTOR = { min: 320, max: 960, start: 480 }
 
@@ -120,9 +121,12 @@ export function Page({
                 </span>
               )}
               {actions && <span className="ml-auto flex shrink-0 items-center gap-1.5">{actions}</span>}
+              <SeasonalLights />
             </header>
           )}
-          <div className={cx('w-full flex-1', column, flush ? 'flex flex-col' : 'px-4 py-4 pb-8 md:px-6')}>{children}</div>
+          <div className={cx('w-full flex-1', column, flush ? 'relative flex flex-col' : 'px-4 py-4 pb-8 md:px-6')}>
+            {children}
+          </div>
         </div>
         {inspector && !(split && full) && (
           <div

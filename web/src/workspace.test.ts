@@ -46,6 +46,7 @@ function thread(
     workspace,
     cloud: null,
     machine: null,
+    agent_settings: null,
   }
 }
 

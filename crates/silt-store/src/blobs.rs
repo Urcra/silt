@@ -328,15 +328,10 @@ fn put_file(root: &Path, durable: bool, source: &Path, take: bool) -> io::Result
     if !moved {
         std::fs::copy(source, &temporary)?;
     }
-    if durable {
-        std::fs::File::open(&temporary)?.sync_all()?;
+    if let Err(error) = keep_temporary(&temporary, &path, hash, durable, moved) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
     }
-    // A copy of a file changed while it was read: what's kept must be what was hashed.
-    if !moved && hash_file(&temporary)?.0 != hash {
-        std::fs::remove_file(&temporary)?;
-        return Err(io::Error::other("the file changed while it was stored"));
-    }
-    std::fs::rename(&temporary, &path)?;
     if take && !moved {
         std::fs::remove_file(source)?;
     }
@@ -344,6 +339,19 @@ fn put_file(root: &Path, durable: bool, source: &Path, take: bool) -> io::Result
         silt_os::sync_dir(&dir)?;
     }
     Ok((hash, size))
+}
+
+/// Makes the file at `temporary` the blob at `path`, once it's on disk and,
+/// when it was copied, still what was hashed.
+fn keep_temporary(temporary: &Path, path: &Path, hash: BlobHash, durable: bool, moved: bool) -> io::Result<()> {
+    if durable {
+        // Windows flushes a file only through a handle that may write to it.
+        std::fs::File::options().write(true).open(temporary)?.sync_all()?;
+    }
+    if !moved && hash_file(temporary)?.0 != hash {
+        return Err(io::Error::other("the file changed while it was stored"));
+    }
+    std::fs::rename(temporary, path)
 }
 
 fn list_blobs(root: &Path) -> io::Result<Vec<(BlobHash, SystemTime)>> {

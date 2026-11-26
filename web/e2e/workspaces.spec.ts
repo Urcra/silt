@@ -390,7 +390,8 @@ test('an agent asks for a folder on a card, and goes on with it once approved (A
   await card.getByRole('button', { name: /^Approve/ }).click()
 
   // The agent is restarted in a sandbox with it, told what's there, and goes on.
-  await expect(page.getByText(/is now in your sandbox, read-only, at that path/)).toBeVisible({ timeout: 60_000 })
+  // The note it was sent comes first; its answer quotes it.
+  await expect(page.getByText(/is now in your sandbox, read-only, at that path/).first()).toBeVisible({ timeout: 60_000 })
   await page.getByRole('tab', { name: 'Access' }).click()
   const folders = page.getByRole('region', { name: 'folders' })
   await expect(folders).toContainText(shared)

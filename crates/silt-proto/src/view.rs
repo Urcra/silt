@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 pub use crate::theme::{
-    AppearanceMode, AppearanceSettings, ThemeCatalog, ThemeCheckView, ThemeColorView, ThemeCss, ThemeDetail, ThemeProblem,
-    ThemeSaved, ThemeSource, ThemeSummary, ThemeSyntaxView,
+    AppearanceMode, AppearanceSettings, SeasonalSettings, SeasonalShow, ThemeCatalog, ThemeCheckView, ThemeColorView, ThemeCss,
+    ThemeDetail, ThemeProblem, ThemeSaved, ThemeSource, ThemeSummary, ThemeSyntaxView,
 };
 use crate::{AgentState, Capabilities, InboxAction, Snooze, Startable, ThreadStatus, Visibility};
 
@@ -77,6 +77,20 @@ pub struct ThreadSummary {
     /// the one answering: the device of its lease.
     #[serde(default)]
     pub machine: Option<String>,
+    /// The settings the agent the web UI last ran in it here ran with, for
+    /// it to start again with; none from a server.
+    #[serde(default)]
+    pub agent_settings: Option<KeptSettings>,
+}
+
+/// The settings a thread's agent ran with, such as its model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct KeptSettings {
+    /// The agent, by its name.
+    pub agent: String,
+    /// Each setting's value, by its id.
+    pub settings: std::collections::BTreeMap<String, String>,
 }
 
 /// The cloud session among a thread's own deltas.
