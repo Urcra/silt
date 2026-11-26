@@ -135,3 +135,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0127](0127-switching-threads-waits-for-nothing-else.md) | Switching threads waits for nothing else | accepted; amended by 0128 |
 | [0128](0128-a-pages-views-go-ahead-of-an-agents-capture.md) | A page's views go ahead of an agent's capture | accepted |
 | [0129](0129-nightly-releases-and-three-channels.md) | Nightly releases, and three channels: stable, nightly and dev | accepted |
+| [0130](0130-the-whole-gate-on-every-pull-request.md) | The whole gate on every pull request | accepted |
