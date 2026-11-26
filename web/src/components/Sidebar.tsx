@@ -18,7 +18,7 @@ import { hosted, serverName } from '../served'
 import { formatKeys } from '../shortcuts'
 import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
 import { useThreadState } from '../threadState'
-import { ago } from '../time'
+import { agoWithSuffix } from '../time'
 import { Button, Dot, type DotTone, Icon, type IconName, Kbd, Menu, Popover, SectionLabel, Skeleton, Spinner, cx } from '../ui'
 import { pillOf, useUpdate } from '../updates'
 import { useInWorkspace } from '../workspaceFilter'
@@ -33,8 +33,8 @@ const ACTIVE = 'bg-accent-tint text-accent-fg shadow-[inset_2px_0_0_var(--accent
 /** What a thread is at, in words, and since when; the time stands apart, as it changes on its own. */
 function stateLine(thread: ThreadSummary, now: number): { said: string | null; when: string | null } {
   const doing = threadDoing(thread) ?? (thread.merged ? 'merged' : thread.mine.settled ? 'settled' : null)
-  const when = ago(thread.last_ms, now)
-  if (!doing) return { said: null, when: /^\d/.test(when) ? `${when} ago` : when }
+  const when = agoWithSuffix(thread.last_ms, now)
+  if (!doing) return { said: null, when }
   const said = doing[0]!.toUpperCase() + doing.slice(1)
   return { said, when: inProgress(thread) ? null : when }
 }
