@@ -14,6 +14,12 @@ export function ago(ms: number, now: number): string {
   return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
+/** Adds the sidebar's suffix to relative durations, never to localized dates. */
+export function agoWithSuffix(ms: number, now: number): string {
+  const said = ago(ms, now)
+  return /^\d+[mhdw]$/.test(said) ? `${said} ago` : said
+}
+
 /** When a plan's limit resets, as Claude Code's usage says it: `Resets at 2:00 PM` today, `Resets Tue 7:00 AM` within the week, else `Resets Dec 1`. */
 export function resetsAt(ms: number, now: number): string {
   const at = new Date(ms)

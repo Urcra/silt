@@ -15,4 +15,5 @@ Protocol version 24.
 - **Agents from the web UI** over ACP, agents asking other agents, artifacts, themes, workspaces with their own rules, Silt's sandbox on Linux, plugins, and local models.
 
 ### Fixed
+- Sidebar thread dates in date-first locales no longer get an incorrect ΓÇ£agoΓÇ¥ suffix.
 - A thread just opened, or scrolled up until an earlier part of it loaded, sometimes drew its turns over each other until they scrolled away.

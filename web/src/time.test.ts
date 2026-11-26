@@ -1,5 +1,5 @@
-import { expect, test } from 'vitest'
-import { ago, resetsAt } from './time'
+import { expect, test, vi } from 'vitest'
+import { ago, agoWithSuffix, resetsAt } from './time'
 
 test('times read as dense lists say them', () => {
   const now = Date.UTC(2026, 9, 22, 12)
@@ -10,6 +10,26 @@ test('times read as dense lists say them', () => {
   expect(ago(now - 3 * 86_400_000, now)).toBe('3d')
   expect(ago(now - 15 * 86_400_000, now)).toBe('2w')
   expect(ago(now + 5_000, now)).toBe('just now')
+})
+
+test('relative sidebar times get an ago suffix, but date-first locale dates do not', () => {
+  const now = Date.UTC(2026, 9, 10)
+  const date = Date.UTC(2026, 8, 10)
+  const original = Date.prototype.toLocaleDateString
+  const locale = vi
+    .spyOn(Date.prototype, 'toLocaleDateString')
+    .mockImplementation(function (this: Date, _locales, options) {
+      return original.call(this, 'fr-FR', options)
+    })
+
+  try {
+    const calendarDate = ago(date, now)
+    expect(calendarDate).toMatch(/^\d/)
+    expect(agoWithSuffix(date, now)).toBe(calendarDate)
+    expect(agoWithSuffix(now - 4 * 60_000, now)).toBe('4m ago')
+  } finally {
+    locale.mockRestore()
+  }
 })
 
 test("a limit's reset reads as a time today, a weekday this week, else a date", () => {
