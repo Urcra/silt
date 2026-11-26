@@ -286,6 +286,7 @@ fn api_routes() -> Router<Web> {
         .route("/api/design-systems/keep", post(keep_design_system))
         .route("/api/threads/{id}/design-system", get(thread_design))
         .route("/api/artifact-settings", get(artifact_settings).put(set_artifact_settings))
+        .route("/api/network-settings", get(network_settings).put(set_network_settings))
         .route("/api/themes", get(themes))
         .route("/api/themes/detail", get(theme_detail))
         .route("/api/themes/css", get(theme_css))
@@ -1224,6 +1225,14 @@ async fn set_appearance(State(web): State<Web>, Json(settings): Json<silt_proto:
     ask(&web, Request::SetAppearance { settings }).await
 }
 
+async fn network_settings(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::NetworkSettings).await
+}
+
+async fn set_network_settings(State(web): State<Web>, Json(settings): Json<crate::protocol::NetworkSettings>) -> HttpResponse {
+    ask(&web, Request::SetNetworkSettings { settings }).await
+}
+
 async fn artifact_settings(State(web): State<Web>) -> HttpResponse {
     ask(&web, Request::ArtifactSettings).await
 }
@@ -1603,7 +1612,9 @@ async fn serve_frame(State(web): State<Web>, Path(key): Path<String>, request: H
     let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&read.data) else {
         return not_found();
     };
-    let proxied = answer(&web, Request::ArtifactSettings).await.is_ok_and(|settings| settings["proxy"] == true);
+    // Offline, a page loads only what Silt kept, never from the CDNs.
+    let proxied = crate::network::allowed(&crate::paths::data_dir()).offline
+        || answer(&web, Request::ArtifactSettings).await.is_ok_and(|settings| settings["proxy"] == true);
     let host = request.headers().get(header::HOST).and_then(|value| value.to_str().ok()).unwrap_or("127.0.0.1");
     let vendor = proxied.then(|| format!("http://{host}/vendor/"));
     let parts = silt_design::frame::FrameParts {
@@ -1684,7 +1695,8 @@ fn framed_response(page: String, policy: &str) -> HttpResponse {
 /// A CDN file an artifact's frame loads through Silt (ADR 0071).
 async fn vendor_file(State(web): State<Web>, Path((host, path)): Path<(String, String)>, request: HttpRequest) -> HttpResponse {
     let query = request.uri().query().map(str::to_owned);
-    match web.vendor.get(&host, &format!("/{path}"), query.as_deref()).await {
+    let reach = crate::network::allowed(&crate::paths::data_dir()).vendor_reach();
+    match web.vendor.get(reach, &host, &format!("/{path}"), query.as_deref()).await {
         Ok(fetched) => vendor_response(fetched),
         Err(silt_vendor::VendorError::Refused(why)) => (StatusCode::FORBIDDEN, why).into_response(),
         Err(error) => (StatusCode::BAD_GATEWAY, error.to_string()).into_response(),

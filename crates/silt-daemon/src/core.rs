@@ -1089,6 +1089,10 @@ impl Core {
                 let css = crate::theme::css(&self.data_dir, light, dark, text);
                 Response::ok(serde_json::json!({ "css": css, "mode": appearance.mode, "motion": motion }))
             }
+            Request::NetworkSettings => to_response(crate::network::view(&self.data_dir)),
+            Request::SetNetworkSettings { settings } => {
+                to_response(crate::network::save(&self.data_dir, settings).map(|()| "saved"))
+            }
             Request::ArtifactSettings => Response::ok(crate::design::artifact_settings(&self.data_dir)),
             Request::SetArtifactSettings { settings } => {
                 to_response(crate::design::set_artifact_settings(&self.data_dir, settings).map(|()| "saved"))
@@ -1516,7 +1520,8 @@ impl Core {
                 // A thread's folder may be in a workspace whose agents sign in apart; a thread not here asks as this machine.
                 let cwd = thread.and_then(|thread| self.find_thread(&thread).and_then(|thread| self.clone_of(thread)).ok());
                 let usage = self.usage.clone();
-                return answer_later(reply, Ok(async move { usage.of(&agent, cwd.as_deref()).await }));
+                let off = crate::network::allowed(&self.data_dir).no_plan_usage();
+                return answer_later(reply, Ok(async move { usage.of(&agent, cwd.as_deref(), off).await }));
             }
             Request::AcpStart { thread, clone, agent, options } => {
                 to_response(self.acp_start(thread.as_deref(), clone.as_deref(), &agent, options).await)

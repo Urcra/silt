@@ -1256,9 +1256,38 @@ export type DesignSource = "project" | "personal";
 export type ArtifactSettings = { 
 /**
  * Through Silt's vendor route, which fetches and keeps each file, so
- * the viewer's browser never contacts a CDN; else from the CDNs.
+ * the viewer's browser never contacts a CDN, as by default; else from
+ * the CDNs.
  */
 proxy: boolean, };
+
+export type NetworkSettings = { offline: boolean, 
+/**
+ * Silt's and plugins' checks for a newer version.
+ */
+update_checks: boolean, 
+/**
+ * Asking agents' providers how much of the plan is left.
+ */
+plan_usage: boolean, 
+/**
+ * Fetching the ACP registry's list of agents.
+ */
+agent_registry: boolean, };
+
+export type NetworkView = { settings: NetworkSettings, 
+/**
+ * `SILT_OFFLINE` is set, so this machine is offline whatever the setting says.
+ */
+offline_env: boolean, 
+/**
+ * `SILT_UPDATE_CHECK=never` is set, so nothing checks for updates by itself.
+ */
+no_update_checks_env: boolean, 
+/**
+ * Offline now, by the setting or the environment.
+ */
+offline: boolean, };
 
 export type AppearanceMode = "system" | "light" | "dark";
 

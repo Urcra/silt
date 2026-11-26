@@ -411,6 +411,26 @@ test('devices and pairing a phone', async ({ page }) => {
   })
 })
 
+test('Settings › Network, online and offline (ADR 0134)', async ({ page }) => {
+  await open(page, '/settings/network')
+  await shoot(page, 'network', async (shown) => {
+    await expect(shown.getByRole('switch', { name: 'Plan usage' })).toBeChecked()
+  })
+  await page.getByRole('switch', { name: 'Offline' }).click()
+  await expect(page.getByRole('switch', { name: 'Offline' })).toBeChecked()
+  // Clicked at the last variant's width, which scrolls the page; open it afresh, with nothing hovered.
+  await open(page, '/settings/network')
+  await page.mouse.move(0, 0)
+  try {
+    await shoot(page, 'network-offline', async (shown) => {
+      await expect(shown.getByRole('switch', { name: 'Plan usage' })).toBeDisabled()
+    })
+  } finally {
+    await page.getByRole('switch', { name: 'Offline' }).click()
+    await expect(page.getByRole('switch', { name: 'Plan usage' })).toBeEnabled()
+  }
+})
+
 test('projects', async ({ page }) => {
   await open(page, '/settings/projects')
   await shoot(page, 'projects', async (shown) => {
