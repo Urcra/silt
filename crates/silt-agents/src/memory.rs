@@ -1,4 +1,4 @@
-//! What agents write down to read in later sessions (ADR 0135), read from
+//! What agents write down to read in later sessions (ADR 0137), read from
 //! each agent's own store into one shape for the memory viewer.
 
 use std::fs;

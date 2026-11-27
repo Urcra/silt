@@ -23,6 +23,8 @@ import type {
   ArtifactSettings,
   NetworkSettings,
   NetworkView,
+  MemoryOverview,
+  MemoryView,
   ChatSettings,
   CloudLaunch,
   DesignSystemView,
@@ -627,6 +629,14 @@ export const api = {
   setAppearance: (settings: AppearanceSettings) => request<string>('PUT', '/api/appearance', settings),
   importTheme: (text: string) => request<ThemeSaved>('POST', '/api/themes/import', { text }),
   duplicateTheme: (from: string) => request<ThemeSaved>('POST', '/api/themes/duplicate', { from }),
+  memory: () => request<MemoryOverview>('GET', '/api/memory'),
+  /** What's remembered in the project whose clone is `clone`, or everywhere without one. */
+  memoryOf: (clone: string | null) =>
+    request<MemoryView>('GET', `/api/memory/store${clone ? `?clone=${encodeURIComponent(clone)}` : ''}`),
+  setMemory: (change: { clone: string | null; store: string; file: string | null; text: string }) =>
+    request<string>('PUT', '/api/memory/store', change),
+  forgetMemory: (change: { clone: string | null; store: string; file: string }) =>
+    request<string>('DELETE', '/api/memory/store', change),
   networkSettings: () => request<NetworkView>('GET', '/api/network-settings'),
   setNetworkSettings: (settings: NetworkSettings) => request<string>('PUT', '/api/network-settings', settings),
   artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),

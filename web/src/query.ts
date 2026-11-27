@@ -58,6 +58,9 @@ export const keys = {
   designAsset: (where: object, path: string) => ['design-systems', 'asset', where, path] as const,
   threadDesign: (id: string) => ['thread', id, 'design-system'] as const,
   artifactSettings: ['artifact-settings'] as const,
+  memory: ['memory'] as const,
+  // Under `memory`, so a change refreshes the overview's counts too.
+  memoryOf: (clone: string | null) => ['memory', clone ?? ''] as const,
   networkSettings: ['network-settings'] as const,
   themes: ['themes'] as const,
   themeDetail: (id: string) => ['themes', 'detail', id] as const,

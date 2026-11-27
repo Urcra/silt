@@ -73,6 +73,9 @@ export const router = createRouter({
       getParentRoute: () => root,
       path: '/settings/$section',
       component: lazyRouteComponent(() => import('./components/Settings'), 'Settings'),
+      // Settings › Memory's place: a project's clone, or `everywhere` (ADR 0137).
+      validateSearch: (search: Record<string, unknown>): { memory?: string } =>
+        typeof search.memory === 'string' && search.memory ? { memory: search.memory } : {},
     }),
     // One design system's page (ADR 0088); the hosted app shows none yet.
     createRoute({

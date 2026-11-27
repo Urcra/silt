@@ -434,7 +434,7 @@ pub trait Agent: Send + Sync {
         None
     }
     /// Where it keeps what it remembers of the project whose clone is
-    /// `project`, or, without one, what it remembers everywhere (ADR 0135).
+    /// `project`, or, without one, what it remembers everywhere (ADR 0137).
     /// `env` reads the run's variables.
     fn memory_stores(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>, _project: Option<&Path>) -> Vec<memory::Store> {
         Vec::new()

@@ -1,4 +1,4 @@
-//! Settings › Memory (ADR 0135): what each agent remembers, read from its
+//! Settings › Memory (ADR 0137): what each agent remembers, read from its
 //! own stores, everywhere and in each project with a clone here.
 
 use std::collections::HashMap;

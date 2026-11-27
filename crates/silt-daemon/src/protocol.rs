@@ -594,7 +594,7 @@ pub enum Request {
         text: Option<silt_theme::TextSettings>,
     },
     /// What agents remember, project by project, for Settings › Memory
-    /// (ADR 0135).
+    /// (ADR 0137).
     Memory,
     /// What agents remember of the project whose clone is `clone`, or,
     /// without one, everywhere.
@@ -1552,7 +1552,7 @@ impl Default for NetworkSettings {
 }
 
 /// Settings › Memory: what agents remember everywhere and in each
-/// project with a clone here (ADR 0135).
+/// project with a clone here (ADR 0137).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct MemoryOverview {
