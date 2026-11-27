@@ -200,7 +200,7 @@ recorded sessions in `~/.copilot/session-state/*/events.jsonl`,
 
 ## Prompts mid-turn: what other tools do, and a way in for each agent
 
-Researched 2026-11-26 and 27; it led to ADR 0137.
+Researched 2026-11-26 and 27; it led to ADR 0138.
 
 **Other tools deliver a message typed mid-turn at the next safe point.** That point is after the running tool call returns and before the next model request. Nothing is interrupted, and the message joins the same turn.
 - **Claude Code:** Enter, at queue priority `next`; Ctrl+Enter sends now.
@@ -220,7 +220,7 @@ ACP's [PR #1261](https://github.com/agentclientprotocol/agent-client-protocol/pu
 Checked against Claude Code 2.1.332 through its SDK input, a message sent during a `sleep` with no priority reached the model as the `sleep` ended. The command wasn't touched, and the model followed the message. With `now`, the cycle ended with an extra `result`, and a new cycle took the message up. The running command still finished.
 
 **Claude's adapter.**
-- **0.109.0 (pinned):** advertises `capabilities._meta.claudeCode.promptQueueing`. It pushes a prompt that arrives while Claude works with no priority, which means `next`. It sends the prompt's `user_message`, then answers the prompt when Claude Code takes it in. Silt steers Claude this way (ADR 0137).
+- **0.109.0 (pinned):** advertises `capabilities._meta.claudeCode.promptQueueing`. It pushes a prompt that arrives while Claude works with no priority, which means `next`. It sends the prompt's `user_message`, then answers the prompt when Claude Code takes it in. Silt steers Claude this way (ADR 0138).
 - **0.113.0:** sends such a prompt at `now`, unless a permission request or question is open, in which case it sends it at `later`.
 
 **Antigravity: `agy acp` steers.** The `agy` CLI (checked 1.5.18) is a Go binary with its own ACP server, separate from the registry's `agy-acp-server`.

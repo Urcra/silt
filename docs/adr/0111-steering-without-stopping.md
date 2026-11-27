@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-11-20
 - Reverses part of: [0022](0022-agent-runtime.md) ("ACP can't add to a running turn")
-- Amended by: [ADR 0137](0137-enter-steers-mid-turn.md): ⏎ steers mid-turn, Claude is steered with a prompt, and a refused steer waits in the queue
+- Amended by: [ADR 0138](0138-enter-steers-mid-turn.md): ⏎ steers mid-turn, Claude is steered with a prompt, and a refused steer waits in the queue
 
 ## Context
 ADR 0022 had a steer cancel the agent's turn (`session/cancel`) and send the steer as the next prompt, framed as "I interrupted your last turn to say: …". The cancel also ends the command the agent is running, so steering an agent in the middle of a build or a test run threw that run away.

@@ -77,7 +77,7 @@ pub(crate) struct AcpRun {
     steering: Option<String>,
     /// The agent adds a steer to the turn it runs, over `_session/steering`
     /// or, as Claude Code, by queueing a prompt sent while it works, so a
-    /// steer needn't cancel it (ADR 0111, ADR 0137).
+    /// steer needn't cancel it (ADR 0111, ADR 0138).
     pub(crate) steers: bool,
     /// Steers that found no turn running, each to send as a prompt in turn.
     steered: Vec<String>,

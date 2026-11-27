@@ -841,7 +841,7 @@ export function AgentDock({
   }
   const steer = () => act(api.steer(thread, draft), sent(draft))
   // An agent that takes a prompt into the turn it runs hears ⏎'s at its next step, and mod+⏎ queues instead
-  // (ADR 0137); for any other, ⏎ queues and mod+⏎ interrupts the turn to say it.
+  // (ADR 0138); for any other, ⏎ queues and mod+⏎ interrupts the turn to say it.
   const steers = live && turning && status.steers === true && attached.length === 0
   const queue = () =>
     act(api.prompt(thread, draft, false, attached), () => {

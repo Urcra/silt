@@ -3085,7 +3085,7 @@ fn a_steer_an_agent_doesnt_take_cancels_its_turn_and_follows_it() {
 
 /// A steer an agent that takes steers refuses waits in the queue instead:
 /// the turn goes on, the command it runs to its end, and the steer is the
-/// next prompt, as the person wrote it (ADR 0137).
+/// next prompt, as the person wrote it (ADR 0138).
 #[test]
 fn a_steer_an_agent_refuses_waits_in_the_queue_for_the_turn_to_end() {
     let env = Env::new();
@@ -3110,7 +3110,7 @@ fn a_steer_an_agent_refuses_waits_in_the_queue_for_the_turn_to_end() {
 /// next step, so Silt steers it with a prompt: it waits, shown as waiting,
 /// while the command runs, joins the same turn once the command ends, and
 /// is recorded where the agent took it in, before what it said of it
-/// (ADR 0137).
+/// (ADR 0138).
 #[test]
 fn a_steer_to_an_agent_that_queues_prompts_joins_the_turn_at_its_next_step() {
     let env = Env::new();
@@ -3136,7 +3136,7 @@ fn a_steer_to_an_agent_that_queues_prompts_joins_the_turn_at_its_next_step() {
 
 /// Stopping the turn while a steer waits for the agent's next step sends
 /// the steer once the turn ends, as Send now beside it does, rather than
-/// dropping it with the turn (ADR 0137).
+/// dropping it with the turn (ADR 0138).
 #[test]
 fn a_cancel_while_a_steer_waits_sends_it_once_the_turn_ends() {
     let env = Env::new();

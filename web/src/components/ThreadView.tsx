@@ -368,7 +368,7 @@ function SendingPrompt({ item }: { item: Sending }) {
 }
 
 /** A steer on its way to the agent, where it will land, until the agent takes it in at its next step. Send now stops
- * the turn, and the steer goes as it ends (ADR 0137). */
+ * the turn, and the steer goes as it ends (ADR 0138). */
 function WaitingSteer({ thread, text }: { thread: string; text: string }) {
   return (
     <div data-testid="steer-waiting" className="flex items-center justify-end gap-2" aria-busy="true">
