@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-11-24
 - Amends: [ADR 0045](0045-windows-natively-and-in-wsl.md) (CI and the gate, release builds)
-- Amended by: [ADR 0129](0129-nightly-releases-and-three-channels.md): Nightly releases, and three channels: stable, nightly and dev
+- Amended by: [ADR 0129](0129-nightly-releases-and-three-channels.md): Nightly releases, and three channels: stable, nightly and dev; [ADR 0139](0139-macos-and-windows-ci-advisory-at-first.md): macOS and Windows CI, advisory at first
 
 ## Context
 ADR 0045 put Windows ahead of macOS. It gave Windows its own CI workflow, `.github/workflows/windows.yml`, with clippy and the tests on GitHub's Windows runners and, behind a `windows-full` label, the WSL handoff, the desktop installer and an aarch64 build. It also added Windows jobs to `release.yml`: `silt.exe` zips for x86_64 and aarch64, which `scripts/install.ps1` installed, and the desktop app's NSIS installer and MSI.
