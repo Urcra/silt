@@ -257,6 +257,7 @@ impl Core {
             mcp: None,
             load: None,
             sign_in_first: None,
+            memory: None,
         };
         let token = run.token.clone();
         let sandbox = run.sandbox.as_ref().map(|(reach, token, workspace)| AcpSandbox {

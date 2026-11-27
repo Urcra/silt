@@ -58,6 +58,7 @@ async fn a_session_streams_asks_permission_and_loads_again() {
         mcp: None,
         load: None,
         sign_in_first: None,
+        memory: None,
     };
     let (sender, mut events) = mpsc::unbounded_channel();
     let agent = start(options.clone(), sender);
@@ -120,6 +121,7 @@ fn options(dir: &std::path::Path, env: Vec<(String, String)>) -> Start {
         mcp: None,
         load: None,
         sign_in_first: None,
+        memory: None,
     }
 }
 

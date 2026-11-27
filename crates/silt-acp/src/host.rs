@@ -45,6 +45,9 @@ pub struct Start {
     /// A sign-in method of the agent's own to ask it to follow before the
     /// session opens (ADR 0056).
     pub sign_in_first: Option<String>,
+    /// Where Claude Code keeps what it remembers of the project, when not
+    /// where it would by itself (ADR 0137).
+    pub memory: Option<PathBuf>,
 }
 
 impl Start {
@@ -605,6 +608,7 @@ mod tests {
             }),
             load: None,
             sign_in_first: None,
+            memory: None,
         }
     }
 

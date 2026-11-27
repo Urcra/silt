@@ -206,6 +206,25 @@ pub struct LaunchPlan {
     /// Variables its workspace gives every agent, such as its own
     /// `CLAUDE_CONFIG_DIR`.
     pub env: Vec<(String, String)>,
+    /// Where it keeps what it remembers of the project, from [`Agent::memory`].
+    pub memory: Option<PathBuf>,
+}
+
+/// The clone a managed checkout at or above `cwd` was made from: its git dir
+/// is `<clone>/.git/silt/clones/<id>.git`, as `silt_git` makes it. `None` for
+/// any other folder, a clone or a worktree included.
+pub fn managed_clone(cwd: &Path) -> Option<PathBuf> {
+    let dot_git = cwd.ancestors().map(|dir| dir.join(".git")).find(|path| path.exists())?;
+    let pointer = std::fs::read_to_string(&dot_git).ok()?;
+    let git_dir = PathBuf::from(pointer.trim().strip_prefix("gitdir:")?.trim());
+    let git_dir = if git_dir.is_absolute() { git_dir } else { dot_git.parent()?.join(git_dir) };
+    let clones = git_dir.parent()?;
+    let silt = clones.parent()?;
+    if git_dir.extension()? != "git" || clones.file_name()? != "clones" || silt.file_name()? != "silt" {
+        return None;
+    }
+    let common = silt.parent()?;
+    (common.file_name()? == ".git").then(|| common.parent().map(Path::to_path_buf)).flatten()
 }
 
 /// What a workspace's rules hold an agent to, passed as the agent's own
@@ -404,6 +423,14 @@ pub trait Agent: Send + Sync {
     /// (ADR 0065). `env` reads the run's variables.
     fn project_state(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>, _cwd: &Path) -> ProjectState {
         ProjectState::default()
+    }
+    /// Where it should keep what it remembers of the project at `cwd`, when
+    /// it would pick another folder by itself: in a managed checkout, the
+    /// one it picks in the checkout's clone, which every thread of the
+    /// project shares, rather than the checkout's own, which none reads after
+    /// the thread (ADR 0137). `env` reads the run's variables.
+    fn memory(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>, _cwd: &Path) -> Option<PathBuf> {
+        None
     }
     /// The model APIs it calls with a key from a variable, which Silt's
     /// gateway adds instead, so its sandbox never holds the key (ADR 0093).
