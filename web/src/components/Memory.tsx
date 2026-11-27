@@ -169,7 +169,7 @@ function Overview() {
       {nothing ? (
         <EmptyState title="No memories yet">
           As they work, agents note how you like things done, the decisions behind the code and where to find things. Each shows
-          here under its project.
+          here under its project. What Gemini CLI remembered before Silt joins the next time an agent starts in its project.
         </EmptyState>
       ) : (
         <>

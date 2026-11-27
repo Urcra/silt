@@ -3114,12 +3114,17 @@ fn memory_folder(id: &str, env: &[(String, String)], cwd: &Path, data_dir: &Path
     let lookup = |name: &str| env.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.clone());
     let home = silt_os::home_dir()?;
     let everywhere = silt_agents::memory::everywhere_dir(data_dir);
-    let moved = silt_agents::memory::sharing(data_dir).then(|| agent.move_person_memory(&home, &lookup, cwd, &everywhere));
-    if let Some(Err(error)) = moved {
-        tracing::warn!(%error, "couldn't move what the agent learnt about the person to the memory everywhere");
+    let sharing = silt_agents::memory::sharing(data_dir);
+    if sharing {
+        let brought = silt_agents::memory::brought_file(data_dir);
+        let moved = agent.move_person_memory(&home, &lookup, cwd, &everywhere);
+        if let Err(error) = moved.and(agent.bring_in_everywhere(&home, &lookup, &everywhere, &brought)) {
+            tracing::warn!(%error, "couldn't bring what the agent learnt about the person to the memory everywhere");
+        }
     }
-    if let Err(error) = agent.gather_memory(&home, &lookup, cwd) {
-        tracing::warn!(%error, "couldn't bring earlier threads' memories into the project's");
+    let shared = sharing.then(|| silt_agents::shared_memory(&home, &lookup, cwd)).flatten();
+    if let Err(error) = agent.gather_memory(&home, &lookup, cwd, shared.as_deref()) {
+        tracing::warn!(%error, "couldn't bring earlier memories into the project's");
     }
     agent.memory(&home, &lookup, cwd)
 }

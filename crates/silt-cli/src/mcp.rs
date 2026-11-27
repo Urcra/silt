@@ -185,12 +185,7 @@ impl DaemonTools {
     /// Silt keeps every thread of the project in (ADR 0137).
     fn project_memory(&self) -> Option<PathBuf> {
         let home = silt_os::home_dir()?;
-        let root = silt_agents::project_root(&self.checkout)?;
-        let env = |name: &str| std::env::var(name).ok();
-        silt_agents::Agent::memory_stores(&silt_agents::claude::ClaudeCode, &home, &env, Some(&root))
-            .into_iter()
-            .find(|store| store.kind == silt_agents::memory::Kind::Memory)
-            .map(|store| store.path)
+        silt_agents::shared_memory(&home, &|name: &str| std::env::var(name).ok(), &self.checkout)
     }
 
     fn everywhere(&self) -> PathBuf {
