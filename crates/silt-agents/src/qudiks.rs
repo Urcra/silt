@@ -74,6 +74,15 @@ impl Agent for Qudiks {
         self.homes(home, env).into_iter().map(|dir| dir.join("auth.json")).collect()
     }
 
+    fn memory_stores(
+        &self,
+        home: &Path,
+        env: &dyn Fn(&str) -> Option<String>,
+        project: Option<&Path>,
+    ) -> Vec<crate::memory::Store> {
+        self.homes(home, env).iter().flat_map(|dir| codex::memory_stores_in(dir, project)).collect()
+    }
+
     fn read_only_home(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         self.homes(home, env).into_iter().map(|dir| dir.join("config.toml")).collect()
     }
@@ -169,6 +178,7 @@ mod tests {
             args: vec!["--github".into()],
             locks: crate::Locks { no_bypass, ..crate::Locks::default() },
             env: Vec::new(),
+            memory: None,
         };
         let args = |no_bypass| -> Vec<String> {
             let launch = Qudiks.launch(&plan(no_bypass)).expect("launches");
@@ -195,6 +205,7 @@ mod tests {
             args: vec!["--github".into()],
             locks: crate::Locks::default(),
             env: Vec::new(),
+            memory: None,
         };
         let words =
             |launch: crate::Launch| -> Vec<String> { launch.args.iter().map(|arg| arg.to_string_lossy().into_owned()).collect() };

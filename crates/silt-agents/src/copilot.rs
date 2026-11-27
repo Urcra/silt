@@ -384,6 +384,21 @@ impl Agent for Copilot {
         vec![crate::home_from(home, env, "COPILOT_HOME", ".copilot")]
     }
 
+    fn memory_stores(
+        &self,
+        home: &Path,
+        env: &dyn Fn(&str) -> Option<String>,
+        project: Option<&Path>,
+    ) -> Vec<crate::memory::Store> {
+        use crate::memory::{Kind, Scope, Store};
+        // Copilot Memory itself is on GitHub, with no API to read it.
+        let config = crate::home_from(home, env, "COPILOT_HOME", ".copilot");
+        match project {
+            Some(_) => Vec::new(),
+            None => vec![Store::new(Scope::Everywhere, Kind::Rules, config.join("copilot-instructions.md"))],
+        }
+    }
+
     fn sign_in(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         let config = crate::home_from(home, env, "COPILOT_HOME", ".copilot");
         ["apps.json", "hosts.json"].iter().map(|file| config.join(file)).collect()

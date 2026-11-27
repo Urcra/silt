@@ -570,6 +570,17 @@ impl Run<'_> {
             args: args.to_vec(),
             locks: held.locks.clone(),
             env: held.env.clone(),
+            memory: home.as_deref().and_then(|home| {
+                let lookup = |name: &str| {
+                    held.env
+                        .iter()
+                        .rev()
+                        .find(|(key, _)| key == name)
+                        .map(|(_, value)| value.clone())
+                        .or_else(|| env::var(name).ok())
+                };
+                self.agent.memory(home, &lookup, self.cwd)
+            }),
         };
         let launch = self.agent.launch(&plan).or_raise(|| CliError(format!("cannot prepare {}", self.agent.display_name())))?;
         let mut command = match reach {

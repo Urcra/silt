@@ -142,4 +142,5 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0134](0134-no-telemetry-and-an-offline-switch.md) | No telemetry, an offline switch, and artifacts' libraries through Silt by default | accepted |
 | [0135](0135-a-threads-header-holds-its-title-and-actions.md) | A thread's header holds its title and actions, and its menu is a right-click | accepted |
 | [0136](0136-every-connected-machines-threads-in-one-list.md) | Every connected machine's threads in one list | accepted |
+| [0137](0137-agents-memory-follows-the-person.md) | Agents' memory follows the person, across agents and machines | accepted |
 | [0138](0138-enter-steers-mid-turn.md) | ⏎ steers mid-turn | accepted |

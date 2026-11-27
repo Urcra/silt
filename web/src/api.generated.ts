@@ -1290,6 +1290,79 @@ plan_usage: boolean,
  */
 agent_registry: boolean, };
 
+export type MemoryOverview = { everywhere: MemoryCount, projects: Array<MemoryProject>, };
+
+export type MemoryCount = { 
+/**
+ * Memories, each in a file of its own.
+ */
+memories: number, 
+/**
+ * Whole files: rules files and agents' summaries that are there.
+ */
+files: number, 
+/**
+ * The agents that wrote them, by id.
+ */
+agents: Array<string>, changed_ms: number | null, 
+/**
+ * Agents whose store there couldn't be read, by id.
+ */
+unread: Array<string>, };
+
+export type MemoryProject = { name: string, clone: string, count: MemoryCount, };
+
+export type MemoryView = { 
+/**
+ * The project's name, or `None` for everywhere.
+ */
+project: string | null, clone: string | null, stores: Array<MemoryStoreView>, 
+/**
+ * The project's rules files, which every agent of a kind reads.
+ */
+rules: Array<RulesFileView>, };
+
+export type MemoryStoreView = { agent: string, 
+/**
+ * `memory`, a folder of memories; `rules`, a rules file; or `summary`,
+ * a summary the agent rebuilds from its sessions.
+ */
+kind: string, 
+/**
+ * Where it is, with `~` for the home folder.
+ */
+path: string, editable: boolean, entries: Array<MemoryEntryView>, 
+/**
+ * A whole-file store's text, when the file is there.
+ */
+text: string | null, error: string | null, };
+
+export type MemoryEntryView = { file: string, name: string, description: string, 
+/**
+ * `user`, `feedback`, `project` or `reference`, when the agent says.
+ */
+kind: string | null, body: string, 
+/**
+ * The whole file, frontmatter included, as an edit starts from.
+ */
+text: string, modified_ms: number | null, 
+/**
+ * The thread whose session wrote it, when Silt recorded that session.
+ */
+thread: MemoryThread | null, };
+
+export type MemoryThread = { id: string, title: string | null, };
+
+export type RulesFileView = { file: string, 
+/**
+ * The agents that read it, by id.
+ */
+readers: Array<string>, 
+/**
+ * Its text, when it's there.
+ */
+text: string | null, };
+
 export type NetworkView = { settings: NetworkSettings, 
 /**
  * `SILT_OFFLINE` is set, so this machine is offline whatever the setting says.

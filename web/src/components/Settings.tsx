@@ -21,6 +21,7 @@ import { ThemeSettings } from './Themes'
 import { AddProjectPage, Projects } from './Projects'
 import { UpdatesSettings } from './Updates'
 import { NetworkSettingsSection } from './Network'
+import { MemorySettings } from './Memory'
 import { WorkspacesSettings } from './Workspaces'
 import { PluginsSettings } from './Plugins'
 import { AutoSettings } from './AutoSettings'
@@ -43,6 +44,7 @@ const GROUPS: { label: string; sections: { id: string; label: string }[] }[] = [
       { id: 'devices', label: 'Devices and sync' },
       ...(inDesktop() ? [{ id: 'machines', label: 'Machines' }] : []),
       ...(hosted() ? [] : [{ id: 'chats', label: 'Chats' }]),
+      ...(hosted() ? [] : [{ id: 'memory', label: 'Memory' }]),
       ...(hosted() ? [] : [{ id: 'models', label: 'Local models' }]),
       { id: 'notifications', label: 'Notifications' },
       { id: 'appearance', label: 'Appearance' },
@@ -375,6 +377,7 @@ export function Settings() {
     text: <TextLayoutSettings />,
     update: <UpdatesSettings />,
     network: <NetworkSettingsSection />,
+    memory: <MemorySettings />,
     'design-systems': <DesignSystemsSettings />,
   }
   return (

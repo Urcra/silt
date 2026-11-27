@@ -1,4 +1,5 @@
 mod acp;
+mod agent_memory;
 mod artifacts;
 mod asks;
 mod attribution;

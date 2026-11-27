@@ -1,3 +1,5 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { allThreads, fixture, silt } from './fixture'
 
@@ -226,4 +228,49 @@ test('reviews and approves a merge request', async ({ page }) => {
   // The request names the thread it merges into by title, linked to it.
   await page.locator(`main a[href$="${thread}"]`).first().click()
   await expect(page.getByText(/merged "Add forked" from fork/)).toBeVisible()
+})
+
+test('Settings › Memory shows what Claude Code remembers of a project, and edits and forgets it', async ({ page }) => {
+  const { url, work } = fixture()
+  const clone = join(work, 'repo')
+  const folder = join(work, 'claude', 'projects', clone.replace(/[^A-Za-z0-9]/g, '-'), 'memory')
+  mkdirSync(folder, { recursive: true })
+  writeFileSync(
+    join(folder, 'MEMORY.md'),
+    '- [Tests use a real store](feedback-tests.md) — never mocks\n- [Release day](project-release.md) — Thursdays\n',
+  )
+  writeFileSync(
+    join(folder, 'feedback-tests.md'),
+    '---\nname: Tests use a real store\ndescription: Integration tests never mock the store\nmetadata:\n  type: feedback\n---\n\nStart daemons with a temporary SILT_HOME.\n',
+  )
+  writeFileSync(
+    join(folder, 'project-release.md'),
+    '---\nname: Release day\ndescription: Releases go out on Thursdays\nmetadata:\n  type: project\n---\n\nCut on Thursday.\n',
+  )
+
+  await page.goto(url)
+  await page.goto(`${new URL(url).origin}/settings/memory`)
+  const memory = page.getByRole('region', { name: 'Memory' })
+  await expect(memory.getByText('2 memories', { exact: true })).toBeVisible()
+  await memory.getByRole('link', { name: /repo/ }).click()
+
+  const place = page.getByRole('region', { name: 'Memory of repo' })
+  await place.getByRole('button', { name: 'Feedback 1' }).click()
+  await expect(place.getByText('Release day')).toHaveCount(0)
+  await place.getByRole('button', { name: 'All 2' }).click()
+  await place.getByRole('button', { name: /Tests use a real store/ }).click()
+  await expect(place.getByText('Start daemons with a temporary SILT_HOME.')).toBeVisible()
+
+  await place.getByRole('button', { name: 'Edit' }).click()
+  const editor = place.getByRole('textbox', { name: 'Edit feedback-tests.md' })
+  await editor.fill(`${await editor.inputValue()}Never point one at the real one.\n`)
+  await place.getByRole('button', { name: 'Save' }).click()
+  await expect(place.getByText('Never point one at the real one.')).toBeVisible()
+  expect(readFileSync(join(folder, 'feedback-tests.md'), 'utf8')).toContain('Never point one at the real one.')
+
+  await place.getByRole('button', { name: 'Forget' }).click()
+  await place.getByRole('button', { name: 'Forget' }).click()
+  await expect(place.getByText('Tests use a real store')).toHaveCount(0)
+  expect(existsSync(join(folder, 'feedback-tests.md'))).toBe(false)
+  expect(readFileSync(join(folder, 'MEMORY.md'), 'utf8')).toBe('- [Release day](project-release.md) — Thursdays\n')
 })

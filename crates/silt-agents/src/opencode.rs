@@ -332,6 +332,24 @@ impl Agent for OpenCode {
         vec![home.join(".local/share/opencode/auth.json")]
     }
 
+    fn memory_stores(
+        &self,
+        home: &Path,
+        env: &dyn Fn(&str) -> Option<String>,
+        project: Option<&Path>,
+    ) -> Vec<crate::memory::Store> {
+        use crate::memory::{Kind, Scope, Store};
+        if project.is_some() {
+            return Vec::new();
+        }
+        let config = env("OPENCODE_CONFIG_DIR")
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| env("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()).map(|dir| PathBuf::from(dir).join("opencode")))
+            .unwrap_or_else(|| home.join(".config/opencode"));
+        vec![Store::new(Scope::Everywhere, Kind::Rules, config.join("AGENTS.md"))]
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }
