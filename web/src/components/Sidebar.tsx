@@ -8,13 +8,25 @@ import { type Caller, type FoldSaid, byCaller, foldListed, foldSaid, useAsksOpen
 import { askedIn, useAsks } from '../asks'
 import { isChat } from '../chats'
 import { useTopic } from '../bus'
-import { type Backend, inDesktop, relaunchDesktop, switchBackend, useBackends } from '../desktop'
+import {
+  type Backend,
+  type Listing,
+  inDesktop,
+  openElsewhere,
+  relaunchDesktop,
+  setMachinesList,
+  switchBackend,
+  useBackends,
+  useListings,
+  useMachinesView,
+} from '../desktop'
+import { type MachineMarked, backendOf, countsOf, machineName, useAllMachines, useMachineMark } from '../elsewhere'
 import { useFold } from '../folds'
 import { useNow } from '../now'
 import { openPalette } from '../palette'
 import { projectName, projects } from '../projects'
 import { keys } from '../query'
-import { type Section, inListOrder, old, section, sections, unread } from '../sections'
+import { type Section, inListOrder, needsYou, old, section, sections, unread } from '../sections'
 import { hosted, serverName } from '../served'
 import { formatKeys } from '../shortcuts'
 import { WAIT_KINDS, inProgress, threadDoing, waitKind } from '../threadLook'
@@ -38,6 +50,7 @@ import {
 import { pillOf, useUpdate } from '../updates'
 import { useInWorkspace } from '../workspaceFilter'
 import { AgentMark } from './AgentMark'
+import { MachineChip, MachineInitial, MachineStripe } from './MachineMark'
 import { useThreadMenu } from './ThreadMenu'
 import { ThreadMark } from './ThreadMark'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
@@ -56,14 +69,35 @@ function stateLine(thread: ThreadSummary, now: number): { said: string | null; w
   return { said, when: inProgress(thread) ? null : when }
 }
 
-function StateLine({ said, when }: { said: string | null; when: string | null }) {
-  return (
-    <span className="truncate text-2xs text-fg-2">
+function StateLine({ said, when, marked }: { said: string | null; when: string | null; marked?: MachineMarked | null }) {
+  const chip = marked && (marked.mark === 'chip' || marked.mark === 'colour-chip')
+  const inLine = marked?.mark === 'line' ? `on ${marked.name}` : null
+  const line = (
+    <>
       {said}
       {said && when && ' · '}
       {when && <span data-volatile>{when}</span>}
+      {inLine && (said || when) && ' · '}
+      {inLine}
+    </>
+  )
+  if (!chip) return <span className="truncate text-2xs text-fg-2">{line}</span>
+  return (
+    <span className="flex min-w-0 items-center gap-[5px] text-2xs text-fg-2">
+      <MachineChip marked={marked} />
+      <span className="truncate">{line}</span>
     </span>
   )
+}
+
+/** Opens a thread on another machine there, in place of following the link here (ADR 0136). */
+function openThere(thread: ThreadSummary) {
+  const backend = backendOf(thread)
+  if (!backend) return undefined
+  return (event: { preventDefault: () => void }) => {
+    event.preventDefault()
+    openElsewhere(backend, thread.id)
+  }
 }
 
 /** The asks a thread made, folded into one row under it until opened (ADR 0120): how many, whose, and what's most pressing. */
@@ -153,7 +187,9 @@ function ThreadItem({
   const { items: actions, dialogs } = useThreadMenu(thread)
   const menu = useMenuAt()
   const item = useRef<HTMLLIElement>(null)
-  const open = useRouterState({ select: (state) => state.location.pathname }) === `/t/${thread.id}`
+  const marked = useMachineMark(thread)
+  const elsewhere = backendOf(thread) !== undefined
+  const open = useRouterState({ select: (state) => state.location.pathname }) === `/t/${thread.id}` && !elsewhere
   // The thread open shows in the list however far down its project is.
   useEffect(() => {
     if (open && current) item.current?.scrollIntoView?.({ block: 'nearest' })
@@ -167,14 +203,16 @@ function ThreadItem({
       <Link
         to="/t/$id"
         params={{ id: thread.id }}
-        title={[title, threadDoing(thread)].filter(Boolean).join(' · ')}
+        onClick={openThere(thread)}
+        title={[title, threadDoing(thread), marked && `on ${marked.name}`].filter(Boolean).join(' · ')}
         className={cx(
           ROW,
-          'flex-1 items-start py-[calc((var(--row)-20px)/2)] pr-7',
+          'relative flex-1 items-start py-[calc((var(--row)-20px)/2)] pr-7',
           asked ? 'pl-[34px]' : nested ? 'pl-[22px]' : 'pl-2',
         )}
-        activeProps={current ? { className: ACTIVE } : undefined}
+        activeProps={current && !elsewhere ? { className: ACTIVE } : undefined}
       >
+        {marked?.mark === 'stripe' && <MachineStripe marked={marked} />}
         <span className="flex h-[18px] items-center">
           <ThreadMark thread={thread} />
         </span>
@@ -193,11 +231,13 @@ function ThreadItem({
           ) : (
             <span className={cx('truncate', unread(thread) && 'font-semibold')}>{title}</span>
           )}
-          <StateLine {...stateLine(thread, now)} />
+          <StateLine {...stateLine(thread, now)} marked={marked} />
         </span>
+        {marked && marked.mark !== 'line' && <span className="sr-only"> on {marked.name}</span>}
         {thread.mine.pinned && <span className="sr-only"> pinned</span>}
         {/* Not amber, which the mark before the title keeps for what waits on someone. */}
         {unread(thread) && <span aria-label="unread" role="img" className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-info" />}
+        {marked?.mark === 'initial' && <MachineInitial marked={marked} />}
       </Link>
       <span className="absolute right-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
         <Menu label={`actions for ${title}`} trigger={<Icon name="more" />} items={actions} />
@@ -214,12 +254,14 @@ function ThreadItem({
  */
 function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
   const now = useNow()
-  const status = useAgentStatus(thread.id)
+  const marked = useMachineMark(thread)
+  const elsewhere = backendOf(thread) !== undefined
+  const status = useAgentStatus(thread.id, !elsewhere)
   const kind = waitKind(thread, status)
   const { icon, word } = WAIT_KINDS[kind]
   const title = thread.title ?? 'Untitled thread'
   // A request waiting for review is named for itself, not for the thread it would merge into.
-  const mrs = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests, enabled: kind === 'review' })
+  const mrs = useQuery({ queryKey: keys.mrs, queryFn: api.mergeRequests, enabled: kind === 'review' && !elsewhere })
   const review = kind === 'review' ? (mrs.data ?? []).find((mr) => mr.target === thread.id && mr.status === 'open') : undefined
   const asked = status?.permissions[0]
   const detail =
@@ -232,6 +274,9 @@ function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
     <>
       <Icon name={icon} className={cx('h-3.5 w-3.5 shrink-0', kind === 'stopped' ? 'text-danger' : 'text-accent-fg')} />
       <span className="min-w-0 flex-1 truncate">{review?.title ?? title}</span>
+      {marked && (marked.mark === 'chip' || marked.mark === 'colour-chip') && <MachineChip marked={marked} />}
+      {marked?.mark === 'initial' && <MachineInitial marked={marked} />}
+      {marked && <span className="sr-only"> on {marked.name}</span>}
       <span className="sr-only"> {word}</span>
       <span className="min-w-7 shrink-0 text-right font-mono text-2xs whitespace-nowrap text-fg-3" data-volatile>
         {ago(thread.last_ms, now).replace('just now', 'now')}
@@ -254,10 +299,12 @@ function NeedsYouItem({ thread }: { thread: ThreadSummary }) {
         <Link
           to="/t/$id"
           params={{ id: thread.id }}
-          title={detail}
-          className={cx(ROW, 'h-7')}
-          activeProps={{ className: 'bg-elevated' }}
+          onClick={openThere(thread)}
+          title={marked ? `${detail} · on ${marked.name}` : detail}
+          className={cx(ROW, 'relative h-7')}
+          activeProps={elsewhere ? undefined : { className: 'bg-elevated' }}
         >
+          {marked?.mark === 'stripe' && <MachineStripe marked={marked} />}
           {row}
         </Link>
       )}
@@ -492,21 +539,60 @@ function UpdateStrip() {
   )
 }
 
-/** A machine's tile: its kind's icon, and how it's connected. */
-function MachineTile({ ssh, tone, size = 26 }: { ssh: boolean; tone: DotTone | null; size?: number }) {
+/** A machine's tile: its kind's icon, and how it's connected; every machine's for All machines. */
+function MachineTile({
+  ssh,
+  tone,
+  size = 26,
+  all = false,
+}: {
+  ssh: boolean
+  tone: DotTone | null
+  size?: number
+  all?: boolean
+}) {
   return (
     <span
       className="relative inline-flex shrink-0 items-center justify-center rounded-md bg-surface-2 text-fg-1"
       style={{ width: size, height: size }}
     >
-      <Icon name={ssh ? 'terminal' : 'laptop'} className="h-3.5 w-3.5" />
+      {all ? (
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 16 16"
+          className="h-3.5 w-3.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M5.5 2.5h8.5v6.5H12M1.5 5.5h9v6.5h-9zM4 14.5h4" />
+        </svg>
+      ) : (
+        <Icon name={ssh ? 'terminal' : 'laptop'} className="h-3.5 w-3.5" />
+      )}
       {tone && <Dot tone={tone} className="absolute -right-0.5 -bottom-0.5 h-2 w-2 shadow-[0_0_0_2px_var(--bg-elevated)]" />}
     </span>
   )
 }
 
-/** How a backend stands, under its name in the machine menu. */
-function backendLine(backend: Backend): { said: string; tone: DotTone } {
+/** How many of a machine's threads wait on the person and run, as its row says. */
+function countsSaid({ running, needsYou }: { running: number; needsYou: number }): string {
+  return [needsYou > 0 && `${needsYou} ${needsYou === 1 ? 'needs' : 'need'} you`, running > 0 && `${running} running`]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/** How a backend stands, under its name in the machine menu, with its threads' counts once it answered. */
+function backendLine(backend: Backend, listing: Listing | undefined): { said: string; tone: DotTone } {
+  const line = kindLine(backend)
+  if (listing?.state === 'lost') return { said: `${line.said.split(' · ')[0]} · lost`, tone: 'danger' }
+  const counts = listing?.state === 'ready' ? countsSaid(countsOf(listing)) : ''
+  return counts ? { ...line, said: `${line.said.split(' · ')[0]} · ${counts}` } : line
+}
+
+function kindLine(backend: Backend): { said: string; tone: DotTone } {
   if (backend.kind === 'ssh') {
     if (backend.state === 'connected') return { said: 'over SSH · connected', tone: 'ok' }
     if (backend.state === 'connecting') return { said: `over SSH · ${backend.step ?? 'connecting'}…`, tone: 'idle' }
@@ -521,34 +607,64 @@ function backendLine(backend: Backend): { said: string; tone: DotTone } {
  * The machine this window shows Silt from (ADRs 0045, 0108, 0115): its name and how it stands, opening
  * the others the desktop app knows, adding one, and Devices and sync.
  */
-function MachineMenu({ said, failing, running }: { said: string; failing: string | null; running: number }) {
+function MachineMenu({
+  said,
+  failing,
+  running,
+  waiting,
+  allSaid,
+}: {
+  said: string
+  failing: string | null
+  running: number
+  /** How many of the shown machine's threads wait on the person. */
+  waiting: number
+  /** What the trigger says in All machines (ADR 0136). */
+  allSaid: string | null
+}) {
   const navigate = useNavigate()
   const status = useQuery({ queryKey: keys.status, queryFn: api.status })
   const { backends, current } = useBackends()
+  const view = useMachinesView()
+  const listings = useListings()
+  const all = allSaid !== null
   const shown = backends.find((backend) => backend.id === current)
-  const name = shown?.label ?? 'This computer'
+  const name = all ? 'All machines' : (shown?.label ?? 'This computer')
   const device = status.data?.servers?.[0]?.name
   const server = status.data?.servers?.[0]
   const here = [device, running > 0 ? `${running} running` : 'nothing running'].filter(Boolean).join(' · ')
+  // In All machines, the shown machine's row says what its threads do, as the others' do.
+  const hereAll = shown
+    ? [kindLine(shown).said.split(' · ')[0], countsSaid({ running, needsYou: waiting })].filter(Boolean).join(' · ')
+    : here
+  const listingOf = (id: string) => listings.find((listing) => listing.id === id)
   const rows =
     backends.length > 0
       ? backends.map((backend) => {
-          const line = backendLine(backend)
-          const chosen = backend.id === current
+          const isShown = backend.id === current
+          const line = backendLine(backend, listingOf(backend.id))
           return {
             id: backend.id,
             label: backend.label,
             ssh: backend.kind === 'ssh',
-            chosen,
+            shown: isShown,
+            chosen: isShown && !all,
             ...line,
-            said: chosen ? here : line.said,
+            said: isShown ? (all ? hereAll : here) : line.said,
           }
         })
-      : [{ id: 'here', label: 'This computer', ssh: false, chosen: true, said: here, tone: 'ok' as DotTone }]
+      : [{ id: 'here', label: 'This computer', ssh: false, shown: true, chosen: true, said: here, tone: 'ok' as DotTone }]
   const go = (section: string, close: () => void) => {
     close()
     void navigate({ to: '/settings/$section', params: { section } })
   }
+  const connected = backends.filter(
+    (backend) => backend.id === current || backend.kind !== 'ssh' || backend.state === 'connected',
+  ).length
+  const waitingAll =
+    waiting + listings.filter((listing) => listing.id !== current).reduce((sum, listing) => sum + countsOf(listing).needsYou, 0)
+  const runningAll =
+    running + listings.filter((listing) => listing.id !== current).reduce((sum, listing) => sum + countsOf(listing).running, 0)
   return (
     <Popover
       label="Switch machine"
@@ -556,13 +672,19 @@ function MachineMenu({ said, failing, running }: { said: string; failing: string
       triggerLabel={`machine: ${name}`}
       triggerTitle={failing ?? undefined}
       triggerClassName="flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-fg-1 hover:bg-surface-2 aria-expanded:bg-surface-2 max-md:min-h-12"
-      panelClassName="w-[316px] max-w-[calc(100vw-20px)] p-1.5"
+      panelClassName="w-[332px] max-w-[calc(100vw-20px)] p-1.5"
       trigger={
         <>
-          <MachineTile ssh={shown?.kind === 'ssh'} tone={failing ? 'danger' : server ? 'ok' : 'idle'} />
+          <MachineTile
+            all={all}
+            ssh={shown?.kind === 'ssh'}
+            tone={failing || allSaid?.includes(' · lost ') ? 'danger' : server || all ? 'ok' : 'idle'}
+          />
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="truncate font-medium">{name}</span>
-            <span className={cx('truncate text-2xs', failing ? 'text-danger' : 'text-fg-2')}>{said}</span>
+            <span className={cx('truncate text-2xs', failing || allSaid?.includes('lost') ? 'text-danger' : 'text-fg-2')}>
+              {allSaid ?? said}
+            </span>
           </span>
           <Icon name="selector" className="h-3 w-3 shrink-0 text-fg-2" />
         </>
@@ -570,6 +692,34 @@ function MachineMenu({ said, failing, running }: { said: string; failing: string
     >
       {(close) => (
         <div className="flex flex-col gap-0.5">
+          {inDesktop() && backends.length > 1 && (
+            <>
+              <button
+                type="button"
+                aria-current={all || undefined}
+                onClick={() => {
+                  close()
+                  if (!all) setMachinesList('all')
+                }}
+                className={cx(
+                  'grid w-full grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-left text-fg-1 hover:bg-surface-2',
+                  all && 'bg-accent-tint',
+                )}
+              >
+                <MachineTile all ssh={false} tone="ok" size={28} />
+                <span className="flex min-w-0 flex-col">
+                  <b className="truncate font-medium">All machines</b>
+                  <span className="truncate font-mono text-2xs text-fg-2">
+                    {[`${connected} connected`, countsSaid({ running: runningAll, needsYou: waitingAll })]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
+                </span>
+                {all ? <Icon name="check" label="shown here" className="text-accent-fg" /> : <span />}
+              </button>
+              <SectionLabel className="px-2.5 pt-2 pb-0.5">Machines</SectionLabel>
+            </>
+          )}
           {rows.map((row) => (
             <button
               key={row.id}
@@ -577,7 +727,9 @@ function MachineMenu({ said, failing, running }: { said: string; failing: string
               aria-current={row.chosen || undefined}
               onClick={() => {
                 close()
-                if (!row.chosen && row.id !== 'here') switchBackend(row.id)
+                if (row.id === 'here') return
+                if (view.list === 'all') setMachinesList('one')
+                if (!row.shown) switchBackend(row.id)
               }}
               className={cx(
                 'grid w-full grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-left text-fg-1 hover:bg-surface-2',
@@ -591,7 +743,18 @@ function MachineMenu({ said, failing, running }: { said: string; failing: string
                   {row.said}
                 </span>
               </span>
-              {row.chosen ? <Icon name="check" label="shown here" className="text-accent-fg" /> : <span />}
+              {row.chosen ? (
+                <Icon name="check" label="shown here" className="text-accent-fg" />
+              ) : all && row.shown ? (
+                <span
+                  className="rounded-[3px] bg-surface-2 px-[5px] py-px font-mono text-2xs text-fg-2"
+                  title="The window shows this machine's page; New thread starts here"
+                >
+                  shown
+                </span>
+              ) : (
+                <span />
+              )}
             </button>
           ))}
           {inDesktop() && (
@@ -622,13 +785,35 @@ function MachineMenu({ said, failing, running }: { said: string; failing: string
 }
 
 /** The bottom of the sidebar: an update, the machine this window shows, and Settings. */
-function MachineFooter({ threads }: { threads: ThreadSummary[] }) {
+function MachineFooter({
+  threads,
+  all,
+  loading,
+  lost,
+}: {
+  threads: ThreadSummary[]
+  /** All machines is picked (ADR 0136). */
+  all: boolean
+  loading: Backend[]
+  lost: Backend[]
+}) {
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
-  const running = threads.filter(inProgress).length
+  const running = threads.filter((thread) => !backendOf(thread) && inProgress(thread)).length
+  const waiting = threads.filter((thread) => !backendOf(thread) && thread.location === 'here' && needsYou(thread)).length
   const signIn = status.data?.servers?.[0]
   const sync = status.data?.sync_error
-  const { backends } = useBackends()
+  const { backends, current } = useBackends()
   const switching = backends.find((backend) => backend.switching)
+  const shownName = backends.find((backend) => backend.id === current)?.label ?? 'This computer'
+  const isLost = new Set(lost.map((backend) => backend.id))
+  const connected = backends.filter(
+    (backend) => (backend.id === current || backend.kind !== 'ssh' || backend.state === 'connected') && !isLost.has(backend.id),
+  ).length
+  const allSaid = all
+    ? lost.length > 0
+      ? `${connected} connected · lost ${lost.map(machineName).join(', ')}`
+      : `${connected} connected · showing ${shownName}`
+    : null
   const said = [
     sync ? 'Sync failing' : signIn ? 'Synced' : 'Not synced',
     running > 0 ? `${running} running` : 'nothing running',
@@ -646,7 +831,7 @@ function MachineFooter({ threads }: { threads: ThreadSummary[] }) {
             <span className="truncate font-medium">On the server</span>
           </span>
         ) : (
-          <MachineMenu said={said} failing={sync ?? null} running={running} />
+          <MachineMenu said={said} failing={sync ?? null} running={running} waiting={waiting} allSaid={allSaid} />
         )}
         <Link
           to="/settings"
@@ -663,9 +848,22 @@ function MachineFooter({ threads }: { threads: ThreadSummary[] }) {
           <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
             <Spinner />
           </span>
-          <span className="truncate">Connecting to {switching.label}…</span>
+          <span className="truncate">
+            {switching.kind === 'ssh' && switching.state !== 'connected'
+              ? `Connecting to ${switching.label}…`
+              : `Opening it on ${machineName(switching)}…`}
+          </span>
         </div>
       )}
+      {all &&
+        loading.map((backend) => (
+          <div key={backend.id} role="status" className="flex items-center gap-2 px-2 text-xs text-fg-2">
+            <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+              <Spinner />
+            </span>
+            <span className="truncate">Getting {machineName(backend)}’s threads…</span>
+          </div>
+        ))}
     </div>
   )
 }
@@ -682,7 +880,8 @@ export function Sidebar() {
   const cloneOf = (repo: string) => named.data?.find((project) => project.repo === repo && project.clone)?.clone ?? undefined
   const now = useNow()
   const shown = useInWorkspace()
-  const mine = (threads.data ?? []).filter(shown)
+  const machines = useAllMachines(threads.data ?? [])
+  const mine = machines.threads.filter(shown)
   const grouped = sections(mine, now)
   // A thread that needs the person stays in its project too, where it lives.
   const listed = mine.filter((thread) => [...LISTED, 'needs_you'].includes(section(thread, now)))
@@ -829,7 +1028,7 @@ export function Sidebar() {
       </nav>
       {/* Outside the list, so a long one never scrolls Settings and this machine out of reach. */}
       <div className="shrink-0 px-2 pb-2">
-        <MachineFooter threads={mine} />
+        <MachineFooter threads={mine} all={machines.all} loading={machines.loading} lost={machines.lost} />
       </div>
     </>
   )

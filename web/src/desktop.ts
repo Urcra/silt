@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { SeasonalShow } from './api'
+import type { SeasonalShow, StateChange, ThreadSummary } from './api'
 
 /** Where the desktop app can show Silt from: this computer, each WSL distribution (ADR 0045), and each machine over SSH (ADR 0108). */
 export interface Backend {
@@ -27,6 +27,32 @@ export interface Backend {
   canInstall?: boolean
   /** An update waits for this many agents to finish before its daemon restarts on it. */
   pendingRestart?: number | null
+  /** The colour its threads are marked with (ADR 0136). */
+  colour?: MachineColour
+  /** This computer's name, which its threads are marked with on other machines' pages. */
+  host?: string | null
+}
+
+/** The colours a machine can have, in the order the desktop app gives them out. */
+export const MACHINE_COLOURS = ['teal', 'plum', 'blue', 'rose', 'sand', 'ink'] as const
+export type MachineColour = (typeof MACHINE_COLOURS)[number]
+
+/** How a thread on another machine is told apart in the list (ADR 0136). */
+export const MARKS = ['chip', 'colour-chip', 'line', 'stripe', 'initial', 'nothing'] as const
+export type Mark = (typeof MARKS)[number]
+
+/** How the person chose to list and mark threads, which every machine's page follows. */
+export interface MachinesView {
+  list: 'all' | 'one'
+  mark: Mark
+  markHere: boolean
+}
+
+/** One other machine's threads, as the desktop app last heard them. */
+export interface Listing {
+  id: string
+  state: 'loading' | 'ready' | 'lost'
+  threads: ThreadSummary[]
 }
 
 /** A machine as the add and edit form fills it in. */
@@ -64,8 +90,10 @@ declare global {
     /** Set by the desktop app's window: where it can show Silt from, sent again as that changes. */
     __siltBackends?: Backend[]
     __siltBackend?: string
-    /** Set by the desktop app's window: the commit it was built from (ADR 0100), and the key its machines links carry. */
-    __siltDesktop?: { commit?: string; key?: string }
+    /** Set by the desktop app's window: the commit it was built from (ADR 0100), the key its machines links carry, and how threads are listed (ADR 0136). */
+    __siltDesktop?: { commit?: string; key?: string; view?: MachinesView }
+    /** Set by the desktop app's window: the threads of every other connected machine (ADR 0136). */
+    __siltThreads?: Listing[]
   }
 }
 
@@ -92,6 +120,80 @@ export function useBackends(): { backends: Backend[]; current: string | undefine
     }
   }, [])
   return { backends, current }
+}
+
+const DEFAULT_VIEW: MachinesView = { list: 'all', mark: 'chip', markHere: false }
+
+/** How threads are listed and marked: the desktop app's choice, or one machine outside it. */
+export function useMachinesView(): MachinesView {
+  const read = () =>
+    inDesktop() ? { ...DEFAULT_VIEW, ...window.__siltDesktop?.view } : { ...DEFAULT_VIEW, list: 'one' as const }
+  const [view, setView] = useState(read)
+  useEffect(() => {
+    const changed = () => setView(read())
+    window.addEventListener('silt-view', changed)
+    return () => window.removeEventListener('silt-view', changed)
+  }, [])
+  return view
+}
+
+/** Every other connected machine's threads, as the desktop app last heard them; none outside it. */
+export function useListings(): Listing[] {
+  const [listings, setListings] = useState(() => window.__siltThreads ?? [])
+  useEffect(() => {
+    const heard = () => setListings(window.__siltThreads ?? [])
+    window.addEventListener('silt-threads', heard)
+    return () => window.removeEventListener('silt-threads', heard)
+  }, [])
+  return listings
+}
+
+/** The link that asks the desktop app to change how threads are listed or marked; it carries the window's key. */
+export function viewLink(path: '' | 'mark' | 'colour', fields: Record<string, string>, key = window.__siltDesktop?.key): string {
+  return `silt://view/${path}?${new URLSearchParams({ ...fields, key: key ?? '' })}`
+}
+
+/** Lists every connected machine's threads, or the shown one's. */
+export function setMachinesList(list: 'all' | 'one') {
+  tellWindow(viewLink('', { list }))
+}
+
+export function setMark(mark: Mark, here: boolean) {
+  tellWindow(viewLink('mark', { mark, here: here ? '1' : '0' }))
+}
+
+export function setMachineColour(backend: string, colour: MachineColour) {
+  tellWindow(viewLink('colour', { backend, colour }))
+}
+
+/** The link that pins, snoozes or settles a thread on another machine, through the desktop app. */
+export function stateLink(backend: string, thread: string, change: StateChange, key = window.__siltDesktop?.key): string {
+  return `silt://threads/state?${new URLSearchParams({ backend, thread, change: JSON.stringify(change), key: key ?? '' })}`
+}
+
+export function changeElsewhere(backend: string, thread: string, change: StateChange) {
+  tellWindow(stateLink(backend, thread, change))
+}
+
+export function openLink(backend: string, thread: string): string {
+  return `silt://open/?${new URLSearchParams({ backend, thread })}`
+}
+
+/** Switches the window to `backend` and opens the thread there. */
+export function openElsewhere(backend: string, thread: string) {
+  tellWindow(openLink(backend, thread))
+}
+
+export function newThreadLink(backend: string, draft: string, origin: string): string {
+  const fields: Record<string, string> = { backend, new: '1' }
+  if (origin) fields.origin = origin
+  if (draft) fields.draft = draft
+  return `silt://open/?${new URLSearchParams(fields)}`
+}
+
+/** Switches the window to `backend`'s New thread, with the draft and the project's origin. */
+export function newThreadOn(backend: string, draft: string, origin: string) {
+  tellWindow(newThreadLink(backend, draft, origin))
 }
 
 /** Calls `heard` when switching backends fails and the window stays where it was. */
@@ -150,7 +252,7 @@ export function installSilt(machine: MachineFields, add: boolean) {
 
 /** Asks the desktop app's window to show Silt from `backend`, which it does in place of opening the link. */
 export function switchBackend(backend: string) {
-  window.location.href = `silt://open/?backend=${encodeURIComponent(backend)}`
+  tellWindow(`silt://open/?backend=${encodeURIComponent(backend)}`)
 }
 
 /** `rgb(r, g, b)` or `rgba(…)` as a browser computes it, as `#rrggbb`. */

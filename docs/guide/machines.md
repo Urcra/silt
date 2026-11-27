@@ -21,6 +21,19 @@ Once connected, a machine stays connected until you disconnect it or quit the ap
 
 The window then shows that machine's own web UI: its threads, its agents and its files. Its Settings › Machines lists your machines and can open them, but adds, changes and removes them only from this computer.
 
+## Every machine's threads in one list
+With **All machines** picked in the machine menu, the sidebar lists the threads of every connected machine together, sorted by what moved last as always, so you see what changed on each without switching ([ADR 0136](../adr/0136-every-connected-machines-threads-in-one-list.md)). It's picked from the start; picking one machine in the menu lists only that machine's, as before.
+- A project worked on from two machines is one group, matched by its origin, and **Needs you** gathers from every machine.
+- Each thread on another machine is marked with it: a chip with its name, unless you pick another way.
+- Opening one switches the window to its machine and opens it there. Pin, snooze and settle work on it from here.
+- Each machine's row in the menu says how it stands, such as `over SSH · 1 needs you · 2 running`.
+- Only connected machines are listed: picking All machines connects nothing. The foot of the sidebar says while a machine's threads load, and when one is lost; the app reconnects it.
+- **New thread** asks which machine to start on. Picking another switches to it, with what you typed and the project.
+
+**Settings › Machines** picks how a thread's machine is marked: a machine chip, the chip in the machine's colour, in the line under the title (`Working · on nuc`), a colour stripe, its initial, or nothing. **Mark the shown machine's threads too** marks the machine the window shows as well. Each machine's colour is picked on its row. These hold on every machine's page, and are kept in `view.json` in the app's data folder.
+
+The app asks each machine for its threads every few seconds over the connection it already has, so nothing new is opened on the other machine. A machine running an older build is listed too, but its own page shows only its threads until it's updated.
+
 ## Install or update Silt there
 When adding a machine finds no `silt` there, **Install Silt on …** puts this computer's build on it, then adds it and connects; a machine already in the list has **Install Silt there** on its row. When a connected machine runs another build than this computer's, its row says which this computer has, and **Update …**, or **Update Silt there** in its menu, puts this computer's build in place of the one it has. The app never does either by itself.
 
@@ -33,7 +46,7 @@ A fresh install goes in `~/.local/bin`, and an update replaces the `silt` it fou
 After an update the machine's daemon restarts on the new build, at once when no agent works in it, else once they finish, so an update never cuts an agent off. The row says when it's waiting.
 
 ## What stays on each machine
-Each machine keeps its own threads, as with [WSL](windows.md). The other machine's daemon keeps running after the app disconnects, so its agents carry on; `packaging/systemd/silt-daemon.service` keeps it running there across reboots. To move a thread between machines, sign both in to a server and [hand it off](handoff.md).
+Each machine keeps its own threads, as with [WSL](windows.md); All machines lists them together, but doesn't move them. The other machine's daemon keeps running after the app disconnects, so its agents carry on; `packaging/systemd/silt-daemon.service` keeps it running there across reboots. To move a thread between machines, sign both in to a server and [hand it off](handoff.md).
 
 ## When it can't connect
 - **The host key isn't trusted:** run `ssh <destination>` once in a terminal and accept the key, or fix `known_hosts` if it changed.

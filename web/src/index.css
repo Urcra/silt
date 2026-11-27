@@ -19,6 +19,18 @@
   initial-value: 360px;
 }
 
+/* Machines' colours (ADR 0136), kept apart from amber, rust and olive, which
+   mark a thread's state, and apart in lightness. Each reads as text on
+   --bg-elevated and under it. */
+:root {
+  --machine-teal: light-dark(#23706b, #6cc0b8);
+  --machine-plum: light-dark(#7d4a8c, #c49ad2);
+  --machine-blue: light-dark(#3a5f9e, #93b1e6);
+  --machine-rose: light-dark(#a3405f, #e594ae);
+  --machine-sand: light-dark(#7a6a3a, #cdbb84);
+  --machine-ink: light-dark(#4a3f2e, #d8ccb6);
+}
+
 /* Components use the Nous tokens through Tailwind's names for them, so a
    theme changes only nous.css. */
 

@@ -141,3 +141,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0133](0133-december-decorations-in-the-desktop-app.md) | December decorations in the desktop app | accepted |
 | [0134](0134-no-telemetry-and-an-offline-switch.md) | No telemetry, an offline switch, and artifacts' libraries through Silt by default | accepted |
 | [0135](0135-a-threads-header-holds-its-title-and-actions.md) | A thread's header holds its title and actions, and its menu is a right-click | accepted |
+| [0136](0136-every-connected-machines-threads-in-one-list.md) | Every connected machine's threads in one list | accepted |
