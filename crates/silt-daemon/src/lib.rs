@@ -14,6 +14,7 @@ mod cloud;
 mod comments;
 mod connectors;
 mod control;
+mod copilot_memory;
 mod core;
 pub mod credentials;
 mod design;

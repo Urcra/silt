@@ -11,19 +11,45 @@ use crate::conventions::{parse_frontmatter, split_frontmatter};
 /// The file indexing a folder of memories, a line a memory.
 pub const INDEX: &str = "MEMORY.md";
 
-/// Whether agents share memory (ADR 0137), as Settings › Memory sets it in
-/// `memory.json`; on unless turned off.
+/// Settings › Memory's switches, in `memory.json` (ADR 0137).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Settings {
+    /// Agents share memory; on unless turned off.
+    #[serde(default = "on")]
+    pub share: bool,
+    /// The projects, by their clones, whose memory is also sent to Copilot
+    /// Memory on GitHub.
+    #[serde(default)]
+    pub copilot: std::collections::BTreeSet<PathBuf>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { share: true, copilot: Default::default() }
+    }
+}
+
+fn on() -> bool {
+    true
+}
+
+pub fn settings(data_dir: &Path) -> Settings {
+    fs::read_to_string(data_dir.join(SETTINGS)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+}
+
+pub fn save_settings(data_dir: &Path, settings: &Settings) -> io::Result<()> {
+    fs::create_dir_all(data_dir)?;
+    let json = serde_json::to_vec_pretty(settings).map_err(io::Error::other)?;
+    write_atomically(&data_dir.join(SETTINGS), &json)
+}
+
+/// Whether agents share memory.
 pub fn sharing(data_dir: &Path) -> bool {
-    fs::read_to_string(data_dir.join(SETTINGS))
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|value| value.get("share").and_then(serde_json::Value::as_bool))
-        .unwrap_or(true)
+    settings(data_dir).share
 }
 
 pub fn set_sharing(data_dir: &Path, share: bool) -> io::Result<()> {
-    fs::create_dir_all(data_dir)?;
-    write_atomically(&data_dir.join(SETTINGS), serde_json::json!({ "share": share }).to_string().as_bytes())
+    save_settings(data_dir, &Settings { share, ..settings(data_dir) })
 }
 
 const SETTINGS: &str = "memory.json";

@@ -50,7 +50,13 @@ impl Core {
     pub(crate) async fn memory_of(&self, clone: Option<&Path>) -> Result<MemoryView, CoreError> {
         let threads = self.session_threads().await?;
         let Some(clone) = clone else {
-            return Ok(MemoryView { project: None, clone: None, stores: self.read_stores(None, &threads), rules: Vec::new() });
+            return Ok(MemoryView {
+                project: None,
+                clone: None,
+                stores: self.read_stores(None, &threads),
+                rules: Vec::new(),
+                copilot: None,
+            });
         };
         let (repo, clone) = self.known_clone(clone)?;
         let rules = RULES_FILES
@@ -66,6 +72,7 @@ impl Core {
             clone: Some(clone.clone()),
             stores: self.read_stores(Some((&repo, &clone)), &threads),
             rules,
+            copilot: Some(self.copilot_view(&clone)),
         })
     }
 
@@ -155,7 +162,15 @@ impl Core {
             .ok_or_else(|| CoreError::Invalid(format!("no agent keeps its memory in {shown} here")))
     }
 
-    fn known_clone(&self, clone: &Path) -> Result<(String, PathBuf), CoreError> {
+    /// The project's memory every agent shares: Claude Code's store of it.
+    pub(crate) fn project_memory_store(&self, repo: &str, clone: &Path) -> Option<PathBuf> {
+        self.stores(Some((repo, clone)))
+            .into_iter()
+            .find(|found| found.agent == silt_agents::claude::AGENT && found.store.kind == Kind::Memory)
+            .map(|found| found.store.path)
+    }
+
+    pub(crate) fn known_clone(&self, clone: &Path) -> Result<(String, PathBuf), CoreError> {
         self.clones
             .iter()
             .find(|(_, known)| known.as_path() == clone)

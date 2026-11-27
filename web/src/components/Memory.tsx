@@ -1,7 +1,15 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearch } from '@tanstack/react-router'
 import { useMemo, useState, type ReactNode } from 'react'
-import { api, type MemoryCount, type MemoryEntryView, type MemoryStoreView, type MemoryView, type RulesFileView } from '../api'
+import {
+  api,
+  type CopilotMemoryView,
+  type MemoryCount,
+  type MemoryEntryView,
+  type MemoryStoreView,
+  type MemoryView,
+  type RulesFileView,
+} from '../api'
 import { useNow } from '../now'
 import { keys, message } from '../query'
 import { agentName } from '../rules'
@@ -419,6 +427,8 @@ function PlaceBody({ view, clone, heading }: { view: MemoryView; clone: string |
         </section>
       )}
 
+      {clone && view.copilot && <CopilotRow clone={clone} copilot={view.copilot} />}
+
       {clone && view.rules.some((rules) => rules.text !== null) && (
         <section aria-label="rules files" className="overflow-hidden rounded-md border border-line bg-surface-1">
           <h3 className="px-3 pt-2.5 pb-1.5 font-medium">Rules files</h3>
@@ -434,6 +444,61 @@ function PlaceBody({ view, clone, heading }: { view: MemoryView; clone: string |
           </ul>
         </section>
       )}
+    </section>
+  )
+}
+
+/** Whether the project's memory goes to Copilot Memory on GitHub too, which Silt can send to but not read (ADR 0137). */
+function CopilotRow({ clone, copilot }: { clone: string; copilot: CopilotMemoryView }) {
+  const queries = useQueryClient()
+  const now = useNow()
+  const refresh = () => {
+    void queries.invalidateQueries({ queryKey: keys.memoryOf(clone) })
+    // Sending runs in the background; look again once it's had time.
+    window.setTimeout(() => void queries.invalidateQueries({ queryKey: keys.memoryOf(clone) }), 4000)
+  }
+  const failed = (failure: unknown) => toast(message(failure), 'danger')
+  const set = (on: boolean) => api.setCopilotMemory({ clone, on }).then(refresh, failed)
+  const send = () => api.sendCopilotMemory().then(refresh, failed)
+  const status = !copilot.repo
+    ? 'Only for a project on GitHub: this clone’s origin isn’t.'
+    : [
+        copilot.repo,
+        copilot.on
+          ? copilot.sending
+            ? 'sending'
+            : copilot.sent_ms
+              ? `sent ${since(copilot.sent_ms, now)}`
+              : 'not sent yet'
+          : 'off',
+        copilot.on && copilot.waiting > 0 ? `${copilot.waiting} to send` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+  return (
+    <section aria-label="Copilot Memory" className="overflow-hidden rounded-md border border-line bg-surface-1">
+      <div className="flex items-start gap-3 px-3 py-2.5">
+        <span className="mt-0.5 text-fg-2">
+          <AgentMark agent="copilot-cli" className="h-4 w-4" />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-sm text-fg-1">Also save to Copilot Memory</span>
+          <span className="text-xs text-fg-2">
+            GitHub Copilot keeps its memory on GitHub, where Silt can't read it back. On, this project's memory is sent there too
+            with the Copilot CLI, and what changes is sent every few minutes, so Copilot has it outside Silt.
+          </span>
+          <span className="font-mono text-2xs break-words text-fg-3">{status}</span>
+          {copilot.error && <span className="text-xs text-danger">{copilot.error}</span>}
+          {copilot.on && (
+            <span>
+              <Button size="sm" onClick={() => void send()} disabled={copilot.sending}>
+                Send now
+              </Button>
+            </span>
+          )}
+        </div>
+        <Switch on={copilot.on} label="Also save to Copilot Memory" disabled={!copilot.repo} onChange={(on) => void set(on)} />
+      </div>
     </section>
   )
 }

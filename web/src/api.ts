@@ -632,6 +632,8 @@ export const api = {
   duplicateTheme: (from: string) => request<ThemeSaved>('POST', '/api/themes/duplicate', { from }),
   memory: () => request<MemoryOverview>('GET', '/api/memory'),
   memorySettings: () => request<MemorySettings>('GET', '/api/memory/settings'),
+  setCopilotMemory: (change: { clone: string; on: boolean }) => request<string>('PUT', '/api/memory/copilot', change),
+  sendCopilotMemory: () => request<string>('POST', '/api/memory/copilot/send'),
   setMemorySettings: (settings: MemorySettings) => request<string>('PUT', '/api/memory/settings', settings),
   /** What's remembered in the project whose clone is `clone`, or everywhere without one. */
   memoryOf: (clone: string | null) =>
