@@ -495,6 +495,47 @@ impl Agent for Gemini {
         self.homes(home, env).into_iter().map(|dir| dir.join("oauth_creds.json")).collect()
     }
 
+    fn memory(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>, cwd: &Path) -> Option<PathBuf> {
+        let clone = crate::managed_clone(cwd)?;
+        let gemini = crate::home_from(home, env, "GEMINI_CLI_HOME", "").join(".gemini");
+        chats_dir(&gemini, &clone).and_then(|chats| chats.parent().map(|dir| dir.join("memory")))
+    }
+
+    fn gather_memory(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>, cwd: &Path) -> io::Result<Vec<String>> {
+        // Gemini CLI keys its private memory by the cwd, with no setting to
+        // move it, so a managed checkout's folder becomes a link to its
+        // clone's, after what it held is brought over.
+        let Some(clone) = crate::managed_clone(cwd) else { return Ok(Vec::new()) };
+        let gemini = crate::home_from(home, env, "GEMINI_CLI_HOME", "").join(".gemini");
+        let project_dir = |chats: PathBuf| chats.parent().map(Path::to_path_buf).unwrap_or(chats);
+        let shared = project_dir(claim_chats_dir(&gemini, &clone)?).join("memory");
+        let own_project = project_dir(claim_chats_dir(&gemini, cwd)?);
+        let own = own_project.join("memory");
+        fs::create_dir_all(&shared)?;
+        let mut gathered = Vec::new();
+        match fs::symlink_metadata(&own) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                if fs::canonicalize(&own).ok() == fs::canonicalize(&shared).ok() {
+                    return Ok(gathered);
+                }
+                fs::remove_file(&own)?;
+            }
+            Ok(_) => {
+                let tag = own_project.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+                gathered = crate::memory::merge_into(&own, &shared, &tag)?.copied;
+                let kept = (0..).map(|n| {
+                    own_project.join(format!("memory-before-silt{}", if n == 0 { String::new() } else { format!("-{n}") }))
+                });
+                let kept = kept.into_iter().find(|path| !path.exists()).expect("some name is free");
+                fs::rename(&own, kept)?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        crate::symlink(&shared, &own)?;
+        Ok(gathered)
+    }
+
     fn memory_stores(
         &self,
         home: &Path,
@@ -692,6 +733,34 @@ fn overlay_home(plan: &LaunchPlan) -> Result<PathBuf, AgentError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_managed_checkout_reads_its_clones_private_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let clone = dir.path().join("clone");
+        let git_dir = clone.join(".git/silt/clones/t1.git");
+        let checkout = clone.join(".silt/checkouts/t1");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::create_dir_all(&checkout).unwrap();
+        fs::write(checkout.join(".git"), format!("gitdir: {}\n", git_dir.display())).unwrap();
+        let home = dir.path().join("home");
+        let gemini = home.join(".gemini");
+        // What the checkout's own folder held before Silt linked it.
+        let own = claim_chats_dir(&gemini, &checkout).unwrap().parent().unwrap().join("memory");
+        fs::create_dir_all(&own).unwrap();
+        fs::write(own.join("MEMORY.md"), "- [pnpm](pnpm.md) — never npm\n").unwrap();
+        fs::write(own.join("pnpm.md"), "Use pnpm.").unwrap();
+        let env = |_: &str| None;
+
+        assert_eq!(Gemini.gather_memory(&home, &env, &checkout).unwrap(), ["pnpm.md"]);
+        let shared = Gemini.memory(&home, &env, &checkout).unwrap();
+        assert_eq!(fs::read_to_string(shared.join("pnpm.md")).unwrap(), "Use pnpm.");
+        assert!(fs::symlink_metadata(&own).unwrap().file_type().is_symlink());
+        assert_eq!(fs::canonicalize(&own).unwrap(), fs::canonicalize(&shared).unwrap());
+        assert!(own.parent().unwrap().join("memory-before-silt/pnpm.md").exists(), "kept as it was");
+        assert!(Gemini.gather_memory(&home, &env, &checkout).unwrap().is_empty(), "once");
+        assert!(Gemini.gather_memory(&home, &env, &clone).unwrap().is_empty(), "the clone is its own");
+    }
 
     #[test]
     fn slugs_follow_gemini() {
