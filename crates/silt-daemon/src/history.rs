@@ -410,28 +410,36 @@ impl Core {
         }
     }
 
-    /// `entries` whole, as they were recorded, rather than cut: each read
-    /// again from its delta alone. One that reads otherwise alone, as a
-    /// transcript whose earlier lines change how a line reads may, comes
-    /// from the history read again whole.
+    /// The `page` of `kept` whole, as it was recorded, rather than cut: each
+    /// entry read again from its delta alone. One that reads otherwise
+    /// alone, as a transcript whose earlier lines change how a line reads
+    /// may, comes from the history read again whole.
     fn whole_entries(
         &self,
         thread: ThreadId,
-        entries: &[(DeltaId, HistoryEntry)],
+        kept: &[(DeltaId, HistoryEntry)],
+        page: std::ops::Range<usize>,
         read: &HashMap<DeltaId, Delta>,
     ) -> Vec<HistoryEntry> {
+        let entries = &kept[page.clone()];
         let mut whole = Vec::with_capacity(entries.len());
         let mut at = 0;
         while at < entries.len() {
             let delta = entries[at].0;
             let same = entries[at..].iter().take_while(|(id, _)| *id == delta).count();
+            // A page may start partway through a delta's entries, as an image
+            // the web UI asks for alone, after its tool's output.
+            let earlier = kept[..page.start + at].iter().rev().take_while(|(id, _)| *id == delta).count();
             let first = entries[at].1.index;
             match self.delta_of(thread, delta, read).map(|delta| entry_texts(&mut HistoryReader::default(), &delta)) {
                 Some(shown)
-                    if shown.len() >= same
-                        && entries[at..at + same].iter().zip(&shown).all(|((_, cut), shown)| cut.kind == shown.kind) =>
+                    if shown.len() >= earlier + same
+                        && entries[at..at + same]
+                            .iter()
+                            .zip(&shown[earlier..])
+                            .all(|((_, cut), shown)| cut.kind == shown.kind) =>
                 {
-                    for ((_, cut), shown) in entries[at..at + same].iter().zip(shown) {
+                    for ((_, cut), shown) in entries[at..at + same].iter().zip(shown.into_iter().skip(earlier)) {
                         let read = shown.into_entry(cut.index, cut.thread.clone(), &cut.origin, cut.time_ms, cut.rewound);
                         whole.push(HistoryEntry { text: read.text, image: read.image, cut: None, ..cut.clone() });
                     }
@@ -480,14 +488,13 @@ impl Core {
         let kept = self.kept_history(thread);
         let total = kept.entries.len();
         let (from, to) = page_range(&kept, asked);
-        let held = &kept.entries[from..to];
         HistoryPage {
             thread: thread.to_string(),
             total,
             entries: if asked.cut {
-                held.iter().map(|(_, entry)| entry.clone()).collect()
+                kept.entries[from..to].iter().map(|(_, entry)| entry.clone()).collect()
             } else {
-                self.whole_entries(thread, held, read)
+                self.whole_entries(thread, &kept.entries, from..to, read)
             },
             from: Some(from),
             version: Some(kept.version),
