@@ -1109,6 +1109,30 @@ test('prompts queue while the agent works, and a steer interrupts its turn', asy
   }).toPass({ timeout: 15_000 })
 })
 
+test('⏎ steers an agent that takes a prompt mid-turn, and the steer waits for its next step', async ({ page }) => {
+  await startInNewThread(page, 'Steering agent')
+  const draft = page.getByLabel('draft')
+  await draft.fill('Long build')
+  await draft.press('Enter')
+  await expect(page.getByText('cargo build').first()).toBeVisible()
+
+  // ⏎ steers: the button beside + queues instead.
+  await draft.fill('use the release profile')
+  await expect(page.getByRole('button', { name: /^Queue/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Steer now/ })).toHaveCount(0)
+  await draft.press('Enter')
+  const waiting = page.getByTestId('steer-waiting')
+  await expect(waiting).toContainText('use the release profile')
+  await expect(waiting.getByRole('button', { name: 'Send now' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'queued prompts' })).toHaveCount(0)
+
+  // Taken in once the command ends, it's a message in the same turn.
+  await expect(page.getByText(/Heard after the command ran: use the release profile/)).toBeVisible()
+  await expect(waiting).toHaveCount(0)
+  await expect(page.getByText('use the release profile', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('agent-state')).toHaveText('Steering agent is ready')
+})
+
 test('a thread started in the background from a branch plans its first prompt and waits in Needs you', async ({ page }) => {
   await page.goto(live.alice)
   await page.getByRole('navigation', { name: 'projects' }).getByRole('link', { name: 'New thread', exact: true }).click()

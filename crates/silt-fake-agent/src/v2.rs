@@ -23,7 +23,7 @@
 //! `Suggest` makes it predict the next prompt once it stopped, as Claude's
 //! adapter does, to a client that says it takes one.
 //! `Which model`, `Long`, `FAKE_ACP_SLOW_SETTINGS` and `FAKE_ACP_STEERING`
-//! work as over v1.
+//! work as over v1; `FAKE_ACP_PROMPT_QUEUEING` only over v2 (see `steering`).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -43,6 +43,9 @@ struct State {
     model: HashMap<String, String>,
     /// The client takes suggested prompts.
     suggestions: bool,
+    /// Prompts sent while the command of a `Long` prompt ran, waiting for
+    /// it to end, with `FAKE_ACP_PROMPT_QUEUEING`.
+    queued: Vec<(String, Responder<v2::PromptResponse>)>,
 }
 
 /// The commands it offers, tagged as Claude's adapter tags them over v2;
@@ -137,6 +140,9 @@ pub async fn main() -> Result<()> {
                 if let Some(meta) = crate::steering::meta() {
                     response["_meta"] = meta;
                 }
+                if crate::steering::queues_prompts() {
+                    response["capabilities"]["_meta"] = json!({"claudeCode": {"promptQueueing": true}});
+                }
                 responder.respond(parse(response)?)
             },
             agent_client_protocol::on_receive_request!(),
@@ -186,6 +192,14 @@ pub async fn main() -> Result<()> {
         )
         .on_receive_request(
             async move |request: v2::PromptRequest, responder: Responder<v2::PromptResponse>, connection: ConnectionTo<Client>| {
+                if crate::steering::queues_prompts() && crate::steering::running() {
+                    let text = request.prompt.iter().filter_map(|block| match block {
+                        v2::ContentBlock::Text(text) => Some(text.text.clone()),
+                        _ => None,
+                    }).collect();
+                    prompted.lock().expect("lock").queued.push((text, responder));
+                    return Ok(());
+                }
                 responder.respond(parse(json!({"messageId": "user-1"}))?)?;
                 let state = prompted.clone();
                 let cancelled = stopping.clone();
@@ -229,6 +243,19 @@ pub async fn main() -> Result<()> {
                         let data = base64::engine::general_purpose::STANDARD.encode(output);
                         say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "long-1", "output": {"data": data}}))?;
                         say(&worker, &session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "long-1", "status": status}))?;
+                        // Prompts that waited for the command join the turn
+                        // now, as Claude Code takes one in at its next step.
+                        let queued = std::mem::take(&mut state.lock().expect("lock").queued);
+                        for (index, (text, waited)) in queued.into_iter().enumerate() {
+                            if killed {
+                                waited.respond_with_error(agent_client_protocol::Error::request_cancelled())?;
+                                continue;
+                            }
+                            let id = format!("queued-{index}");
+                            say(&worker, &session, json!({"sessionUpdate": "user_message", "messageId": id, "content": [{"type": "text", "text": text}]}))?;
+                            waited.respond(parse(json!({"messageId": id}))?)?;
+                            say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": format!("heard-{id}"), "content": {"type": "text", "text": format!("Heard after the command ran: {text}\n\n")}}))?;
+                        }
                         if killed {
                             return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "cancelled"}));
                         }

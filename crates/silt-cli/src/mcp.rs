@@ -180,6 +180,110 @@ impl DaemonTools {
     }
 }
 
+impl DaemonTools {
+    /// The project's shared memory: Claude Code's for its clone, which
+    /// Silt keeps every thread of the project in (ADR 0137).
+    fn project_memory(&self) -> Option<PathBuf> {
+        let home = silt_os::home_dir()?;
+        silt_agents::shared_memory(&home, &|name: &str| std::env::var(name).ok(), &self.checkout)
+    }
+
+    fn everywhere(&self) -> PathBuf {
+        silt_agents::memory::everywhere_dir(&paths::data_dir())
+    }
+
+    fn memory_tool(&self, tool: &str, arguments: &Value) -> Result<String, String> {
+        use silt_agents::memory;
+        if !memory::sharing(&paths::data_dir()) {
+            return Err("sharing memory between agents is off in Settings › Memory".into());
+        }
+        let project = self.project_memory();
+        let everywhere = self.everywhere();
+        let place = |everywhere_too: bool| -> Result<PathBuf, String> {
+            if everywhere_too {
+                Ok(everywhere.clone())
+            } else {
+                project.clone().ok_or_else(|| "this folder isn't in a project".to_owned())
+            }
+        };
+        let flag = |key: &str| arguments.get(key).and_then(Value::as_bool).unwrap_or(false);
+        match tool {
+            "silt_memory_search" => {
+                let words = text_arg(arguments, "query")?.to_lowercase();
+                let mut out = String::new();
+                for (label, dir) in project.iter().map(|dir| ("project", dir.clone())).chain([("everywhere", everywhere.clone())])
+                {
+                    for entry in memory::read_indexed(&dir).unwrap_or_default() {
+                        let text = format!("{} {} {}", entry.name, entry.description, entry.body).to_lowercase();
+                        if words.split_whitespace().all(|word| text.contains(word)) {
+                            let _ = writeln!(out, "[{label}] {} ({}): {}", entry.name, entry.file, entry.description);
+                        }
+                    }
+                }
+                Ok(if out.is_empty() { "No memory matches.".into() } else { format!("Read one with silt_memory_read:\n{out}") })
+            }
+            "silt_memory_read" => {
+                let file = text_arg(arguments, "file")?;
+                if !memory::is_entry_file(&file) {
+                    return Err(format!("{file} isn't a memory's file"));
+                }
+                std::fs::read_to_string(place(flag("everywhere"))?.join(&file))
+                    .map_err(|error| format!("couldn't read {file}: {error}"))
+            }
+            _ => {
+                let kind = text_arg(arguments, "kind")?;
+                // What's learnt about the person holds in every project.
+                let dir = place(flag("everywhere") || kind == "user")?;
+                let file = arguments.get("file").and_then(Value::as_str);
+                let written = memory::write_new(
+                    &dir,
+                    file,
+                    &text_arg(arguments, "name")?,
+                    arguments.get("description").and_then(Value::as_str).unwrap_or_default(),
+                    &kind,
+                    &text_arg(arguments, "body")?,
+                )
+                .map_err(|error| error.to_string())?;
+                Ok(format!("Saved as {written}{}.", if dir == everywhere { ", in the memory everywhere" } else { "" }))
+            }
+        }
+    }
+}
+
+/// The tools to read and add to the memory agents share (ADR 0137).
+fn memory_tools() -> Vec<Value> {
+    vec![
+        serde_json::json!({
+            "name": "silt_memory_search",
+            "description": "Search what you and the person's other agents remember, about this project and about the person: names, descriptions and texts that hold every word.",
+            "inputSchema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}}},
+            "annotations": {"readOnlyHint": true}
+        }),
+        serde_json::json!({
+            "name": "silt_memory_read",
+            "description": "Read a memory by its file, as the memory's index or silt_memory_search names it.",
+            "inputSchema": {"type": "object", "required": ["file"], "properties": {
+                "file": {"type": "string"},
+                "everywhere": {"type": "boolean", "description": "It's in the memory everywhere rather than the project's"}
+            }},
+            "annotations": {"readOnlyHint": true}
+        }),
+        serde_json::json!({
+            "name": "silt_memory_write",
+            "description": "Save something a later session should know: how the person likes things done and why (feedback), who they are (user, kept for every project), a decision or fact about the project (project), or where to find something (reference). Lead with the fact, then why it holds. Give `file` to update a memory rather than add one; don't save what the code or git history already says.",
+            "inputSchema": {"type": "object", "required": ["name", "kind", "body"], "properties": {
+                "name": {"type": "string", "description": "A short title"},
+                "description": {"type": "string", "description": "One line, used to decide later whether it's relevant"},
+                "kind": {"type": "string", "enum": ["user", "feedback", "project", "reference"]},
+                "body": {"type": "string"},
+                "everywhere": {"type": "boolean", "description": "It holds in every project, not only this one"},
+                "file": {"type": "string", "description": "The memory to update"}
+            }},
+            "annotations": {"readOnlyHint": false}
+        }),
+    ]
+}
+
 impl silt_mcp::Backend for DaemonTools {
     fn shows(&self) -> bool {
         self.shows
@@ -199,14 +303,26 @@ impl silt_mcp::Backend for DaemonTools {
         Ok(format!("Use the {name} skill (its files are in {}):\n\n{body}", skill.dir.display()))
     }
 
+    fn more_instructions(&mut self) -> Option<String> {
+        // Claude Code keeps the project's memory natively and is told the
+        // memory everywhere at launch; it sets CLAUDECODE for what it runs.
+        if !silt_agents::memory::sharing(&paths::data_dir()) || std::env::var_os("CLAUDECODE").is_some() {
+            return None;
+        }
+        silt_agents::memory::shared_prompt(self.project_memory().as_deref(), &self.everywhere())
+    }
+
     fn extra(&mut self) -> Vec<Value> {
+        let memory = if silt_agents::memory::sharing(&paths::data_dir()) { memory_tools() } else { Vec::new() };
         let tools = self.plugin_tools();
         if tools.is_empty() {
-            return Vec::new();
+            return memory;
         }
-        let mut listed: Vec<Value> = tools
+        let mut listed: Vec<Value> = memory
             .into_iter()
-            .map(|tool| serde_json::json!({"name": tool.name, "description": tool.description, "inputSchema": tool.input_schema}))
+            .chain(tools.into_iter().map(
+                |tool| serde_json::json!({"name": tool.name, "description": tool.description, "inputSchema": tool.input_schema}),
+            ))
             .collect();
         listed.push(serde_json::json!({
             "name": PLUGIN_WAIT,
@@ -225,6 +341,7 @@ impl silt_mcp::Backend for DaemonTools {
             return self.plugin(Request::PluginCall { tool: tool.to_owned(), input: arguments.clone() });
         }
         match tool {
+            "silt_memory_search" | "silt_memory_read" | "silt_memory_write" => return self.memory_tool(tool, arguments),
             "silt_skills" => {
                 let skills: Vec<Skill> = self.skills().into_iter().filter(|skill| skill.model_invocable).collect();
                 if skills.is_empty() {

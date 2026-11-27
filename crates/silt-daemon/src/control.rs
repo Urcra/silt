@@ -486,6 +486,8 @@ impl Core {
             auto_check: None,
             checking: Vec::new(),
             escalations: Vec::new(),
+            steers: false,
+            waiting_steers: Vec::new(),
         })
     }
 

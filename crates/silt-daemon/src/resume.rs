@@ -115,7 +115,7 @@ impl Core {
             return Err(CoreError::Invalid(format!("this clone is of {identity:?} but the thread belongs to {:?}", record.repo)));
         }
         // A chat's own folder holds only its files, which the thread has.
-        let own_chat = repo.is_chat() && record.repo_root == repo.root();
+        let own_chat = (repo.is_chat() && record.repo_root == repo.root()) || repo.memory_project().is_some();
         if here && !own_chat && !repo.git(&["status", "--porcelain"], None)?.is_empty() {
             return Err(CoreError::Invalid("--here needs a clean working tree".into()));
         }
@@ -203,6 +203,16 @@ impl Core {
         let checkout_id = self.attach_checkout(thread, &path, false).await?;
         self.materialize(checkout_id).await?;
         Ok((checkout_id, path))
+    }
+
+    /// Takes on the memory `thread` in its store's folder here (ADR 0137),
+    /// without its lease: every machine keeps the memory checked out at
+    /// once, and none of them continues it in a fork.
+    pub(crate) async fn check_out_memory(&mut self, thread: ThreadId, folder: &Path) -> Result<CheckoutId, CoreError> {
+        let (repo, _) = self.prepare_thread(thread, folder, true).await?;
+        let checkout_id = self.attach_checkout(thread, repo.root(), false).await?;
+        self.materialize(checkout_id).await?;
+        Ok(checkout_id)
     }
 
     /// Records `root` as the chat `thread`'s folder on this machine.

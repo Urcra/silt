@@ -290,6 +290,9 @@ fn api_routes() -> Router<Web> {
         .route("/api/memory", get(memory_overview))
         .route("/api/memory/store", get(memory_of).put(set_memory).delete(forget_memory))
         .route("/api/memory/move", post(move_memory))
+        .route("/api/memory/settings", get(memory_settings).put(set_memory_settings))
+        .route("/api/memory/copilot", put(set_copilot_memory))
+        .route("/api/memory/copilot/send", post(send_copilot_memory))
         .route("/api/themes", get(themes))
         .route("/api/themes/detail", get(theme_detail))
         .route("/api/themes/css", get(theme_css))
@@ -1273,6 +1276,28 @@ struct MemoryMove {
     /// The project to move it to; without one, everywhere.
     #[serde(default)]
     to: Option<PathBuf>,
+}
+
+#[derive(Deserialize)]
+struct CopilotMemoryChange {
+    clone: PathBuf,
+    on: bool,
+}
+
+async fn set_copilot_memory(State(web): State<Web>, Json(change): Json<CopilotMemoryChange>) -> HttpResponse {
+    ask(&web, Request::SetCopilotMemory { clone: change.clone, on: change.on }).await
+}
+
+async fn send_copilot_memory(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::SendCopilotMemory).await
+}
+
+async fn memory_settings(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::MemorySettings).await
+}
+
+async fn set_memory_settings(State(web): State<Web>, Json(settings): Json<crate::protocol::MemorySettings>) -> HttpResponse {
+    ask(&web, Request::SetMemorySettings { settings }).await
 }
 
 async fn move_memory(State(web): State<Web>, Json(moved): Json<MemoryMove>) -> HttpResponse {

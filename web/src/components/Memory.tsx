@@ -1,13 +1,21 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearch } from '@tanstack/react-router'
 import { useMemo, useState, type ReactNode } from 'react'
-import { api, type MemoryCount, type MemoryEntryView, type MemoryStoreView, type MemoryView, type RulesFileView } from '../api'
+import {
+  api,
+  type CopilotMemoryView,
+  type MemoryCount,
+  type MemoryEntryView,
+  type MemoryStoreView,
+  type MemoryView,
+  type RulesFileView,
+} from '../api'
 import { useNow } from '../now'
 import { keys, message } from '../query'
 import { agentName } from '../rules'
 import { SETTINGS_HEADING } from '../settingsContext'
 import { ago } from '../time'
-import { Button, EmptyState, Icon, Select, Skeleton, Tag, Textarea, cx, toast, type Tone } from '../ui'
+import { Button, EmptyState, Icon, Select, Skeleton, Switch, Tag, Textarea, cx, toast, type Tone } from '../ui'
 import { AgentMark } from './AgentMark'
 import { Markdown } from './Markdown'
 
@@ -151,6 +159,7 @@ function Overview() {
     <section aria-label="Memory" className="flex flex-col gap-3.5">
       <Heading meta={plural(total, 'memory', 'memories')}>Memory</Heading>
       <p className="text-sm text-fg-2">{INTRO}</p>
+      <Sharing />
       {unread.length > 0 && (
         <Failure
           text={`Couldn't read what ${unread.map(agentName).join(' and ')} remember${unread.length === 1 ? 's' : ''} on this computer. Everything else is below.`}
@@ -160,7 +169,7 @@ function Overview() {
       {nothing ? (
         <EmptyState title="No memories yet">
           As they work, agents note how you like things done, the decisions behind the code and where to find things. Each shows
-          here under its project.
+          here under its project. What Gemini CLI remembered before Silt joins the next time an agent starts in its project.
         </EmptyState>
       ) : (
         <>
@@ -220,6 +229,31 @@ function Overview() {
         </>
       )}
     </section>
+  )
+}
+
+/** Whether agents share memory (ADR 0137): on, every agent reads and adds to one memory per project and the memory everywhere. */
+function Sharing() {
+  const queries = useQueryClient()
+  const settings = useQuery({ queryKey: keys.memorySettings, queryFn: api.memorySettings })
+  const share = settings.data?.share ?? true
+  const save = (on: boolean) =>
+    api.setMemorySettings({ share: on }).then(
+      () => void queries.invalidateQueries({ queryKey: keys.memorySettings }),
+      (failure: unknown) => toast(message(failure), 'danger'),
+    )
+  return (
+    <div className="flex items-start gap-3 rounded-md border border-line bg-elevated px-4 py-3">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="text-sm font-medium text-fg-1">Share memory between agents</span>
+        <span className="text-xs text-fg-2">
+          {share
+            ? 'Claude Code, Codex, Gemini CLI and your other agents read and add to one memory in each project, and to your memory everywhere. Off, each agent keeps its own, as it does without Silt.'
+            : "Each agent keeps its own memory, as it does without Silt. What's shared already stays here."}
+        </span>
+      </div>
+      <Switch on={share} label="Share memory between agents" disabled={!settings.data} onChange={(on) => void save(on)} />
+    </div>
   )
 }
 
@@ -393,6 +427,8 @@ function PlaceBody({ view, clone, heading }: { view: MemoryView; clone: string |
         </section>
       )}
 
+      {clone && view.copilot && <CopilotRow clone={clone} copilot={view.copilot} />}
+
       {clone && view.rules.some((rules) => rules.text !== null) && (
         <section aria-label="rules files" className="overflow-hidden rounded-md border border-line bg-surface-1">
           <h3 className="px-3 pt-2.5 pb-1.5 font-medium">Rules files</h3>
@@ -408,6 +444,61 @@ function PlaceBody({ view, clone, heading }: { view: MemoryView; clone: string |
           </ul>
         </section>
       )}
+    </section>
+  )
+}
+
+/** Whether the project's memory goes to Copilot Memory on GitHub too, which Silt can send to but not read (ADR 0137). */
+function CopilotRow({ clone, copilot }: { clone: string; copilot: CopilotMemoryView }) {
+  const queries = useQueryClient()
+  const now = useNow()
+  const refresh = () => {
+    void queries.invalidateQueries({ queryKey: keys.memoryOf(clone) })
+    // Sending runs in the background; look again once it's had time.
+    window.setTimeout(() => void queries.invalidateQueries({ queryKey: keys.memoryOf(clone) }), 4000)
+  }
+  const failed = (failure: unknown) => toast(message(failure), 'danger')
+  const set = (on: boolean) => api.setCopilotMemory({ clone, on }).then(refresh, failed)
+  const send = () => api.sendCopilotMemory().then(refresh, failed)
+  const status = !copilot.repo
+    ? 'Only for a project on GitHub: this clone’s origin isn’t.'
+    : [
+        copilot.repo,
+        copilot.on
+          ? copilot.sending
+            ? 'sending'
+            : copilot.sent_ms
+              ? `sent ${since(copilot.sent_ms, now)}`
+              : 'not sent yet'
+          : 'off',
+        copilot.on && copilot.waiting > 0 ? `${copilot.waiting} to send` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+  return (
+    <section aria-label="Copilot Memory" className="overflow-hidden rounded-md border border-line bg-surface-1">
+      <div className="flex items-start gap-3 px-3 py-2.5">
+        <span className="mt-0.5 text-fg-2">
+          <AgentMark agent="copilot-cli" className="h-4 w-4" />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-sm text-fg-1">Also save to Copilot Memory</span>
+          <span className="text-xs text-fg-2">
+            GitHub Copilot keeps its memory on GitHub, where Silt can't read it back. On, this project's memory is sent there too
+            with the Copilot CLI, and what changes is sent every few minutes, so Copilot has it outside Silt.
+          </span>
+          <span className="font-mono text-2xs break-words text-fg-3">{status}</span>
+          {copilot.error && <span className="text-xs text-danger">{copilot.error}</span>}
+          {copilot.on && (
+            <span>
+              <Button size="sm" onClick={() => void send()} disabled={copilot.sending}>
+                Send now
+              </Button>
+            </span>
+          )}
+        </div>
+        <Switch on={copilot.on} label="Also save to Copilot Memory" disabled={!copilot.repo} onChange={(on) => void set(on)} />
+      </div>
     </section>
   )
 }

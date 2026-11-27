@@ -11,6 +11,49 @@ use crate::conventions::{parse_frontmatter, split_frontmatter};
 /// The file indexing a folder of memories, a line a memory.
 pub const INDEX: &str = "MEMORY.md";
 
+/// Settings › Memory's switches, in `memory.json` (ADR 0137).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Settings {
+    /// Agents share memory; on unless turned off.
+    #[serde(default = "on")]
+    pub share: bool,
+    /// The projects, by their clones, whose memory is also sent to Copilot
+    /// Memory on GitHub.
+    #[serde(default)]
+    pub copilot: std::collections::BTreeSet<PathBuf>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { share: true, copilot: Default::default() }
+    }
+}
+
+fn on() -> bool {
+    true
+}
+
+pub fn settings(data_dir: &Path) -> Settings {
+    fs::read_to_string(data_dir.join(SETTINGS)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+}
+
+pub fn save_settings(data_dir: &Path, settings: &Settings) -> io::Result<()> {
+    fs::create_dir_all(data_dir)?;
+    let json = serde_json::to_vec_pretty(settings).map_err(io::Error::other)?;
+    write_atomically(&data_dir.join(SETTINGS), &json)
+}
+
+/// Whether agents share memory.
+pub fn sharing(data_dir: &Path) -> bool {
+    settings(data_dir).share
+}
+
+pub fn set_sharing(data_dir: &Path, share: bool) -> io::Result<()> {
+    save_settings(data_dir, &Settings { share, ..settings(data_dir) })
+}
+
+const SETTINGS: &str = "memory.json";
+
 /// Silt's own store of what holds in every project, in its data folder.
 pub fn everywhere_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("memory").join("everywhere")
@@ -327,6 +370,132 @@ To remember something new about the person, save it to your own memory as you wo
     Some(prompt)
 }
 
+/// The kinds a memory can be, as Claude Code files them.
+pub const KINDS: [&str; 4] = ["user", "feedback", "project", "reference"];
+
+/// Writes a memory in Claude Code's format to the folder `dir`, with its
+/// index line: as `file` when given, replacing it, else a new file named
+/// from its kind and name. Gives the file's name.
+pub fn write_new(dir: &Path, file: Option<&str>, name: &str, description: &str, kind: &str, body: &str) -> io::Result<String> {
+    let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
+    if !KINDS.contains(&kind) {
+        return Err(invalid(format!("a memory is of kind {}, not {kind}", KINDS.join(", "))));
+    }
+    let one_line = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (name, description) = (one_line(name), one_line(description));
+    if name.is_empty() {
+        return Err(invalid("a memory needs a name".into()));
+    }
+    let file = match file {
+        Some(file) => file.to_owned(),
+        None => {
+            let slug: String = name
+                .to_lowercase()
+                .chars()
+                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+                .collect::<String>()
+                .split('-')
+                .filter(|part| !part.is_empty())
+                .take(8)
+                .collect::<Vec<_>>()
+                .join("-");
+            let stem = format!("{kind}-{slug}");
+            (0..)
+                .map(|n| if n == 0 { format!("{stem}.md") } else { format!("{stem}-{n}.md") })
+                .find(|file| !dir.join(file).exists())
+                .expect("a name is free")
+        }
+    };
+    if !is_entry_file(&file) {
+        return Err(invalid(format!("{file:?} isn't a memory's file")));
+    }
+    let quoted = |text: &str| serde_json::Value::String(text.to_owned()).to_string();
+    let text = format!(
+        "---\nname: {}\ndescription: {}\nmetadata:\n  type: {kind}\n  modified: {}\n---\n\n{}\n",
+        quoted(&name),
+        quoted(&description),
+        crate::time::timestamp_now(),
+        body.trim()
+    );
+    fs::create_dir_all(dir)?;
+    write_atomically(&dir.join(&file), text.as_bytes())?;
+    let index = fs::read_to_string(dir.join(INDEX)).unwrap_or_default();
+    let mut index = without_line_for(&index, &file);
+    if !index.is_empty() && !index.ends_with('\n') {
+        index.push('\n');
+    }
+    let hook = if description.is_empty() { String::new() } else { format!(" — {description}") };
+    index.push_str(&format!("- [{name}]({file}){hook}\n"));
+    write_atomically(&dir.join(INDEX), index.as_bytes())?;
+    Ok(file)
+}
+
+/// The file in Silt's data folder keeping what agents' older memories
+/// were brought in already.
+pub fn brought_file(data_dir: &Path) -> PathBuf {
+    data_dir.join("memory").join("brought.json")
+}
+
+/// Brings `facts` about the person into `everywhere` as memories of kind
+/// `user`, each once: `brought` keeps a hash of each brought in. Gives the
+/// memories written.
+pub fn bring_in_lines(facts: &[String], everywhere: &Path, brought: &Path) -> io::Result<Vec<String>> {
+    use sha2::Digest;
+    let mut seen: std::collections::BTreeSet<String> =
+        fs::read_to_string(brought).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    let mut written = Vec::new();
+    for fact in facts {
+        let hash: String = sha2::Sha256::digest(fact.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
+        if seen.contains(&hash) {
+            continue;
+        }
+        let name: String = fact.split_whitespace().take(8).collect::<Vec<_>>().join(" ");
+        written.push(write_new(everywhere, None, &name, fact, "user", fact)?);
+        seen.insert(hash);
+    }
+    if !written.is_empty() {
+        if let Some(dir) = brought.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        write_atomically(brought, serde_json::to_string(&seen).map_err(io::Error::other)?.as_bytes())?;
+    }
+    Ok(written)
+}
+
+/// What an agent whose own memory isn't the shared one is told (ADR
+/// 0137): the indexes of the project's memory and the memory everywhere,
+/// and the tools to read and add to them. `None` when both are empty.
+pub fn shared_prompt(project: Option<&Path>, everywhere: &Path) -> Option<String> {
+    let list = |dir: &Path| {
+        read_indexed(dir)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| {
+                let hook = if entry.description.is_empty() { String::new() } else { format!(" — {}", entry.description) };
+                format!("- [{}]({}){hook}\n", entry.name, entry.file)
+            })
+            .collect::<String>()
+    };
+    let (in_project, in_everywhere) = (project.map(list).unwrap_or_default(), list(everywhere));
+    let mut prompt = String::from(
+        "# Memory\n\nYou share memory with the person's other agents through Silt: what earlier sessions learnt about this \
+project, and about the person in every project. Read a memory with silt_memory_read when it's relevant, find one with \
+silt_memory_search, and save what a later session should know with silt_memory_write. Memories can be out of date: \
+check what a memory names still exists before relying on it.\n",
+    );
+    if in_project.is_empty() && in_everywhere.is_empty() {
+        prompt.push_str("\nNothing is remembered yet.\n");
+        return Some(prompt);
+    }
+    if !in_project.is_empty() {
+        prompt.push_str(&format!("\n## This project\n\n{in_project}"));
+    }
+    if !in_everywhere.is_empty() {
+        prompt.push_str(&format!("\n## Everywhere\n\n{in_everywhere}"));
+    }
+    Some(prompt)
+}
+
 /// `index` without the lines that point at `file`.
 pub fn without_line_for(index: &str, file: &str) -> String {
     let mut kept = String::with_capacity(index.len());
@@ -468,6 +637,41 @@ mod tests {
 
         assert_eq!(move_entry(&everywhere, "user-rust.md", &project).unwrap(), "user-rust.md");
         assert!(project.join("user-rust.md").exists() && !everywhere.join("user-rust.md").exists());
+    }
+
+    #[test]
+    fn a_new_memory_is_written_as_claude_code_writes_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let file =
+            write_new(dir.path(), None, "Uses pnpm, never npm", "in every project", "feedback", "Install with pnpm.").unwrap();
+        assert_eq!(file, "feedback-uses-pnpm-never-npm.md");
+        let entry = &read_indexed(dir.path()).unwrap()[0];
+        assert_eq!((entry.name.as_str(), entry.description.as_str()), ("Uses pnpm, never npm", "in every project"));
+        assert_eq!((entry.kind.as_deref(), entry.body.trim()), (Some("feedback"), "Install with pnpm."));
+        assert_eq!(
+            write_new(dir.path(), None, "Uses pnpm, never npm", "", "feedback", "Again.").unwrap(),
+            "feedback-uses-pnpm-never-npm-1.md"
+        );
+        write_new(dir.path(), Some(&file), "Uses pnpm", "changed", "feedback", "Still pnpm.").unwrap();
+        let index = fs::read_to_string(dir.path().join(INDEX)).unwrap();
+        assert_eq!(index.matches(&file).count(), 1, "{index}");
+        assert!(index.contains("- [Uses pnpm](feedback-uses-pnpm-never-npm.md) — changed"));
+        assert!(write_new(dir.path(), None, "x", "", "secret", "x").is_err());
+        assert!(write_new(dir.path(), Some("../x.md"), "x", "", "user", "x").is_err());
+    }
+
+    #[test]
+    fn sharing_is_on_until_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(sharing(dir.path()));
+        set_sharing(dir.path(), false).unwrap();
+        assert!(!sharing(dir.path()));
+        let (project, everywhere) = (dir.path().join("p"), dir.path().join("e"));
+        assert!(shared_prompt(Some(&project), &everywhere).unwrap().contains("Nothing is remembered yet"));
+        write_new(&project, None, "Gate", "CI runs it", "project", "CI.").unwrap();
+        let prompt = shared_prompt(Some(&project), &everywhere).unwrap();
+        assert!(prompt.contains("## This project") && prompt.contains("- [Gate](project-gate.md) — CI runs it"));
+        assert!(!prompt.contains("## Everywhere"));
     }
 
     #[test]

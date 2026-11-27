@@ -631,6 +631,18 @@ pub enum Request {
         #[serde(default)]
         to: Option<PathBuf>,
     },
+    /// Sends the project's memory to Copilot Memory on GitHub, or stops.
+    SetCopilotMemory {
+        clone: PathBuf,
+        on: bool,
+    },
+    /// Sends what changed to Copilot Memory now.
+    SendCopilotMemory,
+    /// Whether agents share memory (ADR 0137).
+    MemorySettings,
+    SetMemorySettings {
+        settings: MemorySettings,
+    },
     /// What this machine connects to on its own (ADR 0134).
     NetworkSettings,
     SetNetworkSettings {
@@ -1561,6 +1573,14 @@ impl Default for NetworkSettings {
     }
 }
 
+/// Whether every agent in a project reads and adds to one memory, and the
+/// memory everywhere, or each keeps its own (ADR 0137).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct MemorySettings {
+    pub share: bool,
+}
+
 /// Settings › Memory: what agents remember everywhere and in each
 /// project with a clone here (ADR 0137).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1603,6 +1623,24 @@ pub struct MemoryView {
     pub stores: Vec<MemoryStoreView>,
     /// The project's rules files, which every agent of a kind reads.
     pub rules: Vec<RulesFileView>,
+    /// Whether the project's memory goes to Copilot Memory too.
+    pub copilot: Option<CopilotMemoryView>,
+}
+
+/// A project's memory sent to Copilot Memory on GitHub (ADR 0137).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct CopilotMemoryView {
+    pub on: bool,
+    /// `host/owner/name` of the clone's origin on GitHub; `None` for a
+    /// project that isn't on GitHub, which Copilot Memory can't hold.
+    pub repo: Option<String>,
+    pub sent_ms: Option<i64>,
+    /// Why the last send failed.
+    pub error: Option<String>,
+    /// Memories changed since they were last sent.
+    pub waiting: usize,
+    pub sending: bool,
 }
 
 /// One of an agent's stores.
@@ -2440,6 +2478,14 @@ pub struct AgentStatus {
     /// Calls Auto refused that the agent asks the person to allow.
     #[serde(default)]
     pub escalations: Vec<EscalationAsked>,
+    /// A prompt sent while it works joins the turn it runs, at its next
+    /// step, rather than waiting for the turn to end.
+    #[serde(default)]
+    pub steers: bool,
+    /// The person's steers on their way to the agent, until it takes them
+    /// in.
+    #[serde(default)]
+    pub waiting_steers: Vec<String>,
 }
 
 /// Who checks a thread's commands on Auto (ADR 0132).
@@ -3127,6 +3173,8 @@ mod tests {
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
             NetworkSettings::decl(&config),
+            MemorySettings::decl(&config),
+            CopilotMemoryView::decl(&config),
             MemoryOverview::decl(&config),
             MemoryCount::decl(&config),
             MemoryProject::decl(&config),

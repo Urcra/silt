@@ -75,11 +75,18 @@ pub(crate) struct AcpRun {
     tool_output: HashMap<String, String>,
     /// What to tell the agent once the turn being cancelled for it ends.
     steering: Option<String>,
-    /// The agent adds a steer to the turn it runs (`_session/steering`), so
-    /// a steer needn't cancel it (ADR 0111).
+    /// The agent adds a steer to the turn it runs, over `_session/steering`
+    /// or, as Claude Code, by queueing a prompt sent while it works, so a
+    /// steer needn't cancel it (ADR 0111, ADR 0138).
     pub(crate) steers: bool,
     /// Steers that found no turn running, each to send as a prompt in turn.
     steered: Vec<String>,
+    /// The person's steers on their way to the agent, until it takes them
+    /// in, which the thread shows waiting.
+    waiting_steers: Vec<String>,
+    /// Steers a cancel left to send once the turn ends, before the agent
+    /// took them in: what it says of them after is its last word on them.
+    resent_steers: Vec<String>,
     /// Each tool call's kind as the agent announced it, for permission
     /// requests that don't repeat it.
     tool_kinds: HashMap<String, String>,
@@ -833,6 +840,8 @@ impl Core {
                 steering: None,
                 steers: false,
                 steered: Vec::new(),
+                waiting_steers: Vec::new(),
+                resent_steers: Vec::new(),
                 tool_kinds: HashMap::new(),
                 tool_said: HashMap::new(),
                 within: None,
@@ -1036,6 +1045,7 @@ impl Core {
         if run.steers {
             // Sent while the question is open, so an agent that holds a steer
             // until its question is answered has it as it goes on.
+            run.waiting_steers.push(said.clone());
             send(run, Command::Steer(said));
             for question in &asked {
                 send(run, Command::AnswerQuestion { id: question.id, answers: None });
@@ -1052,16 +1062,17 @@ impl Core {
     }
 
     /// How the agent took a steer: in its turn, it's the person's message
-    /// there; with no turn running, it's a prompt of its own; refused, the
-    /// turn is cancelled for it, as for an agent that takes no steers.
+    /// there; with no turn running, it's a prompt of its own; refused, it
+    /// waits in the queue for the turn to end, which goes on.
     async fn steered(&mut self, thread: ThreadId, text: String, outcome: silt_acp::Steered) -> Result<(), CoreError> {
         use silt_acp::Steered;
         let run = self.acp.get_mut(&thread).expect("caller checked");
+        let taken = matches!(outcome, Steered::Injected | Steered::StartedNewTurn);
         // A note of Silt's own reads as Silt's, and waits for the turn's end
         // where the agent didn't take it in its turn.
         if let Some(at) = run.auto.silt_steers.iter().position(|said| *said == text) {
             run.auto.silt_steers.remove(at);
-            if matches!(outcome, Steered::Injected | Steered::StartedNewTurn) {
+            if taken {
                 self.flush_acp(thread).await?;
                 self.record_acp(thread, &acp::prompt(&text, crate::judges::SILT, &[], &[])).await?;
                 return Ok(());
@@ -1069,25 +1080,41 @@ impl Core {
             run.auto.hand_back.push(text);
             return self.next_prompt(thread).await;
         }
+        // A cancel left it to send once the turn ends; taken in after all,
+        // it's said, and isn't sent again.
+        if let Some(at) = run.resent_steers.iter().position(|said| *said == text) {
+            run.resent_steers.remove(at);
+            let unsent = run.steered.iter().position(|said| *said == text);
+            if let Some(at) = unsent.filter(|_| taken) {
+                run.steered.remove(at);
+                self.flush_acp(thread).await?;
+                let me = self.own_user(thread);
+                self.record_acp(thread, &acp::prompt(&text, &me, &[], &[])).await?;
+            }
+            return Ok(());
+        }
+        if let Some(at) = run.waiting_steers.iter().position(|said| *said == text) {
+            run.waiting_steers.remove(at);
+        }
         match outcome {
             Steered::Injected | Steered::StartedNewTurn => {
                 self.flush_acp(thread).await?;
                 let me = self.own_user(thread);
                 self.record_acp(thread, &acp::prompt(&text, &me, &[], &[])).await?;
+                self.agent_changed(thread).await;
                 return Ok(());
             }
             Steered::PromptRequired => {}
             Steered::Failed | Steered::Error(_) => {
-                warn!(%thread, ?outcome, "the agent didn't take a steer; cancelling its turn instead");
-                let run = self.acp.get_mut(&thread).expect("caller checked");
-                if run.state == AgentState::Working {
-                    cancel_to_say(run, text);
-                    return Ok(());
-                }
+                warn!(%thread, ?outcome, "the agent didn't take a steer; queueing it for when the turn ends");
+                self.enqueue(thread, &text, true).await?;
+                self.agent_changed(thread).await;
+                return Ok(());
             }
         }
         let run = self.acp.get_mut(&thread).expect("caller checked");
         run.steered.push(text);
+        self.agent_changed(thread).await;
         self.next_prompt(thread).await
     }
 
@@ -1233,6 +1260,11 @@ impl Core {
         }
         if command == Command::Cancel {
             run.stopped = true;
+            // A steer the agent hasn't taken in yet goes once the turn ends,
+            // rather than with it: stopping the turn is how it's sent now.
+            let waiting = std::mem::take(&mut run.waiting_steers);
+            run.resent_steers.extend(waiting.iter().cloned());
+            run.steered.extend(waiting);
         }
         send(run, command);
         self.agent_changed(thread).await;
@@ -1666,6 +1698,8 @@ impl Core {
             auto_check: self.auto_check_view(thread),
             checking: run.auto.checking(),
             escalations: run.auto.escalations(),
+            steers: run.steers,
+            waiting_steers: if run.state.running() { run.waiting_steers.clone() } else { Vec::new() },
         })
     }
 
@@ -3114,11 +3148,17 @@ fn memory_folder(id: &str, env: &[(String, String)], cwd: &Path, data_dir: &Path
     let lookup = |name: &str| env.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.clone());
     let home = silt_os::home_dir()?;
     let everywhere = silt_agents::memory::everywhere_dir(data_dir);
-    if let Err(error) = agent.move_person_memory(&home, &lookup, cwd, &everywhere) {
-        tracing::warn!(%error, "couldn't move what the agent learnt about the person to the memory everywhere");
+    let sharing = silt_agents::memory::sharing(data_dir);
+    if sharing {
+        let brought = silt_agents::memory::brought_file(data_dir);
+        let moved = agent.move_person_memory(&home, &lookup, cwd, &everywhere);
+        if let Err(error) = moved.and(agent.bring_in_everywhere(&home, &lookup, &everywhere, &brought)) {
+            tracing::warn!(%error, "couldn't bring what the agent learnt about the person to the memory everywhere");
+        }
     }
-    if let Err(error) = agent.gather_memory(&home, &lookup, cwd) {
-        tracing::warn!(%error, "couldn't bring earlier threads' memories into the project's");
+    let shared = sharing.then(|| silt_agents::shared_memory(&home, &lookup, cwd)).flatten();
+    if let Err(error) = agent.gather_memory(&home, &lookup, cwd, shared.as_deref()) {
+        tracing::warn!(%error, "couldn't bring earlier memories into the project's");
     }
     agent.memory(&home, &lookup, cwd)
 }
@@ -3132,7 +3172,7 @@ fn native_agent(id: &str) -> Option<&'static dyn silt_agents::Agent> {
 /// The memory everywhere's index, for an agent whose own memory has no
 /// place for it (ADR 0137).
 fn everywhere_instructions(id: &str, data_dir: &Path) -> Option<String> {
-    let reads = native_agent(id).is_some_and(|agent| agent.reads_everywhere());
+    let reads = silt_agents::memory::sharing(data_dir) && native_agent(id).is_some_and(|agent| agent.reads_everywhere());
     reads.then(|| silt_agents::memory::everywhere_prompt(&silt_agents::memory::everywhere_dir(data_dir))).flatten()
 }
 

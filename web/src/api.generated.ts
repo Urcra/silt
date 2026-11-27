@@ -286,7 +286,17 @@ checking: Array<string>,
 /**
  * Calls Auto refused that the agent asks the person to allow.
  */
-escalations: Array<EscalationAsked>, };
+escalations: Array<EscalationAsked>, 
+/**
+ * A prompt sent while it works joins the turn it runs, at its next
+ * step, rather than waiting for the turn to end.
+ */
+steers: boolean, 
+/**
+ * The person's steers on their way to the agent, until it takes them
+ * in.
+ */
+waiting_steers: Array<string>, };
 
 export type QuestionAsked = { id: number, message: string, fields: Array<QuestionFieldAsked>, };
 
@@ -1280,6 +1290,23 @@ plan_usage: boolean,
  */
 agent_registry: boolean, };
 
+export type MemorySettings = { share: boolean, };
+
+export type CopilotMemoryView = { on: boolean, 
+/**
+ * `host/owner/name` of the clone's origin on GitHub; `None` for a
+ * project that isn't on GitHub, which Copilot Memory can't hold.
+ */
+repo: string | null, sent_ms: number | null, 
+/**
+ * Why the last send failed.
+ */
+error: string | null, 
+/**
+ * Memories changed since they were last sent.
+ */
+waiting: number, sending: boolean, };
+
 export type MemoryOverview = { everywhere: MemoryCount, projects: Array<MemoryProject>, };
 
 export type MemoryCount = { 
@@ -1310,7 +1337,11 @@ project: string | null, clone: string | null, stores: Array<MemoryStoreView>,
 /**
  * The project's rules files, which every agent of a kind reads.
  */
-rules: Array<RulesFileView>, };
+rules: Array<RulesFileView>, 
+/**
+ * Whether the project's memory goes to Copilot Memory too.
+ */
+copilot: CopilotMemoryView | null, };
 
 export type MemoryStoreView = { agent: string, 
 /**

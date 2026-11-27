@@ -549,16 +549,21 @@ impl Run<'_> {
         let everywhere = silt_agents::memory::everywhere_dir(&paths::data_dir());
         // Made now, as the sandbox shows it only where it exists.
         let _ = fs::create_dir_all(&everywhere);
+        let sharing = silt_agents::memory::sharing(&paths::data_dir());
         if let Some(home) = home.as_deref() {
-            if let Err(error) = self.agent.move_person_memory(home, &lookup, self.cwd, &everywhere) {
-                eprintln!("silt: couldn't move what the agent learnt about you to your memory everywhere: {error}");
-            }
-            match self.agent.gather_memory(home, &lookup, self.cwd) {
-                Ok(gathered) if gathered.is_empty() => {}
-                Ok(gathered) => {
-                    eprintln!("silt: brought {} memories of earlier threads into this project's memory", gathered.len())
+            let shared = sharing.then(|| silt_agents::shared_memory(home, &lookup, self.cwd)).flatten();
+            if sharing {
+                let brought = silt_agents::memory::brought_file(&paths::data_dir());
+                let moved = self.agent.move_person_memory(home, &lookup, self.cwd, &everywhere);
+                let older = self.agent.bring_in_everywhere(home, &lookup, &everywhere, &brought);
+                if let Err(error) = moved.and(older) {
+                    eprintln!("silt: couldn't bring what the agent learnt about you into your memory everywhere: {error}");
                 }
-                Err(error) => eprintln!("silt: couldn't bring earlier threads' memories into this project's: {error}"),
+            }
+            match self.agent.gather_memory(home, &lookup, self.cwd, shared.as_deref()) {
+                Ok(gathered) if gathered.is_empty() => {}
+                Ok(gathered) => eprintln!("silt: brought {} earlier memories into this project's memory", gathered.len()),
+                Err(error) => eprintln!("silt: couldn't bring earlier memories into this project's: {error}"),
             }
         }
         let plan = LaunchPlan {
@@ -581,8 +586,9 @@ impl Run<'_> {
             hook_program: exe.clone(),
             instructions: {
                 let given = agent_conventions::session_instructions(&rules, &skills, native, self.checkout);
-                let everywhere =
-                    self.agent.reads_everywhere().then(|| silt_agents::memory::everywhere_prompt(&everywhere)).flatten();
+                let everywhere = (sharing && self.agent.reads_everywhere())
+                    .then(|| silt_agents::memory::everywhere_prompt(&everywhere))
+                    .flatten();
                 match (given, everywhere) {
                     (Some(given), Some(everywhere)) => Some(format!("{given}\n\n{everywhere}")),
                     (given, everywhere) => given.or(everywhere),

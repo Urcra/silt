@@ -198,6 +198,47 @@ recorded sessions in `~/.copilot/session-state/*/events.jsonl`,
   the SDK protocol instead of ACP would mean a second protocol for one agent, on
   experimental methods, so it isn't recommended.
 
+## Prompts mid-turn: what other tools do, and a way in for each agent
+
+Researched 2026-11-26 and 27; it led to ADR 0138.
+
+**Other tools deliver a message typed mid-turn at the next safe point.** That point is after the running tool call returns and before the next model request. Nothing is interrupted, and the message joins the same turn.
+- **Claude Code:** Enter, at queue priority `next`; Ctrl+Enter sends now.
+- **Codex:** Enter steers, Tab queues. `run_turn` drains pending input into history before each model request.
+- **Copilot CLI:** Enter steers, Ctrl+Enter queues. Its SDK has `mode: "immediate"`.
+- **OpenCode:** `delivery: "steer"` by default, with `<leader>`+Enter to queue.
+- **Cursor and Amp:** both steer at a safe boundary.
+- **Gemini CLI:** queues, unless `experimental.modelSteering` is on.
+
+ACP's [PR #1261](https://github.com/agentclientprotocol/agent-client-protocol/pull/1261) proposes `delivery: "steer" | "queue"` on `session/prompt`. It's still open, and has no priority option. The v2 draft already says agents must not reject a prompt only because foreground work is active.
+
+**Claude Code's queue.** Each queued command has a priority: `now`, `next` or `later`, with `next` the default.
+- `next` commands are drained at the next tool boundary, inside the turn.
+- `now` ends Claude Code's current cycle early.
+- `later` waits for the turn to end.
+
+Checked against Claude Code 2.1.332 through its SDK input, a message sent during a `sleep` with no priority reached the model as the `sleep` ended. The command wasn't touched, and the model followed the message. With `now`, the cycle ended with an extra `result`, and a new cycle took the message up. The running command still finished.
+
+**Claude's adapter.**
+- **0.109.0 (pinned):** advertises `capabilities._meta.claudeCode.promptQueueing`. It pushes a prompt that arrives while Claude works with no priority, which means `next`. It sends the prompt's `user_message`, then answers the prompt when Claude Code takes it in. Silt steers Claude this way (ADR 0138).
+- **0.113.0:** sends such a prompt at `now`, unless a permission request or question is open, in which case it sends it at `later`.
+
+**Antigravity: `agy acp` steers.** The `agy` CLI (checked 1.5.18) is a Go binary with its own ACP server, separate from the registry's `agy-acp-server`.
+- Its built-in changelog for 1.5.0 says `agy acp` supports "steering a running turn by sending another prompt".
+- The registry's server is Python on Antigravity's SDK. Its `Conversation.send` waits for the running turn to end before sending a new message, so there a second prompt waits for the turn.
+- Silt already runs `agy acp` when `agy` is installed. How the first prompt's answer comes back when a second steers it needs checking on a signed-in machine.
+- `agy`'s hooks can also do it. A `PreInvocation` hook fires before every model call and can return `injectSteps` with a `userMessage`. The registry's server parses `injectSteps` but ignores it ("not supported by the SDK yet").
+
+**Gemini CLI** (main at 60f8082).
+- Over ACP, a second `session/prompt` aborts the running turn (`acpSession.ts`), and there's no `_session/steering`.
+- A `BeforeModel` hook runs before every model request under ACP too. It can add a user message to that one request through `hookSpecificOutput.llm_request.messages`. The message isn't kept in history, so the hook would add it again on later calls.
+- The core has `Config.injectionService` with user-steering hints. Issue google-gemini/gemini-cli#30048 asks for steering over ACP. Two pull requests that implemented it, #29901 and #30354, were closed unmerged.
+
+**Copilot CLI** (changelog through 1.0.116).
+- Over ACP, a second prompt still cancels the turn.
+- A `postToolUse` hook's `additionalContext` reaches the model as a system message after each tool. Hooks run in ACP mode; for this particular hook, that's inferred.
+- Natively, its SDK protocol (`copilot --headless --stdio`) takes `session.send` with `mode: "immediate"`.
+
 ## Proposed work
 
 ### 1. Steer without stopping (all agents that advertise it)

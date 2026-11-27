@@ -551,9 +551,95 @@ fn plugin(plan: &LaunchPlan) -> io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// A repository on GitHub, as Copilot Memory scopes a fact to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitHubRepo {
+    pub host: String,
+    pub owner: String,
+    pub name: String,
+}
+
+/// The repository a remote URL names, for `https://`, `ssh://` and
+/// `git@host:` URLs; `None` for another kind of remote or a local path.
+pub fn github_repo(url: &str) -> Option<GitHubRepo> {
+    let url = url.trim();
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .or_else(|| url.strip_prefix("ssh://"))
+        .map(|rest| rest.rsplit_once('@').map_or(rest, |(_, after)| after).to_owned())
+        .or_else(|| url.split_once('@').map(|(_, after)| after.replacen(':', "/", 1)))?;
+    let mut parts = rest.trim_end_matches('/').splitn(3, '/');
+    let host = parts.next()?.split(':').next()?.to_lowercase();
+    let owner = parts.next()?.to_owned();
+    let name = parts.next()?.trim_end_matches(".git").to_owned();
+    let plain = |part: &str| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_alphanumeric() || "-_.".contains(ch));
+    (plain(&host) && plain(&owner) && plain(&name) && !name.contains('/')).then_some(GitHubRepo { host, owner, name })
+}
+
+/// The memories as `copilot memories import` takes them, a JSON object a
+/// line: each a fact of the repository, cited to what it says, as Silt
+/// can't cite code for it.
+pub fn memory_import(entries: &[crate::memory::Entry], repo: &GitHubRepo) -> String {
+    let mut lines = String::new();
+    for entry in entries {
+        let fact = if entry.body.trim().is_empty() { entry.description.clone() } else { entry.body.trim().to_owned() };
+        let line = json!({
+            "type": "memory",
+            "version": 1,
+            "externalId": format!("silt:{}/{}:{}", repo.owner, repo.name, entry.file),
+            "scope": {"type": "repository", "repository": {"host": repo.host, "owner": repo.owner, "name": repo.name}},
+            "subject": entry.name,
+            "fact": fact,
+            "reason": "Remembered by the person's agents in Silt.",
+            "citations": [{"type": "text", "text": entry.description}],
+        });
+        lines.push_str(&line.to_string());
+        lines.push('\n');
+    }
+    lines
+}
+
+/// `copilot memories import` of the file `jsonl`, skipping what Copilot
+/// holds already.
+pub fn memory_import_launch(jsonl: &Path) -> Launch {
+    let mut launch = Launch::new("copilot");
+    launch.arg("memories").arg("import").arg(jsonl).arg("--on-conflict").arg("skip").arg("--output").arg("json");
+    launch
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_projects_memory_goes_to_copilot_as_its_facts() {
+        for url in [
+            "https://github.com/acme/silt.git",
+            "git@github.com:acme/silt.git",
+            "ssh://git@github.com/acme/silt",
+            "https://token@github.com/acme/silt/",
+        ] {
+            assert_eq!(
+                github_repo(url),
+                Some(GitHubRepo { host: "github.com".into(), owner: "acme".into(), name: "silt".into() }),
+                "{url}"
+            );
+        }
+        assert_eq!(github_repo("/srv/git/silt"), None);
+        assert_eq!(github_repo("https://github.com/acme"), None);
+        let entry = crate::memory::parse_entry(
+            "project-gate.md",
+            "---\nname: Gate\ndescription: CI runs it\n---\nCI runs the gate.\n",
+            None,
+            None,
+        );
+        let repo = github_repo("git@github.com:acme/silt.git").unwrap();
+        let line: Value = serde_json::from_str(memory_import(&[entry], &repo).trim()).unwrap();
+        assert_eq!(line["scope"]["repository"]["name"], "silt");
+        assert_eq!((line["subject"].as_str(), line["fact"].as_str()), (Some("Gate"), Some("CI runs the gate.")));
+        assert_eq!(line["externalId"], "silt:acme/silt:project-gate.md");
+    }
 
     #[test]
     fn a_restore_plans_the_session_directory_with_its_side_files() {
