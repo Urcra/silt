@@ -417,13 +417,13 @@ fn path_dir(path: PathBuf) -> PathDir {
     let link = plain
         .then(|| path.ancestors().find(|dir| dir.symlink_metadata().is_ok_and(|meta| meta.file_type().is_symlink())))
         .flatten()
-        .and_then(|link| Some((link.to_owned(), std::fs::canonicalize(link).ok()?)));
-    PathDir { real: std::fs::canonicalize(&path).ok(), link, path }
+        .and_then(|link| Some((link.to_owned(), silt_os::canonicalize(link).ok()?)));
+    PathDir { real: silt_os::canonicalize(&path).ok(), link, path }
 }
 
 /// Where `path` really is, if a link makes that differ.
 fn real_if_linked(path: &Path) -> Option<PathBuf> {
-    std::fs::canonicalize(path).ok().filter(|real| real != path)
+    silt_os::canonicalize(path).ok().filter(|real| real != path)
 }
 
 /// What a run's relays out of the sandbox add to it.
@@ -659,7 +659,7 @@ const EXTRA_WALK_LIMIT: usize = 100_000;
 /// and the git repos in it where it's writable.
 pub fn extra_dir(path: &str, writable: bool, home: Option<&Path>) -> ExtraDir {
     let path = silt_workspace::expand_home(path, home);
-    let real = std::fs::canonicalize(&path).ok().filter(|real| real.is_dir());
+    let real = silt_os::canonicalize(&path).ok().filter(|real| real.is_dir());
     let repos = match &real {
         Some(real) if writable => repos_in(real, EXTRA_WALK_LIMIT),
         _ => Some(Vec::new()),
@@ -739,7 +739,7 @@ fn pointed_at(pointer: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(pointer).ok()?;
     let target = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
     let target = if target.is_absolute() { target } else { pointer.parent()?.join(target) };
-    Some(std::fs::canonicalize(&target).unwrap_or(target))
+    Some(silt_os::canonicalize(&target).unwrap_or(target))
 }
 
 /// A checkout's own git dir when it's elsewhere, as a managed checkout's
@@ -832,7 +832,7 @@ pub fn program_paths(program: &std::ffi::OsStr, env: &[(String, String)]) -> Vec
     };
     let Some(found) = found else { return Vec::new() };
     let mut paths = vec![found.clone()];
-    if let Ok(real) = std::fs::canonicalize(&found)
+    if let Ok(real) = silt_os::canonicalize(&found)
         && real != found
     {
         paths.push(real);

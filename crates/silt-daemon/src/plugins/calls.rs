@@ -1224,6 +1224,9 @@ mod tests {
         let push = json!({"repo": "acme/api", "path": "/silt/work/api", "branch": "ada/fix"});
         let waiting = github(&mut core, "github_push", push.clone()).await;
         let pending = core.approvals_view(None, false).await.expect("approvals");
+        if pending.is_empty() {
+            panic!("the push asked nothing: {:?}", outcome(waiting.await.expect("answers")));
+        }
         assert_eq!(pending.len(), 1);
         let card = pending[0].card.as_ref().expect("a card");
         assert_eq!(card.title, "Push ada/fix to acme/api");

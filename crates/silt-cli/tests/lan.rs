@@ -13,18 +13,21 @@ use serde_json::{Value, json};
 const IPHONE: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1";
 
 /// Two free ports in a row: the listener's and the certificate's page's.
-/// macOS lets a listener on 0.0.0.0 share a port with another process's on
-/// 127.0.0.1, which then answers what curl sends there, so both must be free.
+/// They're below every system's ephemeral range, where other tests'
+/// listeners get theirs: Windows hands those out in turn, so the port after
+/// one is often the next taken. macOS and Windows let a listener on 0.0.0.0
+/// share a port with another's on 127.0.0.1, which then answers what curl
+/// sends there, so both must be free.
 fn free_ports() -> u16 {
     let free = |port: u16| {
         std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() && std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
     };
-    loop {
-        let port = std::net::TcpListener::bind("0.0.0.0:0").expect("binds").local_addr().expect("address").port();
-        if port < u16::MAX && free(port) && free(port + 1) {
-            return port;
-        }
-    }
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("after 1970").subsec_nanos();
+    let start = (seed ^ std::process::id()) % 10_000;
+    (0..10_000)
+        .map(|step| 20_000 + u16::try_from((start + step * 2) % 10_000).expect("small"))
+        .find(|&port| free(port) && free(port + 1))
+        .expect("two free ports")
 }
 
 /// A phone: its own cookies, trusting only the machine's authority, and

@@ -142,7 +142,7 @@ pub fn still_allowed(
                 return false;
             }
             policy.is_none_or(|policy| {
-                let resolve = |root: &str| std::fs::canonicalize(silt_workspace::expand_home(root, home.as_deref())).ok();
+                let resolve = |root: &str| silt_os::canonicalize(&silt_workspace::expand_home(root, home.as_deref())).ok();
                 policy.folder_verdict(Path::new(path), *writable, resolve).answer != silt_workspace::FolderAnswer::Never
             })
         })
