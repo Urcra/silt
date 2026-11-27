@@ -1,0 +1,166 @@
+# macOS and Windows on every pull request (ADR 0138): clippy, the
+# workspace's tests, silt-cli's integration tests and the desktop app on
+# each, and on Windows a WSL distribution beside the native silt. Linux has
+# the whole gate in ci.yml.
+#
+# These are advisory for now: `/claude merge` neither waits for nor fails on
+# a check named `... (advisory)` (.github/scripts/claude.sh). They're kept
+# apart from ci.yml so that a red one leaves ci.yml's run green, which
+# `/claude merge` reads to skip a gate CI already passed.
+#
+# As in ci.yml, a fork's pull request runs here without approval, so
+# nothing here may need a secret or a write permission.
+name: platforms
+
+on:
+  pull_request:
+    paths-ignore: ["**.md"]
+  push:
+    branches: [main]
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # The tests don't need the web UI, and building it needs Node.js and pnpm.
+  SILT_SKIP_WEB_BUILD: "1"
+
+jobs:
+  check:
+    name: ${{ matrix.name }} (advisory)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            runner: macos-15
+          - name: Windows
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Tests compare files byte for byte, and migrations are checksummed.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: platforms
+          workspaces: |
+            . -> target
+            crates/silt-desktop -> target
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-nextest
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Tests
+        if: ${{ !cancelled() }}
+        run: |
+          cargo nextest run --locked --workspace --exclude silt-cli --no-fail-fast
+          cargo test --locked --workspace --doc
+      # Several machines on a real server, each with its own SILT_HOME, and
+      # the agent CLIs' stand-ins.
+      - name: Integration tests
+        if: ${{ !cancelled() }}
+        timeout-minutes: 60
+        run: |
+          cargo build --locked -p silt-fake-agent
+          cargo nextest run --locked -p silt-cli --no-fail-fast
+      - name: Desktop app
+        if: ${{ !cancelled() }}
+        working-directory: crates/silt-desktop
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
+  # The Linux `silt` the WSL distribution runs in `wsl`.
+  linux-binaries:
+    name: WSL's Linux silt (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: platforms-linux
+      - name: Build
+        run: cargo build --locked -p silt-cli -p silt-fake-agent
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-binaries
+          retention-days: 1
+          path: |
+            target/debug/silt
+            target/debug/silt-fake-claude
+
+  # A WSL distribution beside the native `silt` (ADR 0045): WSL 1, as
+  # GitHub's runners can't run WSL 2. It shares Windows' loopback, as WSL 2's
+  # mirrored mode does. A thread goes from Windows to the distribution and
+  # another back, and the desktop app starts both backends.
+  wsl:
+    name: WSL handoff (advisory)
+    needs: linux-binaries
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 1
+          additional-packages: git
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-binaries
+          path: linux-binaries
+      - name: silt in the distribution
+        run: |
+          MSYS2_ARG_CONV_EXCL='*' wsl.exe -d Ubuntu-24.04 --exec sh -c \
+            'install -m 755 "$(wslpath -u "$1")"/silt "$(wslpath -u "$1")"/silt-fake-claude /usr/local/bin/ && silt --version' \
+            _ "$(cygpath -w linux-binaries)"
+      - name: Rust
+        run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: platforms-wsl
+          workspaces: |
+            . -> target
+            crates/silt-desktop -> target
+      - name: Build
+        run: cargo build --locked -p silt-cli -p silt-fake-agent
+      - name: Handoff
+        timeout-minutes: 20
+        run: SILT=target/debug/silt.exe FAKE_CLAUDE=target/debug/silt-fake-claude.exe scripts/wsl-handoff.sh Ubuntu-24.04
+      - name: Desktop backends
+        if: ${{ !cancelled() }}
+        timeout-minutes: 30
+        working-directory: crates/silt-desktop
+        run: |
+          export SILT_TEST_WSL=Ubuntu-24.04 SILT_BIN="$(cygpath -w ../../target/debug/silt.exe)" SILT_HOME="$(cygpath -w "$RUNNER_TEMP/silt-home")"
+          cargo test --locked the_native_and_a_distribution_backend_start -- --nocapture

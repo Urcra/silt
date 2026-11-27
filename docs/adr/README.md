@@ -124,7 +124,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0116](0116-memory-that-follows-the-work.md) | Memory that follows the work | accepted |
 | [0117](0117-conversations-open-at-their-end.md) | Conversations open at their end | accepted; amended by 0127 |
 | [0118](0118-an-agents-own-modes-in-the-permissions-menu.md) | An agent's own modes in the permissions menu | accepted |
-| [0119](0119-no-windows-ci-or-releases.md) | No Windows CI or Windows releases | accepted; amended by 0129 |
+| [0119](0119-no-windows-ci-or-releases.md) | No Windows CI or Windows releases | accepted; amended by 0129, 0138 |
 | [0120](0120-agents-ask-other-agents.md) | Agents ask other agents | accepted |
 | [0121](0121-videos-and-images-without-a-size-limit.md) | Videos, and images without a size limit | accepted |
 | [0122](0122-the-plugin-sdk-is-mit.md) | The plugin SDK is MIT | accepted |
@@ -136,10 +136,11 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0128](0128-a-pages-views-go-ahead-of-an-agents-capture.md) | A page's views go ahead of an agent's capture | accepted |
 | [0129](0129-nightly-releases-and-three-channels.md) | Nightly releases, and three channels: stable, nightly and dev | accepted |
 | [0130](0130-the-whole-gate-on-every-pull-request.md) | The whole gate on every pull request | accepted |
-| [0131](0131-the-gate-runs-on-the-pull-request.md) | The gate runs on the pull request | accepted |
+| [0131](0131-the-gate-runs-on-the-pull-request.md) | The gate runs on the pull request | accepted; amended by 0138 |
 | [0132](0132-auto-for-agents-without-an-auto-mode.md) | Auto for agents without an auto mode | accepted |
 | [0133](0133-december-decorations-in-the-desktop-app.md) | December decorations in the desktop app | accepted |
 | [0134](0134-no-telemetry-and-an-offline-switch.md) | No telemetry, an offline switch, and artifacts' libraries through Silt by default | accepted |
 | [0135](0135-a-threads-header-holds-its-title-and-actions.md) | A thread's header holds its title and actions, and its menu is a right-click | accepted |
 | [0136](0136-every-connected-machines-threads-in-one-list.md) | Every connected machine's threads in one list | accepted |
 | [0137](0137-agents-memory-follows-the-person.md) | Agents' memory follows the person, across agents and machines | accepted |
+| [0138](0138-macos-and-windows-ci-advisory-at-first.md) | macOS and Windows CI, advisory at first | accepted |

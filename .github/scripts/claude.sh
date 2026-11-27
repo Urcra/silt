@@ -580,12 +580,14 @@ ci_gated_run() {
 }
 
 # Waits for every check run on the head commit to finish, and says
-# whether all passed.
+# whether all passed. A check named `... (advisory)`, as platforms.yml's
+# are, is neither waited for nor counted (ADR 0138).
 cmd_ci() {
     local sha=$1 waited=0 runs total pending failed
     cmd_status set ci active "CI (\`${sha:0:8}\`)"
     while :; do
-        runs=$(gh api "repos/$repo/commits/$sha/check-runs?per_page=100" --jq '.check_runs')
+        runs=$(gh api "repos/$repo/commits/$sha/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name | endswith(" (advisory)") | not)]')
         total=$(jq length <<<"$runs")
         pending=$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")
         if [ "$total" -gt 0 ] && [ "$pending" -eq 0 ]; then

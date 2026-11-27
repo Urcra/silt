@@ -4,6 +4,7 @@
 - Date: 2026-11-26
 - Amends: [ADR 0091](0091-a-faster-gate-and-a-pass-that-stands.md) (a pass no longer stands for a commit), [ADR 0052](0052-commits-tolerate-a-slower-machine.md) (no commit runs the gate)
 - Builds on: [ADR 0130](0130-the-whole-gate-on-every-pull-request.md)
+- Amended by: [ADR 0138](0138-macos-and-windows-ci-advisory-at-first.md): macOS and Windows CI, advisory at first
 
 ## Context
 Every commit by a maintainer, or by an agent working for one, went through `scripts/commit.sh`, which ran the full gate first unless it had already passed on that exact tree. That took 20 to 30 minutes per commit in a cloud session, and an edit made meanwhile meant running it again.
