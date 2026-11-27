@@ -10,6 +10,35 @@ pub struct QueuedPrompt {
     pub author: String,
     pub text: String,
     pub created_ms: i64,
+    /// The files it goes with, in order; the daemon keeps them.
+    pub files: Vec<QueuedFile>,
+}
+
+/// A file a queued prompt goes with, as it was attached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedFile {
+    pub name: String,
+    pub mime: String,
+}
+
+fn files_json(files: &[QueuedFile]) -> String {
+    serde_json::Value::Array(
+        files.iter().map(|file| serde_json::json!({"name": file.name, "mime": file.mime})).collect(),
+    )
+    .to_string()
+}
+
+/// The files a row names; a row this build can't read names none.
+fn files_of(json: &str) -> Vec<QueuedFile> {
+    let parsed: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+    parsed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|file| {
+            Some(QueuedFile { name: file["name"].as_str()?.to_owned(), mime: file["mime"].as_str()?.to_owned() })
+        })
+        .collect()
 }
 
 impl Store {
@@ -17,26 +46,35 @@ impl Store {
     pub async fn queue(&self, thread: ThreadId) -> Result<Vec<QueuedPrompt>, StoreError> {
         let thread = id_bytes(thread.0);
         let rows = sqlx::query!(
-            r#"SELECT id AS "id!", author, text, created_ms FROM prompt_queue WHERE thread_id = ? ORDER BY position, id"#,
+            r#"SELECT id AS "id!", author, text, created_ms, files FROM prompt_queue WHERE thread_id = ? ORDER BY position, id"#,
             thread
         )
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
             .into_iter()
-            .map(|row| QueuedPrompt { id: row.id, author: row.author, text: row.text, created_ms: row.created_ms })
+            .map(|row| QueuedPrompt {
+                id: row.id,
+                author: row.author,
+                text: row.text,
+                created_ms: row.created_ms,
+                files: files_of(&row.files),
+            })
             .collect())
     }
 
-    /// Adds a prompt at the end of the thread's queue, or at its front.
+    /// Adds a prompt, with the files it goes with, at the end of the
+    /// thread's queue, or at its front.
     pub async fn enqueue(
         &self,
         thread: ThreadId,
         author: &str,
         text: &str,
+        files: &[QueuedFile],
         created_ms: i64,
         first: bool,
     ) -> Result<i64, StoreError> {
+        let files = files_json(files);
         let thread = id_bytes(thread.0);
         let mut tx = self.write_transaction().await?;
         let ends = sqlx::query!(
@@ -48,10 +86,12 @@ impl Store {
         .await?;
         let position = if first { ends.first - 1 } else { ends.last + 1 };
         let id = sqlx::query_scalar!(
-            r#"INSERT INTO prompt_queue (thread_id, author, text, position, created_ms) VALUES (?, ?, ?, ?, ?) RETURNING id AS "id!""#,
+            r#"INSERT INTO prompt_queue (thread_id, author, text, files, position, created_ms) VALUES (?, ?, ?, ?, ?, ?)
+               RETURNING id AS "id!""#,
             thread,
             author,
             text,
+            files,
             position,
             created_ms
         )
@@ -75,13 +115,25 @@ impl Store {
     pub async fn take_queued(&self, thread: ThreadId, id: i64) -> Result<Option<QueuedPrompt>, StoreError> {
         let thread = id_bytes(thread.0);
         let row = sqlx::query!(
-            r#"DELETE FROM prompt_queue WHERE id = ? AND thread_id = ? RETURNING id AS "id!", author, text, created_ms"#,
+            r#"DELETE FROM prompt_queue WHERE id = ? AND thread_id = ? RETURNING id AS "id!", author, text, created_ms, files"#,
             id,
             thread
         )
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|row| QueuedPrompt { id: row.id, author: row.author, text: row.text, created_ms: row.created_ms }))
+        Ok(row.map(|row| QueuedPrompt {
+            id: row.id,
+            author: row.author,
+            text: row.text,
+            created_ms: row.created_ms,
+            files: files_of(&row.files),
+        }))
+    }
+
+    /// Every queued prompt's id, in any thread: the daemon drops the files
+    /// of any other.
+    pub async fn queued_ids(&self) -> Result<Vec<i64>, StoreError> {
+        Ok(sqlx::query_scalar!(r#"SELECT id AS "id!" FROM prompt_queue"#).fetch_all(&self.pool).await?)
     }
 
     /// Takes the next prompt out of the thread's queue.

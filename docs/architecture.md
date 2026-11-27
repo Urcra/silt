@@ -155,6 +155,7 @@ The first resume or fork of such a thread imports the commit's tree before check
 | `acp-registry.json`, `agents/` | The cached ACP registry and the agents downloaded from it |
 | `linked/`, `trusted-prepare` | Shared git-ignored paths per project, and the prepare scripts the person allowed ([ADR 0012](adr/0012-agent-adapters-and-repo-conventions.md)) |
 | `attachments/<thread>/` | Files attached to a thread's prompts that its agent reads from disk rather than in the prompt, such as spreadsheets; Silt's sandbox shows an agent only its own thread's, and erasing the thread removes them |
+| `queued/<id>/` | The files of a queued prompt, waiting until it's sent; a daemon starting drops those of prompts no longer queued |
 | `local/sessions/` | `local`'s conversations, one file each, which it loads again ([ADR 0092](adr/0092-local-models.md)) |
 | `erasing/` | Erasures under way, one marker each listing what goes, finished at the next start if one stopped ([ADR 0092](adr/0092-local-models.md)) |
 | `runtimes/llama.cpp/` | llama.cpp's build, when Silt fetched one ([ADR 0092](adr/0092-local-models.md)) |

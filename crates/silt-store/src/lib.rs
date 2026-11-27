@@ -15,7 +15,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePo
 
 pub use blobs::{BlobStore, ChunkError, Chunked, hash_file};
 pub use plugin_calls::{GrantRecord, PluginCallRecord};
-pub use queue::QueuedPrompt;
+pub use queue::{QueuedFile, QueuedPrompt};
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 

@@ -2819,6 +2819,8 @@ pub struct Queued {
     pub author: String,
     pub text: String,
     pub created_ms: i64,
+    /// The names of the files it goes with.
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

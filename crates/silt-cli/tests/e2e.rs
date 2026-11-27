@@ -3134,6 +3134,44 @@ fn a_steer_with_files_an_agent_doesnt_take_sends_them_with_its_prompt() {
     assert!(resent, "the resent prompt has the file: {said_now:?}");
 }
 
+/// A prompt with files sent while the agent works waits in the queue with
+/// them, which keeps them on disk until the turn ends and it goes, files and
+/// all, as any prompt does.
+#[test]
+fn a_prompt_with_files_waits_in_the_queue_with_them() {
+    use base64::Engine as _;
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_steerable(&env, &api, "v2", "", "Long build");
+    let running = eventually(|| serde_json::Value::Array(history_entries(&api, &thread)).to_string().contains("cargo build"));
+    assert!(running, "the command never started: {:?}", history_entries(&api, &thread));
+    let data = base64::engine::general_purpose::STANDARD.encode("release = true\n");
+    let attachment = serde_json::json!({"name": "notes.txt", "mime": "text/plain", "data": data});
+    let answer = api.ok(
+        "POST",
+        &format!("/api/threads/{thread}/agent/prompt"),
+        Some(serde_json::json!({"text": "then read the notes", "attachments": [attachment]})),
+    );
+    assert_eq!(answer, "queued");
+    let queue = api.ok("GET", &format!("/api/threads/{thread}/queue"), None);
+    assert_eq!(queue[0]["files"], serde_json::json!(["notes.txt"]), "{queue}");
+    let kept = env.silt_home.join("queued").join(queue[0]["id"].to_string());
+    assert_eq!(fs::read_to_string(kept.join("0")).expect("kept"), "release = true\n");
+    let mut users = Vec::new();
+    let sent = eventually(|| {
+        users = history_entries(&api, &thread)
+            .iter()
+            .filter(|entry| entry["kind"] == "user")
+            .filter_map(|entry| entry["text"].as_str().map(str::to_owned))
+            .collect();
+        users.iter().any(|text| text.starts_with("then read the notes\n\n(attached: ") && text.ends_with("notes.txt)"))
+    });
+    assert!(sent, "the queued prompt went with its file: {users:?}");
+    assert_eq!(users.first().map(String::as_str), Some("Long build"), "after the turn it waited for: {users:?}");
+    assert!(eventually(|| !kept.exists()), "its files go once it's sent");
+    assert_eq!(api.ok("GET", &format!("/api/threads/{thread}/queue"), None), serde_json::json!([]));
+}
+
 /// An agent that doesn't take steers has its turn cancelled, which kills
 /// the command it runs, and hears the steer as its next prompt, as before
 /// steering was taken (ADR 0111).

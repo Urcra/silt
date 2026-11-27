@@ -233,7 +233,7 @@ fn saved_path(dir: &Path, upload: &Uploaded) -> Result<PathBuf, CoreError> {
     Ok(dir.join(crate::acp::attachment_name(&hash, &upload.name)))
 }
 
-async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+pub(crate) async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
     if let Some(dir) = to.parent() {
         tokio::fs::create_dir_all(dir).await?;
     }

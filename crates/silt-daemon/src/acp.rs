@@ -983,15 +983,9 @@ impl Core {
             .flatten()
     }
 
-    /// Sends `text` to the thread's agent when it's ready for a prompt, and
-    /// queues it otherwise (ADR 0022). An agent awaiting input takes it as
-    /// the answer to its plan.
-    pub(crate) async fn acp_prompt(&mut self, selector: &str, text: &str, plan: bool) -> Result<&'static str, CoreError> {
-        self.acp_prompt_with(selector, text, plan, Given::default()).await
-    }
-
-    /// [`Self::acp_prompt`] with files attached, which only go with a prompt
-    /// the agent takes now.
+    /// Sends `text`, with its files, to the thread's agent when it's ready
+    /// for a prompt, and queues them otherwise (ADR 0022). An agent awaiting
+    /// input takes it as the answer to its plan.
     pub(crate) async fn acp_prompt_with(
         &mut self,
         selector: &str,
@@ -1016,12 +1010,7 @@ impl Core {
             if plan {
                 return Err(CoreError::Invalid("Plan first starts a turn of its own; send it once this one ends".into()));
             }
-            if !attachments.is_empty() {
-                return Err(CoreError::Invalid(
-                    "attached files go with a prompt the agent takes now; send it once this turn ends".into(),
-                ));
-            }
-            self.enqueue(thread, text, false).await?;
+            self.enqueue_with(thread, text, attachments, false).await?;
             return Ok("queued");
         }
         let run = self.acp.get_mut(&thread).expect("checked above");
@@ -1202,11 +1191,13 @@ impl Core {
         if self.hand_back(thread).await? {
             return Ok(());
         }
-        let Some(next) = self.store.take_next(thread).await? else {
+        let Some((next, files)) = self.take_next_queued(thread).await? else {
             return Ok(());
         };
         self.announce(crate::protocol::BusEvent::Queue { thread: thread.to_string() });
-        self.send_prompt(thread, &next.author, &next.text, Given::default()).await
+        let sent = self.send_prompt(thread, &next.author, &next.text, files).await;
+        self.sent_queued(next.id);
+        sent
     }
 
     /// Records and sends a prompt by `author`, with teammates' drafts, the
