@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", author, text, created_ms FROM prompt_queue WHERE thread_id = ? ORDER BY position, id",
+  "query": "DELETE FROM prompt_queue WHERE id = ? AND thread_id = ? RETURNING id AS \"id!\", author, text, created_ms, files",
   "describe": {
     "columns": [
       {
@@ -46,17 +46,29 @@
             "name": "created_ms"
           }
         }
+      },
+      {
+        "name": "files",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "prompt_queue",
+            "name": "files"
+          }
+        }
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
+      false,
       false,
       false,
       false,
       false
     ]
   },
-  "hash": "abb0b25b4ab880100be920ed5cac30be6308d351da2b6b7d5f52989dfda481aa"
+  "hash": "15218eea5c32314cbaa2c1ca381b8deffc29b1317f995bfa80002f2c037aaf76"
 }
