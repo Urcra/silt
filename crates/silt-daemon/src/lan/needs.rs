@@ -230,6 +230,8 @@ impl Request {
             | Self::ForgetMemory { .. }
             | Self::MoveMemory { .. }
             | Self::SetMemorySettings { .. }
+            | Self::SetCopilotMemory { .. }
+            | Self::SendCopilotMemory
             | Self::PageAssets { .. }
             | Self::PageConnectors { .. }
             | Self::SetPageConnectors { .. }
