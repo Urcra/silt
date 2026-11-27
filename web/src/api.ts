@@ -24,6 +24,7 @@ import type {
   NetworkSettings,
   NetworkView,
   MemoryOverview,
+  MemorySettings,
   MemoryView,
   ChatSettings,
   CloudLaunch,
@@ -630,6 +631,10 @@ export const api = {
   importTheme: (text: string) => request<ThemeSaved>('POST', '/api/themes/import', { text }),
   duplicateTheme: (from: string) => request<ThemeSaved>('POST', '/api/themes/duplicate', { from }),
   memory: () => request<MemoryOverview>('GET', '/api/memory'),
+  memorySettings: () => request<MemorySettings>('GET', '/api/memory/settings'),
+  setCopilotMemory: (change: { clone: string; on: boolean }) => request<string>('PUT', '/api/memory/copilot', change),
+  sendCopilotMemory: () => request<string>('POST', '/api/memory/copilot/send'),
+  setMemorySettings: (settings: MemorySettings) => request<string>('PUT', '/api/memory/settings', settings),
   /** What's remembered in the project whose clone is `clone`, or everywhere without one. */
   memoryOf: (clone: string | null) =>
     request<MemoryView>('GET', `/api/memory/store${clone ? `?clone=${encodeURIComponent(clone)}` : ''}`),
@@ -637,6 +642,9 @@ export const api = {
     request<string>('PUT', '/api/memory/store', change),
   forgetMemory: (change: { clone: string | null; store: string; file: string }) =>
     request<string>('DELETE', '/api/memory/store', change),
+  /** Moves a memory to the memory everywhere, or to the project whose clone is `to`. */
+  moveMemory: (change: { clone: string | null; store: string; file: string; to: string | null }) =>
+    request<string>('POST', '/api/memory/move', change),
   networkSettings: () => request<NetworkView>('GET', '/api/network-settings'),
   setNetworkSettings: (settings: NetworkSettings) => request<string>('PUT', '/api/network-settings', settings),
   artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),

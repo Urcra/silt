@@ -11,6 +11,54 @@ use crate::conventions::{parse_frontmatter, split_frontmatter};
 /// The file indexing a folder of memories, a line a memory.
 pub const INDEX: &str = "MEMORY.md";
 
+/// Settings › Memory's switches, in `memory.json` (ADR 0137).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Settings {
+    /// Agents share memory; on unless turned off.
+    #[serde(default = "on")]
+    pub share: bool,
+    /// The projects, by their clones, whose memory is also sent to Copilot
+    /// Memory on GitHub.
+    #[serde(default)]
+    pub copilot: std::collections::BTreeSet<PathBuf>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { share: true, copilot: Default::default() }
+    }
+}
+
+fn on() -> bool {
+    true
+}
+
+pub fn settings(data_dir: &Path) -> Settings {
+    fs::read_to_string(data_dir.join(SETTINGS)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+}
+
+pub fn save_settings(data_dir: &Path, settings: &Settings) -> io::Result<()> {
+    fs::create_dir_all(data_dir)?;
+    let json = serde_json::to_vec_pretty(settings).map_err(io::Error::other)?;
+    write_atomically(&data_dir.join(SETTINGS), &json)
+}
+
+/// Whether agents share memory.
+pub fn sharing(data_dir: &Path) -> bool {
+    settings(data_dir).share
+}
+
+pub fn set_sharing(data_dir: &Path, share: bool) -> io::Result<()> {
+    save_settings(data_dir, &Settings { share, ..settings(data_dir) })
+}
+
+const SETTINGS: &str = "memory.json";
+
+/// Silt's own store of what holds in every project, in its data folder.
+pub fn everywhere_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("memory").join("everywhere")
+}
+
 /// Whose a store is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
@@ -198,6 +246,256 @@ pub fn forget_entry(dir: &Path, file: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// What [`merge_into`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Merged {
+    /// Memories copied over, by their name in the target.
+    pub copied: Vec<String>,
+}
+
+/// The file in a merged-from folder saying it was, so it's merged once.
+pub const MERGED_MARK: &str = ".silt-merged";
+
+/// Copies the memories of the folder `from` into `into`, with their index
+/// lines, once: the folder is marked as merged, and left otherwise as it
+/// was. A memory the target holds the same is skipped; one it holds
+/// differently under the same name is kept beside it, named after `tag`.
+pub fn merge_into(from: &Path, into: &Path, tag: &str) -> io::Result<Merged> {
+    let mut merged = Merged::default();
+    if from.join(MERGED_MARK).exists() || !from.is_dir() {
+        return Ok(merged);
+    }
+    let entries = read_indexed(from)?;
+    if !entries.is_empty() {
+        fs::create_dir_all(into)?;
+    }
+    let mut index = fs::read_to_string(into.join(INDEX)).unwrap_or_default();
+    for entry in &entries {
+        if let Added::Copied(name) = add_to(into, entry, &mut index, tag)? {
+            merged.copied.push(name);
+        }
+    }
+    if !merged.copied.is_empty() {
+        write_atomically(&into.join(INDEX), index.as_bytes())?;
+    }
+    fs::write(from.join(MERGED_MARK), format!("merged into {}\n", into.display()))?;
+    Ok(merged)
+}
+
+/// What [`add_to`] did with a memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Added {
+    /// Copied under this name.
+    Copied(String),
+    /// The target held it the same already.
+    Held(String),
+    /// No free name for it.
+    Skipped,
+}
+
+/// Copies `entry` into the folder `into`, adding its line to `index`: under
+/// its own name, or `<name>-<tag>.md` when the target holds that name
+/// differently.
+fn add_to(into: &Path, entry: &Entry, index: &mut String, tag: &str) -> io::Result<Added> {
+    let name = match fs::read_to_string(into.join(&entry.file)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => entry.file.clone(),
+        Err(error) => return Err(error),
+        Ok(held) if held == entry.text => return Ok(Added::Held(entry.file.clone())),
+        Ok(_) => {
+            let stem = entry.file.strip_suffix(".md").unwrap_or(&entry.file);
+            let tag: String = tag.chars().filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-').collect();
+            format!("{stem}-{tag}.md")
+        }
+    };
+    if !is_entry_file(&name) || into.join(&name).exists() {
+        return Ok(Added::Skipped);
+    }
+    fs::create_dir_all(into)?;
+    write_atomically(&into.join(&name), entry.text.as_bytes())?;
+    if !index.is_empty() && !index.ends_with('\n') {
+        index.push('\n');
+    }
+    let hook = if entry.description.is_empty() { String::new() } else { format!(" — {}", entry.description) };
+    index.push_str(&format!("- [{}]({name}){hook}\n", entry.name));
+    Ok(Added::Copied(name))
+}
+
+/// Moves the memory `file` from the folder `from` to `into`, with its index
+/// line, and gives its name there.
+pub fn move_entry(from: &Path, file: &str, into: &Path) -> io::Result<String> {
+    let entry = read_indexed(from)?
+        .into_iter()
+        .find(|entry| entry.file == file)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("no memory {file}")))?;
+    let mut index = fs::read_to_string(into.join(INDEX)).unwrap_or_default();
+    let name = match add_to(into, &entry, &mut index, "moved")? {
+        Added::Copied(name) => {
+            write_atomically(&into.join(INDEX), index.as_bytes())?;
+            name
+        }
+        Added::Held(name) => name,
+        Added::Skipped => return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{file} is there already"))),
+    };
+    forget_entry(from, file)?;
+    Ok(name)
+}
+
+/// Moves the memories of `kind` from the folder `from` to `into`, such as
+/// what an agent filed under a project about the person.
+pub fn move_kind(from: &Path, kind: &str, into: &Path) -> io::Result<Vec<String>> {
+    let mut moved = Vec::new();
+    for entry in read_indexed(from)?.into_iter().filter(|entry| entry.kind.as_deref() == Some(kind)) {
+        moved.push(move_entry(from, &entry.file, into)?);
+    }
+    Ok(moved)
+}
+
+/// What an agent is told of the memories in `dir`, which hold in every
+/// project: where they are and their index. `None` when there are none.
+pub fn everywhere_prompt(dir: &Path) -> Option<String> {
+    let entries = read_indexed(dir).ok()?;
+    if entries.is_empty() {
+        return None;
+    }
+    let mut prompt = format!(
+        "# Memory everywhere\n\nWhat you and the person's other agents learned about them, which holds in every project. \
+Silt keeps it in `{}`: read a memory's file there when it's relevant. \
+To remember something new about the person, save it to your own memory as you would, of type `user`; Silt moves it here.\n\n",
+        dir.display()
+    );
+    for entry in entries {
+        let hook = if entry.description.is_empty() { String::new() } else { format!(" — {}", entry.description) };
+        prompt.push_str(&format!("- [{}]({}){hook}\n", entry.name, entry.file));
+    }
+    Some(prompt)
+}
+
+/// The kinds a memory can be, as Claude Code files them.
+pub const KINDS: [&str; 4] = ["user", "feedback", "project", "reference"];
+
+/// Writes a memory in Claude Code's format to the folder `dir`, with its
+/// index line: as `file` when given, replacing it, else a new file named
+/// from its kind and name. Gives the file's name.
+pub fn write_new(dir: &Path, file: Option<&str>, name: &str, description: &str, kind: &str, body: &str) -> io::Result<String> {
+    let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
+    if !KINDS.contains(&kind) {
+        return Err(invalid(format!("a memory is of kind {}, not {kind}", KINDS.join(", "))));
+    }
+    let one_line = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (name, description) = (one_line(name), one_line(description));
+    if name.is_empty() {
+        return Err(invalid("a memory needs a name".into()));
+    }
+    let file = match file {
+        Some(file) => file.to_owned(),
+        None => {
+            let slug: String = name
+                .to_lowercase()
+                .chars()
+                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+                .collect::<String>()
+                .split('-')
+                .filter(|part| !part.is_empty())
+                .take(8)
+                .collect::<Vec<_>>()
+                .join("-");
+            let stem = format!("{kind}-{slug}");
+            (0..)
+                .map(|n| if n == 0 { format!("{stem}.md") } else { format!("{stem}-{n}.md") })
+                .find(|file| !dir.join(file).exists())
+                .expect("a name is free")
+        }
+    };
+    if !is_entry_file(&file) {
+        return Err(invalid(format!("{file:?} isn't a memory's file")));
+    }
+    let quoted = |text: &str| serde_json::Value::String(text.to_owned()).to_string();
+    let text = format!(
+        "---\nname: {}\ndescription: {}\nmetadata:\n  type: {kind}\n  modified: {}\n---\n\n{}\n",
+        quoted(&name),
+        quoted(&description),
+        crate::time::timestamp_now(),
+        body.trim()
+    );
+    fs::create_dir_all(dir)?;
+    write_atomically(&dir.join(&file), text.as_bytes())?;
+    let index = fs::read_to_string(dir.join(INDEX)).unwrap_or_default();
+    let mut index = without_line_for(&index, &file);
+    if !index.is_empty() && !index.ends_with('\n') {
+        index.push('\n');
+    }
+    let hook = if description.is_empty() { String::new() } else { format!(" — {description}") };
+    index.push_str(&format!("- [{name}]({file}){hook}\n"));
+    write_atomically(&dir.join(INDEX), index.as_bytes())?;
+    Ok(file)
+}
+
+/// The file in Silt's data folder keeping what agents' older memories
+/// were brought in already.
+pub fn brought_file(data_dir: &Path) -> PathBuf {
+    data_dir.join("memory").join("brought.json")
+}
+
+/// Brings `facts` about the person into `everywhere` as memories of kind
+/// `user`, each once: `brought` keeps a hash of each brought in. Gives the
+/// memories written.
+pub fn bring_in_lines(facts: &[String], everywhere: &Path, brought: &Path) -> io::Result<Vec<String>> {
+    use sha2::Digest;
+    let mut seen: std::collections::BTreeSet<String> =
+        fs::read_to_string(brought).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    let mut written = Vec::new();
+    for fact in facts {
+        let hash: String = sha2::Sha256::digest(fact.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
+        if seen.contains(&hash) {
+            continue;
+        }
+        let name: String = fact.split_whitespace().take(8).collect::<Vec<_>>().join(" ");
+        written.push(write_new(everywhere, None, &name, fact, "user", fact)?);
+        seen.insert(hash);
+    }
+    if !written.is_empty() {
+        if let Some(dir) = brought.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        write_atomically(brought, serde_json::to_string(&seen).map_err(io::Error::other)?.as_bytes())?;
+    }
+    Ok(written)
+}
+
+/// What an agent whose own memory isn't the shared one is told (ADR
+/// 0137): the indexes of the project's memory and the memory everywhere,
+/// and the tools to read and add to them. `None` when both are empty.
+pub fn shared_prompt(project: Option<&Path>, everywhere: &Path) -> Option<String> {
+    let list = |dir: &Path| {
+        read_indexed(dir)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| {
+                let hook = if entry.description.is_empty() { String::new() } else { format!(" — {}", entry.description) };
+                format!("- [{}]({}){hook}\n", entry.name, entry.file)
+            })
+            .collect::<String>()
+    };
+    let (in_project, in_everywhere) = (project.map(list).unwrap_or_default(), list(everywhere));
+    let mut prompt = String::from(
+        "# Memory\n\nYou share memory with the person's other agents through Silt: what earlier sessions learnt about this \
+project, and about the person in every project. Read a memory with silt_memory_read when it's relevant, find one with \
+silt_memory_search, and save what a later session should know with silt_memory_write. Memories can be out of date: \
+check what a memory names still exists before relying on it.\n",
+    );
+    if in_project.is_empty() && in_everywhere.is_empty() {
+        prompt.push_str("\nNothing is remembered yet.\n");
+        return Some(prompt);
+    }
+    if !in_project.is_empty() {
+        prompt.push_str(&format!("\n## This project\n\n{in_project}"));
+    }
+    if !in_everywhere.is_empty() {
+        prompt.push_str(&format!("\n## Everywhere\n\n{in_everywhere}"));
+    }
+    Some(prompt)
+}
+
 /// `index` without the lines that point at `file`.
 pub fn without_line_for(index: &str, file: &str) -> String {
     let mut kept = String::with_capacity(index.len());
@@ -283,6 +581,97 @@ mod tests {
         assert_eq!(fs::read_to_string(dir.path().join(INDEX)).unwrap(), "# Memory\n- [B](b.md) — two\n");
         write_entry(dir.path(), "b.md", "changed").unwrap();
         assert_eq!(fs::read_to_string(dir.path().join("b.md")).unwrap(), "changed");
+    }
+
+    #[test]
+    fn a_threads_memory_is_merged_once_keeping_both_of_a_name() {
+        let root = tempfile::tempdir().unwrap();
+        let (from, into) = (root.path().join("thread"), root.path().join("clone"));
+        fs::create_dir_all(&from).unwrap();
+        fs::create_dir_all(&into).unwrap();
+        fs::write(from.join(INDEX), "- [Same](same.md) — kept\n- [New](new.md) — learnt\n- [Clash](clash.md) — changed\n")
+            .unwrap();
+        for (file, text) in [("same.md", "same"), ("new.md", "new"), ("clash.md", "theirs")] {
+            fs::write(from.join(file), text).unwrap();
+        }
+        fs::write(into.join(INDEX), "- [Same](same.md) — kept\n- [Clash](clash.md) — mine").unwrap();
+        fs::write(into.join("same.md"), "same").unwrap();
+        fs::write(into.join("clash.md"), "mine").unwrap();
+
+        let merged = merge_into(&from, &into, "t1").unwrap();
+        assert_eq!(merged.copied, ["new.md", "clash-t1.md"]);
+        assert_eq!(fs::read_to_string(into.join("clash.md")).unwrap(), "mine");
+        assert_eq!(fs::read_to_string(into.join("clash-t1.md")).unwrap(), "theirs");
+        assert_eq!(
+            fs::read_to_string(into.join(INDEX)).unwrap(),
+            "- [Same](same.md) — kept\n- [Clash](clash.md) — mine\n- [New](new.md) — learnt\n- [Clash](clash-t1.md) — changed\n"
+        );
+        assert!(from.join("new.md").exists(), "the thread's folder is left as it was");
+        assert_eq!(merge_into(&from, &into, "t1").unwrap(), Merged::default(), "once");
+        assert_eq!(merge_into(&root.path().join("missing"), &into, "t2").unwrap(), Merged::default());
+    }
+
+    #[test]
+    fn memories_about_the_person_move_with_their_lines() {
+        let root = tempfile::tempdir().unwrap();
+        let (project, everywhere) = (root.path().join("project"), root.path().join("everywhere"));
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join(INDEX), "- [Rust](user-rust.md) — senior\n- [Gate](project-gate.md) — CI\n").unwrap();
+        fs::write(
+            project.join("user-rust.md"),
+            "---\nname: Rust\ndescription: senior\nmetadata:\n  type: user\n---\nCodes in Rust.\n",
+        )
+        .unwrap();
+        fs::write(project.join("project-gate.md"), "---\nname: Gate\nmetadata:\n  type: project\n---\nCI.\n").unwrap();
+
+        assert_eq!(move_kind(&project, "user", &everywhere).unwrap(), ["user-rust.md"]);
+        assert!(!project.join("user-rust.md").exists());
+        assert_eq!(fs::read_to_string(project.join(INDEX)).unwrap(), "- [Gate](project-gate.md) — CI\n");
+        assert_eq!(fs::read_to_string(everywhere.join(INDEX)).unwrap(), "- [Rust](user-rust.md) — senior\n");
+        assert!(move_kind(&project, "user", &everywhere).unwrap().is_empty());
+
+        let prompt = everywhere_prompt(&everywhere).unwrap();
+        assert!(prompt.contains(&everywhere.display().to_string()));
+        assert!(prompt.contains("- [Rust](user-rust.md) — senior"));
+        assert_eq!(everywhere_prompt(&root.path().join("none")), None);
+
+        assert_eq!(move_entry(&everywhere, "user-rust.md", &project).unwrap(), "user-rust.md");
+        assert!(project.join("user-rust.md").exists() && !everywhere.join("user-rust.md").exists());
+    }
+
+    #[test]
+    fn a_new_memory_is_written_as_claude_code_writes_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let file =
+            write_new(dir.path(), None, "Uses pnpm, never npm", "in every project", "feedback", "Install with pnpm.").unwrap();
+        assert_eq!(file, "feedback-uses-pnpm-never-npm.md");
+        let entry = &read_indexed(dir.path()).unwrap()[0];
+        assert_eq!((entry.name.as_str(), entry.description.as_str()), ("Uses pnpm, never npm", "in every project"));
+        assert_eq!((entry.kind.as_deref(), entry.body.trim()), (Some("feedback"), "Install with pnpm."));
+        assert_eq!(
+            write_new(dir.path(), None, "Uses pnpm, never npm", "", "feedback", "Again.").unwrap(),
+            "feedback-uses-pnpm-never-npm-1.md"
+        );
+        write_new(dir.path(), Some(&file), "Uses pnpm", "changed", "feedback", "Still pnpm.").unwrap();
+        let index = fs::read_to_string(dir.path().join(INDEX)).unwrap();
+        assert_eq!(index.matches(&file).count(), 1, "{index}");
+        assert!(index.contains("- [Uses pnpm](feedback-uses-pnpm-never-npm.md) — changed"));
+        assert!(write_new(dir.path(), None, "x", "", "secret", "x").is_err());
+        assert!(write_new(dir.path(), Some("../x.md"), "x", "", "user", "x").is_err());
+    }
+
+    #[test]
+    fn sharing_is_on_until_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(sharing(dir.path()));
+        set_sharing(dir.path(), false).unwrap();
+        assert!(!sharing(dir.path()));
+        let (project, everywhere) = (dir.path().join("p"), dir.path().join("e"));
+        assert!(shared_prompt(Some(&project), &everywhere).unwrap().contains("Nothing is remembered yet"));
+        write_new(&project, None, "Gate", "CI runs it", "project", "CI.").unwrap();
+        let prompt = shared_prompt(Some(&project), &everywhere).unwrap();
+        assert!(prompt.contains("## This project") && prompt.contains("- [Gate](project-gate.md) — CI runs it"));
+        assert!(!prompt.contains("## Everywhere"));
     }
 
     #[test]

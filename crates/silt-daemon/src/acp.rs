@@ -905,6 +905,7 @@ impl Core {
             load,
             sign_in_first: None,
             memory: None,
+            instructions: None,
         }
     }
 
@@ -2518,7 +2519,10 @@ pub(crate) fn sandboxed(
     // files live in its data. The last is made now, as a mount needs it there.
     let attachments = attachments_dir(data_dir, thread);
     std::fs::create_dir_all(&attachments)?;
-    read_only.extend([data_dir.join("agents"), data_dir.join("skills"), attachments]);
+    // So is the memory everywhere, which agents read (ADR 0137).
+    let everywhere = silt_agents::memory::everywhere_dir(data_dir);
+    std::fs::create_dir_all(&everywhere)?;
+    read_only.extend([data_dir.join("agents"), data_dir.join("skills"), attachments, everywhere]);
     let prepared = crate::sandbox::prepare(&crate::sandbox::Run {
         data_dir,
         thread: &sandbox.thread,
@@ -2856,6 +2860,7 @@ async fn ask_agent(info: &AgentInfo, data_dir: &Path, mut ending: tokio::sync::w
         load: None,
         sign_in_first: None,
         memory: None,
+        instructions: None,
     };
     let (sender, mut receiver) = mpsc::unbounded_channel();
     let handle = silt_acp::start(start, sender);
@@ -3136,12 +3141,39 @@ pub(crate) struct AcpSandbox {
 }
 
 /// Where the agent `id` keeps what it remembers of the project at `cwd`,
-/// when not where it would by itself (ADR 0137).
-fn memory_folder(id: &str, env: &[(String, String)], cwd: &Path) -> Option<PathBuf> {
-    let key = silt_workspace::agent_key(id);
-    let agent = silt_agents::AGENTS.iter().copied().find(|agent| silt_workspace::agent_key(agent.id()) == key)?;
+/// when not where it would by itself (ADR 0137), after bringing in what
+/// earlier threads remembered in folders of their own.
+fn memory_folder(id: &str, env: &[(String, String)], cwd: &Path, data_dir: &Path) -> Option<PathBuf> {
+    let agent = native_agent(id)?;
     let lookup = |name: &str| env.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.clone());
-    agent.memory(&silt_os::home_dir()?, &lookup, cwd)
+    let home = silt_os::home_dir()?;
+    let everywhere = silt_agents::memory::everywhere_dir(data_dir);
+    let sharing = silt_agents::memory::sharing(data_dir);
+    if sharing {
+        let brought = silt_agents::memory::brought_file(data_dir);
+        let moved = agent.move_person_memory(&home, &lookup, cwd, &everywhere);
+        if let Err(error) = moved.and(agent.bring_in_everywhere(&home, &lookup, &everywhere, &brought)) {
+            tracing::warn!(%error, "couldn't bring what the agent learnt about the person to the memory everywhere");
+        }
+    }
+    let shared = sharing.then(|| silt_agents::shared_memory(&home, &lookup, cwd)).flatten();
+    if let Err(error) = agent.gather_memory(&home, &lookup, cwd, shared.as_deref()) {
+        tracing::warn!(%error, "couldn't bring earlier memories into the project's");
+    }
+    agent.memory(&home, &lookup, cwd)
+}
+
+/// The Silt agent an ACP agent from the registry is, by its key.
+fn native_agent(id: &str) -> Option<&'static dyn silt_agents::Agent> {
+    let key = silt_workspace::agent_key(id);
+    silt_agents::AGENTS.iter().copied().find(|agent| silt_workspace::agent_key(agent.id()) == key)
+}
+
+/// The memory everywhere's index, for an agent whose own memory has no
+/// place for it (ADR 0137).
+fn everywhere_instructions(id: &str, data_dir: &Path) -> Option<String> {
+    let reads = silt_agents::memory::sharing(data_dir) && native_agent(id).is_some_and(|agent| agent.reads_everywhere());
+    reads.then(|| silt_agents::memory::everywhere_prompt(&silt_agents::memory::everywhere_dir(data_dir))).flatten()
 }
 
 pub(crate) fn spawn_agent(
@@ -3169,7 +3201,8 @@ pub(crate) fn spawn_agent(
         let given: Vec<(String, String)> = env.into_iter().chain(workspace_env).collect();
         let inherited = registry::agent_environment(&info.id, &data_dir);
         start.env = inherited.iter().chain(&given).cloned().collect();
-        start.memory = memory_folder(&info.id, &start.env, &start.cwd);
+        start.memory = memory_folder(&info.id, &start.env, &start.cwd, &data_dir);
+        start.instructions = everywhere_instructions(&info.id, &data_dir);
         // What answers the sandbox's relays, such as its gateway, for as
         // long as the agent runs.
         let mut outside = Vec::new();
@@ -3241,9 +3274,9 @@ mod tests {
         let config = dir.path().join("claude");
         let env = vec![("CLAUDE_CONFIG_DIR".to_owned(), config.to_string_lossy().into_owned())];
         let shared = config.join("projects").join(silt_agents::claude::project_slug(&clone)).join("memory");
-        assert_eq!(memory_folder(registry::CLAUDE_AGENT, &env, &checkout), Some(shared));
-        assert_eq!(memory_folder(registry::CLAUDE_AGENT, &env, &clone), None, "Claude Code finds that one itself");
-        assert_eq!(memory_folder("codex-acp", &env, &checkout), None);
+        assert_eq!(memory_folder(registry::CLAUDE_AGENT, &env, &checkout, dir.path()), Some(shared));
+        assert_eq!(memory_folder(registry::CLAUDE_AGENT, &env, &clone, dir.path()), None, "Claude Code finds that one itself");
+        assert_eq!(memory_folder("codex-acp", &env, &checkout, dir.path()), None);
     }
 
     #[test]

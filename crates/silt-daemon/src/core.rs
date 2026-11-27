@@ -391,6 +391,7 @@ pub struct Core {
     pub(crate) summary_folds: Mutex<HashMap<FamilyId, crate::views::FamilyFold>>,
     /// This person's state of each thread (ADR 0024).
     pub(crate) personal: crate::personal::Personal,
+    pub(crate) copilot_memory: crate::copilot_memory::CopilotMemory,
     /// The control channel to the server (ADR 0026).
     pub(crate) control: crate::control::Control,
     /// Files that vanished from each checkout, waiting a moment for the
@@ -684,6 +685,7 @@ impl Core {
             judges: crate::judges::Judges::load(data_dir),
             summary_folds: Mutex::new(HashMap::new()),
             personal: crate::personal::Personal::default(),
+            copilot_memory: Default::default(),
             control: crate::control::Control::default(),
             rename_waits: HashMap::new(),
             draining: HashSet::new(),
@@ -1097,6 +1099,19 @@ impl Core {
             Request::ForgetMemory { clone, store, file } => {
                 to_response(self.forget_memory(clone.as_deref(), &store, &file).map(|()| "forgotten"))
             }
+            Request::MoveMemory { clone, store, file, to } => {
+                to_response(self.move_memory(clone.as_deref(), &store, &file, to.as_deref()))
+            }
+            Request::SetCopilotMemory { clone, on } => to_response(self.set_copilot_memory(&clone, on)),
+            Request::SendCopilotMemory => Response::ok(self.send_copilot_memory()),
+            Request::MemorySettings => {
+                Response::ok(crate::protocol::MemorySettings { share: silt_agents::memory::sharing(&self.data_dir) })
+            }
+            Request::SetMemorySettings { settings } => to_response(
+                silt_agents::memory::set_sharing(&self.data_dir, settings.share)
+                    .map(|()| "saved")
+                    .map_err(|error| CoreError::Invalid(format!("couldn't save memory.json: {error}"))),
+            ),
             Request::NetworkSettings => to_response(crate::network::view(&self.data_dir)),
             Request::SetNetworkSettings { settings } => {
                 to_response(crate::network::save(&self.data_dir, settings).map(|()| "saved"))
@@ -1688,6 +1703,7 @@ impl Core {
         self.drive_sync();
         self.lan.tick();
         if self.resident {
+            self.drive_copilot_memory();
             self.updates.check_if_due();
             crate::plugins::updates::check_if_due(&self.data_dir);
         }

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
@@ -273,4 +274,83 @@ test('Settings › Memory shows what Claude Code remembers of a project, and edi
   await expect(place.getByText('Tests use a real store')).toHaveCount(0)
   expect(existsSync(join(folder, 'feedback-tests.md'))).toBe(false)
   expect(readFileSync(join(folder, 'MEMORY.md'), 'utf8')).toBe('- [Release day](project-release.md) — Thursdays\n')
+})
+
+test('a memory moves from a project to everywhere and back', async ({ page }) => {
+  const { url, work } = fixture()
+  const clone = join(work, 'repo')
+  const folder = join(work, 'claude', 'projects', clone.replace(/[^A-Za-z0-9]/g, '-'), 'memory')
+  mkdirSync(folder, { recursive: true })
+  writeFileSync(join(folder, 'MEMORY.md'), '- [Writes British English](user-british.md) — colour, behaviour\n')
+  writeFileSync(
+    join(folder, 'user-british.md'),
+    '---\nname: Writes British English\ndescription: colour, behaviour\nmetadata:\n  type: feedback\n---\n\nColour, not color.\n',
+  )
+
+  await page.goto(url)
+  await page.goto(`${new URL(url).origin}/settings/memory?memory=${encodeURIComponent(clone)}`)
+  const place = page.getByRole('region', { name: 'Memory of repo' })
+  await place.getByRole('button', { name: /Writes British English/ }).click()
+  await place.getByRole('button', { name: 'Use everywhere' }).click()
+  await expect(place.getByText('Writes British English')).toHaveCount(0)
+  expect(existsSync(join(folder, 'user-british.md'))).toBe(false)
+
+  await page.goto(`${new URL(url).origin}/settings/memory?memory=everywhere`)
+  const everywhere = page.getByRole('region', { name: 'Memory of everywhere' })
+  await everywhere.getByRole('button', { name: /Writes British English/ }).click()
+  await expect(everywhere.getByText('Colour, not color.')).toBeVisible()
+  await everywhere.getByRole('button', { name: 'Move to a project' }).click()
+  await everywhere.getByLabel('Project to move it to').selectOption({ label: 'repo' })
+  await expect(everywhere.getByText('Writes British English')).toHaveCount(0)
+  expect(readFileSync(join(folder, 'user-british.md'), 'utf8')).toContain('Colour, not color.')
+})
+
+test('sharing memory between agents turns off and on', async ({ page }) => {
+  const { url, siltHome } = fixture()
+  await page.goto(url)
+  await page.goto(`${new URL(url).origin}/settings/memory`)
+  const share = page.getByRole('switch', { name: 'Share memory between agents' })
+  await expect(share).toBeChecked()
+  await share.click()
+  await expect(share).not.toBeChecked()
+  expect(JSON.parse(readFileSync(join(siltHome, 'memory.json'), 'utf8')).share).toBe(false)
+  await expect(page.getByText('Each agent keeps its own memory, as it does without Silt.', { exact: false })).toBeVisible()
+  await share.click()
+  await expect(share).toBeChecked()
+  expect(JSON.parse(readFileSync(join(siltHome, 'memory.json'), 'utf8')).share).toBe(true)
+})
+
+test("a project's memory goes to Copilot Memory only on GitHub, and says when it can't", async ({ page }) => {
+  const { url, work } = fixture()
+  const clone = join(work, 'repo')
+  const folder = join(work, 'claude', 'projects', clone.replace(/[^A-Za-z0-9]/g, '-'), 'memory')
+  mkdirSync(folder, { recursive: true })
+  writeFileSync(join(folder, 'MEMORY.md'), '- [Gate](project-gate.md) — CI runs it\n')
+  writeFileSync(
+    join(folder, 'project-gate.md'),
+    '---\nname: Gate\ndescription: CI runs it\nmetadata:\n  type: project\n---\n\nCI.\n',
+  )
+  const place = page.getByRole('region', { name: 'Copilot Memory' })
+  const open = async () => {
+    await page.goto(url)
+    await page.goto(`${new URL(url).origin}/settings/memory?memory=${encodeURIComponent(clone)}`)
+  }
+
+  await open()
+  await expect(place.getByText('Only for a project on GitHub', { exact: false })).toBeVisible()
+  await expect(place.getByRole('switch', { name: 'Also save to Copilot Memory' })).toBeDisabled()
+
+  execFileSync('git', ['-C', clone, 'remote', 'add', 'origin', 'https://github.com/acme/repo.git'])
+  try {
+    await open()
+    await expect(place.getByText('github.com/acme/repo · off')).toBeVisible()
+    await place.getByRole('switch', { name: 'Also save to Copilot Memory' }).click()
+    // This machine has no Copilot CLI: what failed is said, and the memory waits to be sent.
+    await expect(place.getByText(/\d+ to send/)).toBeVisible({ timeout: 15_000 })
+    await expect(place.getByText("couldn't run the Copilot CLI", { exact: false })).toBeVisible({ timeout: 15_000 })
+    await place.getByRole('switch', { name: 'Also save to Copilot Memory' }).click()
+    await expect(place.getByText('github.com/acme/repo · off')).toBeVisible()
+  } finally {
+    execFileSync('git', ['-C', clone, 'remote', 'remove', 'origin'])
+  }
 })

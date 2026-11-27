@@ -154,7 +154,7 @@ Proposals for discussion, not decisions.
 ### 1. Keep a project's memory across its threads (a bug today)
 A thread in a managed checkout loses what Claude Code and Gemini CLI remember. Silt can give every thread of a project the clone's own folder:
 - **Claude Code:** add `autoMemoryDirectory` to the `--settings` Silt already passes, set to the folder the clone itself gets (`<config dir>/projects/<slug of the clone>/memory/`), so a thread, a `--here` thread and a plain `claude` in the clone share one memory. Silt's sandbox has to let the run write that folder. Probed to work.
-- **Gemini CLI:** no setting moves private memory. Candidates, not probed: register the checkout's path under the clone's slug in `projects.json`, or link `tmp/<checkout slug>/memory` to the clone's.
+- **Gemini CLI:** no setting moves private memory. Probed with 0.71.1 against a mock of the Gemini API: registering the checkout's path under the clone's slug in `projects.json` doesn't hold, as Gemini writes its own slug back at start; linking `tmp/<checkout slug>/memory` to the clone's folder does, and the clone's `MEMORY.md` reaches the prompt.
 - Threads already ended keep theirs in their own folders; a one-time merge into the clone's folder can bring them back.
 
 ### 2. A memory viewer

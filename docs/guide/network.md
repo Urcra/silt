@@ -54,6 +54,7 @@ The agent CLIs you run through Silt talk to their own providers: Claude Code to 
 - **Dictation:** the speech models, from Hugging Face and the speech engine's GitHub releases, the first time you dictate, checked against pinned hashes.
 - **Plugins:** installing a plugin from git clones its repository with your own sign-in ([Plugins](plugins.md)). What a plugin reaches is what its manifest declares and you granted.
 - **Forges:** pushing to GitHub or opening a pull request goes to the forge with your own sign-in ([Git and forges](git-and-forges.md)).
+- **Copilot Memory:** off until you turn it on for a project in Settings › Memory. Then the daemon sends that project's memory to Copilot Memory on GitHub with the Copilot CLI and your own sign-in, at once and every few minutes after, only what changed and never while offline.
 - **Phones on your network:** off until you turn it on. Then the machine listens on your local network for the phones you pair, and drops connections from anywhere else. Notifications to a paired phone go through its browser's push service, encrypted for that browser, so the service sees only that one was sent ([The hosted app and phones](hosted-app-and-phones.md)).
 
 ## A server

@@ -495,6 +495,64 @@ impl Agent for Gemini {
         self.homes(home, env).into_iter().map(|dir| dir.join("oauth_creds.json")).collect()
     }
 
+    fn memory(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>, cwd: &Path) -> Option<PathBuf> {
+        let clone = crate::managed_clone(cwd)?;
+        let gemini = crate::home_from(home, env, "GEMINI_CLI_HOME", "").join(".gemini");
+        chats_dir(&gemini, &clone).and_then(|chats| chats.parent().map(|dir| dir.join("memory")))
+    }
+
+    fn gather_memory(
+        &self,
+        home: &Path,
+        env: &dyn Fn(&str) -> Option<String>,
+        cwd: &Path,
+        shared: Option<&Path>,
+    ) -> io::Result<Vec<String>> {
+        // Gemini CLI keys its private memory by the cwd, with no setting to
+        // move it, so its folders become links: a managed checkout's to its
+        // clone's, and while agents share memory, both to the shared one.
+        let Some(clone) = crate::project_root(cwd) else { return Ok(Vec::new()) };
+        let managed = crate::managed_clone(cwd).is_some();
+        let gemini = crate::home_from(home, env, "GEMINI_CLI_HOME", "").join(".gemini");
+        let project_dir = |chats: PathBuf| chats.parent().map(Path::to_path_buf).unwrap_or(chats);
+        if shared.is_none() {
+            // Not sharing any more: the clone's folder is its own again.
+            if let Some(chats) = chats_dir(&gemini, &clone) {
+                unlink_memory(&project_dir(chats))?;
+            }
+            if !managed {
+                return Ok(Vec::new());
+            }
+        }
+        let clone_project = project_dir(claim_chats_dir(&gemini, &clone)?);
+        let mut gathered = Vec::new();
+        let target = match shared {
+            Some(shared) => {
+                gathered.extend(link_memory(&clone_project, shared)?);
+                shared.to_path_buf()
+            }
+            None => clone_project.join("memory"),
+        };
+        if managed {
+            gathered.extend(link_memory(&project_dir(claim_chats_dir(&gemini, cwd)?), &target)?);
+        }
+        Ok(gathered)
+    }
+
+    fn bring_in_everywhere(
+        &self,
+        home: &Path,
+        env: &dyn Fn(&str) -> Option<String>,
+        everywhere: &Path,
+        brought: &Path,
+    ) -> io::Result<Vec<String>> {
+        // Gemini CLI 0.43 and older saved what it learnt about the person
+        // under this heading of the person's GEMINI.md.
+        let gemini_md = crate::home_from(home, env, "GEMINI_CLI_HOME", "").join(".gemini/GEMINI.md");
+        let Ok(text) = fs::read_to_string(gemini_md) else { return Ok(Vec::new()) };
+        crate::memory::bring_in_lines(&gemini_added(&text), everywhere, brought)
+    }
+
     fn memory_stores(
         &self,
         home: &Path,
@@ -689,9 +747,139 @@ fn overlay_home(plan: &LaunchPlan) -> Result<PathBuf, AgentError> {
     Ok(overlay)
 }
 
+/// Makes the `memory` folder of the Gemini project folder `project` a link
+/// to `target`, after bringing over what it held, which is kept as
+/// `memory-before-silt`. Gives the memories brought over.
+fn link_memory(project: &Path, target: &Path) -> io::Result<Vec<String>> {
+    let own = project.join("memory");
+    fs::create_dir_all(target)?;
+    let mut gathered = Vec::new();
+    match fs::symlink_metadata(&own) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            if fs::canonicalize(&own).ok() == fs::canonicalize(target).ok() {
+                return Ok(gathered);
+            }
+            fs::remove_file(&own)?;
+        }
+        Ok(_) => {
+            let tag = project.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+            gathered = crate::memory::merge_into(&own, target, &tag)?.copied;
+            let kept = (0..)
+                .map(|n| project.join(format!("memory-before-silt{}", if n == 0 { String::new() } else { format!("-{n}") })));
+            let kept = kept.into_iter().find(|path| !path.exists()).expect("some name is free");
+            fs::rename(&own, kept)?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    crate::symlink(target, &own)?;
+    Ok(gathered)
+}
+
+/// Undoes [`link_memory`] for a clone once agents stop sharing memory: the
+/// folder it kept from before is its own again, else an empty one.
+fn unlink_memory(project: &Path) -> io::Result<()> {
+    let own = project.join("memory");
+    if !fs::symlink_metadata(&own).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Ok(());
+    }
+    fs::remove_file(&own)?;
+    let kept = project.join("memory-before-silt");
+    if kept.is_dir() { fs::rename(kept, own) } else { fs::create_dir_all(own) }
+}
+
+/// The facts under `## Gemini Added Memories` in a `GEMINI.md`.
+fn gemini_added(text: &str) -> Vec<String> {
+    let mut lines = text.lines().skip_while(|line| line.trim() != "## Gemini Added Memories").skip(1);
+    std::iter::from_fn(|| lines.next())
+        .take_while(|line| !line.starts_with("## "))
+        .filter_map(|line| line.trim().strip_prefix("- ").map(|fact| fact.trim().to_owned()))
+        .filter(|fact| !fact.is_empty())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn while_agents_share_memory_gemini_reads_and_writes_the_shared_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let clone = dir.path().join("clone");
+        fs::create_dir_all(clone.join(".git")).unwrap();
+        let home = dir.path().join("home");
+        let gemini = home.join(".gemini");
+        let env = |_: &str| None;
+        // What Gemini CLI kept of the clone before Silt.
+        let own = claim_chats_dir(&gemini, &clone).unwrap().parent().unwrap().join("memory");
+        fs::create_dir_all(&own).unwrap();
+        fs::write(own.join("MEMORY.md"), "- [Lint](lint.md) — clippy first\n").unwrap();
+        fs::write(own.join("lint.md"), "Run clippy first.").unwrap();
+        let shared = dir.path().join("claude/projects/-clone/memory");
+
+        assert_eq!(Gemini.gather_memory(&home, &env, &clone, Some(&shared)).unwrap(), ["lint.md"]);
+        assert_eq!(fs::read_to_string(shared.join("lint.md")).unwrap(), "Run clippy first.");
+        assert_eq!(fs::canonicalize(&own).unwrap(), fs::canonicalize(&shared).unwrap(), "Gemini reads the shared memory");
+        assert!(Gemini.gather_memory(&home, &env, &clone, Some(&shared)).unwrap().is_empty());
+
+        // Off, the clone's own folder is its own again.
+        Gemini.gather_memory(&home, &env, &clone, None).unwrap();
+        assert!(!fs::symlink_metadata(&own).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(own.join("lint.md")).unwrap(), "Run clippy first.");
+    }
+
+    #[test]
+    fn what_gemini_added_about_the_person_is_brought_in_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        fs::create_dir_all(home.join(".gemini")).unwrap();
+        fs::write(
+            home.join(".gemini/GEMINI.md"),
+            "# My rules\n\n- Be brief.\n\n## Gemini Added Memories\n- I prefer pnpm over npm\n- My name is Alex\n\n## Later\n- not a memory\n",
+        )
+        .unwrap();
+        assert_eq!(
+            gemini_added(&fs::read_to_string(home.join(".gemini/GEMINI.md")).unwrap()),
+            ["I prefer pnpm over npm", "My name is Alex"]
+        );
+        let (everywhere, brought) = (dir.path().join("everywhere"), dir.path().join("brought.json"));
+        let env = |_: &str| None;
+        let written = Gemini.bring_in_everywhere(&home, &env, &everywhere, &brought).unwrap();
+        assert_eq!(written, ["user-i-prefer-pnpm-over-npm.md", "user-my-name-is-alex.md"]);
+        fs::remove_file(everywhere.join("user-my-name-is-alex.md")).unwrap();
+        assert!(
+            Gemini.bring_in_everywhere(&home, &env, &everywhere, &brought).unwrap().is_empty(),
+            "once, even when forgotten since"
+        );
+    }
+
+    #[test]
+    fn a_managed_checkout_reads_its_clones_private_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let clone = dir.path().join("clone");
+        let git_dir = clone.join(".git/silt/clones/t1.git");
+        let checkout = clone.join(".silt/checkouts/t1");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::create_dir_all(&checkout).unwrap();
+        fs::write(checkout.join(".git"), format!("gitdir: {}\n", git_dir.display())).unwrap();
+        let home = dir.path().join("home");
+        let gemini = home.join(".gemini");
+        // What the checkout's own folder held before Silt linked it.
+        let own = claim_chats_dir(&gemini, &checkout).unwrap().parent().unwrap().join("memory");
+        fs::create_dir_all(&own).unwrap();
+        fs::write(own.join("MEMORY.md"), "- [pnpm](pnpm.md) — never npm\n").unwrap();
+        fs::write(own.join("pnpm.md"), "Use pnpm.").unwrap();
+        let env = |_: &str| None;
+
+        assert_eq!(Gemini.gather_memory(&home, &env, &checkout, None).unwrap(), ["pnpm.md"]);
+        let shared = Gemini.memory(&home, &env, &checkout).unwrap();
+        assert_eq!(fs::read_to_string(shared.join("pnpm.md")).unwrap(), "Use pnpm.");
+        assert!(fs::symlink_metadata(&own).unwrap().file_type().is_symlink());
+        assert_eq!(fs::canonicalize(&own).unwrap(), fs::canonicalize(&shared).unwrap());
+        assert!(own.parent().unwrap().join("memory-before-silt/pnpm.md").exists(), "kept as it was");
+        assert!(Gemini.gather_memory(&home, &env, &checkout, None).unwrap().is_empty(), "once");
+        assert!(Gemini.gather_memory(&home, &env, &clone, None).unwrap().is_empty(), "the clone is its own");
+    }
 
     #[test]
     fn slugs_follow_gemini() {

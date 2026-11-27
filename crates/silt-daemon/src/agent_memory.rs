@@ -20,6 +20,9 @@ const RULES_FILES: &[(&str, &[&str])] = &[
     (".github/copilot-instructions.md", &["copilot-cli"]),
 ];
 
+/// Whose the memory everywhere is: Silt's, which every agent reads.
+const SILT: &str = "silt";
+
 /// An agent's store, with whose it is.
 struct Found {
     agent: &'static str,
@@ -47,7 +50,13 @@ impl Core {
     pub(crate) async fn memory_of(&self, clone: Option<&Path>) -> Result<MemoryView, CoreError> {
         let threads = self.session_threads().await?;
         let Some(clone) = clone else {
-            return Ok(MemoryView { project: None, clone: None, stores: self.read_stores(None, &threads), rules: Vec::new() });
+            return Ok(MemoryView {
+                project: None,
+                clone: None,
+                stores: self.read_stores(None, &threads),
+                rules: Vec::new(),
+                copilot: None,
+            });
         };
         let (repo, clone) = self.known_clone(clone)?;
         let rules = RULES_FILES
@@ -63,6 +72,7 @@ impl Core {
             clone: Some(clone.clone()),
             stores: self.read_stores(Some((&repo, &clone)), &threads),
             rules,
+            copilot: Some(self.copilot_view(&clone)),
         })
     }
 
@@ -89,6 +99,58 @@ impl Core {
             .map_err(|error| CoreError::Invalid(format!("couldn't forget {file}: {error}")))
     }
 
+    /// Moves what the session's agent filed about the person under its
+    /// project this turn to the memory everywhere (ADR 0137). Memory is
+    /// the agent's own, so a failure is logged rather than failing capture.
+    pub(crate) fn move_person_memory(&self, session_id: &str, cwd: &Path) {
+        if !memory::sharing(&self.data_dir) {
+            return;
+        }
+        let Some(session) = self.session(session_id) else { return };
+        let (Some(home), Some(thread)) = (silt_os::home_dir(), self.threads.get(&session.record.thread)) else { return };
+        let workspace_env = match silt_agents::project_root(cwd) {
+            Some(root) => self.workspace_env(&thread.repo, &root),
+            None => Default::default(),
+        };
+        let env = |name: &str| workspace_env.get(name).cloned().or_else(|| std::env::var(name).ok());
+        let everywhere = memory::everywhere_dir(&self.data_dir);
+        if let Err(error) = session.agent.move_person_memory(&home, &env, cwd, &everywhere) {
+            tracing::warn!(%error, "couldn't move what the agent learnt about the person to the memory everywhere");
+        }
+    }
+
+    /// Moves a memory to the memory everywhere, or to the project whose
+    /// clone is `to`, into Claude Code's store there, whose kinds the viewer
+    /// files it by. Gives its file's name there.
+    pub(crate) fn move_memory(
+        &self,
+        clone: Option<&Path>,
+        store: &str,
+        file: &str,
+        to: Option<&Path>,
+    ) -> Result<String, CoreError> {
+        let from = self.store_shown_as(clone, store)?;
+        if from.store.kind != Kind::Memory {
+            return Err(CoreError::Invalid(format!("{store} isn't a folder of memories")));
+        }
+        let into = match to {
+            None => memory::everywhere_dir(&self.data_dir),
+            Some(to) => {
+                let (repo, to) = self.known_clone(to)?;
+                self.stores(Some((&repo, &to)))
+                    .into_iter()
+                    .find(|found| found.agent == silt_agents::claude::AGENT && found.store.kind == Kind::Memory)
+                    .map(|found| found.store.path)
+                    .ok_or_else(|| CoreError::Invalid(format!("no memory to move it to in {}", to.display())))?
+            }
+        };
+        if into == from.store.path {
+            return Err(CoreError::Invalid(format!("{file} is there already")));
+        }
+        memory::move_entry(&from.store.path, file, &into)
+            .map_err(|error| CoreError::Invalid(format!("couldn't move {file}: {error}")))
+    }
+
     /// The store Silt lists as `shown` there, so a request can only name
     /// one of those.
     fn store_shown_as(&self, clone: Option<&Path>, shown: &str) -> Result<Found, CoreError> {
@@ -100,7 +162,15 @@ impl Core {
             .ok_or_else(|| CoreError::Invalid(format!("no agent keeps its memory in {shown} here")))
     }
 
-    fn known_clone(&self, clone: &Path) -> Result<(String, PathBuf), CoreError> {
+    /// The project's memory every agent shares: Claude Code's store of it.
+    pub(crate) fn project_memory_store(&self, repo: &str, clone: &Path) -> Option<PathBuf> {
+        self.stores(Some((repo, clone)))
+            .into_iter()
+            .find(|found| found.agent == silt_agents::claude::AGENT && found.store.kind == Kind::Memory)
+            .map(|found| found.store.path)
+    }
+
+    pub(crate) fn known_clone(&self, clone: &Path) -> Result<(String, PathBuf), CoreError> {
         self.clones
             .iter()
             .find(|(_, known)| known.as_path() == clone)
@@ -115,6 +185,11 @@ impl Core {
         let workspace_env = project.map(|(repo, clone)| self.workspace_env(repo, clone)).unwrap_or_default();
         let env = |name: &str| workspace_env.get(name).cloned().or_else(|| std::env::var(name).ok());
         let mut found: Vec<Found> = Vec::new();
+        if project.is_none() {
+            let everywhere = memory::everywhere_dir(&self.data_dir);
+            found
+                .push(Found { agent: SILT, store: Store::new(silt_agents::memory::Scope::Everywhere, Kind::Memory, everywhere) });
+        }
         for agent in silt_agents::AGENTS {
             for store in agent.memory_stores(&home, &env, project.map(|(_, clone)| clone)) {
                 if !found.iter().any(|other| other.store.path == store.path) {
