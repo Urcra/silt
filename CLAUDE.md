@@ -105,7 +105,7 @@ Each one fails a test while it's out of date. Never edit them by hand.
 - **The docs site** fails when a page under `docs/guide/` isn't in `PAGES` (`crates/silt-site/src/lib.rs`) or isn't linked from the guide. It also fails when a doc names a `silt` command the reference lacks.
 - **The desktop app is its own workspace.** `cargo build --workspace` skips it; run `cargo` in `crates/silt-desktop`. The gate checks it only when `webkit2gtk-4.1` is installed. So is `crates/silt-voice`, which the gate checks on Linux.
 - **WSL watchers:** `/mnt/<drive>` has no inotify. See Rules.
-- **macOS and Windows.** `platforms.yml` runs clippy, the tests, the desktop app and, on Windows, the WSL handoff on every pull request. Its checks are advisory, so `/claude merge` doesn't wait for them (ADR 0138): look at them before merging. Locally, the gate cross-checks with clippy when `x86_64-pc-windows-gnu` and MinGW are installed, and Wine and `just install-wsl` on a real machine check the rest. Only the `silt-cli` tests that send Unix signals or need a Unix terminal are `#[cfg(unix)]`. Paths in deltas stay `/`-separated.
+- **macOS and Windows.** `platforms.yml` runs clippy, the tests, the desktop app and, on Windows, the WSL handoff on every pull request. Its checks are advisory, so `/claude merge` doesn't wait for them (ADR 0139): look at them before merging. Locally, the gate cross-checks with clippy when `x86_64-pc-windows-gnu` and MinGW are installed, and Wine and `just install-wsl` on a real machine check the rest. Only the `silt-cli` tests that send Unix signals or need a Unix terminal are `#[cfg(unix)]`. Paths in deltas stay `/`-separated.
 
 
 ## Working agreement

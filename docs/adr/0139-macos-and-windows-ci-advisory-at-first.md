@@ -1,4 +1,4 @@
-# 0138: macOS and Windows CI, advisory at first
+# 0139: macOS and Windows CI, advisory at first
 
 - Status: accepted
 - Date: 2026-11-27

@@ -1,4 +1,4 @@
-# macOS and Windows on every pull request (ADR 0138): clippy, the
+# macOS and Windows on every pull request (ADR 0139): clippy, the
 # workspace's tests, silt-cli's integration tests and the desktop app on
 # each, and on Windows a WSL distribution beside the native silt. Linux has
 # the whole gate in ci.yml.

@@ -581,7 +581,7 @@ ci_gated_run() {
 
 # Waits for every check run on the head commit to finish, and says
 # whether all passed. A check named `... (advisory)`, as platforms.yml's
-# are, is neither waited for nor counted (ADR 0138).
+# are, is neither waited for nor counted (ADR 0139).
 cmd_ci() {
     local sha=$1 waited=0 runs total pending failed
     cmd_status set ci active "CI (\`${sha:0:8}\`)"

@@ -8,7 +8,7 @@
 - Amended by: [ADR 0064](0064-the-desktop-app-starts-every-backend.md): The desktop app starts every backend when it launches
 - Amended by: [ADR 0108](0108-machines-over-ssh.md): Machines over SSH
 - Amended by: [ADR 0115](0115-the-sidebar-names-the-workspace-and-the-machine.md): The sidebar names the workspace at its top and the machine at its bottom
-- Amended by: [ADR 0138](0138-macos-and-windows-ci-advisory-at-first.md): macOS and Windows CI, advisory at first
+- Amended by: [ADR 0139](0139-macos-and-windows-ci-advisory-at-first.md): macOS and Windows CI, advisory at first
 
 ## Context
 Silt runs on Linux and WSL2, macOS was next (M25), and Windows came after it. Most people who could try Silt work on Windows, so Windows comes first now.
