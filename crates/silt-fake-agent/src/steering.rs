@@ -7,6 +7,12 @@
 //! A prompt saying `Long` runs a command that takes a few seconds, as a
 //! build would. A steer added meanwhile is heard while it runs, and it runs
 //! to its end; a cancel kills it.
+//!
+//! With `FAKE_ACP_PROMPT_QUEUEING` set, the v2 agent advertises
+//! `claudeCode.promptQueueing`, as Claude's adapter does, and a prompt sent
+//! while the command of a `Long` prompt runs waits until it ends: then it's
+//! echoed as a `user_message`, answered, and heard in the same turn. A
+//! cancel before that answers it `-32800`, as the adapter does.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,6 +53,17 @@ pub(crate) fn answer(method: &str, params: &Value) -> agent_client_protocol::Res
         _ => return Err(agent_client_protocol::Error::internal_error().data("the steer went nowhere")),
     };
     Ok(json!({"outcome": outcome}))
+}
+
+/// Whether the command of a `Long` prompt runs.
+pub(crate) fn running() -> bool {
+    RUNNING.load(Ordering::SeqCst)
+}
+
+/// Whether a prompt sent while the agent works waits for its next step, as
+/// Claude Code queues one, behind `FAKE_ACP_PROMPT_QUEUEING` (v2 only).
+pub(crate) fn queues_prompts() -> bool {
+    std::env::var_os("FAKE_ACP_PROMPT_QUEUEING").is_some_and(|set| !set.is_empty())
 }
 
 pub(crate) fn cancel() {

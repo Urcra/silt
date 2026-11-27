@@ -840,11 +840,20 @@ export function AgentDock({
       })
   }
   const steer = () => act(api.steer(thread, draft), sent(draft))
+  // An agent that takes a prompt into the turn it runs hears ⏎'s at its next step, and mod+⏎ queues instead
+  // (ADR 0137); for any other, ⏎ queues and mod+⏎ interrupts the turn to say it.
+  const steers = live && turning && status.steers === true && attached.length === 0
+  const queue = () =>
+    act(api.prompt(thread, draft, false, attached), () => {
+      clear()
+      sent(draft)()
+    })
   // ⏎ before the page knows whether an agent runs, or which it may start, goes once it knows, rather than start
   // one that's running already or drop the draft.
   const known = heard && (hosted() || !choices.isPending)
   const held = useRef<{ now: boolean }>(undefined)
-  // `now`: mod+⏎, which interrupts a turn under way to say the draft at once rather than queue it.
+  // `now`: mod+⏎, which interrupts a turn under way to say the draft at once rather than queue it, or, to an agent
+  // that takes steers, queues it rather than steer.
   const send = (now = false) => {
     if (!known) {
       held.current = { now }
@@ -861,14 +870,10 @@ export function AgentDock({
     }
     if (starting.current) return queueAfter(starting.current)
     if (startable) return start()
-    if (now && turning && draft.trim()) return steer()
+    if (turning && draft.trim() && now !== steers) return steer()
     if (!live || !sendable) return
     // A queued prompt shows in the queue once the daemon has it, not in the history.
-    if (!ready(status))
-      return act(api.prompt(thread, draft, false, attached), () => {
-        clear()
-        sent(draft)()
-      })
+    if (!ready(status)) return queue()
     optimistic((text, files) => api.prompt(thread, text, false, files))
   }
   useEffect(() => {
@@ -1051,27 +1056,42 @@ export function AgentDock({
     ? { label: 'Start agent', title: `Starts ${startName} here${draft.trim() ? ' with your draft' : ''}` }
     : live && draft.trim()
       ? {
-          label: ready(status) ? 'Send' : 'Queue',
+          label: ready(status) ? 'Send' : steers ? 'Steer' : 'Queue',
           disabled: !sendable,
           title: ready(status)
             ? "Sends your draft together with everyone else's"
-            : attached.length > 0
-              ? 'Attached files go with a prompt the agent takes now'
-              : 'Queues your draft for when the agent is ready',
+            : steers
+              ? 'Tells the agent your draft once the step it is on ends'
+              : attached.length > 0
+                ? 'Attached files go with a prompt the agent takes now'
+                : 'Queues your draft for when the agent is ready',
         }
       : undefined
-  const enter = startable ? `start ${startName}` : live && !ready(status) ? 'queue' : 'send'
-  const note = turning && draft.trim() && (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={steer}
-      title={`Interrupts the agent's turn to tell it your draft (${formatKeys('mod+⏎')})`}
-    >
-      Steer now
-      <span className="font-mono text-2xs text-fg-3">{formatKeys('mod+⏎')}</span>
-    </Button>
-  )
+  const enter = startable ? `start ${startName}` : live && !ready(status) ? (steers ? 'steer' : 'queue') : 'send'
+  const note =
+    turning &&
+    draft.trim() &&
+    (steers ? (
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={queue}
+        title={`Queues your draft for when this turn ends (${formatKeys('mod+⏎')})`}
+      >
+        Queue
+        <span className="font-mono text-2xs text-fg-3">{formatKeys('mod+⏎')}</span>
+      </Button>
+    ) : (
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={steer}
+        title={`Interrupts the agent's turn to tell it your draft (${formatKeys('mod+⏎')})`}
+      >
+        Steer now
+        <span className="font-mono text-2xs text-fg-3">{formatKeys('mod+⏎')}</span>
+      </Button>
+    ))
 
   return (
     <section aria-label="agent at work" className="flex flex-col gap-2">

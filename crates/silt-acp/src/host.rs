@@ -77,8 +77,9 @@ pub enum Command {
     },
     Cancel,
     /// Adds `text` to the turn the agent runs, for an agent that takes
-    /// steers ([`Event::Ready`]'s `steers`); [`Event::Steered`] says how it
-    /// went.
+    /// steers ([`Event::Ready`]'s `steers`): over `_session/steering`, or as
+    /// a prompt to an agent that queues one sent while it works, as Claude
+    /// Code does. [`Event::Steered`] says how it went.
     Steer(String),
     /// The person's answer to a permission request: an option id, or none
     /// to refuse.

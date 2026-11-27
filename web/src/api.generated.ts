@@ -286,7 +286,17 @@ checking: Array<string>,
 /**
  * Calls Auto refused that the agent asks the person to allow.
  */
-escalations: Array<EscalationAsked>, };
+escalations: Array<EscalationAsked>, 
+/**
+ * A prompt sent while it works joins the turn it runs, at its next
+ * step, rather than waiting for the turn to end.
+ */
+steers: boolean, 
+/**
+ * The person's steers on their way to the agent, until it takes them
+ * in.
+ */
+waiting_steers: Array<string>, };
 
 export type QuestionAsked = { id: number, message: string, fields: Array<QuestionFieldAsked>, };
 
