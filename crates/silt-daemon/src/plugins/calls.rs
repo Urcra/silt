@@ -757,7 +757,9 @@ impl Core {
             .find(|candidate| candidate.id == id)
             .ok_or_else(|| CoreError::Invalid(format!("no workspace {workspace}")))?;
         for (path, writable) in folders {
-            *found.policy.paths.entry(path.clone()).or_insert(false) |= *writable;
+            // A workspace names its folders `/`-separated, and leaves out one that isn't.
+            let path = if cfg!(windows) { path.replace('\\', "/") } else { path.clone() };
+            *found.policy.paths.entry(path).or_insert(false) |= *writable;
         }
         self.set_workspaces(all)
     }
@@ -1071,7 +1073,9 @@ mod tests {
         assert!(matches!(outcome(waiting.await.expect("answers")), Outcome::Done { .. }));
         let saved = core.workspaces();
         let work = saved.workspaces.iter().find(|workspace| workspace.id.as_str() == "work").expect("work");
-        assert_eq!(work.policy.paths.get(other.to_string_lossy().as_ref()), Some(&true));
+        let slashed =
+            if cfg!(windows) { other.to_string_lossy().replace('\\', "/") } else { other.to_string_lossy().into_owned() };
+        assert_eq!(work.policy.paths.get(&slashed), Some(&true));
         assert!(
             crate::folders::granted(data.path(), &thread, Some("a later run"), 1).contains_key(other.to_string_lossy().as_ref())
         );

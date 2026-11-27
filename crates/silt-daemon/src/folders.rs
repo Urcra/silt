@@ -263,7 +263,7 @@ mod tests {
     fn a_grant_the_rules_now_refuse_is_dropped_at_the_next_start() {
         let data = tempfile::tempdir().unwrap();
         let mine = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(mine.path()).unwrap();
+        let root = silt_os::canonicalize(mine.path()).unwrap();
         let (kept, refused) = (root.join("kept"), root.join("refused"));
         std::fs::create_dir_all(&kept).unwrap();
         std::fs::create_dir_all(&refused).unwrap();

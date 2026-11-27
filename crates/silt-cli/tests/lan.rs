@@ -62,6 +62,10 @@ impl Phone {
             .arg(&self.jar)
             .arg("-b")
             .arg(&self.jar);
+        // Schannel, Windows' curl, can't check revocation for a private authority.
+        if cfg!(windows) {
+            command.arg("--ssl-no-revoke");
+        }
         if app {
             command.args(["-H", "X-Silt-Request: 1", "-H"]).arg(format!("Origin: https://{}:{}", self.host, self.port));
         }
