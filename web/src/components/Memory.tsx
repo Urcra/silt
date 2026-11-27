@@ -7,7 +7,7 @@ import { keys, message } from '../query'
 import { agentName } from '../rules'
 import { SETTINGS_HEADING } from '../settingsContext'
 import { ago } from '../time'
-import { Button, EmptyState, Icon, Select, Skeleton, Tag, Textarea, cx, toast, type Tone } from '../ui'
+import { Button, EmptyState, Icon, Select, Skeleton, Switch, Tag, Textarea, cx, toast, type Tone } from '../ui'
 import { AgentMark } from './AgentMark'
 import { Markdown } from './Markdown'
 
@@ -151,6 +151,7 @@ function Overview() {
     <section aria-label="Memory" className="flex flex-col gap-3.5">
       <Heading meta={plural(total, 'memory', 'memories')}>Memory</Heading>
       <p className="text-sm text-fg-2">{INTRO}</p>
+      <Sharing />
       {unread.length > 0 && (
         <Failure
           text={`Couldn't read what ${unread.map(agentName).join(' and ')} remember${unread.length === 1 ? 's' : ''} on this computer. Everything else is below.`}
@@ -220,6 +221,31 @@ function Overview() {
         </>
       )}
     </section>
+  )
+}
+
+/** Whether agents share memory (ADR 0137): on, every agent reads and adds to one memory per project and the memory everywhere. */
+function Sharing() {
+  const queries = useQueryClient()
+  const settings = useQuery({ queryKey: keys.memorySettings, queryFn: api.memorySettings })
+  const share = settings.data?.share ?? true
+  const save = (on: boolean) =>
+    api.setMemorySettings({ share: on }).then(
+      () => void queries.invalidateQueries({ queryKey: keys.memorySettings }),
+      (failure: unknown) => toast(message(failure), 'danger'),
+    )
+  return (
+    <div className="flex items-start gap-3 rounded-md border border-line bg-elevated px-4 py-3">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="text-sm font-medium text-fg-1">Share memory between agents</span>
+        <span className="text-xs text-fg-2">
+          {share
+            ? 'Claude Code, Codex, Gemini CLI and your other agents read and add to one memory in each project, and to your memory everywhere. Off, each agent keeps its own, as it does without Silt.'
+            : "Each agent keeps its own memory, as it does without Silt. What's shared already stays here."}
+        </span>
+      </div>
+      <Switch on={share} label="Share memory between agents" disabled={!settings.data} onChange={(on) => void save(on)} />
+    </div>
   )
 }
 

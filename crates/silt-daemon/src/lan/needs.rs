@@ -79,6 +79,7 @@ impl Request {
             | Self::NetworkSettings { .. }
             | Self::Memory
             | Self::MemoryOf { .. }
+            | Self::MemorySettings
             | Self::DesignSystems { .. }
             | Self::DesignCatalog { .. }
             | Self::DesignSystem { .. }
@@ -228,6 +229,7 @@ impl Request {
             | Self::SetMemory { .. }
             | Self::ForgetMemory { .. }
             | Self::MoveMemory { .. }
+            | Self::SetMemorySettings { .. }
             | Self::PageAssets { .. }
             | Self::PageConnectors { .. }
             | Self::SetPageConnectors { .. }

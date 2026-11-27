@@ -3114,7 +3114,8 @@ fn memory_folder(id: &str, env: &[(String, String)], cwd: &Path, data_dir: &Path
     let lookup = |name: &str| env.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.clone());
     let home = silt_os::home_dir()?;
     let everywhere = silt_agents::memory::everywhere_dir(data_dir);
-    if let Err(error) = agent.move_person_memory(&home, &lookup, cwd, &everywhere) {
+    let moved = silt_agents::memory::sharing(data_dir).then(|| agent.move_person_memory(&home, &lookup, cwd, &everywhere));
+    if let Some(Err(error)) = moved {
         tracing::warn!(%error, "couldn't move what the agent learnt about the person to the memory everywhere");
     }
     if let Err(error) = agent.gather_memory(&home, &lookup, cwd) {
@@ -3132,7 +3133,7 @@ fn native_agent(id: &str) -> Option<&'static dyn silt_agents::Agent> {
 /// The memory everywhere's index, for an agent whose own memory has no
 /// place for it (ADR 0137).
 fn everywhere_instructions(id: &str, data_dir: &Path) -> Option<String> {
-    let reads = native_agent(id).is_some_and(|agent| agent.reads_everywhere());
+    let reads = silt_agents::memory::sharing(data_dir) && native_agent(id).is_some_and(|agent| agent.reads_everywhere());
     reads.then(|| silt_agents::memory::everywhere_prompt(&silt_agents::memory::everywhere_dir(data_dir))).flatten()
 }
 
