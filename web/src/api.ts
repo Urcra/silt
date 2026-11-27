@@ -604,7 +604,7 @@ export const api = {
   subfolders: (dir: string) => request<Subfolder[]>('GET', `/api/folders?dir=${encodeURIComponent(dir)}`),
   importFound: (paths: string[] = []) => request<number>('POST', '/api/found/import', { paths }),
   cloneProject: (url: string, path: string) => request<string>('POST', '/api/projects/clone', { url, path }),
-  newProject: (path: string) => request<string>('POST', '/api/projects/new', { path }),
+  openFolder: (path: string) => request<string>('POST', '/api/projects/open', { path }),
   projectHome: (repo: string, home: string) => request<string>('PUT', '/api/projects/home', { repo, home }),
   // This machine's workspaces (ADR 0065).
   workspaces: () => request<WorkspacesView>('GET', '/api/workspaces'),

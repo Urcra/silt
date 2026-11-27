@@ -1608,7 +1608,7 @@ impl Core {
             Request::OrgChange { change } => return answer_later(reply, self.org_change(change)),
             Request::ThreadState { thread, change } => to_response(self.change_thread_state(&thread, change).await),
             Request::AddClone { path } => to_response(self.add_clone(&path).await),
-            Request::NewProject { path } => to_response(self.new_project(&path).await),
+            Request::OpenFolder { path } => to_response(self.open_folder(&path).await),
             Request::Subfolders { dir } => return answer_later(reply, Ok(crate::projects::subfolders(dir))),
             Request::CloneProject { url, path } => return answer_later(reply, self.clone_project(&url, &path)),
             Request::ProjectHome { repo, home } => to_response(self.set_project_home(&repo, &home).await),

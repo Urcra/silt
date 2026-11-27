@@ -236,7 +236,7 @@ function NewProject({ near, onAdded }: { near?: string; onAdded: (path: string) 
         setError(undefined)
         setBusy(true)
         api
-          .newProject(path)
+          .openFolder(path)
           .then(
             () => onAdded(path),
             (failure: unknown) => setError(message(failure)),

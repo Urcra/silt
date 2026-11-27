@@ -270,7 +270,7 @@ impl Request {
             | Self::OrgChange { .. }
             | Self::AddClone { .. }
             | Self::CloneProject { .. }
-            | Self::NewProject { .. }
+            | Self::OpenFolder { .. }
             | Self::Subfolders { .. }
             | Self::RunRules { .. }
             | Self::SetWorkspaces { .. }

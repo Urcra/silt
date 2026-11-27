@@ -260,7 +260,7 @@ fn api_routes() -> Router<Web> {
         .route("/api/devices/{id}/revoke", post(device_revoke))
         .route("/api/threads/{id}/state", axum::routing::patch(thread_state))
         .route("/api/projects/clone", post(clone_project))
-        .route("/api/projects/new", post(new_project))
+        .route("/api/projects/open", post(open_folder))
         .route("/api/found", get(found_folders))
         .route("/api/found/import", post(import_found))
         .route("/api/folders", get(subfolders))
@@ -2153,8 +2153,8 @@ async fn add_clone(State(web): State<Web>, Json(body): Json<CloneQuery>) -> Http
     ask(&web, Request::AddClone { path: body.path }).await
 }
 
-async fn new_project(State(web): State<Web>, Json(body): Json<CloneQuery>) -> HttpResponse {
-    ask(&web, Request::NewProject { path: body.path }).await
+async fn open_folder(State(web): State<Web>, Json(body): Json<CloneQuery>) -> HttpResponse {
+    ask(&web, Request::OpenFolder { path: body.path }).await
 }
 
 async fn found_folders(State(web): State<Web>) -> HttpResponse {

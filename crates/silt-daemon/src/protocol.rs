@@ -1241,9 +1241,9 @@ pub enum Request {
         url: String,
         path: PathBuf,
     },
-    /// Makes the folder `path` with an empty git repository, then adds it
-    /// (ADR 0053).
-    NewProject {
+    /// Adds the folder `path` as a project, making it or starting git in it
+    /// as needed (ADR 0140).
+    OpenFolder {
         path: PathBuf,
     },
     /// The folders in `dir`, for completing a path as it's typed.

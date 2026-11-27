@@ -192,11 +192,14 @@ impl Core {
         Ok(project)
     }
 
-    /// Makes the folder `path` and an empty git repository in it, then adds
-    /// it, for a project to start from nothing (ADR 0053).
-    pub(crate) async fn new_project(&mut self, path: &Path) -> Result<String, CoreError> {
-        check_new_folder(path)?;
-        let repo = silt_git::Repo::init(path)?;
+    /// Opens the folder `path` as a project, whatever's there (ADR 0140): a
+    /// folder in a git repository is added as that repository; one without
+    /// git gets an empty repository; one that isn't there is made with one.
+    pub(crate) async fn open_folder(&mut self, path: &Path) -> Result<String, CoreError> {
+        let repo = match open_folder_as(path, silt_os::home_dir().as_deref())? {
+            Opening::Repository => silt_git::Repo::discover(path)?,
+            Opening::Init | Opening::Make => silt_git::Repo::init(path)?,
+        };
         self.remember_clone(repo.root()).await;
         Ok(repo.project()?)
     }
@@ -392,6 +395,46 @@ fn check_new_folder(path: &Path) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// What opening a folder as a project does to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Opening {
+    /// It's in a git repository, which is added as it is.
+    Repository,
+    /// It's there without git: `git init` runs in it.
+    Init,
+    /// It isn't there: it's made, with an empty repository.
+    Make,
+}
+
+/// What [`Core::open_folder`] does with `path`, or why it won't. Neither the
+/// home folder nor a root gets `git init`, as every folder under it would then
+/// be in that repository.
+pub(crate) fn open_folder_as(path: &Path, home: Option<&Path>) -> Result<Opening, CoreError> {
+    if !path.is_absolute() {
+        return Err(CoreError::Invalid("give the folder an absolute path".into()));
+    }
+    if !path.exists() {
+        check_new_folder(path)?;
+        return Ok(Opening::Make);
+    }
+    if !path.is_dir() {
+        return Err(CoreError::Invalid(format!("{} is a file, not a folder", path.display())));
+    }
+    if silt_git::Repo::discover(path).is_ok() {
+        return Ok(Opening::Repository);
+    }
+    let same = |a: &Path, b: &Path| {
+        silt_os::canonicalize(a).unwrap_or_else(|_| a.to_owned()) == silt_os::canonicalize(b).unwrap_or_else(|_| b.to_owned())
+    };
+    if path.parent().is_none() || home.is_some_and(|home| same(path, home)) {
+        return Err(CoreError::Invalid(format!(
+            "Silt won't start a git repository in {}, as every folder in it would be in that repository; pick a folder in it",
+            path.display()
+        )));
+    }
+    Ok(Opening::Init)
+}
+
 /// The folders in `dir`, by name, for completing a typed path. Off the
 /// event loop, as a slow disk shouldn't hold the daemon up.
 pub(crate) async fn subfolders(dir: PathBuf) -> Result<Vec<Subfolder>, CoreError> {
@@ -534,5 +577,26 @@ mod tests {
         assert_eq!(said, [(".hidden", false), ("Alpha", true), ("beta", false)]);
         assert!(subfolders(PathBuf::from("relative")).await.is_err());
         assert!(subfolders(dir.path().join("missing")).await.is_err());
+    }
+
+    #[test]
+    fn a_folder_opens_as_its_repository_is_made_or_gets_git() {
+        let place = tempfile::tempdir().expect("temp dir");
+        let root = silt_os::canonicalize(place.path()).expect("canonical");
+        let repo = root.join("repo");
+        silt_git::Repo::init(&repo).expect("init");
+        std::fs::create_dir(repo.join("src")).expect("src");
+        let plain = root.join("plain");
+        std::fs::create_dir(&plain).expect("plain");
+        std::fs::write(root.join("notes.txt"), "").expect("file");
+        let home = Some(root.as_path());
+
+        assert_eq!(open_folder_as(&repo, home).expect("repo"), Opening::Repository);
+        assert_eq!(open_folder_as(&repo.join("src"), home).expect("in repo"), Opening::Repository);
+        assert_eq!(open_folder_as(&plain, home).expect("plain"), Opening::Init);
+        assert_eq!(open_folder_as(&root.join("new"), home).expect("new"), Opening::Make);
+        for refused in [root.clone(), root.join("notes.txt"), root.join("no/such"), PathBuf::from("relative")] {
+            assert!(open_folder_as(&refused, home).is_err(), "{} opened", refused.display());
+        }
     }
 }

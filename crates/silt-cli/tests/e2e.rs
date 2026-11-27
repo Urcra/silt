@@ -716,7 +716,7 @@ fn a_new_project_starts_in_a_folder_made_for_it_and_follows_it_to_a_remote() {
     let (_place, folder) = new_project(&api);
     let folder_project = silt_git::normalize_remote(&folder.to_string_lossy());
     assert!(folder.join(".git").is_dir(), "the folder has a repository");
-    let (made_again, answer) = api.call("POST", "/api/projects/new", Some(serde_json::json!({"path": folder})));
+    let (made_again, answer) = api.call("POST", "/api/projects/open", Some(serde_json::json!({"path": folder})));
     assert!(!made_again && answer["error"].as_str().is_some_and(|error| error.contains("already there")), "{answer}");
     let projects = api.ok("GET", "/api/projects", None);
     let listed = projects.as_array().expect("projects").iter().find(|listed| listed["repo"] == folder_project.as_str()).cloned();
@@ -752,7 +752,7 @@ fn a_new_projects_threads_follow_a_remote_added_while_the_daemon_was_stopped() {
 fn new_project(api: &Api) -> (tempfile::TempDir, PathBuf) {
     let place = tempfile::tempdir().expect("temp dir");
     let folder = silt_os::canonicalize(place.path()).expect("canonical").join("quest-viewer");
-    let project = api.ok("POST", "/api/projects/new", Some(serde_json::json!({"path": folder})));
+    let project = api.ok("POST", "/api/projects/open", Some(serde_json::json!({"path": folder})));
     assert_eq!(project, silt_git::normalize_remote(&folder.to_string_lossy()).as_str());
     (place, folder)
 }
