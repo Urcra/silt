@@ -482,6 +482,24 @@ impl Agent for Antigravity {
         vec![home.join(".gemini"), home.join(".antigravity")]
     }
 
+    fn memory_stores(
+        &self,
+        home: &Path,
+        _env: &dyn Fn(&str) -> Option<String>,
+        project: Option<&Path>,
+    ) -> Vec<crate::memory::Store> {
+        use crate::memory::{Kind, Scope, Store};
+        // No memory of its own: `/learn` writes rules. `GEMINI.md` is
+        // Gemini CLI's too.
+        match project {
+            Some(_) => Vec::new(),
+            None => vec![
+                Store::new(Scope::Everywhere, Kind::Rules, home.join(".gemini/AGENTS.md")),
+                Store::new(Scope::Everywhere, Kind::Rules, home.join(".gemini/GEMINI.md")),
+            ],
+        }
+    }
+
     fn id(&self) -> &'static str {
         AGENT
     }

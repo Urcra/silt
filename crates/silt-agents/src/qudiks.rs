@@ -74,6 +74,15 @@ impl Agent for Qudiks {
         self.homes(home, env).into_iter().map(|dir| dir.join("auth.json")).collect()
     }
 
+    fn memory_stores(
+        &self,
+        home: &Path,
+        env: &dyn Fn(&str) -> Option<String>,
+        project: Option<&Path>,
+    ) -> Vec<crate::memory::Store> {
+        self.homes(home, env).iter().flat_map(|dir| codex::memory_stores_in(dir, project)).collect()
+    }
+
     fn read_only_home(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         self.homes(home, env).into_iter().map(|dir| dir.join("config.toml")).collect()
     }

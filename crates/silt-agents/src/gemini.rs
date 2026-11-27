@@ -495,6 +495,26 @@ impl Agent for Gemini {
         self.homes(home, env).into_iter().map(|dir| dir.join("oauth_creds.json")).collect()
     }
 
+    fn memory_stores(
+        &self,
+        home: &Path,
+        env: &dyn Fn(&str) -> Option<String>,
+        project: Option<&Path>,
+    ) -> Vec<crate::memory::Store> {
+        use crate::memory::{Kind, Scope, Store};
+        let gemini = crate::home_from(home, env, "GEMINI_CLI_HOME", "").join(".gemini");
+        match project {
+            // Its private memory sits beside the project's chats, once it
+            // has registered the project.
+            Some(clone) => chats_dir(&gemini, clone)
+                .and_then(|chats| chats.parent().map(|dir| dir.join("memory")))
+                .map(|dir| Store::new(Scope::Project, Kind::Memory, dir))
+                .into_iter()
+                .collect(),
+            None => vec![Store::new(Scope::Everywhere, Kind::Rules, gemini.join("GEMINI.md"))],
+        }
+    }
+
     fn read_only_home(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         self.homes(home, env).into_iter().map(|dir| dir.join("settings.json")).collect()
     }

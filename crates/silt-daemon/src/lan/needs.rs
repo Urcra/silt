@@ -77,6 +77,8 @@ impl Request {
             | Self::ThemeCss { .. }
             | Self::ArtifactSettings { .. }
             | Self::NetworkSettings { .. }
+            | Self::Memory
+            | Self::MemoryOf { .. }
             | Self::DesignSystems { .. }
             | Self::DesignCatalog { .. }
             | Self::DesignSystem { .. }
@@ -223,6 +225,8 @@ impl Request {
             | Self::DuplicateTheme { .. }
             | Self::SetArtifactSettings { .. }
             | Self::SetNetworkSettings { .. }
+            | Self::SetMemory { .. }
+            | Self::ForgetMemory { .. }
             | Self::PageAssets { .. }
             | Self::PageConnectors { .. }
             | Self::SetPageConnectors { .. }

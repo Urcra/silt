@@ -287,6 +287,8 @@ fn api_routes() -> Router<Web> {
         .route("/api/threads/{id}/design-system", get(thread_design))
         .route("/api/artifact-settings", get(artifact_settings).put(set_artifact_settings))
         .route("/api/network-settings", get(network_settings).put(set_network_settings))
+        .route("/api/memory", get(memory_overview))
+        .route("/api/memory/store", get(memory_of).put(set_memory).delete(forget_memory))
         .route("/api/themes", get(themes))
         .route("/api/themes/detail", get(theme_detail))
         .route("/api/themes/css", get(theme_css))
@@ -1222,6 +1224,43 @@ async fn duplicate_theme(State(web): State<Web>, Json(body): Json<ThemeDuplicate
 
 async fn set_appearance(State(web): State<Web>, Json(settings): Json<silt_proto::view::AppearanceSettings>) -> HttpResponse {
     ask(&web, Request::SetAppearance { settings }).await
+}
+
+async fn memory_overview(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::Memory).await
+}
+
+#[derive(Deserialize)]
+struct MemoryQuery {
+    /// The project's clone; without it, what's remembered everywhere.
+    #[serde(default)]
+    clone: Option<PathBuf>,
+}
+
+async fn memory_of(State(web): State<Web>, Query(query): Query<MemoryQuery>) -> HttpResponse {
+    ask(&web, Request::MemoryOf { clone: query.clone }).await
+}
+
+#[derive(Deserialize)]
+struct MemoryChange {
+    #[serde(default)]
+    clone: Option<PathBuf>,
+    store: String,
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(default)]
+    text: String,
+}
+
+async fn set_memory(State(web): State<Web>, Json(change): Json<MemoryChange>) -> HttpResponse {
+    ask(&web, Request::SetMemory { clone: change.clone, store: change.store, file: change.file, text: change.text }).await
+}
+
+async fn forget_memory(State(web): State<Web>, Json(change): Json<MemoryChange>) -> HttpResponse {
+    let Some(file) = change.file else {
+        return Failed { status: StatusCode::BAD_REQUEST, message: "name the memory to forget".into() }.into_response();
+    };
+    ask(&web, Request::ForgetMemory { clone: change.clone, store: change.store, file }).await
 }
 
 async fn network_settings(State(web): State<Web>) -> HttpResponse {

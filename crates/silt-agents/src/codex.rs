@@ -580,6 +580,15 @@ impl Agent for Codex {
         vec![crate::home_from(home, env, "CODEX_HOME", ".codex").join("auth.json")]
     }
 
+    fn memory_stores(
+        &self,
+        home: &Path,
+        env: &dyn Fn(&str) -> Option<String>,
+        project: Option<&Path>,
+    ) -> Vec<crate::memory::Store> {
+        memory_stores_in(&crate::home_from(home, env, "CODEX_HOME", ".codex"), project)
+    }
+
     fn read_only_home(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         vec![crate::home_from(home, env, "CODEX_HOME", ".codex").join("config.toml")]
     }
@@ -703,9 +712,37 @@ pub(crate) fn launch_as(command: &str, plan: &LaunchPlan, asking: &[&str]) -> La
     launch
 }
 
+/// Codex's stores in its home `dir`: one for every project, so none is a
+/// project's own. Its summary is in `memories/`, or in `memories_v2/` for a
+/// home that never had the first.
+pub fn memory_stores_in(dir: &Path, project: Option<&Path>) -> Vec<crate::memory::Store> {
+    use crate::memory::{Kind, Scope, Store};
+    if project.is_some() {
+        return Vec::new();
+    }
+    let memories = if dir.join("memories").is_dir() { "memories" } else { "memories_v2" };
+    vec![
+        Store::new(Scope::Everywhere, Kind::Summary, dir.join(memories).join("memory_summary.md")),
+        Store::new(Scope::Everywhere, Kind::Rules, dir.join("AGENTS.md")),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_memory_is_everywhere_and_in_the_folder_it_reads() {
+        use crate::memory::{Kind, Scope};
+        let dir = tempfile::tempdir().unwrap();
+        assert!(memory_stores_in(dir.path(), Some(Path::new("/repo"))).is_empty());
+        let fresh = memory_stores_in(dir.path(), None);
+        assert_eq!(fresh[0].path, dir.path().join("memories_v2/memory_summary.md"));
+        assert_eq!((fresh[0].scope, fresh[0].kind, fresh[0].editable()), (Scope::Everywhere, Kind::Summary, false));
+        assert_eq!((fresh[1].path.clone(), fresh[1].kind), (dir.path().join("AGENTS.md"), Kind::Rules));
+        std::fs::create_dir(dir.path().join("memories")).unwrap();
+        assert_eq!(memory_stores_in(dir.path(), None)[0].path, dir.path().join("memories/memory_summary.md"));
+    }
 
     #[test]
     fn a_restore_replaces_codex_s_own_rollout_of_the_id_or_dates_a_new_one() {
