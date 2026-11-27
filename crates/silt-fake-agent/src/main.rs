@@ -20,7 +20,8 @@
 //! `Which model` makes it answer with its model, which `FAKE_ACP_SLOW_SETTINGS`
 //! makes it take only a while after it's asked for (see `settle`).
 //! `Long` runs a command a steer can be added to while it runs, with
-//! `FAKE_ACP_STEERING` (see `steering`).
+//! `FAKE_ACP_STEERING`, or, over v2, a prompt waits for it to end, with
+//! `FAKE_ACP_PROMPT_QUEUEING` (see `steering`).
 //! It speaks ACP v1, as Copilot does, answering a client that asks for v2
 //! with v1; with `FAKE_ACP_V2` it speaks v2 instead, as Claude's adapter
 //! does (see `v2`). With `FAKE_ACP_SIGN_IN` naming a file, it needs a sign-in

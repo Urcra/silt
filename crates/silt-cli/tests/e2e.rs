@@ -3010,14 +3010,18 @@ fn a_terminals_sandboxed_agent_is_restarted_with_the_folder_it_was_granted() {
 }
 
 /// Starts the fake agent speaking `protocol` (`v1` or `v2`) with
-/// `FAKE_ACP_STEERING` set to `steering`, or unset when it's empty.
+/// `FAKE_ACP_STEERING` set to `steering`, or unset when it's empty; with
+/// `queueing`, it queues a prompt sent while it works, as Claude Code does
+/// (`FAKE_ACP_PROMPT_QUEUEING`).
 fn start_steerable(env: &Env, api: &Api, protocol: &str, steering: &str, prompt: &str) -> String {
     let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
     let mut vars = serde_json::json!({});
     if protocol == "v2" {
         vars["FAKE_ACP_V2"] = "1".into();
     }
-    if !steering.is_empty() {
+    if steering == "queueing" {
+        vars["FAKE_ACP_PROMPT_QUEUEING"] = "1".into();
+    } else if !steering.is_empty() {
         vars["FAKE_ACP_STEERING"] = steering.into();
     }
     let agents = serde_json::json!([{"id": "steerable", "name": "Fake steerable", "command": fake, "env": vars}]);
@@ -3061,24 +3065,93 @@ fn a_steer_reaches_an_agent_that_takes_steers_and_leaves_its_command_running() {
     }
 }
 
-/// An agent that doesn't take steers, or refuses one, has its turn
-/// cancelled, which kills the command it runs, and hears the steer as its
-/// next prompt, as before steering was taken (ADR 0111).
+/// An agent that doesn't take steers has its turn cancelled, which kills
+/// the command it runs, and hears the steer as its next prompt, as before
+/// steering was taken (ADR 0111).
 #[test]
 fn a_steer_an_agent_doesnt_take_cancels_its_turn_and_follows_it() {
     let env = Env::new();
     let api = Api::open(&env);
-    for steering in ["", "failed", "error"] {
+    let thread = start_steerable(&env, &api, "v2", "", "Long build");
+    steer_while_the_command_runs(&api, &thread, "stop and use the release profile");
+    let interrupted = "I interrupted your last turn to say: stop and use the release profile";
+    let entries = settled_history(&api, &thread, &format!("Done: {interrupted}"));
+    let all = serde_json::Value::Array(history_entries(&api, &thread)).to_string();
+    assert!(all.contains("The command was killed."), "{all}");
+    let said = said(&entries);
+    assert!(said.contains(&("user", interrupted)), "{said:?}");
+    assert!(!said.iter().any(|(_, text)| text.contains("Heard")), "{said:?}");
+}
+
+/// A steer an agent that takes steers refuses waits in the queue instead:
+/// the turn goes on, the command it runs to its end, and the steer is the
+/// next prompt, as the person wrote it (ADR 0138).
+#[test]
+fn a_steer_an_agent_refuses_waits_in_the_queue_for_the_turn_to_end() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    for steering in ["failed", "error"] {
         let thread = start_steerable(&env, &api, "v2", steering, "Long build");
-        steer_while_the_command_runs(&api, &thread, "stop and use the release profile");
-        let interrupted = "I interrupted your last turn to say: stop and use the release profile";
-        let entries = settled_history(&api, &thread, &format!("Done: {interrupted}"));
+        steer_while_the_command_runs(&api, &thread, "then use the release profile");
+        let entries = settled_history(&api, &thread, "Done: then use the release profile");
         let all = serde_json::Value::Array(history_entries(&api, &thread)).to_string();
-        assert!(all.contains("The command was killed."), "{steering:?}: {all}");
+        assert!(all.contains("The command ran to its end."), "{steering}: {all}");
+        assert!(!all.contains("I interrupted"), "{steering}: {all}");
         let said = said(&entries);
-        assert!(said.contains(&("user", interrupted)), "{steering:?}: {said:?}");
-        assert!(!said.iter().any(|(_, text)| text.contains("Heard while")), "{steering:?}: {said:?}");
+        let users: Vec<&str> = said.iter().filter(|(kind, _)| *kind == "user").map(|(_, text)| *text).collect();
+        assert_eq!(users, ["Long build", "then use the release profile"], "{steering}: {said:?}");
+        let ended = said.iter().position(|&(_, text)| text == "Done: Long build");
+        let queued = said.iter().position(|&(_, text)| text == "then use the release profile");
+        assert!(ended < queued, "{steering}: it waited for the turn to end: {said:?}");
     }
+}
+
+/// Claude Code queues a prompt sent while it works and takes it in at its
+/// next step, so Silt steers it with a prompt: it waits, shown as waiting,
+/// while the command runs, joins the same turn once the command ends, and
+/// is recorded where the agent took it in, before what it said of it
+/// (ADR 0138).
+#[test]
+fn a_steer_to_an_agent_that_queues_prompts_joins_the_turn_at_its_next_step() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_steerable(&env, &api, "v2", "queueing", "Long build");
+    let live = |api: &Api| api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert!(eventually(|| live(&api)["agent"]["steers"] == true), "{}", live(&api));
+    steer_while_the_command_runs(&api, &thread, "use the release profile");
+    assert_eq!(live(&api)["agent"]["waiting_steers"], serde_json::json!(["use the release profile"]));
+    // What the agent says of the steer and its end read as one message.
+    let heard = "Heard after the command ran: use the release profile\n\nDone: Long build";
+    let entries = settled_history(&api, &thread, heard);
+    let all = serde_json::Value::Array(history_entries(&api, &thread)).to_string();
+    assert!(all.contains("The command ran to its end."), "the command was left to run: {all}");
+    assert!(!all.contains("I interrupted"), "{all}");
+    let said = said(&entries);
+    let steer = said.iter().position(|&(kind, text)| kind == "user" && text == "use the release profile");
+    let answer = said.iter().position(|&(kind, text)| kind == "assistant" && text == heard);
+    assert!(steer.is_some() && steer < answer, "one turn, the steer in it before its answer: {said:?}");
+    assert_eq!(said.iter().filter(|&&(kind, _)| kind == "user").count(), 2, "{said:?}");
+    assert_eq!(live(&api)["agent"]["waiting_steers"], serde_json::json!([]));
+}
+
+/// Stopping the turn while a steer waits for the agent's next step sends
+/// the steer once the turn ends, as Send now beside it does, rather than
+/// dropping it with the turn (ADR 0138).
+#[test]
+fn a_cancel_while_a_steer_waits_sends_it_once_the_turn_ends() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_steerable(&env, &api, "v2", "queueing", "Long build");
+    steer_while_the_command_runs(&api, &thread, "stop and use the release profile");
+    api.ok("POST", &format!("/api/threads/{thread}/agent/cancel"), None);
+    let entries = settled_history(&api, &thread, "Done: stop and use the release profile");
+    let all = serde_json::Value::Array(history_entries(&api, &thread)).to_string();
+    assert!(all.contains("The command was killed."), "{all}");
+    assert!(!all.contains("I interrupted"), "{all}");
+    let said = said(&entries);
+    let users: Vec<&str> = said.iter().filter(|(kind, _)| *kind == "user").map(|(_, text)| *text).collect();
+    assert_eq!(users, ["Long build", "stop and use the release profile"], "sent once: {said:?}");
+    assert!(!said.iter().any(|(_, text)| text.contains("Heard")), "{said:?}");
 }
 
 /// A steer that finds no turn running, as one sent as the turn ends, comes

@@ -2478,6 +2478,14 @@ pub struct AgentStatus {
     /// Calls Auto refused that the agent asks the person to allow.
     #[serde(default)]
     pub escalations: Vec<EscalationAsked>,
+    /// A prompt sent while it works joins the turn it runs, at its next
+    /// step, rather than waiting for the turn to end.
+    #[serde(default)]
+    pub steers: bool,
+    /// The person's steers on their way to the agent, until it takes them
+    /// in.
+    #[serde(default)]
+    pub waiting_steers: Vec<String>,
 }
 
 /// Who checks a thread's commands on Auto (ADR 0132).

@@ -31,6 +31,13 @@ pub(crate) fn supported(meta: Option<&Map<String, Value>>) -> bool {
     meta.and_then(|meta| meta.get("steering")?.get("supported")?.as_bool()) == Some(true)
 }
 
+/// Whether an ACP v2 agent's capabilities say a prompt sent while it works
+/// waits in its own queue and joins the turn at its next step, as Claude
+/// Code's does at priority `next`, rather than cancelling the turn.
+pub(crate) fn queues_prompts(meta: Option<&Map<String, Value>>) -> bool {
+    meta.and_then(|meta| meta.get("claudeCode")?.get("promptQueueing")?.as_bool()) == Some(true)
+}
+
 pub(crate) fn request(session: &str, text: &str) -> Result<UntypedMessage, agent_client_protocol::Error> {
     UntypedMessage::new(
         METHOD,
@@ -70,6 +77,14 @@ mod tests {
         assert!(!supported(Some(&meta(json!({"steering": {"supported": false}})))));
         assert!(!supported(Some(&meta(json!({"claudeCode": {"promptQueueing": true}})))));
         assert!(!supported(None));
+    }
+
+    #[test]
+    fn claude_code_queues_a_prompt_sent_while_it_works() {
+        assert!(queues_prompts(Some(&meta(json!({"claudeCode": {"promptQueueing": true}})))));
+        assert!(!queues_prompts(Some(&meta(json!({"claudeCode": {}})))));
+        assert!(!queues_prompts(Some(&meta(json!({"steering": {"supported": true}})))));
+        assert!(!queues_prompts(None));
     }
 
     #[test]

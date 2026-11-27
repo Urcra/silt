@@ -107,7 +107,11 @@ impl ConnectTo<Agent> for V2 {
                 )
                 .capabilities(capabilities);
                 let init = connection.send_request(request).block_task().await?;
-                let steers = crate::steering::supported(init.meta.as_ref());
+                let extension = crate::steering::supported(init.meta.as_ref());
+                // Claude Code adds a prompt sent while it works to the turn
+                // at its next step, so a steer is a prompt there.
+                let queues = crate::steering::queues_prompts(init.capabilities.meta.as_ref());
+                let steers = extension || queues;
                 let methods = crate::sign_in::methods(&serde_json::to_value(&init.auth_methods).unwrap_or_default());
                 reading.lock().expect("lock").sign_in.clone_from(&methods);
                 if let Some(method) = start.sign_in_first.clone()
@@ -235,6 +239,26 @@ impl ConnectTo<Agent> for V2 {
                                     serde_json::from_value(serde_json::json!({"action": "cancel"})).expect("a cancel action"),
                                 )?;
                             }
+                        }
+                        Command::Steer(text) if !extension => {
+                            let prompt =
+                                blocks_v2(&text, &[], accepts).map_err(agent_client_protocol::Error::into_internal_error)?;
+                            reading.lock().expect("lock").steering(text.clone());
+                            let (told, taken) = (events.clone(), reading.clone());
+                            let sent = connection.send_request(PromptRequest::new(session.clone(), prompt));
+                            connection.spawn(async move {
+                                // The agent's echo of it, in order with what it
+                                // says, usually says it took it first.
+                                let answer = sent.block_task().await;
+                                if taken.lock().expect("lock").took(&text).is_some() {
+                                    let outcome = match answer {
+                                        Ok(_) => crate::Steered::Injected,
+                                        Err(error) => crate::Steered::Error(error.to_string()),
+                                    };
+                                    let _ = told.send(Event::Steered { text, outcome });
+                                }
+                                Ok(())
+                            })?;
                         }
                         Command::Steer(text) => {
                             let request = crate::steering::request(&session.to_string(), &text)?;
@@ -373,6 +397,10 @@ pub(crate) struct Reading {
     background: HashMap<String, String>,
     /// The agent's subagents, by their sessions.
     children: HashMap<String, Child>,
+    /// Steers sent as prompts that the agent hasn't taken in yet, in the
+    /// order sent. Each is taken in when its `user_message` comes, which
+    /// the agent sends in order with what it says around it.
+    steers: Vec<String>,
 }
 
 /// A subagent, as its parent's updates say it: v2 runs each in a session
@@ -427,6 +455,19 @@ impl Reading {
     /// their own stops.
     pub(crate) fn running_children(&self) -> Vec<SessionId> {
         self.children.iter().filter(|(_, child)| !child.ended).map(|(id, _)| SessionId::new(id.clone())).collect()
+    }
+
+    /// A steer sent as a prompt is on its way to the agent.
+    pub(crate) fn steering(&mut self, text: String) {
+        self.steers.push(text);
+    }
+
+    /// The steer the agent took in, when `said` is one still on its way:
+    /// it's taken in once, by its echo or by the prompt's answer, whichever
+    /// comes first.
+    pub(crate) fn took(&mut self, said: &str) -> Option<String> {
+        let at = self.steers.iter().position(|text| text.trim() == said.trim())?;
+        Some(self.steers.remove(at))
     }
 
     /// What an update of `session` says, as Silt's events. A subagent's
@@ -617,6 +658,13 @@ impl Reading {
                 }
                 events.push(Event::TurnEnded { reason: idle.stop_reason.map_or(StopReason::EndTurn, stop_reason) });
                 events
+            }
+            SessionUpdate::UserMessage(message) => {
+                let said = match message.content {
+                    MaybeUndefined::Value(content) => all_text(&content),
+                    _ => return Vec::new(),
+                };
+                self.took(&said).map(|text| Event::Steered { text, outcome: crate::Steered::Injected }).into_iter().collect()
             }
             SessionUpdate::AgentMessageChunk(chunk) => self
                 .added(format!("message {}", chunk.message_id), &text_of(&chunk.content), true)

@@ -367,6 +367,26 @@ function SendingPrompt({ item }: { item: Sending }) {
   )
 }
 
+/** A steer on its way to the agent, where it will land, until the agent takes it in at its next step. Send now stops
+ * the turn, and the steer goes as it ends (ADR 0138). */
+function WaitingSteer({ thread, text }: { thread: string; text: string }) {
+  return (
+    <div data-testid="steer-waiting" className="flex items-center justify-end gap-2" aria-busy="true">
+      <Button
+        variant="ghost"
+        size="sm"
+        title="Stops the turn, and what it runs, to send this at once"
+        onClick={() => void api.cancelTurn(thread).catch((failure: unknown) => toast(message(failure), 'danger'))}
+      >
+        Send now
+      </Button>
+      <p className="w-fit max-w-[75%] rounded-lg border border-dashed border-line-strong px-3.5 py-2.5 text-chat leading-[1.45] whitespace-pre-wrap text-fg-2">
+        {text}
+      </p>
+    </div>
+  )
+}
+
 /** What one entry says: a prompt, the agent's words as Markdown, or an event. */
 function EntryText({ entry }: { entry: HistoryEntry }) {
   const notification = entry.kind === 'user' ? taskNotification(entry.text) : null
@@ -2281,6 +2301,9 @@ function ThreadBody({
                             <div ref={below} className="flex flex-col gap-3 pt-2 pb-4">
                               {waitingPrompts.map((item) => (
                                 <SendingPrompt key={item.id} item={item} />
+                              ))}
+                              {agent?.waiting_steers?.map((text, index) => (
+                                <WaitingSteer key={`${index} ${text}`} thread={thread} text={text} />
                               ))}
                               {agent?.sign_in && <SignInCard thread={thread} asked={agent.sign_in} agent={agent.agent} />}
                               {agent?.permissions.map((asked, index) => (
