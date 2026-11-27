@@ -485,6 +485,10 @@ impl Core {
                 return;
             }
         };
+        // A store waiting on this server's listing is looked at again now.
+        if self.listed_from.insert(server.to_owned()) {
+            self.memory_threads.wake();
+        }
         let home = Home::Server(server.to_owned());
         for family in listing.families.iter().map(|family| family.id).chain(listing.threads.iter().map(|info| info.family)) {
             if let Err(error) = self.settle_home(family, home.clone()).await {

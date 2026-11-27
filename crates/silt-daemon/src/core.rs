@@ -392,6 +392,9 @@ pub struct Core {
     /// This person's state of each thread (ADR 0024).
     pub(crate) personal: crate::personal::Personal,
     pub(crate) copilot_memory: crate::copilot_memory::CopilotMemory,
+    pub(crate) memory_threads: crate::memory_threads::MemoryThreads,
+    /// The servers that have answered a listing since the daemon started.
+    pub(crate) listed_from: HashSet<String>,
     /// The control channel to the server (ADR 0026).
     pub(crate) control: crate::control::Control,
     /// Files that vanished from each checkout, waiting a moment for the
@@ -686,6 +689,8 @@ impl Core {
             summary_folds: Mutex::new(HashMap::new()),
             personal: crate::personal::Personal::default(),
             copilot_memory: Default::default(),
+            memory_threads: Default::default(),
+            listed_from: HashSet::new(),
             control: crate::control::Control::default(),
             rename_waits: HashMap::new(),
             draining: HashSet::new(),
@@ -1703,6 +1708,7 @@ impl Core {
         self.drive_sync();
         self.lan.tick();
         if self.resident {
+            self.drive_memory_threads().await;
             self.drive_copilot_memory();
             self.updates.check_if_due();
             crate::plugins::updates::check_if_due(&self.data_dir);
@@ -1761,7 +1767,13 @@ impl Core {
     /// [`Self::take_in_what_changed_meanwhile`] takes it in.
     /// A managed checkout is the thread's alone, so it's always recorded.
     pub(crate) fn left_alone(&self, checkout: &CheckoutRecord) -> bool {
-        !checkout.managed && !self.agent_at_work(checkout.thread)
+        !checkout.managed && !self.agent_at_work(checkout.thread) && !self.is_memory_thread(checkout.thread)
+    }
+
+    /// Whether `thread` holds a person's memory, whose folder records
+    /// whoever changes it, agent or not (ADR 0137).
+    pub(crate) fn is_memory_thread(&self, thread: ThreadId) -> bool {
+        self.threads.get(&thread).is_some_and(|record| silt_types::is_memory(&record.repo))
     }
 
     /// Whether an agent works in the thread: running, starting, or awaited.
@@ -3067,6 +3079,9 @@ impl Core {
         let Ok(identity) = repo.project() else {
             return;
         };
+        if silt_types::is_memory(&identity) {
+            return;
+        }
         if self.clones.get(&identity).map(PathBuf::as_path) == Some(repo.root()) {
             return;
         }
@@ -3087,7 +3102,10 @@ impl Core {
             .threads
             .values()
             .filter(|thread| {
-                !thread.repo.is_empty() && !silt_types::is_chat(&thread.repo) && !self.clones.contains_key(&thread.repo)
+                !thread.repo.is_empty()
+                    && !silt_types::is_chat(&thread.repo)
+                    && !silt_types::is_memory(&thread.repo)
+                    && !self.clones.contains_key(&thread.repo)
             })
             .filter(|thread| thread.repo_root.join(".git").is_dir())
             .map(|thread| (thread.created_ms, thread.repo.clone(), thread.repo_root.clone()))

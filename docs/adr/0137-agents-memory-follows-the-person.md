@@ -27,8 +27,13 @@ Each store sits on one machine and is read by one agent, and no screen shows wha
 - **Copilot's memory on GitHub** is written only when the person turns that on for a project.
 
 **Each store is a family of its own,** one per person and project and one per person, its files the memory files. The daemon bridges it to the agents' folders as it bridges a checkout to disk, through `silt_checkout::is_writable`. So concurrent edits on two machines merge as text, and a memory's history and search come as a thread's do.
-- A project is matched by its Silt project, not its path.
-- It syncs only to the person's own servers, redacted (ADR 0032).
+- **A thread of a reserved project:** `silt:memory/<project>` for a project's, `silt:memory` for the memory everywhere. The project is matched by its Silt project, not its path. Like `silt:chats` (ADR 0059), a memory project is never placed in an org, and its threads are always `Private`; the server refuses to share one. `PROTOCOL` goes to 26, so a memory thread never reaches a server that would place it in an org.
+- **The checkout is the store's folder:** Claude Code's folder of the project, which every agent shares, and `$SILT_HOME/memory/everywhere`. Each is made a repository marked with its memory project, with a chat's fixed first commit, so every machine has the thread's base without fetching it. Its files stay where agents read them.
+- **One thread per store, made once:** a machine adopts the thread a server lists for the store; it makes one only after the server that would hold it has answered a listing since the daemon started, so two machines don't each make one. Should they still, the oldest is kept. No id is derived from what's known, which anyone could claim on the server first.
+- **Adopting** writes the thread's files into the folder, then brings in what the folder held that the thread hasn't, as edits.
+- **Always recorded, never leased:** a memory checkout records whoever changes its folder, agent or not, unlike ADR 0047's rows; and it's checked out without the thread's lease, so every machine holds it at once and none continues it in a fork.
+- **Not a thread to list:** memory threads are left out of the thread lists, search and the graph, the daemon's and the server's.
+- A project's memory syncs where the project does, and the memory everywhere with the default workspace's server, redacted (ADR 0032). A project kept on this machine keeps its memory here too.
 - **Codex's own store isn't synced as files,** as its locks and baseline are per machine. Its memories are read for the viewer, and its edits go in as ad hoc notes.
 
 **A memory viewer** lists the person-wide memories, as Everywhere, above each project's. It lists a project's memories from every agent and the shared store: type, description, when each was last changed, and the thread that wrote it (Claude's `originSessionId`). It can edit and delete them, as each agent allows, and lists the rules files every agent reads beside them. Mockups come before code.

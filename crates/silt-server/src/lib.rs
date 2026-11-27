@@ -786,8 +786,9 @@ async fn register_thread(
     .execute(db)
     .await?;
     // A chat is its person's own until they share it, and no org holds it
-    // (ADR 0059).
-    let chat = silt_types::is_chat(&thread.repo);
+    // (ADR 0059); their memory is theirs alone, always (ADR 0137).
+    let chat = silt_types::is_personal(&thread.repo);
+    let visibility = if silt_types::is_memory(&thread.repo) { Some(silt_proto::Visibility::Private) } else { visibility };
     let visibility =
         visibility.or_else(|| chat.then_some(silt_proto::Visibility::Private)).map(|visibility| visibility.to_string());
     sqlx::query!(
@@ -995,6 +996,9 @@ async fn set_visibility(
         (Some(repo), None) if silt_types::is_chat(&repo) => {
             return Err(bad_request("chats have no project to set; set each chat's own visibility"));
         }
+        (Some(repo), None) if silt_types::is_memory(&repo) => {
+            return Err(bad_request("a person's memory is theirs alone"));
+        }
         (Some(repo), None) => {
             // A repository nobody placed yet joins the caller's org only if
             // they administer the server, or work in it and may then decide
@@ -1024,6 +1028,11 @@ async fn set_visibility(
                 return Err(not_found());
             }
             let thread = id_bytes(thread.0);
+            let repo =
+                sqlx::query_scalar::<_, String>("SELECT repo FROM threads WHERE id = ?").bind(&thread).fetch_optional(db).await?;
+            if repo.as_deref().is_some_and(silt_types::is_memory) {
+                return Err(bad_request("a person's memory is theirs alone"));
+            }
             let updated =
                 sqlx::query!("UPDATE threads SET visibility = ? WHERE id = ? AND owner_id = ?", visibility, thread, caller.user)
                     .execute(db)
@@ -1115,6 +1124,8 @@ async fn search(
     let limit = usize::try_from(limit).unwrap_or(0);
     let mut hits = browse::edited_hits(&server, caller.user, &query, limit).await?;
     hits.extend(indexed);
+    // A person's memory is a thread only to sync it (ADR 0137).
+    hits.retain(|hit| !silt_types::is_memory(&hit.repo));
     hits.truncate(limit);
     Ok(Json(SearchReply { hits }))
 }

@@ -220,6 +220,9 @@ impl Repo {
         if self.is_chat() {
             return Ok(silt_types::CHATS.to_owned());
         }
+        if let Some(memory) = self.memory_project() {
+            return Ok(memory);
+        }
         if let Some(origin) = self.remote_url("origin")? {
             return Ok(normalize_remote(&origin));
         }
@@ -236,6 +239,28 @@ impl Repo {
     /// names [`silt_types::CHATS`] as its project.
     pub fn is_chat(&self) -> bool {
         self.repo.config_snapshot().string(CHAT_KEY).is_some_and(|project| project.as_slice() == silt_types::CHATS.as_bytes())
+    }
+
+    /// The memory project a folder of a person's memory is marked with
+    /// (ADR 0137), from its local config, which no delta ever writes.
+    pub fn memory_project(&self) -> Option<String> {
+        let project = self.repo.config_snapshot().string(CHAT_KEY)?.to_string();
+        silt_types::is_memory(&project).then_some(project)
+    }
+
+    /// Makes the folder `path` of a person's memory a repository of the
+    /// memory project `project` (ADR 0137), with the same first commit as a
+    /// chat's, so every machine has it. What the folder holds is left.
+    pub fn init_memory(path: &Path, project: &str) -> Result<Self, GitError> {
+        if !silt_types::is_memory(project) {
+            return Err(GitError::Command { args: "init".into(), stderr: format!("{project} isn't a memory project") });
+        }
+        std::fs::create_dir_all(path)?;
+        run_git(path, &["init", "--quiet", "--initial-branch=main"], None)?;
+        run_git(path, &["config", CHAT_KEY, project], None)?;
+        let commit = chat_root(path)?;
+        run_git(path, &["update-ref", "refs/heads/main", &commit.to_string()], None)?;
+        Self::discover(path)
     }
 
     /// Makes `path` a chat's repository (ADR 0059): marked as one, with
