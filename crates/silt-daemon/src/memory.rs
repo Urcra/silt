@@ -322,6 +322,17 @@ mod tests {
 
     /// A store with one titled thread in a clone; the directories go with it.
     async fn store_with_thread() -> (tempfile::TempDir, tempfile::TempDir, Store) {
+        let committed = Op::Git(GitOp::Committed { commit: COMMIT, branch: None });
+        store_with(vec![
+            Op::Conv(ConvOp::Title("held or not".into())),
+            committed,
+            Op::Conv(ConvOp::Title("still the same".into())),
+        ])
+        .await
+    }
+
+    /// A store with one thread in a clone, whose family's log is `ops`.
+    async fn store_with(ops: Vec<Op>) -> (tempfile::TempDir, tempfile::TempDir, Store) {
         let (data, repo) = (tempfile::tempdir().expect("temp dir"), tempfile::tempdir().expect("temp dir"));
         assert!(Command::new("git").args(["init", "-q"]).current_dir(repo.path()).status().expect("git").success());
         let store = Store::open(data.path()).await.expect("opens");
@@ -336,8 +347,7 @@ mod tests {
         store.create_thread(&thread).await.expect("thread");
         let mut family = Family::new();
         let mut log: Vec<Delta> = Vec::new();
-        let committed = Op::Git(GitOp::Committed { commit: COMMIT, branch: None });
-        for op in [Op::Conv(ConvOp::Title("held or not".into())), committed, Op::Conv(ConvOp::Title("still the same".into()))] {
+        for op in ops {
             let delta = family.delta(ActorId(2), THREAD, Author::User, 5, family.thread_head(THREAD), op);
             family.apply(delta.clone(), &mut std::collections::HashMap::new()).expect("applies");
             log.push(delta);
@@ -471,6 +481,44 @@ mod tests {
             &HashMap::new(),
         );
         assert!(!core.families.loaded(&FAMILY).expect("held").log_decoded(), "what it added was read alone");
+    }
+
+    /// The web UI asks for each image it shows whole on its own, and an
+    /// image comes in the same line as its tool's output, after it.
+    #[tokio::test]
+    async fn an_entry_asked_for_whole_after_another_of_its_line_is_read_from_its_delta_alone() {
+        let acp = |line: serde_json::Value| {
+            let session = silt_log::SessionRef { agent: silt_agents::acp::AGENT.into(), id: "s".into() };
+            Op::Conv(ConvOp::Native { session, file: silt_log::SessionFile::Main, line: line.to_string() })
+        };
+        let picture = "A".repeat(4000);
+        let output = serde_json::json!([
+            {"type": "text", "text": "rendered"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": picture}},
+        ]);
+        let (data, _repo, store) = store_with(vec![
+            acp(serde_json::json!({"t": "prompt", "text": "render it"})),
+            acp(serde_json::json!({"t": "tool_call", "id": "c1", "title": "Render", "kind": "execute", "input": {}})),
+            acp(serde_json::json!({"t": "tool_result", "id": "c1", "status": "completed", "output": output.to_string()})),
+        ])
+        .await;
+        let (mut core, _inbox) = loaded_core(store, data.path()).await;
+        let entries = core.history_entries(THREAD);
+        let image = entries.iter().position(|(_, entry)| entry.kind == "image").expect("an image");
+        assert_eq!(entries[image - 1].1.kind, "tool_result");
+        assert_eq!(entries[image - 1].0, entries[image].0, "both from the one line");
+        core.release_log(FAMILY).await;
+        let asked = crate::history::PageAsked { offset: image, limit: 1, known: None, cut: false, tail: None, before: None };
+        let read = core.deltas_for_page(THREAD, asked).await;
+        let page = core.history_page(THREAD, asked, &read);
+        let whole = &page.entries[0];
+        assert_eq!(whole.kind, "image");
+        assert!(whole.cut.is_none());
+        assert_eq!(whole.image.as_ref().map(|image| image.data.as_str()), Some(picture.as_str()));
+        assert!(
+            !core.families.loaded(&FAMILY).expect("held").log_decoded(),
+            "read from its line alone, not from the history read again whole"
+        );
     }
 
     #[tokio::test]
