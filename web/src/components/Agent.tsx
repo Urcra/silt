@@ -80,6 +80,8 @@ function useThreadWorkspace(thread: string) {
   return summary ? workspaceOf(workspaces.data, summary.repo, summary.workspace) : undefined
 }
 
+const FILES_DONT_QUEUE = 'Files can’t wait in the queue: steer them in now, or send them once the turn ends'
+
 /** Whether a prompt goes straight to the agent rather than its queue. */
 function ready(status: AgentStatus): boolean {
   return status.state === 'idle' || status.state === 'awaiting_input'
@@ -771,7 +773,7 @@ export function AgentDock({
       ? [{ id: 'approve', label: 'Approve the plan', run: () => act(api.prompt(thread, APPROVED)) }]
       : []),
   ])
-  const sendable = live && draft.trim() !== '' && !(attached.length > 0 && !ready(status))
+  const sendable = live && draft.trim() !== ''
   const startable = !live && !elsewhere && !hosted() && agent !== ''
   // What was written while the request was under way stays to be sent next.
   const sent = (text: string) => () => {
@@ -839,15 +841,23 @@ export function AgentDock({
         setError(message(failure))
       })
   }
-  const steer = () => act(api.steer(thread, draft), sent(draft))
+  const steer = () =>
+    act(api.steer(thread, draft, attached), () => {
+      clear()
+      sent(draft)()
+    })
   // An agent that takes a prompt into the turn it runs hears ⏎'s at its next step, and mod+⏎ queues instead
   // (ADR 0138); for any other, ⏎ queues and mod+⏎ interrupts the turn to say it.
-  const steers = live && turning && status.steers === true && attached.length === 0
-  const queue = () =>
+  const steers = live && turning && status.steers === true
+  // The queue keeps only text, so files go with a steer or once the agent is ready.
+  const queueable = attached.length === 0
+  const queue = () => {
+    if (!queueable) return setError(FILES_DONT_QUEUE)
     act(api.prompt(thread, draft, false, attached), () => {
       clear()
       sent(draft)()
     })
+  }
   // ⏎ before the page knows whether an agent runs, or which it may start, goes once it knows, rather than start
   // one that's running already or drop the draft.
   const known = heard && (hosted() || !choices.isPending)
@@ -1057,14 +1067,14 @@ export function AgentDock({
     : live && draft.trim()
       ? {
           label: ready(status) ? 'Send' : steers ? 'Steer' : 'Queue',
-          disabled: !sendable,
+          disabled: !sendable || (!ready(status) && !steers && !queueable),
           title: ready(status)
             ? "Sends your draft together with everyone else's"
             : steers
               ? 'Tells the agent your draft once the step it is on ends'
-              : attached.length > 0
-                ? 'Attached files go with a prompt the agent takes now'
-                : 'Queues your draft for when the agent is ready',
+              : queueable
+                ? 'Queues your draft for when the agent is ready'
+                : FILES_DONT_QUEUE,
         }
       : undefined
   const enter = startable ? `start ${startName}` : live && !ready(status) ? (steers ? 'steer' : 'queue') : 'send'
@@ -1075,8 +1085,9 @@ export function AgentDock({
       <Button
         variant="ghost"
         size="sm"
-        onClick={queue}
-        title={`Queues your draft for when this turn ends (${formatKeys('mod+⏎')})`}
+        onClick={() => send(true)}
+        disabled={!queueable}
+        title={queueable ? `Queues your draft for when this turn ends (${formatKeys('mod+⏎')})` : FILES_DONT_QUEUE}
       >
         Queue
         <span className="font-mono text-2xs text-fg-3">{formatKeys('mod+⏎')}</span>
@@ -1085,7 +1096,7 @@ export function AgentDock({
       <Button
         variant="ghost"
         size="sm"
-        onClick={steer}
+        onClick={() => send(true)}
         title={`Interrupts the agent's turn to tell it your draft (${formatKeys('mod+⏎')})`}
       >
         Steer now

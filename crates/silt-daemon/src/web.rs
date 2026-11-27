@@ -313,7 +313,7 @@ fn api_routes() -> Router<Web> {
         .route("/api/threads/{id}/agent/sign-in/code", post(agent_sign_in_code))
         .route("/api/threads/{id}/agent/sign-in/cancel", post(agent_sign_in_cancel))
         .route("/api/threads/{id}/agent/stop", post(agent_stop))
-        .route("/api/threads/{id}/agent/steer", post(agent_steer))
+        .route("/api/threads/{id}/agent/steer", post(agent_steer).layer(DefaultBodyLimit::max(PROMPT_BODY_BYTES)))
         .route("/api/threads/{id}/agent/preset", post(agent_preset))
         .route("/api/threads/{id}/agent/mode", post(agent_mode))
         .route("/api/threads/{id}/agent/setting", post(agent_setting))
@@ -2306,7 +2306,7 @@ async fn agent_sign_in_cancel(State(web): State<Web>, Path(thread): Path<String>
 }
 
 async fn agent_steer(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<AgentPrompt>) -> HttpResponse {
-    ask(&web, Request::AcpSteer { thread, text: body.text }).await
+    ask(&web, Request::AcpSteer { thread, text: body.text, attachments: body.attachments }).await
 }
 
 #[derive(Deserialize)]

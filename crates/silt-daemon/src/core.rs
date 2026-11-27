@@ -1637,10 +1637,13 @@ impl Core {
                 Ok(thread) => to_response(self.set_preset(thread, preset).await),
                 Err(error) => Response::error(error),
             },
-            Request::AcpSteer { thread, text } => match self.find_thread(&thread) {
-                Ok(thread) => to_response(self.acp_steer(thread, &text).await),
-                Err(error) => Response::error(error),
-            },
+            Request::AcpSteer { thread, text, attachments } => {
+                let steer = match (self.find_thread(&thread), crate::acp::decode(attachments, &self.data_dir)) {
+                    (Ok(thread), Ok(files)) => self.acp_steer(thread, &text, files).await,
+                    (Err(error), _) | (_, Err(error)) => Err(error),
+                };
+                to_response(steer)
+            }
             Request::Queue { thread } => match self.find_thread(&thread) {
                 Ok(thread) => to_response(self.queue(thread).await),
                 Err(error) => Response::error(error),

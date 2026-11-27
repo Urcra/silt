@@ -3065,6 +3065,75 @@ fn a_steer_reaches_an_agent_that_takes_steers_and_leaves_its_command_running() {
     }
 }
 
+/// Files steered into the turn of an agent that takes steers go as files
+/// saved where it can read them, since a steer carries only text: the agent
+/// hears where they are, and the history shows the steer with its files.
+#[test]
+fn a_steer_with_files_tells_an_agent_that_takes_steers_where_they_are() {
+    use base64::Engine as _;
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_steerable(&env, &api, "v2", "injected", "Long build");
+    let running = eventually(|| serde_json::Value::Array(history_entries(&api, &thread)).to_string().contains("cargo build"));
+    assert!(running, "the command never started: {:?}", history_entries(&api, &thread));
+    let data = base64::engine::general_purpose::STANDARD.encode("release = true\n");
+    let attachment = serde_json::json!({"name": "notes.txt", "mime": "text/plain", "data": data});
+    let answer = api.ok(
+        "POST",
+        &format!("/api/threads/{thread}/agent/steer"),
+        Some(serde_json::json!({"text": "use the release profile", "attachments": [attachment]})),
+    );
+    assert_eq!(answer, "steering");
+    let entries = settled_history(&api, &thread, "Done: Long build");
+    let said = said(&entries);
+    let heard = said
+        .iter()
+        .find_map(|&(kind, text)| (kind == "assistant").then(|| text.strip_prefix("Heard while the command ran: ")).flatten())
+        .unwrap_or_else(|| panic!("the agent heard the steer: {said:?}"));
+    let path = heard
+        .lines()
+        .find_map(|line| line.strip_prefix("- notes.txt (text/plain): "))
+        .unwrap_or_else(|| panic!("the steer says where the file is: {heard}"));
+    assert!(heard.starts_with("use the release profile\n\n"), "{heard}");
+    assert_eq!(fs::read_to_string(path).expect("the file is saved"), "release = true\n");
+    let users: Vec<&str> = said.iter().filter(|(kind, _)| *kind == "user").map(|(_, text)| *text).collect();
+    assert_eq!(users.len(), 2, "one prompt and one steer: {said:?}");
+    assert!(users[1].starts_with("use the release profile\n\n(attached: "), "{said:?}");
+    assert!(users[1].ends_with("notes.txt)"), "{said:?}");
+    assert!(!users[1].contains("saved where you can read them"), "the history shows the files, not the note: {said:?}");
+}
+
+/// Files steered into the turn of an agent that doesn't take steers go
+/// with the prompt the cancel leaves to send, as with any prompt.
+#[test]
+fn a_steer_with_files_an_agent_doesnt_take_sends_them_with_its_prompt() {
+    use base64::Engine as _;
+    let env = Env::new();
+    let api = Api::open(&env);
+    let thread = start_steerable(&env, &api, "v2", "", "Long build");
+    let running = eventually(|| serde_json::Value::Array(history_entries(&api, &thread)).to_string().contains("cargo build"));
+    assert!(running, "the command never started: {:?}", history_entries(&api, &thread));
+    let data = base64::engine::general_purpose::STANDARD.encode("release = true\n");
+    let attachment = serde_json::json!({"name": "notes.txt", "mime": "text/plain", "data": data});
+    let answer = api.ok(
+        "POST",
+        &format!("/api/threads/{thread}/agent/steer"),
+        Some(serde_json::json!({"text": "stop and use the release profile", "attachments": [attachment]})),
+    );
+    assert_eq!(answer, "steering");
+    let interrupted = "I interrupted your last turn to say: stop and use the release profile";
+    let mut said_now = Vec::new();
+    let resent = eventually(|| {
+        said_now = history_entries(&api, &thread)
+            .iter()
+            .filter(|entry| entry["kind"] == "user")
+            .filter_map(|entry| entry["text"].as_str().map(str::to_owned))
+            .collect();
+        said_now.iter().any(|text| text.starts_with(&format!("{interrupted}\n\n(attached: ")) && text.ends_with("notes.txt)"))
+    });
+    assert!(resent, "the resent prompt has the file: {said_now:?}");
+}
+
 /// An agent that doesn't take steers has its turn cancelled, which kills
 /// the command it runs, and hears the steer as its next prompt, as before
 /// steering was taken (ADR 0111).

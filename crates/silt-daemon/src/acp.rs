@@ -73,8 +73,9 @@ pub(crate) struct AcpRun {
     error: Option<String>,
     /// Each running tool call's output so far, to tell browsers what's new.
     tool_output: HashMap<String, String>,
-    /// What to tell the agent once the turn being cancelled for it ends.
-    steering: Option<String>,
+    /// What to tell the agent once the turn being cancelled for it ends,
+    /// with the files it came with.
+    steering: Option<(String, Given)>,
     /// The agent adds a steer to the turn it runs, over `_session/steering`
     /// or, as Claude Code, by queueing a prompt sent while it works, so a
     /// steer needn't cancel it (ADR 0111, ADR 0138).
@@ -87,6 +88,9 @@ pub(crate) struct AcpRun {
     /// Steers a cancel left to send once the turn ends, before the agent
     /// took them in: what it says of them after is its last word on them.
     resent_steers: Vec<String>,
+    /// Files steered in, by the text the agent was sent: a steer carries
+    /// only text, so they go as saved files it's told of.
+    steer_files: HashMap<String, SteerFiles>,
     /// Each tool call's kind as the agent announced it, for permission
     /// requests that don't repeat it.
     tool_kinds: HashMap<String, String>,
@@ -219,6 +223,25 @@ impl Given {
     fn is_empty(&self) -> bool {
         self.sent.is_empty() && self.uploaded.is_empty()
     }
+}
+
+/// A prompt's files as the conversation and the agent take them.
+struct Files {
+    /// Their names beside the session.
+    attached: Vec<String>,
+    media: Vec<silt_proto::view::ImageView>,
+    /// Those sent in the prompt itself.
+    inline: Vec<Attachment>,
+    /// Those saved for the agent to read: name, type and path.
+    saved: Vec<(String, String, PathBuf)>,
+}
+
+/// What a steer with files shows as, once the agent takes it.
+#[derive(Debug, Clone)]
+struct SteerFiles {
+    said: String,
+    attached: Vec<String>,
+    media: Vec<silt_proto::view::ImageView>,
 }
 
 /// What the fork's agent is asked for a change guide.
@@ -423,10 +446,14 @@ fn optional_text(field: &silt_acp::QuestionField) -> bool {
 /// An answer in the person's own words, as Claude Code words a result.
 /// Cancels the agent's turn to say `said` once it ends, after what earlier
 /// steers left to say.
-fn cancel_to_say(run: &mut AcpRun, said: String) {
+fn cancel_to_say(run: &mut AcpRun, said: String, files: Given) {
     run.steering = Some(match run.steering.take() {
-        Some(before) => format!("{before}\n\n{said}"),
-        None => said,
+        Some((before, mut given)) => {
+            given.sent.extend(files.sent);
+            given.uploaded.extend(files.uploaded);
+            (format!("{before}\n\n{said}"), given)
+        }
+        None => (said, files),
     });
     send(run, Command::Cancel);
 }
@@ -842,6 +869,7 @@ impl Core {
                 steered: Vec::new(),
                 waiting_steers: Vec::new(),
                 resent_steers: Vec::new(),
+                steer_files: HashMap::new(),
                 tool_kinds: HashMap::new(),
                 tool_said: HashMap::new(),
                 within: None,
@@ -1029,12 +1057,23 @@ impl Core {
     /// hears it in the turn it runs, which goes on, a command it runs
     /// included (ADR 0111); for any other, the turn is cancelled and `text`
     /// goes first once it ends. An agent that isn't working hears it as its
-    /// next prompt.
-    pub(crate) async fn acp_steer(&mut self, thread: ThreadId, text: &str) -> Result<&'static str, CoreError> {
+    /// next prompt. Files go with the prompt a cancel leaves to send, and to
+    /// an agent that steers, as files saved where it can read them.
+    pub(crate) async fn acp_steer(&mut self, thread: ThreadId, text: &str, files: Given) -> Result<&'static str, CoreError> {
         let run = self.running(thread)?;
         if !matches!(run.state, AgentState::Working) {
-            return self.acp_prompt(&thread.to_string(), text, false).await;
+            return self.acp_prompt_with(&thread.to_string(), text, false, files).await;
         }
+        if text.trim().is_empty() {
+            return Err(CoreError::Invalid("there is nothing to send".into()));
+        }
+        let steers = run.steers;
+        let (files, shown) = if steers && !files.is_empty() {
+            let Files { attached, media, saved, .. } = self.prepare_files(thread, files, |_| false).await?;
+            (Given::default(), Some((saved_note(&saved), attached, media)))
+        } else {
+            (files, None)
+        };
         let run = self.acp.get_mut(&thread).expect("checked above");
         // Steering while the agent asks answers its question in your own words.
         let asked = std::mem::take(&mut run.questions);
@@ -1042,7 +1081,15 @@ impl Core {
             Some(question) => format!("to your question \"{}\": {text}", question.message),
             None => text.to_owned(),
         };
-        if run.steers {
+        if steers {
+            let said = match shown {
+                Some((note, attached, media)) => {
+                    let sent = format!("{said}\n\n{note}");
+                    run.steer_files.insert(sent.clone(), SteerFiles { said, attached, media });
+                    sent
+                }
+                None => said,
+            };
             // Sent while the question is open, so an agent that holds a steer
             // until its question is answered has it as it goes on.
             run.waiting_steers.push(said.clone());
@@ -1051,7 +1098,7 @@ impl Core {
                 send(run, Command::AnswerQuestion { id: question.id, answers: None });
             }
         } else {
-            cancel_to_say(run, said);
+            cancel_to_say(run, said, files);
         }
         for question in asked {
             let said = own_answer(&question, text);
@@ -1087,9 +1134,7 @@ impl Core {
             let unsent = run.steered.iter().position(|said| *said == text);
             if let Some(at) = unsent.filter(|_| taken) {
                 run.steered.remove(at);
-                self.flush_acp(thread).await?;
-                let me = self.own_user(thread);
-                self.record_acp(thread, &acp::prompt(&text, &me, &[], &[])).await?;
+                self.record_steer(thread, &text).await?;
             }
             return Ok(());
         }
@@ -1098,15 +1143,17 @@ impl Core {
         }
         match outcome {
             Steered::Injected | Steered::StartedNewTurn => {
-                self.flush_acp(thread).await?;
-                let me = self.own_user(thread);
-                self.record_acp(thread, &acp::prompt(&text, &me, &[], &[])).await?;
+                self.record_steer(thread, &text).await?;
                 self.agent_changed(thread).await;
                 return Ok(());
             }
             Steered::PromptRequired => {}
             Steered::Failed | Steered::Error(_) => {
                 warn!(%thread, ?outcome, "the agent didn't take a steer; queueing it for when the turn ends");
+                // Its files are saved, and it says where, which it goes on saying in the queue.
+                if let Some(run) = self.acp.get_mut(&thread) {
+                    run.steer_files.remove(&text);
+                }
                 self.enqueue(thread, &text, true).await?;
                 self.agent_changed(thread).await;
                 return Ok(());
@@ -1116,6 +1163,19 @@ impl Core {
         run.steered.push(text);
         self.agent_changed(thread).await;
         self.next_prompt(thread).await
+    }
+
+    /// Records the person's steer the agent took in, with the files it
+    /// came with.
+    async fn record_steer(&mut self, thread: ThreadId, text: &str) -> Result<(), CoreError> {
+        self.flush_acp(thread).await?;
+        let me = self.own_user(thread);
+        let files = self.acp.get_mut(&thread).and_then(|run| run.steer_files.remove(text));
+        let prompt = match &files {
+            Some(files) => acp::prompt(&files.said, &me, &files.attached, &files.media),
+            None => acp::prompt(text, &me, &[], &[]),
+        };
+        self.record_acp(thread, &prompt).await
     }
 
     /// Sends the next prompt once a turn ended: a steer first, then the
@@ -1128,13 +1188,14 @@ impl Core {
             let me = self.own_user(thread);
             return self.send_prompt(thread, &me, &note, Given::default()).await;
         }
-        if let Some(steer) = run.steering.take() {
+        if let Some((steer, files)) = run.steering.take() {
             let me = self.own_user(thread);
             let said = format!("I interrupted your last turn to say: {steer}");
-            return self.send_prompt(thread, &me, &said, Given::default()).await;
+            return self.send_prompt(thread, &me, &said, files).await;
         }
         if !run.steered.is_empty() {
             let steer = run.steered.remove(0);
+            run.steer_files.remove(&steer);
             let me = self.own_user(thread);
             return self.send_prompt(thread, &me, &steer, Given::default()).await;
         }
@@ -1188,6 +1249,36 @@ impl Core {
         run.stopped = false;
         run.hush = None;
         run.woke_by.clear();
+        let accepts = self.running(thread)?.accepts;
+        let Files { attached, media, inline: attachments, saved } =
+            self.prepare_files(thread, attachments, |attachment| accepts.inline(attachment)).await?;
+        self.record_acp(thread, &acp::prompt(&said, &authors.join(", "), &attached, &media)).await?;
+        if !saved.is_empty() {
+            prompt = format!("{prompt}\n\n{}", saved_note(&saved));
+        }
+        let run = self.acp.get_mut(&thread).expect("caller checked");
+        if author != crate::judges::SILT {
+            run.auto.prompted(&said);
+        }
+        run.state = AgentState::Working;
+        run.error = None;
+        run.suggestion = None;
+        run.last_said.clear();
+        run.last_prompt = Some((prompt.clone(), attachments.clone()));
+        send(run, Command::Prompt { text: prompt, attachments });
+        self.agent_changed(thread).await;
+        Ok(())
+    }
+
+    /// Keeps a prompt's files beside its session, and readies them for the
+    /// agent: in the prompt where `inline` says it takes them, else saved
+    /// where it can read them.
+    async fn prepare_files(
+        &mut self,
+        thread: ThreadId,
+        attachments: Given,
+        inline: impl Fn(&Attachment) -> bool,
+    ) -> Result<Files, CoreError> {
         let Given { mut sent, uploaded } = attachments;
         let session = self.acp.get(&thread).and_then(|run| run.session.clone());
         let reference = session.and_then(|id| self.session_mut(&id).map(|session| session.reference()));
@@ -1205,30 +1296,14 @@ impl Core {
             })
             .collect();
         media.extend(taken.media);
-        self.record_acp(thread, &acp::prompt(&said, &authors.join(", "), &attached, &media)).await?;
-        let accepts = self.running(thread)?.accepts;
         sent.extend(taken.for_agent);
-        let (attachments, as_files): (Vec<_>, Vec<_>) = sent.into_iter().partition(|attachment| accepts.inline(attachment));
+        let (inline, as_files): (Vec<_>, Vec<_>) = sent.into_iter().partition(|attachment| inline(attachment));
         let mut saved = taken.saved;
         for attachment in &as_files {
             let path = save_attachment(&self.data_dir, thread, attachment).await?;
             saved.push((attachment.name.clone(), attachment.mime.clone(), path));
         }
-        if !saved.is_empty() {
-            prompt = format!("{prompt}\n\n{}", saved_note(&saved));
-        }
-        let run = self.acp.get_mut(&thread).expect("caller checked");
-        if author != crate::judges::SILT {
-            run.auto.prompted(&said);
-        }
-        run.state = AgentState::Working;
-        run.error = None;
-        run.suggestion = None;
-        run.last_said.clear();
-        run.last_prompt = Some((prompt.clone(), attachments.clone()));
-        send(run, Command::Prompt { text: prompt, attachments });
-        self.agent_changed(thread).await;
-        Ok(())
+        Ok(Files { attached, media, inline, saved })
     }
 
     pub(crate) async fn acp_command(&mut self, selector: &str, command: Command) -> Result<&'static str, CoreError> {
@@ -1699,7 +1774,12 @@ impl Core {
             checking: run.auto.checking(),
             escalations: run.auto.escalations(),
             steers: run.steers,
-            waiting_steers: if run.state.running() { run.waiting_steers.clone() } else { Vec::new() },
+            waiting_steers: if run.state.running() {
+                let shown = |sent: &String| run.steer_files.get(sent).map_or_else(|| sent.clone(), |files| files.said.clone());
+                run.waiting_steers.iter().map(shown).collect()
+            } else {
+                Vec::new()
+            },
         })
     }
 

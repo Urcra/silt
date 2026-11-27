@@ -1307,10 +1307,12 @@ pub enum Request {
         thread: String,
         preset: Preset,
     },
-    /// Interrupts the agent's turn to tell it `text`.
+    /// Interrupts the agent's turn to tell it `text`, with files.
     AcpSteer {
         thread: String,
         text: String,
+        #[serde(default)]
+        attachments: Vec<PromptAttachment>,
     },
     /// The prompts waiting for the thread's agent, next first.
     Queue {

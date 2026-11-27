@@ -711,7 +711,8 @@ export const api = {
   signInCode: (id: string, code: string) => request<string>('POST', `${thread(id)}/agent/sign-in/code`, { code }),
   cancelSignIn: (id: string) => request<string>('POST', `${thread(id)}/agent/sign-in/cancel`),
   stopAgent: (id: string) => request<string>('POST', `${thread(id)}/agent/stop`),
-  steer: (id: string, text: string) => request<string>('POST', `${thread(id)}/agent/steer`, { text }),
+  steer: (id: string, text: string, attachments: PromptAttachment[] = []) =>
+    request<string>('POST', `${thread(id)}/agent/steer`, { text, attachments: sentFiles(attachments) }),
   setPreset: (id: string, preset: Preset) => request<string>('POST', `${thread(id)}/agent/preset`, { preset }),
   queue: (id: string) => request<Queued[]>('GET', `${thread(id)}/queue`),
   enqueue: (id: string, text: string) => request<number>('POST', `${thread(id)}/queue`, { text }),

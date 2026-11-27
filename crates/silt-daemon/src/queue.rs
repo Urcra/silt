@@ -61,7 +61,7 @@ impl Core {
         self.running(thread)?;
         let queued = self.store.take_queued(thread, id).await?.ok_or_else(gone)?;
         self.queue_changed(thread);
-        self.acp_steer(thread, &queued.text).await
+        self.acp_steer(thread, &queued.text, crate::acp::Given::default()).await
     }
 
     /// Sends the queue's front to an idle agent.
