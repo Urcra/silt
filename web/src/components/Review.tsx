@@ -6,7 +6,6 @@ import { Link, useNavigate, useParams } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type DiffSpec, type ThreadSummary, type TurnInfo } from '../api'
 import { useTopic } from '../bus'
-import { useDetailChoice, useGroupingChoice } from '../detail'
 import { useTextSettings } from '../text'
 import type { DiffFile } from '../diffParse'
 import { type View, VIEWS, baseOf } from '../diffSpec'
@@ -158,8 +157,6 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
   useEffect(() => {
     if (diff.hasNextPage && !diff.isFetchingNextPage) void diff.fetchNextPage()
   }, [diff])
-  const [detail, setDetail] = useDetailChoice()
-  const [grouping, setGrouping] = useGroupingChoice()
   const [filter, setFilter] = useState('')
   const filterBox = useRef<HTMLInputElement>(null)
   const pane = useRef<HTMLElement>(null)
@@ -277,11 +274,6 @@ function Review({ thread, summary }: { thread: string; summary: ThreadSummary })
         panelOpen={false}
         waiting={status?.state === 'awaiting_input' || status?.state === 'awaiting_permission'}
         onChanges={back}
-        onDetails={back}
-        detail={detail}
-        onDetail={setDetail}
-        grouping={grouping}
-        onGrouping={setGrouping}
         onConversation={back}
       />
       <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line-subtle px-4 py-1.5 md:pl-5">

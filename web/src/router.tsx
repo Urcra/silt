@@ -11,6 +11,10 @@ const root = createRootRoute({ component: Layout })
 export interface NewThreadSearch {
   project?: string
   pick?: 'projects' | 'new' | 'folder' | 'clone' | 'workspace'
+  /** The project to start in, by its origin, as another machine's New thread sends it (ADR 0136). */
+  origin?: string
+  /** What was typed there. */
+  draft?: string
 }
 
 const PICKS = ['projects', 'new', 'folder', 'clone', 'workspace']
@@ -19,6 +23,8 @@ function newThreadSearch(search: Record<string, unknown>): NewThreadSearch {
   return {
     ...(typeof search.project === 'string' ? { project: search.project } : {}),
     ...(typeof search.pick === 'string' && PICKS.includes(search.pick) ? { pick: search.pick as NewThreadSearch['pick'] } : {}),
+    ...(typeof search.origin === 'string' ? { origin: search.origin } : {}),
+    ...(typeof search.draft === 'string' ? { draft: search.draft } : {}),
   }
 }
 
@@ -108,6 +114,8 @@ export const router = createRouter({
       getParentRoute: () => root,
       path: '/graph',
       component: lazyRouteComponent(() => import('./components/Graph'), 'Graph'),
+      validateSearch: (search: Record<string, unknown>): { thread?: string } =>
+        typeof search.thread === 'string' ? { thread: search.thread } : {},
     }),
     createRoute({
       getParentRoute: () => root,

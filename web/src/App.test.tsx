@@ -151,6 +151,7 @@ test('threads are grouped by project, newest first', () => {
     workspace: null,
     cloud: null,
     machine: null,
+    terminal: false,
     agent_settings: null,
   })
   const grouped = projects([thread('a', 'github.com/u/b', 1), thread('b', '', 2), thread('c', 'github.com/u/b', 3)])
@@ -229,4 +230,167 @@ test('the sidebar names the workspace at its top, and at its bottom the machine,
   expect(within(menu).getByRole('button', { name: /This computer/ })).toHaveTextContent('laptop · 1 running')
   expect(within(menu).queryByRole('button', { name: 'Add a machine' })).toBeNull()
   expect(within(menu).getByRole('button', { name: /Devices and sync/ })).toHaveTextContent('silt.example.dev')
+})
+
+test('All machines lists every connected machine’s threads, marked with their machine, and the menu says how each stands', async () => {
+  const summary = (id: string, title: string, overrides: Partial<ThreadSummary>) => ({
+    id,
+    repo: 'github.com/u/r',
+    title,
+    agent: 'claude',
+    created_ms: 1,
+    messages: 2,
+    edits: 0,
+    shared: false,
+    location: 'here',
+    forked_from: null,
+    owner: '',
+    collaborators: [],
+    last_ms: Date.now(),
+    merged: false,
+    review: false,
+    mine: {
+      pinned: false,
+      snoozed_until: null,
+      snoozed_at: null,
+      wake_on_activity: false,
+      settled: false,
+      seen_ms: null,
+      reviewed_turn: null,
+    },
+    machine: null,
+    ...overrides,
+  })
+  window.__siltBackends = [
+    { id: 'native', label: 'This computer', kind: 'native', colour: 'ink' },
+    { id: 'ssh:nuc', label: 'nuc', kind: 'ssh', state: 'connected', colour: 'teal' },
+    { id: 'ssh:vps', label: 'vps', kind: 'ssh', state: 'idle', colour: 'plum' },
+  ]
+  window.__siltBackend = 'native'
+  window.__siltDesktop = { commit: 'abc', key: 'k', view: { list: 'all', mark: 'chip', markHere: false } }
+  window.__siltThreads = [
+    {
+      id: 'ssh:nuc',
+      state: 'ready',
+      threads: [
+        summary('1111111111111111', 'Faster replica load', { agent_state: 'working' }),
+        summary('2222222222222222', 'Retry the TLS check', { agent_state: 'awaiting_permission' }),
+      ] as ThreadSummary[],
+    },
+  ]
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) => {
+      const body = path.startsWith('/api/threads')
+        ? [summary('0123456789abcdef0123456789abcdef', 'Fix the lexer', {})]
+        : path.startsWith('/api/status')
+          ? { servers: [], sync_error: null }
+          : []
+      return new Response(JSON.stringify(body), { status: 200 })
+    }),
+  )
+  try {
+    render(<App />)
+    const project = await screen.findByRole('region', { name: 'github.com/u/r' })
+    await waitFor(() => expect(within(project).getByText('Faster replica load')).toBeInTheDocument())
+    expect(within(project).getByText('Fix the lexer')).toBeInTheDocument()
+    const there = within(project).getByRole('link', { name: /Faster replica load/ })
+    expect(there).toHaveTextContent('nucWorking')
+    expect(there).toHaveAccessibleName(/on nuc/)
+    expect(within(project).getByRole('link', { name: /Fix the lexer/ })).not.toHaveTextContent('nuc')
+    // Needs you gathers from every machine.
+    const waiting = screen.getByRole('region', { name: 'needs you' })
+    expect(within(waiting).getByText('Retry the TLS check')).toBeInTheDocument()
+
+    const machine = screen.getByRole('button', { name: 'machine: All machines' })
+    expect(machine).toHaveTextContent('All machines2 connected · showing This computer')
+    fireEvent.click(machine)
+    const menu = screen.getByRole('dialog', { name: 'Switch machine' })
+    expect(within(menu).getByRole('button', { name: /^All machines/ })).toHaveTextContent('2 connected · 1 needs you · 1 running')
+    expect(within(menu).getByRole('button', { name: /^nuc/ })).toHaveTextContent('over SSH · 1 needs you · 1 running')
+    expect(within(menu).getByRole('button', { name: /^vps/ })).toHaveTextContent('over SSH · not connected')
+  } finally {
+    delete window.__siltBackends
+    delete window.__siltBackend
+    delete window.__siltDesktop
+    delete window.__siltThreads
+  }
+})
+
+test('in All machines, New thread asks which machine to start on, and picking another carries the draft and project there', async () => {
+  window.__siltBackends = [
+    { id: 'native', label: 'This computer', kind: 'native', colour: 'ink' },
+    { id: 'ssh:nuc', label: 'nuc', kind: 'ssh', state: 'connected', colour: 'teal' },
+  ]
+  window.__siltBackend = 'native'
+  window.__siltDesktop = { commit: 'abc', key: 'k', view: { list: 'all', mark: 'chip', markHere: false } }
+  const went: string[] = []
+  const location = window.location
+  vi.stubGlobal('location', {
+    ...location,
+    pathname: '/',
+    get href() {
+      return location.href
+    },
+    set href(to: string) {
+      went.push(to)
+    },
+  })
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) => {
+      const body = path.startsWith('/api/agents')
+        ? { agents: [], clones: [{ repo: 'github.com/u/silt', path: '/home/me/silt' }] }
+        : path.startsWith('/api/status')
+          ? { servers: [], sync_error: null }
+          : []
+      return new Response(JSON.stringify(body), { status: 200 })
+    }),
+  )
+  try {
+    render(<App />)
+    const picker = await screen.findByRole('button', { name: 'machine: This computer', hidden: false })
+    fireEvent.change(screen.getByLabelText('first prompt'), { target: { value: 'Fix the lexer' } })
+    fireEvent.click(picker)
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Pick a machine' })).getByRole('menuitemradio', { name: /nuc/ }))
+    await waitFor(() =>
+      expect(went).toContain('silt://open/?backend=ssh%3Anuc&new=1&origin=github.com%2Fu%2Fsilt&draft=Fix+the+lexer'),
+    )
+  } finally {
+    delete window.__siltBackends
+    delete window.__siltBackend
+    delete window.__siltDesktop
+  }
+})
+
+test('a machine that stops answering leaves the list, and the foot says it’s lost while the app reconnects', async () => {
+  window.__siltBackends = [
+    { id: 'native', label: 'This computer', kind: 'native', colour: 'ink' },
+    { id: 'ssh:nuc', label: 'nuc', kind: 'ssh', state: 'connecting', colour: 'teal' },
+  ]
+  window.__siltBackend = 'native'
+  window.__siltDesktop = { commit: 'abc', key: 'k', view: { list: 'all', mark: 'chip', markHere: false } }
+  window.__siltThreads = [{ id: 'ssh:nuc', state: 'lost', threads: [] }]
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) =>
+      path.startsWith('/api/status')
+        ? new Response(JSON.stringify({ servers: [], sync_error: null }), { status: 200 })
+        : new Response('[]', { status: 200 }),
+    ),
+  )
+  try {
+    render(<App />)
+    const machine = await screen.findByRole('button', { name: 'machine: All machines' })
+    expect(machine).toHaveTextContent('1 connected · lost nuc')
+    fireEvent.click(machine)
+    expect(
+      within(screen.getByRole('dialog', { name: 'Switch machine' })).getByRole('button', { name: /^nuc/ }),
+    ).toHaveTextContent('over SSH · lost')
+  } finally {
+    delete window.__siltBackends
+    delete window.__siltBackend
+    delete window.__siltDesktop
+    delete window.__siltThreads
+  }
 })

@@ -77,6 +77,10 @@ pub struct ThreadSummary {
     /// the one answering: the device of its lease.
     #[serde(default)]
     pub machine: Option<String>,
+    /// Its agent works in a terminal, which answers it, not this page
+    /// (ADR 0026).
+    #[serde(default)]
+    pub terminal: bool,
     /// The settings the agent the web UI last ran in it here ran with, for
     /// it to start again with; none from a server.
     #[serde(default)]
@@ -1110,6 +1114,9 @@ pub struct GraphQuery {
     pub project: Option<String>,
     /// Only this family's threads.
     pub family: Option<String>,
+    /// Only the threads of this thread's family, by its id; none when it
+    /// isn't one the reader may see.
+    pub thread: Option<String>,
     /// Only the person's own threads.
     pub mine: bool,
     /// Comma-separated kinds to show; all by default.

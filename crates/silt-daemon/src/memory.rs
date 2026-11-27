@@ -365,6 +365,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_graph_narrows_to_a_threads_family_by_its_id() {
+        let (data, _repo, store) = store_with_thread().await;
+        let (core, _inbox) = loaded_core(store, data.path()).await;
+        let all = core.graph(&GraphQuery::default());
+        assert!(!all.is_empty(), "the thread's commit is in the graph");
+        let of = |thread: String| core.graph(&GraphQuery { thread: Some(thread), ..GraphQuery::default() });
+        assert_eq!(of(THREAD.to_string()), all);
+        assert_eq!(of(THREAD.short()), all, "by the short id too");
+        assert!(of(ThreadId(404).to_string()).is_empty(), "no thread, no rows rather than every family's");
+    }
+
+    #[tokio::test]
     async fn a_family_not_held_answers_the_views_across_families_as_one_held_does() {
         let (data, _repo, store) = store_with_thread().await;
         let (core, _inbox) = loaded_core(store.clone(), data.path()).await;

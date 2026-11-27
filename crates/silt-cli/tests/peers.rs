@@ -262,3 +262,45 @@ fn agents_hear_of_each_other_and_message_each_other_with_a_daemon() {
 fn agents_hear_of_each_other_and_message_each_other_without_a_daemon() {
     agents_hear_of_each_other_and_message_each_other(false);
 }
+
+/// The listed thread whose id ends with `short`, as `silt log` shortens it.
+fn listed(machine: &Machine, short: &str) -> Option<serde_json::Value> {
+    let threads = machine.web("GET", "/api/threads", None);
+    threads.as_array()?.iter().find(|thread| thread["id"].as_str().is_some_and(|id| id.ends_with(short))).cloned()
+}
+
+/// An agent run in a terminal reads as working while it's in a turn, on
+/// its own machine and on the person's other devices, which pass nothing
+/// on to it: its terminal answers it.
+#[test]
+fn an_agent_in_a_terminal_reads_as_working_here_and_on_another_device() {
+    let root = common::temp_root("silt-terminal");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let laptop = Machine::new(root.path(), "laptop", &origin, &server);
+    let desktop = Machine::new(root.path(), "desktop", &origin, &server);
+    laptop.silt(&["daemon", "start"]);
+    desktop.silt(&["daemon", "start"]);
+    let marker = root.path().join("in-tool");
+    let agent = in_tool(&laptop, &["claude"], &marker, &[]);
+    let short = laptop.stdout(&["log"]).split_whitespace().next().expect("a thread").to_owned();
+    let working = |thread: &Option<serde_json::Value>| {
+        thread.as_ref().is_some_and(|thread| thread["agent_state"] == "working" && thread["terminal"] == true)
+    };
+    assert!(eventually(|| working(&listed(&laptop, &short))), "working here: {:?}", listed(&laptop, &short));
+    assert!(eventually(|| working(&listed(&desktop, &short))), "working on the desktop: {:?}", listed(&desktop, &short));
+
+    let id = listed(&desktop, &short).and_then(|thread| thread["id"].as_str().map(str::to_owned)).expect("listed");
+    let (status, answer) =
+        desktop.web_answer("POST", &format!("/api/threads/{id}/agent/prompt"), Some(serde_json::json!({ "text": "hi" })));
+    assert_ne!(status, "200", "a prompt isn't passed on to a terminal: {answer}");
+    assert!(answer.contains("terminal"), "{answer}");
+
+    let_go(&marker);
+    finished(agent);
+    let idle = |thread: Option<serde_json::Value>| {
+        thread.is_some_and(|thread| thread["terminal"] == false && thread["agent_state"] != "working")
+    };
+    assert!(eventually(|| idle(listed(&laptop, &short))), "its turn ended: {:?}", listed(&laptop, &short));
+    assert!(eventually(|| idle(listed(&desktop, &short))), "and the desktop heard: {:?}", listed(&desktop, &short));
+}

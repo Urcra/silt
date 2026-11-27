@@ -1429,6 +1429,32 @@ impl Core {
 
     /// Records a turn mark, unless the log has it already: a mark seen by
     /// two processes, or read again, is recorded once.
+    /// The threads with an agent recorded from a terminal mid-turn here,
+    /// as the turn marks in their logs say, each with the agent's command.
+    /// The web UI's own agents aren't among them.
+    pub(crate) fn in_terminal(&self) -> Vec<(ThreadId, String)> {
+        let mut found: Vec<(ThreadId, String)> = self
+            .sessions
+            .iter()
+            .filter(|session| self.turning_in_terminal(session))
+            .map(|session| (session.record.thread, session.record.agent.clone()))
+            .collect();
+        found.sort();
+        found.dedup_by_key(|(thread, _)| *thread);
+        found
+    }
+
+    /// Whether an agent recorded from a terminal is mid-turn in `thread` here.
+    pub(crate) fn thread_in_terminal(&self, thread: ThreadId) -> bool {
+        self.sessions.iter().any(|session| session.record.thread == thread && self.turning_in_terminal(session))
+    }
+
+    fn turning_in_terminal(&self, session: &Session) -> bool {
+        session.live
+            && session.record.agent != silt_agents::acp::AGENT
+            && self.families().get(&session.family).is_some_and(|family| family.in_turn(&session.reference()))
+    }
+
     pub(crate) async fn record_turn(&mut self, session_id: &str, mark: TurnMark) -> Result<(), CoreError> {
         let Some(session) = self.session(session_id) else {
             return Ok(());

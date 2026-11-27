@@ -399,6 +399,7 @@ fn summary(
         workspace: None,
         cloud: silt_proto::view::cloud_session(own.iter().copied()),
         machine: row.holder.and_then(|holder| machines.get(&holder).cloned()),
+        terminal: running.get(&row.id).is_some_and(|(_, agent)| agent.terminal),
         agent_settings: None,
     }
 }
@@ -1691,8 +1692,17 @@ async fn graph(
     let readable = Readable::load(&server, browser.user).await?;
     let states = states(&server, browser).await?;
     let mut rows = Vec::new();
+    let thread_family = match &query.thread {
+        Some(wanted) => match readable.rows.iter().find(|row| row.id.to_string() == *wanted) {
+            Some(row) => Some(row.family),
+            None => return Ok(Json(rows)),
+        },
+        None => None,
+    };
     for (family, browsed) in &readable.deltas {
-        if query.family.as_ref().is_some_and(|wanted| *wanted != family.to_string()) {
+        if query.family.as_ref().is_some_and(|wanted| *wanted != family.to_string())
+            || thread_family.is_some_and(|wanted| wanted != *family)
+        {
             continue;
         }
         let log = browsed.log.as_slice();

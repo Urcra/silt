@@ -702,9 +702,18 @@ impl Core {
         let summaries: HashMap<String, crate::protocol::ThreadSummary> =
             self.thread_summaries().into_iter().map(|summary| (summary.id.clone(), summary)).collect();
         let mut rows = Vec::new();
+        let thread_family = match &query.thread {
+            Some(wanted) => match self.find_thread(wanted).ok().and_then(|thread| self.threads.get(&thread)) {
+                Some(record) => Some(record.family),
+                None => return Vec::new(),
+            },
+            None => None,
+        };
         let families: Vec<FamilyId> = self.families.keys().copied().collect();
         for family_id in families {
-            if query.family.as_ref().is_some_and(|wanted| *wanted != family_id.to_string()) {
+            if query.family.as_ref().is_some_and(|wanted| *wanted != family_id.to_string())
+                || thread_family.is_some_and(|wanted| wanted != family_id)
+            {
                 continue;
             }
             for mut row in self.graph_in(family_id) {

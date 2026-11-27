@@ -537,6 +537,7 @@ async fn the_hosted_app_directs_an_agent_only_through_its_owners_machine() {
             preset: "ask_for_everything".into(),
             sign_in: None,
             background: 0,
+            terminal: false,
         }],
         startable: Vec::new(),
     };
@@ -610,6 +611,7 @@ async fn people_see_their_devices_what_runs_on_each_and_choose_what_each_may_do(
             preset: String::new(),
             sign_in: None,
             background: 0,
+            terminal: false,
         }],
         startable: vec![Startable { id: "fake".into(), name: "Fake agent".into() }],
     };
@@ -689,6 +691,7 @@ async fn a_thread_continues_only_on_an_online_device_of_ones_own_once_its_agent_
             preset: String::new(),
             sign_in: None,
             background: 0,
+            terminal: false,
         }],
         startable: Vec::new(),
     };
@@ -851,6 +854,7 @@ async fn what_a_device_reports_reaches_its_persons_inbox_with_what_to_do() {
             preset: String::new(),
             sign_in: None,
             background: 0,
+            terminal: false,
         }],
         startable: Vec::new(),
     };
@@ -991,6 +995,7 @@ async fn notifying_notifications_are_pushed_encrypted_to_the_persons_browsers() 
             preset: String::new(),
             sign_in: None,
             background: 0,
+            terminal: false,
         }],
         startable: Vec::new(),
     };
@@ -1264,6 +1269,9 @@ async fn the_graph_shows_turns_forks_and_requests_of_what_each_person_sees() {
     assert_eq!(turns.as_array().expect("rows").len(), 1);
     let (_, older) = alice.get("/graph?before=20").await;
     assert!(older.as_array().expect("rows").iter().all(|row| row["time_ms"].as_i64() < Some(20)));
+    let (_, of_fork) = alice.get(&format!("/graph?thread={FORK}")).await;
+    assert_eq!(of_fork, rows, "a thread's family is the whole of this one");
+    assert_eq!(alice.get("/graph?thread=nothing").await.1, serde_json::json!([]));
 
     let dave = Browser::sign_in(&world.people.iter().find(|(name, _)| *name == "dave").expect("dave").1, "dave").await;
     assert_eq!(dave.get("/graph").await.1, serde_json::json!([]), "dave isn't in the org");

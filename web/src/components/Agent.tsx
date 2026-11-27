@@ -1,6 +1,6 @@
 import { siltTool } from '../askCall'
 import { useQuery } from '@tanstack/react-query'
-import { type Dispatch, type ReactNode, type SetStateAction, useEffect, useRef, useState } from 'react'
+import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from 'react'
 import {
   api,
   type AgentSetting,
@@ -690,7 +690,6 @@ export function AgentDock({
   onSent,
   onSending,
   people,
-  top,
 }: {
   thread: string
   status: AgentStatus | null
@@ -706,8 +705,6 @@ export function AgentDock({
   onSending?: (text: string, files: string[]) => number
   /** Everyone else here, whose machines may run an agent in the thread. */
   people: Presence[]
-  /** On the composer's top edge. */
-  top?: ReactNode
 }) {
   const [chosenAgent, setAgent] = useState<string>()
   const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents, enabled: !hosted() })
@@ -1110,7 +1107,6 @@ export function AgentDock({
                       : 'Steer it now, or queue a prompt for when this turn ends'
                     : `Ask ${status.agent}, or attach files for context`
         }
-        top={top}
         above={above}
         below={below}
         tools={tools}

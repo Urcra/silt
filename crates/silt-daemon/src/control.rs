@@ -157,8 +157,29 @@ impl Core {
                     .ok()
                     .and_then(|preset| preset.as_str().map(str::to_owned))
                     .unwrap_or_default(),
+                terminal: false,
             });
         }
+        // Agents in a terminal, which the person's other devices show as working but answer nothing for.
+        for (thread, agent) in self.in_terminal() {
+            if self.acp.contains_key(&thread) || !self.homed_at(thread, server) {
+                continue;
+            }
+            agents.push(AgentReport {
+                thread,
+                agent,
+                agent_id: String::new(),
+                state: AgentState::Working,
+                permissions: Vec::new(),
+                questions: Vec::new(),
+                sign_in: None,
+                background: 0,
+                queued: 0,
+                preset: String::new(),
+                terminal: true,
+            });
+        }
+        agents.sort_by_key(|agent| agent.thread);
         agents
     }
 
@@ -469,7 +490,23 @@ impl Core {
     }
 
     pub(crate) fn shown_state(&self, thread: ThreadId) -> Option<AgentState> {
-        self.elsewhere_of(thread).map(|running| running.agent.state).or_else(|| self.agent_state(thread))
+        if let Some(running) = self.elsewhere_of(thread) {
+            return Some(running.agent.state);
+        }
+        // An agent in a terminal works there however the web UI's last run here ended.
+        if !self.running_here(thread) && self.thread_in_terminal(thread) {
+            return Some(AgentState::Working);
+        }
+        self.agent_state(thread)
+    }
+
+    /// Whether the thread's agent works in a terminal, here or on another
+    /// of the person's devices, which answers it rather than the web UI.
+    pub(crate) fn shown_in_terminal(&self, thread: ThreadId) -> bool {
+        match self.elsewhere_of(thread) {
+            Some(running) => running.agent.terminal,
+            None => !self.running_here(thread) && self.thread_in_terminal(thread),
+        }
     }
 
     /// How many commands and subagents the thread's agent left running,
@@ -519,7 +556,13 @@ impl Core {
             _ => return None,
         };
         let thread = self.find_thread(selector).ok()?;
-        self.elsewhere_of(thread).map(|_| Elsewhere::PassOn(thread, command))
+        self.elsewhere_of(thread).map(|running| {
+            if running.agent.terminal {
+                Elsewhere::Refuse("its agent runs in a terminal on another machine; answer it there")
+            } else {
+                Elsewhere::PassOn(thread, command)
+            }
+        })
     }
 
     /// Passes `command` on through the server to the device running the

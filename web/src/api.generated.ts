@@ -778,6 +778,11 @@ project: string | null,
  */
 family: string | null, 
 /**
+ * Only the threads of this thread's family, by its id; none when it
+ * isn't one the reader may see.
+ */
+thread: string | null, 
+/**
  * Only the person's own threads.
  */
 mine: boolean, 
@@ -2352,6 +2357,11 @@ cloud: string | null,
  * the one answering: the device of its lease.
  */
 machine: string | null, 
+/**
+ * Its agent works in a terminal, which answers it, not this page
+ * (ADR 0026).
+ */
+terminal: boolean, 
 /**
  * The settings the agent the web UI last ran in it here ran with, for
  * it to start again with; none from a server.

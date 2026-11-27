@@ -10,9 +10,10 @@ import { needsYou } from '../sections'
 import { hosted } from '../served'
 import { inBackground, inProgress, threadWhere } from '../threadLook'
 import { ago } from '../time'
-import { Avatar, EmptyState, Icon, Input, Skeleton, Tabs, Tag, type Tone, buttonClass, cx } from '../ui'
+import { Avatar, ContextMenu, EmptyState, Icon, Input, Skeleton, Tabs, Tag, type Tone, buttonClass, cx, useMenuAt } from '../ui'
 import { useInWorkspace } from '../workspaceFilter'
 import { Page } from './Page'
+import { useThreadMenu } from './ThreadMenu'
 import { ThreadMark } from './ThreadMark'
 
 type Filter = 'all' | 'needs_you' | 'working' | 'mine' | 'shared' | 'elsewhere'
@@ -37,7 +38,7 @@ function threadState(
       return { label: 'Stopped', tone: 'danger' }
     case 'working':
     case 'starting':
-      return { label: 'Working', tone: 'ok' }
+      return { label: thread.terminal ? 'Working in a terminal' : 'Working', tone: 'ok' }
   }
   if (inBackground(thread)) return { label: 'In the background', tone: 'ok' }
   if (thread.review) return { label: 'Review requested', tone: 'accent' }
@@ -76,10 +77,13 @@ function ThreadRow({
   const state = threadState(thread, fromIt, recovered)
   const to = recovered ? ('/t/$id/reconcile' as const) : ('/t/$id' as const)
   const mr = into ?? fromIt
+  const { items, dialogs } = useThreadMenu(thread)
+  const menu = useMenuAt()
   return (
     <tr
+      {...menu.handlers}
       className={cx(
-        'group relative border-b border-line-subtle hover:bg-surface-1',
+        'group relative border-b border-line-subtle hover:bg-surface-1 [-webkit-touch-callout:none] pointer-coarse:select-none',
         (into || recovered) && 'bg-accent-tint hover:bg-accent-tint',
       )}
     >
@@ -152,6 +156,15 @@ function ThreadRow({
       </td>
       <td className="pr-3 pl-3 text-right font-mono text-2xs whitespace-nowrap text-fg-3">
         <span data-volatile>{ago(thread.last_ms, now)}</span>
+        {menu.at && (
+          <ContextMenu
+            label={`actions for ${thread.title ?? 'Untitled thread'}`}
+            items={items}
+            at={menu.at}
+            onClose={menu.close}
+          />
+        )}
+        {dialogs}
       </td>
     </tr>
   )

@@ -3,7 +3,10 @@ import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
 import {
   type Backend,
+  MACHINE_COLOURS,
+  type MachineColour,
   type MachineFields,
+  type Mark,
   type MachineTest,
   type SwitchFailure,
   type TestStep,
@@ -12,18 +15,24 @@ import {
   disconnectMachine,
   installSilt,
   removeMachine,
+  setMachineColour,
+  setMachinesList,
+  setMark,
   switchBackend,
   testMachine,
   useBackends,
   useMachineTest,
+  useMachinesView,
   useSwitchFailed,
 } from '../desktop'
+import { colourOf, machineName } from '../elsewhere'
 import { useNow } from '../now'
 import { keys } from '../query'
 import { fieldsOf, machineProblem, withCode } from '../machines'
 import { SETTINGS_HEADING } from '../settingsContext'
 import { ago } from '../time'
-import { Banner, Button, Dot, Icon, type IconName, Input, Menu, Spinner, cx, toast } from '../ui'
+import { Banner, Button, Chip, Dot, Icon, type IconName, Input, Menu, Popover, Spinner, cx, toast } from '../ui'
+import { MachineChip, MachineInitial } from './MachineMark'
 
 /** Says why switching machines failed; mounted once, beside the toasts. */
 export function SwitchFailures() {
@@ -96,6 +105,7 @@ function Row({
   meta,
   actions,
   children,
+  colour,
 }: {
   name: string
   icon: IconName
@@ -105,6 +115,8 @@ function Row({
   meta: ReactNode
   actions?: ReactNode
   children?: ReactNode
+  /** Its colour's picker, in the desktop app (ADR 0136). */
+  colour?: ReactNode
 }) {
   return (
     <section
@@ -122,6 +134,7 @@ function Row({
             </span>
           )}
           <span className="ml-auto inline-flex items-center gap-2">
+            {colour}
             {status}
             {actions}
           </span>
@@ -200,6 +213,7 @@ function MachineRow({
       destination={machine.destination}
       port={machine.port}
       status={<Status backend={machine} shown={shown} installing={machine.installing ? `${verb}…` : undefined} />}
+      colour={<ColourPicker backend={machine} />}
       meta={meta}
       actions={
         <>
@@ -514,8 +528,8 @@ export function MachinesSettings() {
         )}
       </div>
       <p className="text-sm text-fg-2">
-        This window shows Silt from one machine at a time, picked under Runs on. Add a computer you reach over SSH, such as a VPS.
-        Each machine keeps its own threads; hand one off through a server to move it.
+        This window shows Silt from one machine at a time, and can list every connected machine’s threads together. Add a computer
+        you reach over SSH, such as a VPS. Each machine keeps its own threads; hand one off through a server to move it.
       </p>
       {remote && (
         <Banner tone="info">
@@ -530,6 +544,7 @@ export function MachinesSettings() {
             name={backend.label}
             icon="laptop"
             status={<Status backend={backend} shown={backend.id === current} />}
+            colour={<ColourPicker backend={backend} />}
             meta={
               backend.kind === 'wsl'
                 ? 'A WSL distribution on this computer'
@@ -574,11 +589,149 @@ export function MachinesSettings() {
           </div>
         )
       )}
+      {backends.length > 1 && <ThreadsFromMachines />}
       <p className="text-xs text-fg-2">
         Silt connects with this computer’s <code className="font-mono">ssh</code>, and your keys, agent and{' '}
         <code className="font-mono">~/.ssh/config</code>. It never asks for a password, so a machine needs a key that signs in
         without a prompt.
       </p>
+    </section>
+  )
+}
+
+const COLOUR_NAMES: Record<MachineColour, string> = {
+  teal: 'Teal',
+  plum: 'Plum',
+  blue: 'Blue',
+  rose: 'Rose',
+  sand: 'Sand',
+  ink: 'Ink',
+}
+
+/** A machine's colour, which its threads are marked with (ADR 0136), and the others to pick from. */
+function ColourPicker({ backend }: { backend: Backend }) {
+  const colour = backend.colour ?? 'ink'
+  return (
+    <Popover
+      label={`${backend.label}’s colour`}
+      triggerLabel={`${backend.label}’s colour: ${COLOUR_NAMES[colour]}`}
+      triggerValue={colour}
+      align="right"
+      triggerClassName="inline-flex h-6 items-center gap-1.5 rounded-md border border-line bg-elevated px-2 text-xs text-fg-1 hover:bg-surface-2 aria-expanded:border-accent"
+      panelClassName="p-2"
+      trigger={
+        <>
+          <span aria-hidden="true" className="h-[9px] w-[9px] rounded-[2px]" style={{ background: colourOf(colour) }} />
+          {COLOUR_NAMES[colour]}
+        </>
+      }
+    >
+      {(close) => (
+        <div role="radiogroup" aria-label={`${backend.label}’s colour`} className="flex gap-1.5">
+          {MACHINE_COLOURS.map((each) => (
+            <button
+              key={each}
+              type="button"
+              role="radio"
+              aria-checked={each === colour}
+              aria-label={COLOUR_NAMES[each]}
+              title={COLOUR_NAMES[each]}
+              onClick={() => {
+                close()
+                if (each !== colour) setMachineColour(backend.id, each)
+              }}
+              className={cx(
+                'h-5 w-5 rounded-sm max-md:h-9 max-md:w-9',
+                each === colour && 'shadow-[0_0_0_2px_var(--bg-elevated),0_0_0_3.5px_var(--fg-1)]',
+              )}
+              style={{ background: colourOf(each) }}
+            />
+          ))}
+        </div>
+      )}
+    </Popover>
+  )
+}
+
+const MARK_OPTIONS: { value: Mark; label: string; detail: string }[] = [
+  { value: 'chip', label: 'Machine chip', detail: 'its name in a small chip' },
+  { value: 'colour-chip', label: 'Chip in its colour', detail: 'the chip filled with the machine’s colour' },
+  { value: 'line', label: 'In the line', detail: 'after the thread’s state, in words' },
+  { value: 'stripe', label: 'Colour', detail: 'a stripe at the row’s edge' },
+  { value: 'initial', label: 'Initial', detail: 'its first letter on its colour' },
+  { value: 'nothing', label: 'Nothing', detail: 'when the threads never mix up; the tooltip still says' },
+]
+
+/** How a thread's mark looks, beside its option. */
+function MarkPreview({ mark, backend }: { mark: Mark; backend: Backend }) {
+  const marked = { name: machineName(backend), colour: colourOf(backend.colour), mark }
+  return (
+    <span aria-hidden="true" className="ml-auto inline-flex items-center gap-1.5 text-2xs whitespace-nowrap text-fg-2">
+      {mark === 'stripe' && <span className="h-3.5 w-[3px] rounded-sm" style={{ background: marked.colour }} />}
+      {(mark === 'chip' || mark === 'colour-chip') && <MachineChip marked={marked} />}
+      Working{mark === 'line' && ` · on ${marked.name}`}
+      {mark === 'initial' && <MachineInitial marked={marked} />}
+    </span>
+  )
+}
+
+/** Whether the sidebar lists every connected machine's threads, and how each thread's machine is marked (ADR 0136). */
+function ThreadsFromMachines() {
+  const view = useMachinesView()
+  const { backends, current } = useBackends()
+  const example = backends.find((backend) => backend.id !== current) ?? backends[0]
+  return (
+    <section aria-label="Threads from other machines" className="mt-2 flex flex-col gap-3">
+      <h3 className="text-sm font-medium">Threads from other machines</h3>
+      <div className="flex flex-col rounded-md border border-line bg-elevated">
+        <div className="flex flex-wrap items-center gap-3 border-b border-line-subtle px-4 py-3">
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="text-sm">List</span>
+            <span className="text-2xs text-fg-2">The machine menu’s choice, the same on every machine’s page.</span>
+          </span>
+          <span role="group" aria-label="List" className="inline-flex gap-1.5">
+            <Chip selected={view.list === 'all'} onClick={() => setMachinesList('all')}>
+              All machines
+            </Chip>
+            <Chip selected={view.list === 'one'} onClick={() => setMachinesList('one')}>
+              One machine at a time
+            </Chip>
+          </span>
+        </div>
+        <fieldset className="flex flex-col gap-1 border-b border-line-subtle px-4 py-3">
+          <legend className="sr-only">Mark each thread’s machine</legend>
+          <span className="text-sm">Mark each thread’s machine</span>
+          <span className="mb-1 text-2xs text-fg-2">How a thread on another machine stands apart in the list and Needs you.</span>
+          {MARK_OPTIONS.map((option) => (
+            <label key={option.value} className="flex cursor-pointer items-center gap-2 py-1 text-sm max-md:min-h-11">
+              <input
+                type="radio"
+                name="mark"
+                className="accent-[var(--accent)]"
+                checked={view.mark === option.value}
+                onChange={() => setMark(option.value, view.markHere)}
+              />
+              <span className="min-w-0">
+                {option.label} <span className="text-2xs text-fg-2">{option.detail}</span>
+              </span>
+              {example && <MarkPreview mark={option.value} backend={example} />}
+            </label>
+          ))}
+        </fieldset>
+        <label className="flex cursor-pointer items-start gap-2 px-4 py-3 text-sm max-md:min-h-11">
+          <input
+            type="checkbox"
+            className="mt-1 accent-[var(--accent)]"
+            checked={view.markHere}
+            disabled={view.mark === 'nothing'}
+            onChange={(event) => setMark(view.mark, event.target.checked)}
+          />
+          <span className="flex flex-col">
+            <span>Mark the shown machine’s threads too</span>
+            <span className="text-2xs text-fg-2">Off: only threads on another machine are marked.</span>
+          </span>
+        </label>
+      </div>
     </section>
   )
 }

@@ -1,6 +1,4 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AgentMark } from './AgentMark'
-import { agentName } from '../rules'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
@@ -19,12 +17,10 @@ import {
   useState,
 } from 'react'
 import {
-  AGENTS,
   api,
   short,
-  type AgentStatus,
   type CommentView,
-  type DiffStat,
+  type AgentStatus,
   type HistoryEntry,
   type Presence,
   type ThreadSummary,
@@ -37,7 +33,6 @@ import { readWhole } from '../diffParse'
 import { useHideGit, useHideOthers, useShared } from '../hideGit'
 import { useHistory } from '../historyLoad'
 import { appHref, filePath } from '../permalink'
-import { forgeOf, projectName } from '../projects'
 import { keys, message } from '../query'
 import { useNow } from '../now'
 import { useMedia } from '../media'
@@ -46,7 +41,7 @@ import { hosted } from '../served'
 import { useClearSentDraft, useLive, usePresence } from '../session'
 import { type Sending, addSending, arrived, dropSending, useSending } from '../sending'
 import { formatKeys, useActions } from '../shortcuts'
-import { inBackground, threadTone } from '../threadLook'
+import { threadTone } from '../threadLook'
 import { taskNotification } from '../taskNotification'
 import { useThreadState } from '../threadState'
 import { ago } from '../time'
@@ -88,29 +83,10 @@ import {
 import { RunningStrip, TaskCard } from './Tasks'
 import { AskCard, AskStrip, AskedNote } from './Asks'
 import { askOfCall, askedIn, useAsks } from '../asks'
-import {
-  Avatar,
-  Button,
-  Counts,
-  Dot,
-  Icon,
-  type IconName,
-  Input,
-  Kbd,
-  KeyValue,
-  Popover,
-  Select,
-  Skeleton,
-  Tabs,
-  Tag,
-  buttonClass,
-  cx,
-  toast,
-} from '../ui'
+import { Avatar, Button, Counts, Dot, Icon, Input, Kbd, KeyValue, Popover, Skeleton, Tabs, buttonClass, cx, toast } from '../ui'
 import { AgentDock, AgentTail, EscalationCard, PermissionCard, PlanCard, SignInCard } from './Agent'
-import { AccessPanel, Approvals, SandboxShield } from './Sandbox'
+import { AccessPanel, Approvals } from './Sandbox'
 import { CommentThread } from './CommentThread'
-import { EraseThread } from './EraseThread'
 import { CopyLink } from './CopyLink'
 import { DiffPanel } from './DiffPanel'
 import { DiffView } from './DiffView'
@@ -136,8 +112,6 @@ import {
   TranscriptGrouping,
   useDetailChoice,
   useGroupingChoice,
-  type Detail,
-  type Grouping,
 } from '../detail'
 import { draftOf, keepDraft, threadDraft, useDraft } from '../drafts'
 import { SeasonalLights } from './Seasonal'
@@ -1189,92 +1163,6 @@ function OfferForm({ thread, onError }: { thread: string; onError: (failure: unk
   )
 }
 
-/** What the thread changed, over the composer: how much, a way to review it, a pull request on the forge, and for a fork, offering it back. */
-function ChangesBar({
-  thread,
-  files,
-  totals,
-  forked,
-  forge,
-  onReview,
-}: {
-  thread: string
-  files: number
-  totals: { added: number; removed: number }
-  forked: boolean
-  /** The forge the project's remote is on, by name, when it is a known one. */
-  forge: string | undefined
-  onReview: () => void
-}) {
-  const [offering, setOffering] = useState(false)
-  const [pushing, setPushing] = useState(false)
-  // Asked again with the changes, as a commit or a branch can lift what stood in the way.
-  const blocker = useQuery({
-    queryKey: [...keys.thread(thread), 'pull-request', files, totals.added, totals.removed],
-    queryFn: () => api.pullRequestBlocker(thread),
-    enabled: !hosted(),
-  })
-  // The tab opens on the click, so no popup blocker stops it, and goes to the forge once the push is done.
-  const createPr = () => {
-    const tab = window.open('', '_blank')
-    setPushing(true)
-    api.openPullRequest(thread).then(
-      (url) => {
-        setPushing(false)
-        if (tab) tab.location.href = url
-        else window.location.assign(url)
-      },
-      (failure: unknown) => {
-        setPushing(false)
-        tab?.close()
-        toast(message(failure), 'danger')
-      },
-    )
-  }
-  return (
-    <div
-      role="group"
-      aria-label="what the thread changed"
-      className="flex flex-wrap items-center gap-2 rounded-t-xl border-b border-line bg-bg px-3 py-1.5 text-xs"
-    >
-      <Icon name="file" className="h-3.5 w-3.5 text-fg-2" />
-      <span>
-        {files} {files === 1 ? 'file' : 'files'} changed
-      </span>
-      <Counts added={totals.added} removed={totals.removed} />
-      <span className="ml-auto flex items-center gap-1.5">
-        <Button size="sm" variant="ghost" onClick={onReview}>
-          Review
-        </Button>
-        {forked &&
-          (offering ? (
-            <OfferForm thread={thread} onError={(failure) => toast(message(failure), 'danger')} />
-          ) : (
-            <Button size="sm" variant={hosted() ? 'primary' : 'secondary'} icon="merge" onClick={() => setOffering(true)}>
-              Offer as merge request
-            </Button>
-          ))}
-        {!hosted() && !offering && (
-          <Button
-            size="sm"
-            variant={blocker.data ? 'secondary' : 'primary'}
-            icon="external"
-            disabled={pushing || Boolean(blocker.data)}
-            onClick={createPr}
-            title={
-              blocker.data
-                ? `No pull request yet: ${blocker.data}`
-                : `Pushes the thread's branch to origin and opens ${forge ?? 'the forge'}'s page for its pull request`
-            }
-          >
-            {pushing ? 'Pushing…' : forge ? `Create PR on ${forge}` : 'Create PR on the forge'}
-          </Button>
-        )}
-      </span>
-    </div>
-  )
-}
-
 function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
   const navigate = useNavigate()
   // Each time the palette asks, the offer opens again.
@@ -1318,301 +1206,7 @@ function ForkActions({ thread, forked }: { thread: string; forked: boolean }) {
   )
 }
 
-/** The header's More (ADR 0044): the commands that pick the thread up in a terminal, with which agent, Join live, the graph and the details. */
-function ThreadMore({
-  thread,
-  summary,
-  here,
-  onDetails,
-  detail,
-  onDetail,
-  grouping,
-  onGrouping,
-}: {
-  thread: string
-  summary: ThreadSummary | undefined
-  here: number
-  onDetails: () => void
-  detail: Detail
-  onDetail: (detail: Detail) => void
-  grouping: Grouping
-  onGrouping: (grouping: Grouping) => void
-}) {
-  const [agent, setAgent] = useState('')
-  const commands = [
-    `silt resume ${short(thread)}${agent ? ` --agent ${agent}` : ''}`,
-    `silt fork ${short(thread)}${agent ? ` --agent ${agent}` : ''}`,
-  ]
-  return (
-    <Popover
-      label="more for this thread"
-      triggerLabel="More for this thread"
-      align="right"
-      triggerClassName="inline-flex h-7 w-7 items-center justify-center rounded-sm text-fg-2 hover:bg-surface-2 hover:text-fg-1 max-md:min-h-11 max-md:min-w-11"
-      panelClassName="flex w-80 flex-col gap-1 p-2"
-      trigger={<Icon name="more" />}
-    >
-      {(close) => (
-        <>
-          <p className="px-1 pb-0.5 text-2xs text-fg-2">Group the agent&apos;s work</p>
-          <span role="radiogroup" aria-label="transcript grouping" className="mx-1 flex rounded-sm border border-line p-0.5">
-            {GROUPINGS.map((choice) => (
-              <button
-                key={choice.id}
-                type="button"
-                role="radio"
-                aria-checked={grouping === choice.id}
-                title={choice.says}
-                onClick={() => onGrouping(choice.id)}
-                className={cx(
-                  'flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11',
-                  grouping === choice.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1',
-                )}
-              >
-                {choice.label}
-              </button>
-            ))}
-          </span>
-          <p className="px-1 pt-1 pb-0.5 text-2xs text-fg-2">How much each step shows</p>
-          <span role="radiogroup" aria-label="transcript detail" className="mx-1 flex rounded-sm border border-line p-0.5">
-            {DETAILS.map((choice) => (
-              <button
-                key={choice.id}
-                type="button"
-                role="radio"
-                aria-checked={detail === choice.id}
-                title={choice.says}
-                onClick={() => onDetail(choice.id)}
-                className={cx(
-                  'flex-1 rounded-[3px] px-2 py-1 text-xs max-md:min-h-11',
-                  detail === choice.id ? 'bg-surface-2 text-fg-1' : 'text-fg-2 hover:text-fg-1',
-                )}
-              >
-                {choice.label}
-              </button>
-            ))}
-          </span>
-          <div className="my-1 border-t border-line-subtle" />
-          {summary && isChat(summary.repo) && !hosted() && (
-            <>
-              <ChatToProject thread={thread} summary={summary} onDone={close} />
-              <div className="my-1 border-t border-line-subtle" />
-            </>
-          )}
-          <EraseThread thread={thread} summary={summary} onDone={close} />
-          <p className="px-1 pb-0.5 text-2xs text-fg-2">
-            {summary && isChat(summary.repo)
-              ? 'Continue in a terminal, anywhere'
-              : 'Continue in a terminal, in a clone of the repository'}
-          </p>
-          <label className="flex items-center gap-2 px-1 text-xs text-fg-2">
-            with
-            <select
-              aria-label="agent"
-              value={agent}
-              onChange={(event) => setAgent(event.target.value)}
-              className="rounded-sm border border-line bg-elevated px-2 py-1 font-mono text-xs text-fg-1"
-            >
-              <option value="">{summary?.agent ?? 'its agent'}</option>
-              {AGENTS.filter((name) => name !== summary?.agent).map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {commands.map((command) => (
-            <button
-              key={command}
-              type="button"
-              className={cx(buttonClass('ghost'), 'justify-start font-mono font-normal text-fg-1')}
-              onClick={() => {
-                void navigator.clipboard?.writeText(command).catch(() => undefined)
-                toast(`Copied: ${command}`, 'ok')
-                close()
-              }}
-            >
-              <Icon name="copy" />
-              {command}
-            </button>
-          ))}
-          <div className="my-1 border-t border-line-subtle" />
-          {!hosted() && (
-            <Link
-              to="/t/$id/live"
-              params={{ id: thread }}
-              className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
-            >
-              <Dot tone={here > 0 ? 'ok' : 'idle'} />
-              Join live{here > 0 && ` · ${here} here`}
-            </Link>
-          )}
-          <Link to="/graph" className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}>
-            <Icon name="graph" />
-            History graph
-          </Link>
-          <button
-            type="button"
-            className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
-            onClick={() => {
-              close()
-              onDetails()
-            }}
-          >
-            <Icon name="info" />
-            Details
-          </button>
-        </>
-      )}
-    </Popover>
-  )
-}
-
-/**
- * What a chat can become (ADR 0059): a project of its own, its folder as it is, or a new thread in a project that starts from the
- * chat's conversation, with its files copied in.
- */
-function ChatToProject({ thread, summary, onDone }: { thread: string; summary: ThreadSummary; onDone: () => void }) {
-  const navigate = useNavigate()
-  const queries = useQueryClient()
-  const choices = useQuery({ queryKey: keys.agents, queryFn: api.agents })
-  const clones = choices.data?.clones ?? []
-  const agents = choices.data?.agents ?? []
-  const [making, setMaking] = useState(false)
-  const [continuing, setContinuing] = useState(false)
-  const [clone, setClone] = useState('')
-  const [copy, setCopy] = useState(true)
-  const [copyTo, setCopyTo] = useState(`notes/chat-${short(thread)}`)
-  const [prompt, setPrompt] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string>()
-  const chosen = clone || clones[0]?.path || ''
-  const agent =
-    agents.find((candidate) => candidate.name === summary.agent || candidate.id === summary.agent)?.id ?? agents[0]?.id ?? ''
-  const failed = (failure: unknown) => setError(message(failure))
-  const makeProject = () => {
-    setBusy(true)
-    api
-      .makeProject(thread)
-      .then((project) => {
-        toast(`The chat is now the project ${projectName(project)}`, 'ok')
-        void queries.invalidateQueries({ queryKey: keys.threads })
-        void queries.invalidateQueries({ queryKey: keys.projects })
-        void queries.invalidateQueries({ queryKey: keys.agents })
-        onDone()
-      }, failed)
-      .finally(() => setBusy(false))
-  }
-  const continueIn = () => {
-    setBusy(true)
-    api
-      .startAgent(
-        agent,
-        { clone: chosen },
-        {
-          here: true,
-          continues: thread,
-          copy_to: copy ? copyTo.trim() : null,
-          prompt: prompt.trim() || 'Carry on from the chat.',
-        },
-      )
-      .then((started) => {
-        void queries.invalidateQueries({ queryKey: keys.threads })
-        onDone()
-        void navigate({ to: '/t/$id', params: { id: started } })
-      }, failed)
-      .finally(() => setBusy(false))
-  }
-  return (
-    <div className="flex flex-col gap-1.5">
-      <p className="px-1 pb-0.5 text-2xs text-fg-2">This chat belongs to no project</p>
-      {!making ? (
-        <button
-          type="button"
-          className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
-          onClick={() => setMaking(true)}
-        >
-          <Icon name="folder" />
-          Make it a project…
-        </button>
-      ) : (
-        <div className="flex flex-col gap-1.5 rounded-sm border border-line p-2 text-xs">
-          <p className="text-fg-2">
-            Its folder becomes a project of its own, with this chat and its files in it. Add a remote later to share it.
-          </p>
-          <span className="flex justify-end gap-1.5">
-            <Button variant="ghost" onClick={() => setMaking(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" disabled={busy} onClick={makeProject}>
-              Make it a project
-            </Button>
-          </span>
-        </div>
-      )}
-      {!continuing ? (
-        <button
-          type="button"
-          className={cx(buttonClass('ghost'), 'justify-start font-normal text-fg-1')}
-          onClick={() => setContinuing(true)}
-        >
-          <Icon name="branch" />
-          Continue in a project…
-        </button>
-      ) : (
-        <form
-          className="flex flex-col gap-1.5 rounded-sm border border-line p-2 text-xs"
-          onSubmit={(event) => {
-            event.preventDefault()
-            continueIn()
-          }}
-        >
-          {clones.length === 0 ? (
-            <p className="text-fg-2">No project on this machine yet.</p>
-          ) : (
-            <Select aria-label="project to continue in" value={chosen} onChange={(event) => setClone(event.target.value)}>
-              {clones.map((candidate) => (
-                <option key={candidate.path} value={candidate.path}>
-                  {candidate.repo ? projectName(candidate.repo) : candidate.path}
-                </option>
-              ))}
-            </Select>
-          )}
-          <label className="flex items-center gap-1.5 text-fg-2">
-            <input type="checkbox" checked={copy} onChange={(event) => setCopy(event.target.checked)} />
-            Copy the chat&apos;s files to
-          </label>
-          {copy && (
-            <Input
-              aria-label="folder in the project"
-              value={copyTo}
-              onChange={(event) => setCopyTo(event.target.value)}
-              className="font-mono text-xs"
-            />
-          )}
-          <Input
-            aria-label="first prompt there"
-            placeholder="Carry on from the chat."
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-          />
-          <p className="text-fg-2">A new thread in your clone, its agent starting from this chat&apos;s conversation.</p>
-          <span className="flex justify-end gap-1.5">
-            <Button variant="ghost" onClick={() => setContinuing(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" disabled={busy || !chosen || !agent}>
-              Start there
-            </Button>
-          </span>
-        </form>
-      )}
-      {error && <p className="px-1 text-xs text-danger">{error}</p>}
-    </div>
-  )
-}
-
-/** The thread's header (ADR 0044): its title and where it is, then Fork, Share, Changes, and the rest behind More. */
+/** The thread's header (ADR 0044): its title, a pill when it needs the person, then Fork, Share, More and the panel's toggle. */
 export function ThreadHeader({
   thread,
   summary,
@@ -1621,152 +1215,40 @@ export function ThreadHeader({
   panelOpen,
   waiting,
   onChanges,
-  onDetails,
-  detail,
-  onDetail,
-  grouping,
-  onGrouping,
   onConversation,
-  onExpand,
-  agent,
 }: {
   thread: string
   summary: ThreadSummary | undefined
-  /** The agent the web UI runs in it, for what its sandbox reaches. */
-  agent?: AgentStatus | null
-  detail: Detail
-  onDetail: (detail: Detail) => void
-  grouping: Grouping
-  onGrouping: (grouping: Grouping) => void
   people: { user: string; device: string }[]
   changes: { added: number; removed: number } | null
   panelOpen: boolean
   /** The agent waits on the person: a plan to approve or a permission. */
   waiting: boolean
   onChanges: () => void
-  /** Opens the details, beside the conversation or as a sheet on a phone. */
-  onDetails: () => void
   /** Back to the conversation, from the expanded review, in place of the panel's toggle. */
   onConversation?: () => void
-  /** Opens the review across the page, beside the panel's toggle. */
-  onExpand?: () => void
 }) {
-  const commits = useQuery({ queryKey: keys.commits(thread), queryFn: () => api.commits(thread), retry: false })
-  const branch = commits.data?.findLast((commit) => commit.branch)?.branch
-  const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
-  const where = summary ? whereSaid(summary, status.data?.servers?.[0]?.name ?? null) : null
-  const threads = useQuery({ queryKey: keys.threads, queryFn: api.threads })
-  const source = summary?.forked_from ? threads.data?.find((candidate) => candidate.id === summary.forked_from) : undefined
-  const asked = askedIn(useAsks(), thread)
   return (
     <header className="@container/head sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2.5 border-b border-line-subtle bg-bg px-4 md:pr-3 md:pl-5">
       <DrawerButton />
-      {/* Two lines, as ADR 0044 draws it: the title keeps the room, what it is goes under it. */}
-      <div className="flex min-w-0 flex-1 flex-col justify-center">
-        <div className="flex min-w-0 items-center gap-2">
-          <h1 className="min-w-0 truncate text-heading leading-tight font-medium" title={summary?.title ?? undefined}>
-            {summary?.title ?? 'Thread'}
-          </h1>
-          {waiting ? (
-            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-warn-tint px-2 py-0.5 text-2xs whitespace-nowrap max-md:hidden">
-              <Dot tone="warn" />
-              Waiting on you
-            </span>
-          ) : (
-            summary && <StatePill summary={summary} />
-          )}
-          {summary?.local_only && (
-            <span
-              className="shrink-0 max-md:hidden"
-              title="Its project keeps new threads off every server; choose a server on the Projects page to move it"
-            >
-              <Tag>This machine only</Tag>
-            </span>
-          )}
-        </div>
-        {/* What people know it by first: its project, branch, where it runs and its agent; the id last. */}
-        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs leading-tight whitespace-nowrap text-fg-2">
-          {summary && <span className="shrink-0 font-mono">{projectName(summary.repo || 'no remote')}</span>}
-          {branch && !isChat(summary?.repo) && (
-            <span
-              className="inline-flex min-w-0 shrink items-center gap-1"
-              title={`The branch its latest commit went on: ${branch}`}
-            >
-              · <Icon name="branch" className="h-3 w-3 shrink-0" />
-              <span className="max-w-[16ch] truncate font-mono">{branch}</span>
-            </span>
-          )}
-          {where && (
-            <span className="inline-flex shrink-0 items-center gap-1">
-              · <Icon name={where.icon} className="h-3 w-3 shrink-0" />
-              <span className="truncate">{where.label}</span>
-            </span>
-          )}
-          {summary?.agent && (
-            <span
-              className="inline-flex shrink-0 items-center gap-1"
-              title={`${agentName(summary.agent)} · recorded its latest session`}
-            >
-              · <AgentMark agent={summary.agent} labelled className="h-[13px] w-[13px]" />
-            </span>
-          )}
-          {asked && (
-            <span className="inline-flex min-w-0 shrink items-center gap-1" data-testid="asked-by">
-              · asked by{' '}
-              <AgentMark
-                agent={asked.caller_agent_id || asked.caller_agent}
-                name={asked.caller_agent}
-                className="h-[13px] w-[13px]"
-              />
-              <Link className="min-w-0 truncate text-accent-fg" to="/t/$id" params={{ id: asked.caller }} data-volatile>
-                {source?.title ?? short(asked.caller)}
-              </Link>
-            </span>
-          )}
-          {summary?.forked_from && !asked && !summary.title?.startsWith('Fork of ') && (
-            <span className="inline-flex min-w-0 shrink items-center gap-1">
-              · fork of
-              <Link
-                className="min-w-0 truncate text-accent-fg"
-                to="/t/$id"
-                params={{ id: summary.forked_from }}
-                title={summary.forked_from}
-                data-volatile
-              >
-                {source?.title ?? short(summary.forked_from)}
-              </Link>
-            </span>
-          )}
-          <span className="shrink-0 font-mono text-2xs text-fg-3" data-volatile>
-            · {short(thread)}
+      {/* Only the title: the project, branch, machine, agent and id are in the sidebar and the panel already. */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <h1 className="min-w-0 truncate text-heading leading-tight font-medium" title={summary?.title ?? undefined}>
+          {summary?.title ?? 'Thread'}
+        </h1>
+        {waiting ? (
+          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-warn-tint px-2 py-0.5 text-2xs whitespace-nowrap max-md:hidden">
+            <Dot tone="warn" />
+            Waiting on you
           </span>
-        </div>
+        ) : (
+          summary && <StatePill summary={summary} />
+        )}
       </div>
       <Here people={people} />
       <span className="flex shrink-0 items-center gap-1">
-        <SandboxShield thread={thread} summary={summary} agent={agent} />
         <ForkActions thread={thread} forked={Boolean(summary?.forked_from)} />
         {summary && <ShareDialog thread={summary} />}
-        <ThreadMore
-          thread={thread}
-          summary={summary}
-          here={people.length}
-          onDetails={onDetails}
-          detail={detail}
-          onDetail={onDetail}
-          grouping={grouping}
-          onGrouping={onGrouping}
-        />
-        {onExpand && (
-          <Button
-            variant="ghost"
-            aria-label="Expand the review"
-            onClick={onExpand}
-            title="The changes across the page, to review (⇧D)"
-          >
-            <Icon name="expand" className="h-4 w-4" />
-          </Button>
-        )}
         {onConversation ? (
           <Button icon="collapse" onClick={onConversation} title="Back to the conversation (Esc)">
             Conversation <Kbd>Esc</Kbd>
@@ -1794,34 +1276,15 @@ export function ThreadHeader({
   )
 }
 
-/** Where the thread's work is, for its header: this machine by name, the server, or another device. */
-function whereSaid(summary: ThreadSummary, device: string | null): { label: string; icon: IconName } {
-  if (summary.location === 'moved') return { label: `moved to ${summary.machine ?? 'another device'}`, icon: 'handoff' }
-  if (summary.location === 'remote')
-    return summary.machine ? { label: `on ${summary.machine}`, icon: 'monitor' } : { label: 'on the server', icon: 'cloud' }
-  return { label: device ?? 'this machine', icon: 'monitor' }
-}
-
-/** The thread's state beside its title, in words, when its agent is doing something; waiting on the person has its own pill. */
+/** An agent that stopped with an error, beside the title; waiting on the person has its own pill, and working shows in the sidebar. */
 function StatePill({ summary }: { summary: ThreadSummary }) {
-  const state = summary.agent_state
-  if (state === 'working' || state === 'starting' || inBackground(summary)) {
-    return (
-      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-ok-tint px-2 py-0.5 text-2xs whitespace-nowrap text-ok max-md:hidden">
-        <Dot tone="ok" />
-        {state === 'starting' ? 'Starting' : state === 'working' ? 'Working' : 'In the background'}
-      </span>
-    )
-  }
-  if (state === 'error') {
-    return (
-      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-danger-tint px-2 py-0.5 text-2xs whitespace-nowrap text-danger max-md:hidden">
-        <Dot tone="danger" />
-        Stopped with an error
-      </span>
-    )
-  }
-  return null
+  if (summary.agent_state !== 'error') return null
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-danger-tint px-2 py-0.5 text-2xs whitespace-nowrap text-danger max-md:hidden">
+      <Dot tone="danger" />
+      Stopped with an error
+    </span>
+  )
 }
 
 /** The thread's lineage: what it was forked from, and its forks. */
@@ -1908,8 +1371,23 @@ function InspectorSection({
 function ThreadCommits({ thread }: { thread: string }) {
   const commits = useQuery({ queryKey: keys.commits(thread), queryFn: () => api.commits(thread), retry: false })
   if (!commits.data?.length) return null
+  const branch = commits.data.findLast((commit) => commit.branch)?.branch
   return (
-    <InspectorSection title="Commits from this thread" label="commits">
+    <InspectorSection
+      title="Commits from this thread"
+      label="commits"
+      aside={
+        branch && (
+          <span
+            className="inline-flex min-w-0 items-center gap-1 text-fg-2"
+            title={`The branch its latest commit went on: ${branch}`}
+          >
+            <Icon name="branch" className="h-3 w-3 shrink-0" />
+            <span className="max-w-[20ch] truncate font-mono">{branch}</span>
+          </span>
+        )
+      }
+    >
       <ul className="flex flex-col gap-1.5 text-xs">
         {commits.data.map((commit) => (
           <li key={commit.commit} className="flex flex-col gap-0.5">
@@ -1931,15 +1409,13 @@ function ThreadCommits({ thread }: { thread: string }) {
   )
 }
 
-/** How many of the thread's files Details lists before More. */
-const LISTED_FILES = 200
-
 /** The Thread board's inspector: handoff, lineage, files, commits and comments on code. */
 function Details({
   thread,
   summary,
   total,
-  files,
+  threads,
+  agent,
   codeComments,
   anchor,
   onChanged,
@@ -1948,7 +1424,10 @@ function Details({
   thread: string
   summary: ThreadSummary | undefined
   total: number
-  files: DiffStat[] | null
+  /** Every thread, for its lineage. */
+  threads: ThreadSummary[]
+  /** The agent here, for what its sandbox reaches. */
+  agent: AgentStatus | null | undefined
   codeComments: CommentView[]
   anchor: Anchor
   onChanged: () => Promise<unknown>
@@ -1957,7 +1436,7 @@ function Details({
   const now = useNow()
   const status = useQuery({ queryKey: keys.status, queryFn: api.status, enabled: !hosted() })
   const device = status.data?.servers?.[0]?.name ?? 'this machine'
-  const [listed, setListed] = useState(LISTED_FILES)
+  const related = summary && (summary.forked_from || threads.some((other) => other.forked_from === summary.id))
   const liveOn =
     summary?.location === 'moved'
       ? 'another device'
@@ -2005,29 +1484,18 @@ function Details({
           Picking it up on another machine moves the agent session there. This one stops writing.
         </p>
       </InspectorSection>
-      <InspectorSection title="Files changed">
-        {files === null && <Skeleton className="h-10" />}
-        {files?.length === 0 && <p className="text-xs text-fg-2">No changes yet.</p>}
-        <ul className="flex flex-col gap-0.5 font-mono text-2xs">
-          {files?.slice(0, listed).map((file) => (
-            <li key={file.path} className="flex items-center gap-2 py-0.5">
-              <a
-                href={appHref(filePath(thread, file.path))}
-                className="min-w-0 flex-1 truncate text-fg-1 hover:text-accent-fg max-md:inline-flex max-md:min-h-11 max-md:items-center"
-                title={file.path}
-              >
-                {file.path}
-              </a>
-              <Counts added={file.added} removed={file.removed} binary={file.binary} />
-            </li>
-          ))}
-        </ul>
-        {files && files.length > listed && (
-          <Button variant="ghost" size="sm" className="self-start" onClick={() => setListed(listed + LISTED_FILES)}>
-            {(files.length - listed).toLocaleString()} more files
-          </Button>
-        )}
-      </InspectorSection>
+      {summary && related && (
+        <InspectorSection
+          title="Lineage"
+          aside={
+            <Link to="/graph" search={{ thread: summary.id }} className="text-accent-fg hover:text-fg-1">
+              View graph
+            </Link>
+          }
+        >
+          <Lineage summary={summary} threads={threads} />
+        </InspectorSection>
+      )}
       <ThreadCommits thread={thread} />
       <InspectorSection title="Comments on code">
         <ul data-testid="code-comments" className="flex flex-col gap-2">
@@ -2080,6 +1548,7 @@ function Details({
           Comment on lines
         </Button>
       </InspectorSection>
+      {!hosted() && <AccessPanel thread={thread} summary={summary} agent={agent} embedded />}
     </div>
   )
 }
@@ -2098,7 +1567,7 @@ function Here({ people }: { people: { user: string; device: string }[] }) {
   )
 }
 
-type InspectorTab = 'design' | 'changes' | 'artifacts' | 'details' | 'lineage' | 'access'
+type InspectorTab = 'design' | 'changes' | 'artifacts' | 'details'
 
 const NO_PEOPLE: Presence[] = []
 const NO_TURNS: TurnInfo[] = []
@@ -2671,46 +2140,63 @@ function ThreadBody({
                               </Suspense>
                             ) : (
                               <div className="flex flex-col">
-                                <div className="sticky top-0 z-10 flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-line-subtle bg-bg px-4 py-1.5">
-                                  <Tabs
-                                    label="inspector"
-                                    tabs={[
-                                      ...(designTitle ? [{ id: 'design' as const, label: designTitle }] : []),
-                                      {
-                                        id: 'changes',
-                                        label: (
-                                          <>
-                                            {isChat(summary?.repo) ? 'Files' : 'Changes'}{' '}
-                                            {totals && (totals.added > 0 || totals.removed > 0) && (
-                                              <Counts added={totals.added} removed={totals.removed} />
-                                            )}
-                                          </>
-                                        ),
-                                      },
-                                      ...(groups.length > 0 || images.length > 0
-                                        ? [
-                                            {
-                                              id: 'artifacts' as const,
-                                              label: (
-                                                <>
-                                                  Artifacts{' '}
-                                                  <span className="font-mono text-2xs text-accent-fg">
-                                                    {groups.length + images.length}
-                                                  </span>
-                                                </>
-                                              ),
-                                            },
-                                          ]
-                                        : []),
-                                      { id: 'details', label: 'Details' },
-                                      { id: 'lineage', label: 'Lineage' },
-                                      ...(hosted() ? [] : [{ id: 'access' as const, label: 'Access' }]),
-                                    ]}
-                                    value={tab}
-                                    onChange={setTab}
-                                  />
+                                <div className="sticky top-0 z-10 flex shrink-0 flex-col bg-bg">
+                                  <div className="flex min-h-12 flex-wrap items-center gap-2 border-b border-line-subtle px-4 py-1.5">
+                                    <Tabs
+                                      label="inspector"
+                                      tabs={[
+                                        ...(designTitle ? [{ id: 'design' as const, label: designTitle }] : []),
+                                        {
+                                          id: 'changes',
+                                          label: (
+                                            <>
+                                              {isChat(summary?.repo) ? 'Files' : 'Changes'}{' '}
+                                              {totals && (totals.added > 0 || totals.removed > 0) && (
+                                                <Counts added={totals.added} removed={totals.removed} />
+                                              )}
+                                            </>
+                                          ),
+                                        },
+                                        ...(groups.length > 0 || images.length > 0
+                                          ? [
+                                              {
+                                                id: 'artifacts' as const,
+                                                label: (
+                                                  <>
+                                                    Artifacts{' '}
+                                                    <span className="font-mono text-2xs text-accent-fg">
+                                                      {groups.length + images.length}
+                                                    </span>
+                                                  </>
+                                                ),
+                                              },
+                                            ]
+                                          : []),
+                                        { id: 'details', label: 'Details' },
+                                      ]}
+                                      value={tab}
+                                      onChange={setTab}
+                                    />
+                                    {tab === 'changes' && roomy && (
+                                      <Button
+                                        variant="ghost"
+                                        className="ml-auto"
+                                        aria-label="Expand the review"
+                                        onClick={openReview}
+                                        title="The changes across the page, to review (⇧D)"
+                                      >
+                                        <Icon name="expand" className="h-4 w-4" />
+                                      </Button>
+                                    )}
+                                  </div>
+                                  {/* What the diff shows and how, under the tabs, filled by the diff itself. */}
                                   {tab === 'changes' && (
-                                    <span ref={setDiffControls} className="ml-auto flex items-center gap-2" />
+                                    <div
+                                      ref={setDiffControls}
+                                      role="toolbar"
+                                      aria-label="what the diff shows"
+                                      className="flex min-h-10 flex-wrap items-center gap-2 border-b border-line-subtle px-4 py-1 text-xs text-fg-2"
+                                    />
                                   )}
                                 </div>
                                 {tab === 'design' ? (
@@ -2726,29 +2212,13 @@ function ThreadBody({
                                       onOpen={(id) => openArtifact(id)}
                                     />
                                   </Suspense>
-                                ) : tab === 'access' ? (
-                                  <AccessPanel thread={thread} agent={agent} />
-                                ) : tab === 'lineage' ? (
-                                  <div className="flex flex-col gap-6 px-5 py-5">
-                                    {summary && (
-                                      <InspectorSection
-                                        title="Lineage"
-                                        aside={
-                                          <Link to="/graph" className="text-accent-fg hover:text-fg-1">
-                                            View graph
-                                          </Link>
-                                        }
-                                      >
-                                        <Lineage summary={summary} threads={threads.data ?? []} />
-                                      </InspectorSection>
-                                    )}
-                                  </div>
                                 ) : tab === 'details' ? (
                                   <Details
                                     thread={thread}
                                     summary={summary}
                                     total={total}
-                                    files={files}
+                                    threads={threads.data ?? []}
+                                    agent={agent}
                                     codeComments={codeComments}
                                     anchor={anchor}
                                     onChanged={reloadComments}
@@ -2778,18 +2248,7 @@ function ThreadBody({
                             changes={totals}
                             panelOpen={panel && desktop}
                             waiting={agent?.state === 'awaiting_input' || agent?.state === 'awaiting_permission'}
-                            agent={agent}
-                            detail={detail}
-                            onDetail={setDetail}
-                            grouping={grouping}
-                            onGrouping={setGrouping}
                             onChanges={showChanges}
-                            onExpand={roomy ? openReview : undefined}
-                            onDetails={() => {
-                              setTab('details')
-                              setPanel(true)
-                              setSheet(window.matchMedia('(max-width: 1023px)').matches)
-                            }}
                           />
                           <div className="mx-auto flex w-full max-w-(--read-width) flex-1 flex-col px-4 md:px-6">
                             {askedHere && (
@@ -2871,22 +2330,6 @@ function ThreadBody({
                                 onPeople={setPeople}
                                 onSent={() => list.current?.follow()}
                                 onSending={(text, files) => addSending(thread, text, files, total)}
-                                // Docked on the composer's top edge: what the thread changed and what the next prompt adds to it are one object.
-                                top={
-                                  files &&
-                                  files.length > 0 &&
-                                  totals &&
-                                  !busy && (
-                                    <ChangesBar
-                                      thread={thread}
-                                      files={files.length}
-                                      totals={totals}
-                                      forked={Boolean(summary?.forked_from)}
-                                      forge={forgeOf(summary?.repo ?? '')}
-                                      onReview={roomy ? openReview : showChanges}
-                                    />
-                                  )
-                                }
                               />
                             </div>
                           </div>

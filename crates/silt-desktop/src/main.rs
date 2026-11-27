@@ -11,6 +11,7 @@
 
 mod backends;
 mod daemon;
+mod elsewhere;
 mod machines;
 #[cfg(target_os = "linux")]
 mod microphone;
@@ -18,7 +19,7 @@ mod ssh;
 mod theme;
 mod zoom;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,6 +35,7 @@ use tauri::{AppHandle, Manager, Theme, Url, WebviewUrl, WebviewWindow, WebviewWi
 
 use crate::backends::{Backend, Target};
 use crate::daemon::{Answer, DesktopError};
+use crate::elsewhere::{List, Listing, View};
 use crate::machines::Edit;
 
 const MAIN: &str = "main";
@@ -67,6 +69,15 @@ struct State {
     /// own page is told: a frame in it, such as an artifact's, could send
     /// such a link too.
     key: String,
+    /// How threads are listed and marked, and the file that keeps it (ADR 0136).
+    view: Mutex<View>,
+    view_file: OnceLock<PathBuf>,
+    /// The other backends' threads, as the page was last told them.
+    listings: Mutex<BTreeMap<String, Listing>>,
+    /// The UI of each backend that isn't shown, by its id, once found.
+    uis: Mutex<HashMap<String, Url>>,
+    /// Asks the gathering to look again now, not at its next turn.
+    poke: AtomicBool,
 }
 
 impl State {
@@ -87,6 +98,12 @@ impl State {
             .iter()
             .map(|backend| {
                 let mut entry = serde_json::json!({ "id": backend.id(), "label": backend.label(), "kind": backend.kind() });
+                // What its threads are marked with on other machines' pages (ADR 0136).
+                if *backend == Backend::Native
+                    && let Some(host) = host_name()
+                {
+                    entry["host"] = host.into();
+                }
                 // What a machine over SSH is offered to update to (ADR 0109).
                 if *backend == Backend::Native
                     && let Some(version) = backends.machines.local_version()
@@ -97,6 +114,12 @@ impl State {
             })
             .collect();
         list.extend(backends.machines.entries());
+        let view = self.view.lock().expect("lock");
+        for (at, entry) in list.iter_mut().enumerate() {
+            let colour = entry["id"].as_str().map(|id| view.colour(id, at).to_owned());
+            entry["colour"] = colour.into();
+        }
+        drop(view);
         if shown.is_some_and(|shown| shown != target) {
             let id = serde_json::Value::String(target.id());
             for entry in list.iter_mut().filter(|entry| entry["id"] == id) {
@@ -142,8 +165,57 @@ impl State {
     fn retarget(&self, name: &str, to: Backend) {
         let mut target = self.target.lock().expect("lock");
         if target.backend == Backend::Ssh(name.to_owned()) {
-            *target = Target { backend: to, project: None };
+            *target = Target { backend: to, ..Target::default() };
         }
+    }
+
+    /// Whether `link` carries the key only the window's own page is told.
+    fn keyed(&self, link: &Url) -> bool {
+        link.query_pairs().any(|(name, value)| name == "key" && value == self.key)
+    }
+
+    /// Changes how threads are listed or marked, keeps it, and tells the page.
+    fn change_view(&self, edit: elsewhere::ViewEdit) {
+        let kept = {
+            let mut view = self.view.lock().expect("lock");
+            view.apply(edit);
+            view.clone()
+        };
+        if let Some(file) = self.view_file.get() {
+            let written = file.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| fs::write(file, kept.remember()));
+            if let Err(error) = written {
+                eprintln!("silt-desktop: could not keep how threads are listed: {error}");
+            }
+        }
+        if let Some(window) = self.app.get().and_then(|app| app.get_webview_window(MAIN)) {
+            let _ = window.eval(elsewhere::view_script(&kept));
+        }
+        self.tell();
+        self.poke.store(true, Ordering::SeqCst);
+    }
+
+    /// The UI of `backend` as last found, if it's connected: the window's
+    /// own for the backend it shows.
+    fn ui_found(&self, backend: &Backend) -> Option<Url> {
+        if self.shown.lock().expect("lock").as_ref() == Some(backend) {
+            return self.ui.lock().expect("lock").clone();
+        }
+        if let Backend::Ssh(name) = backend {
+            return match self.backends.get()?.machines.connection(name) {
+                ssh::Connection::Up(url) => Some(url),
+                _ => None,
+            };
+        }
+        self.uis.lock().expect("lock").get(&backend.id()).cloned()
+    }
+
+    /// Makes a change to a thread on another machine, as its own page would.
+    fn change_elsewhere(&self, change: &elsewhere::StateChange) {
+        let done = self.ui_found(&change.backend).is_some_and(|ui| elsewhere::change_state(&ui, change));
+        if !done {
+            eprintln!("silt-desktop: could not change thread {} on {}", change.thread, change.backend.label());
+        }
+        self.poke.store(true, Ordering::SeqCst);
     }
 }
 
@@ -159,6 +231,11 @@ fn main() {
         backends: OnceLock::new(),
         app: OnceLock::new(),
         key: new_key(),
+        view: Mutex::default(),
+        view_file: OnceLock::new(),
+        listings: Mutex::default(),
+        uis: Mutex::default(),
+        poke: AtomicBool::new(false),
     });
     let (linked, closing) = (state.clone(), state.clone());
     tauri::Builder::default()
@@ -174,6 +251,10 @@ fn main() {
         .setup(move |app| {
             let _ = state.app.set(app.handle().clone());
             let dir = app.path().app_data_dir().ok();
+            if let Some(file) = dir.as_ref().map(|dir| dir.join(elsewhere::VIEW)) {
+                *state.view.lock().expect("lock") = fs::read_to_string(&file).map(|text| View::parse(&text)).unwrap_or_default();
+                let _ = state.view_file.set(file);
+            }
             let fixed = finding.join().unwrap_or_else(|_| vec![Backend::Native]);
             let machines = Arc::new(ssh::Machines::load(dir.as_deref()));
             let told = state.clone();
@@ -190,13 +271,15 @@ fn main() {
             }
             // Opened by itself, the window shows where it last did, not this computer every time.
             if !opened_by_link && let Some(backend) = dir.as_ref().and_then(|dir| last_backend(&dir.join(LAST_BACKEND), &known)) {
-                *state.target.lock().expect("lock") = Target { backend, project: None };
+                *state.target.lock().expect("lock") = Target { backend, ..Target::default() };
             }
             let silts = Arc::new(Silts::load(dir.as_ref().map(|dir| dir.join(WSL_SILTS))));
             app.manage(silts.clone());
             let shown = state.target.lock().expect("lock").backend.clone();
             let (starting, fixed) = (silts.clone(), state.backends.get().expect("set").fixed.clone());
             std::thread::spawn(move || start_the_others(&fixed, &shown, &native_silt(), &starting));
+            let (gathering, finding) = (state.clone(), silts.clone());
+            std::thread::spawn(move || gather(&gathering, &finding));
             open_window(app.handle(), state, silts, dir)?;
             Ok(())
         })
@@ -212,6 +295,18 @@ fn main() {
                 }
             }
         });
+}
+
+/// This computer's name, without its domain, as `hostname` says it.
+fn host_name() -> Option<&'static str> {
+    static NAME: OnceLock<Option<String>> = OnceLock::new();
+    NAME.get_or_init(|| {
+        let said = env::var("COMPUTERNAME")
+            .ok()
+            .or_else(|| daemon::output_of(Command::new("hostname")).map(|out| String::from_utf8_lossy(&out).into_owned()))?;
+        elsewhere::short_host(&said)
+    })
+    .as_deref()
 }
 
 /// A key no page can guess.
@@ -274,10 +369,11 @@ fn link_in(args: impl IntoIterator<Item = String>, known: &[Backend]) -> Option<
 /// offers where it says where Silt runs, rather than in a menu bar of the
 /// window's own, and of this app.
 fn desktop_script(state: &State) -> String {
+    let view = state.view.lock().expect("lock").for_page();
     format!(
         "window.__siltBackends = {}; window.__siltDesktop = {};",
         state.list(),
-        serde_json::json!({ "commit": env!("SILT_BUILD_COMMIT"), "key": state.key })
+        serde_json::json!({ "commit": env!("SILT_BUILD_COMMIT"), "key": state.key, "view": view })
     )
 }
 
@@ -329,6 +425,22 @@ fn open_window(app: &AppHandle, state: Arc<State>, silts: Arc<Silts>, dir: Optio
                 *navigating.target.lock().expect("lock") = wanted;
                 let state = navigating.clone();
                 std::thread::spawn(move || state.tell());
+                return false;
+            }
+            // And how threads are listed and marked (ADR 0136), from any machine's page.
+            if let Some(edit) = elsewhere::view_edit_of(to) {
+                if navigating.keyed(to) {
+                    let state = navigating.clone();
+                    std::thread::spawn(move || state.change_view(edit));
+                }
+                return false;
+            }
+            // And to pin, snooze or settle a thread on another machine.
+            if let Some(change) = elsewhere::state_change_of(to, &navigating.known()) {
+                if navigating.keyed(to) {
+                    let state = navigating.clone();
+                    std::thread::spawn(move || state.change_elsewhere(&change));
+                }
                 return false;
             }
             // And to edit the machines (ADR 0108), which can take a while.
@@ -396,6 +508,9 @@ fn open_window(app: &AppHandle, state: Arc<State>, silts: Arc<Silts>, dir: Optio
             let shown = loading.shown.lock().expect("lock").clone();
             let shown = shown.unwrap_or_else(|| loading.target.lock().expect("lock").backend.clone());
             let _ = window.eval(current_script(&shown));
+            // A page that loads after a listing or the view changed hears them again (ADR 0136).
+            let _ = window.eval(elsewhere::view_script(&loading.view.lock().expect("lock")));
+            let _ = window.eval(elsewhere::script(&loading.listings.lock().expect("lock")));
             let state = loading.clone();
             std::thread::spawn(move || state.tell());
             if !started.swap(true, Ordering::SeqCst) {
@@ -494,7 +609,13 @@ fn keep_ui(window: &WebviewWindow, state: &State, silts: &Silts, dir: Option<&Pa
         // Another backend or project starts on its own page.
         let carried = if showing.as_ref() == Some(&wanted) { known.as_ref() } else { None };
         let opened = open_ui(&wanted, &program, silts, state).and_then(|new| {
-            let moved = daemon::same_page_on(Some(&shown), carried, &new);
+            let mut moved = daemon::same_page_on(Some(&shown), carried, &new);
+            // A thread or New thread asked for on another machine (ADR 0136).
+            if let Some(page) = wanted.page.as_ref().filter(|_| carried.is_none()) {
+                let (path, query) = page.path();
+                moved.set_path(&path);
+                moved.set_query(query.as_deref());
+            }
             eprintln!("silt-desktop: showing {}{}", new.origin().ascii_serialization(), moved.path());
             *state.ui.lock().expect("lock") = Some(new);
             *state.shown.lock().expect("lock") = Some(wanted.backend.clone());
@@ -556,6 +677,137 @@ fn keep_ui(window: &WebviewWindow, state: &State, silts: &Silts, dir: Option<&Pa
             }
         }
     }
+}
+
+/// How often every other connected machine is asked for its threads.
+const GATHER_EVERY: Duration = Duration::from_secs(3);
+
+/// Asks every connected backend the window doesn't show for its threads,
+/// while All machines is picked, and tells the page (ADR 0136). Only
+/// connected machines are asked: a machine over SSH is connected only when
+/// the person picks or tests it. One that answered and stops is lost until
+/// it answers again; this computer's and a distribution's daemons are found
+/// again, and a machine's tunnel opened again, with backoff.
+fn gather(state: &State, silts: &Silts) {
+    let program = native_silt();
+    let mut told = String::new();
+    // When each backend may next be looked for again, and how many times it failed.
+    let mut again: HashMap<String, (Instant, u32)> = HashMap::new();
+    loop {
+        let all = state.view.lock().expect("lock").list == List::All;
+        let mut listings = BTreeMap::new();
+        if all {
+            let shown = state.shown.lock().expect("lock").clone();
+            let before = state.listings.lock().expect("lock").clone();
+            for backend in state.known().into_iter().filter(|backend| Some(backend) != shown.as_ref()) {
+                let id = backend.id();
+                let answered = matches!(before.get(&id), Some(Listing::Ready(_) | Listing::Lost));
+                let due = again.get(&id).is_none_or(|(at, _)| Instant::now() >= *at);
+                // Finding a daemon with `silt open` can take seconds, and the page says so meanwhile.
+                if !before.contains_key(&id) && due && !matches!(&backend, Backend::Ssh(_)) && state.ui_found(&backend).is_none()
+                {
+                    let mut loading = before.clone();
+                    loading.insert(id.clone(), Listing::Loading);
+                    tell_threads(state, &loading, &mut told);
+                }
+                let Some(ui) = ui_to_ask(state, &backend, &program, silts, due) else {
+                    if answered
+                        && matches!(&backend, Backend::Ssh(_))
+                        && state.backends.get().is_some_and(|backends| {
+                            matches!(backends.machines.connection(&backend.label()), ssh::Connection::Connecting)
+                        })
+                    {
+                        listings.insert(id.clone(), Listing::Lost);
+                    }
+                    if due {
+                        back_off(&mut again, &id);
+                    }
+                    continue;
+                };
+                if !before.contains_key(&id) {
+                    let mut loading = before.clone();
+                    loading.insert(id.clone(), Listing::Loading);
+                    tell_threads(state, &loading, &mut told);
+                }
+                let listing = match elsewhere::threads_of(&ui) {
+                    Some(threads) => {
+                        again.remove(&id);
+                        Listing::Ready(threads)
+                    }
+                    None => {
+                        state.uis.lock().expect("lock").remove(&id);
+                        if due {
+                            reconnect(state, &backend);
+                            back_off(&mut again, &id);
+                        }
+                        if answered { Listing::Lost } else { Listing::Loading }
+                    }
+                };
+                listings.insert(id, listing);
+            }
+        }
+        *state.listings.lock().expect("lock") = listings.clone();
+        tell_threads(state, &listings, &mut told);
+        let until = Instant::now() + GATHER_EVERY;
+        while Instant::now() < until && !state.poke.swap(false, Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+fn back_off(again: &mut HashMap<String, (Instant, u32)>, id: &str) {
+    let failures = again.get(id).map_or(0, |(_, failures)| failures + 1);
+    again.insert(id.to_owned(), (Instant::now() + daemon::backoff(failures + 2), failures));
+}
+
+/// Tells the page the listings, unless it was told them already.
+fn tell_threads(state: &State, listings: &BTreeMap<String, Listing>, told: &mut String) {
+    let script = elsewhere::script(listings);
+    if script == *told {
+        return;
+    }
+    if let Some(window) = state.app.get().and_then(|app| app.get_webview_window(MAIN))
+        && window.eval(&script).is_ok()
+    {
+        *told = script;
+    }
+}
+
+/// The UI to ask `backend` for its threads at: a machine's while it's
+/// connected, and this computer's or a distribution's, found with `silt open`
+/// when `due`.
+fn ui_to_ask(state: &State, backend: &Backend, program: &Path, silts: &Silts, due: bool) -> Option<Url> {
+    if let Some(found) = state.ui_found(backend) {
+        return Some(found);
+    }
+    if matches!(backend, Backend::Ssh(_)) || !due {
+        return None;
+    }
+    let target = Target { backend: backend.clone(), ..Target::default() };
+    match command_for(&target, program, silts).and_then(daemon::open_web) {
+        Ok(found) => {
+            state.uis.lock().expect("lock").insert(backend.id(), found.clone());
+            Some(found)
+        }
+        Err(error) => {
+            eprintln!("silt-desktop: could not reach {} for its threads: {}", backend.label(), explain(&error));
+            None
+        }
+    }
+}
+
+/// Opens a machine's tunnel again once it stopped answering, as the window
+/// does for the machine it shows.
+fn reconnect(state: &State, backend: &Backend) {
+    let (Backend::Ssh(name), Some(backends)) = (backend, state.backends.get()) else {
+        return;
+    };
+    let (machines, name) = (backends.machines.clone(), name.clone());
+    std::thread::spawn(move || {
+        if let Err(reason) = machines.connect(&name) {
+            eprintln!("silt-desktop: could not reconnect {name}: {reason}");
+        }
+    });
 }
 
 /// Waits `wait`, or less if another backend or project is asked for.
@@ -759,7 +1011,7 @@ mod tests {
             };
             daemon::run(backends::start_daemon(&backend, &program, &wsl_silt).expect("a command"))
                 .unwrap_or_else(|error| panic!("{backend:?} starts: {}", explain(&error)));
-            let target = Target { backend, project: None };
+            let target = Target { backend, ..Target::default() };
             let ui = command_for(&target, &program, &silts)
                 .and_then(daemon::open_web)
                 .unwrap_or_else(|error| panic!("{target:?}: {}", explain(&error)));

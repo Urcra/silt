@@ -19,11 +19,21 @@ test.afterAll(() => {
   teardown(SILT, world.work, [join(world.work, 'silt')])
 })
 
-/** Picks how the transcript groups the agent's work, or how much each step shows, from the thread's menu. */
+/** Picks how the transcript groups the agent's work, or how much each step shows, from the palette (Settings › Text
+ * and layout keeps the same choice). */
 async function choose(page: Page, group: 'transcript grouping' | 'transcript detail', label: string) {
-  await page.getByRole('button', { name: 'More for this thread' }).click()
-  await page.getByRole('radiogroup', { name: group }).getByRole('radio', { name: label }).click()
-  await page.keyboard.press('Escape')
+  await page.keyboard.press('ControlOrMeta+k')
+  const palette = page.getByRole('dialog', { name: 'Command palette' })
+  const prefix = group === 'transcript grouping' ? 'Group the work ' : 'Transcript: '
+  const action = `${prefix}${group === 'transcript grouping' ? label.toLowerCase() : label}`
+  await palette.getByLabel('command').fill(prefix)
+  // The palette offers only the choices not in force, so none offered for this label means it already is.
+  const offered = palette.getByRole('option', { name: new RegExp(`^${prefix}`) })
+  await expect(offered.first()).toBeVisible()
+  const wanted = palette.getByRole('option', { name: new RegExp(`^${action}`) })
+  if (await wanted.count()) await wanted.click()
+  else await page.keyboard.press('Escape')
+  await expect(palette).toBeHidden()
   // No hover or focus left over from the menu in the shot.
   await page.mouse.move(1430, 1790)
   await page.waitForTimeout(300)
