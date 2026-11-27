@@ -593,6 +593,34 @@ pub enum Request {
         #[serde(default)]
         text: Option<silt_theme::TextSettings>,
     },
+    /// What agents remember, project by project, for Settings › Memory
+    /// (ADR 0137).
+    Memory,
+    /// What agents remember of the project whose clone is `clone`, or,
+    /// without one, everywhere.
+    MemoryOf {
+        #[serde(default)]
+        clone: Option<PathBuf>,
+    },
+    /// Replaces the memory `file` in the store shown as `store` there with
+    /// `text`, or, without a file, the whole-file store, such as a rules
+    /// file. Only a store Silt lists there can be named.
+    SetMemory {
+        #[serde(default)]
+        clone: Option<PathBuf>,
+        store: String,
+        #[serde(default)]
+        file: Option<String>,
+        text: String,
+    },
+    /// Removes the memory `file` from the store shown as `store` there, and
+    /// its line from the index.
+    ForgetMemory {
+        #[serde(default)]
+        clone: Option<PathBuf>,
+        store: String,
+        file: String,
+    },
     /// What this machine connects to on its own (ADR 0134).
     NetworkSettings,
     SetNetworkSettings {
@@ -1521,6 +1549,101 @@ impl Default for NetworkSettings {
     fn default() -> Self {
         Self { offline: false, update_checks: true, plan_usage: true, agent_registry: true }
     }
+}
+
+/// Settings › Memory: what agents remember everywhere and in each
+/// project with a clone here (ADR 0137).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct MemoryOverview {
+    pub everywhere: MemoryCount,
+    pub projects: Vec<MemoryProject>,
+}
+
+/// How much is remembered in one place, and by whom.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct MemoryCount {
+    /// Memories, each in a file of its own.
+    pub memories: usize,
+    /// Whole files: rules files and agents' summaries that are there.
+    pub files: usize,
+    /// The agents that wrote them, by id.
+    pub agents: Vec<String>,
+    pub changed_ms: Option<i64>,
+    /// Agents whose store there couldn't be read, by id.
+    pub unread: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct MemoryProject {
+    pub name: String,
+    pub clone: PathBuf,
+    pub count: MemoryCount,
+}
+
+/// What agents remember in one place: a project, or everywhere.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct MemoryView {
+    /// The project's name, or `None` for everywhere.
+    pub project: Option<String>,
+    pub clone: Option<PathBuf>,
+    pub stores: Vec<MemoryStoreView>,
+    /// The project's rules files, which every agent of a kind reads.
+    pub rules: Vec<RulesFileView>,
+}
+
+/// One of an agent's stores.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct MemoryStoreView {
+    pub agent: String,
+    /// `memory`, a folder of memories; `rules`, a rules file; or `summary`,
+    /// a summary the agent rebuilds from its sessions.
+    pub kind: String,
+    /// Where it is, with `~` for the home folder.
+    pub path: String,
+    pub editable: bool,
+    pub entries: Vec<MemoryEntryView>,
+    /// A whole-file store's text, when the file is there.
+    pub text: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct MemoryEntryView {
+    pub file: String,
+    pub name: String,
+    pub description: String,
+    /// `user`, `feedback`, `project` or `reference`, when the agent says.
+    pub kind: Option<String>,
+    pub body: String,
+    /// The whole file, frontmatter included, as an edit starts from.
+    pub text: String,
+    pub modified_ms: Option<i64>,
+    /// The thread whose session wrote it, when Silt recorded that session.
+    pub thread: Option<MemoryThread>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct MemoryThread {
+    pub id: String,
+    pub title: Option<String>,
+}
+
+/// A rules file at the root of a project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct RulesFileView {
+    pub file: String,
+    /// The agents that read it, by id.
+    pub readers: Vec<String>,
+    /// Its text, when it's there.
+    pub text: Option<String>,
 }
 
 /// [`NetworkSettings`] with what the daemon's environment sets.
@@ -2994,6 +3117,14 @@ mod tests {
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
             NetworkSettings::decl(&config),
+            MemoryOverview::decl(&config),
+            MemoryCount::decl(&config),
+            MemoryProject::decl(&config),
+            MemoryView::decl(&config),
+            MemoryStoreView::decl(&config),
+            MemoryEntryView::decl(&config),
+            MemoryThread::decl(&config),
+            RulesFileView::decl(&config),
             NetworkView::decl(&config),
             silt_proto::view::AppearanceMode::decl(&config),
             silt_proto::view::AppearanceSettings::decl(&config),

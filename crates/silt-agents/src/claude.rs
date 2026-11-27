@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use crate::conventions::NativeConventions;
 use crate::entry::{Entry, Task, TaskKind, TaskStatus};
+use crate::memory::{Kind, Scope, Store};
 use crate::{
     Agent, AgentError, Capture, CheckedSession, Found, Launch, LaunchPlan, OnDisk, Read, Reader, Restore, Rewrites, Role,
     SessionIds, Start, Stateless, Write, translated_text,
@@ -264,6 +265,16 @@ impl Agent for ClaudeCode {
         let clone = crate::managed_clone(cwd)?;
         let dir = self.homes(home, env).into_iter().find(|dir| dir.extension().is_none())?;
         Some(dir.join("projects").join(project_slug(&clone)).join("memory"))
+    }
+
+    fn memory_stores(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>, project: Option<&Path>) -> Vec<Store> {
+        let Some(dir) = self.homes(home, env).into_iter().find(|dir| dir.extension().is_none()) else { return Vec::new() };
+        match project {
+            Some(clone) => {
+                vec![Store::new(Scope::Project, Kind::Memory, dir.join("projects").join(project_slug(clone)).join("memory"))]
+            }
+            None => vec![Store::new(Scope::Everywhere, Kind::Rules, dir.join("CLAUDE.md"))],
+        }
     }
 
     fn project_state(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>, cwd: &Path) -> crate::ProjectState {

@@ -16,6 +16,7 @@ mod entry;
 mod error;
 pub mod gemini;
 pub mod history;
+pub mod memory;
 pub mod oneshot;
 pub mod opencode;
 pub mod qudiks;
@@ -431,6 +432,12 @@ pub trait Agent: Send + Sync {
     /// the thread (ADR 0137). `env` reads the run's variables.
     fn memory(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>, _cwd: &Path) -> Option<PathBuf> {
         None
+    }
+    /// Where it keeps what it remembers of the project whose clone is
+    /// `project`, or, without one, what it remembers everywhere (ADR 0137).
+    /// `env` reads the run's variables.
+    fn memory_stores(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>, _project: Option<&Path>) -> Vec<memory::Store> {
+        Vec::new()
     }
     /// The model APIs it calls with a key from a variable, which Silt's
     /// gateway adds instead, so its sandbox never holds the key (ADR 0093).

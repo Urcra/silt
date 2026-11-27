@@ -125,7 +125,7 @@ fn read_skill(file: &Path, scope: SkillScope) -> Option<Skill> {
 }
 
 /// The frontmatter between leading `---` lines, and the rest.
-fn split_frontmatter(text: &str) -> (&str, &str) {
+pub(crate) fn split_frontmatter(text: &str) -> (&str, &str) {
     let Some(rest) = text.strip_prefix("---").and_then(|rest| rest.strip_prefix('\n').or_else(|| rest.strip_prefix("\r\n")))
     else {
         return ("", text);
@@ -143,7 +143,7 @@ fn split_frontmatter(text: &str) -> (&str, &str) {
 /// The subset of YAML that skill frontmatter uses: `key: value` with plain
 /// or quoted values, `|` and `>` block scalars, and one level of nested
 /// maps, flattened to `parent.key`.
-fn parse_frontmatter(text: &str) -> BTreeMap<String, String> {
+pub(crate) fn parse_frontmatter(text: &str) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
     let lines: Vec<&str> = text.lines().collect();
     let mut index = 0;

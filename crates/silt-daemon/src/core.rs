@@ -1089,6 +1089,14 @@ impl Core {
                 let css = crate::theme::css(&self.data_dir, light, dark, text);
                 Response::ok(serde_json::json!({ "css": css, "mode": appearance.mode, "motion": motion }))
             }
+            Request::Memory => to_response(self.memory_overview().await),
+            Request::MemoryOf { clone } => to_response(self.memory_of(clone.as_deref()).await),
+            Request::SetMemory { clone, store, file, text } => {
+                to_response(self.set_memory(clone.as_deref(), &store, file.as_deref(), &text).map(|()| "saved"))
+            }
+            Request::ForgetMemory { clone, store, file } => {
+                to_response(self.forget_memory(clone.as_deref(), &store, &file).map(|()| "forgotten"))
+            }
             Request::NetworkSettings => to_response(crate::network::view(&self.data_dir)),
             Request::SetNetworkSettings { settings } => {
                 to_response(crate::network::save(&self.data_dir, settings).map(|()| "saved"))
