@@ -811,7 +811,7 @@ pub struct HookInput {
     pub reason: Option<String>,
 }
 
-/// `settings` keeping its memory in `memory`, when given (ADR 0135).
+/// `settings` keeping its memory in `memory`, when given (ADR 0137).
 pub fn with_memory(settings: &str, memory: Option<&Path>) -> String {
     let Some(memory) = memory else { return settings.to_owned() };
     let mut settings: Value = serde_json::from_str(settings).unwrap_or_else(|_| json!({}));

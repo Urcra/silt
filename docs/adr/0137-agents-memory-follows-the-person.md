@@ -1,4 +1,4 @@
-# 0135: Agents' memory follows the person, across agents and machines
+# 0137: Agents' memory follows the person, across agents and machines
 
 - Status: accepted
 - Date: 2026-11-26

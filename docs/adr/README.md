@@ -140,4 +140,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0132](0132-auto-for-agents-without-an-auto-mode.md) | Auto for agents without an auto mode | accepted |
 | [0133](0133-december-decorations-in-the-desktop-app.md) | December decorations in the desktop app | accepted |
 | [0134](0134-no-telemetry-and-an-offline-switch.md) | No telemetry, an offline switch, and artifacts' libraries through Silt by default | accepted |
-| [0135](0135-agents-memory-follows-the-person.md) | Agents' memory follows the person, across agents and machines | accepted |
+| [0137](0137-agents-memory-follows-the-person.md) | Agents' memory follows the person, across agents and machines | accepted |

@@ -20,7 +20,7 @@ pub const CLAUDE_TOOLS_OFF: &[&str] = &["Artifact", "ArtifactData", "ArtifactCom
 /// What every session Silt starts tells its agent: Claude's adapter reads
 /// `claudeCode.options` as Claude Code's own options; other agents ignore it.
 /// Its `settings` are Claude Code's flag settings, which keep its memory in
-/// `memory` when given (ADR 0135).
+/// `memory` when given (ADR 0137).
 fn session_meta(memory: Option<&std::path::Path>) -> serde_json::Map<String, serde_json::Value> {
     let mut meta = serde_json::json!({"claudeCode": {"options": {"disallowedTools": CLAUDE_TOOLS_OFF}}});
     if let Some(memory) = memory {

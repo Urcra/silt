@@ -3102,7 +3102,7 @@ pub(crate) struct AcpSandbox {
 }
 
 /// Where the agent `id` keeps what it remembers of the project at `cwd`,
-/// when not where it would by itself (ADR 0135).
+/// when not where it would by itself (ADR 0137).
 fn memory_folder(id: &str, env: &[(String, String)], cwd: &Path) -> Option<PathBuf> {
     let key = silt_workspace::agent_key(id);
     let agent = silt_agents::AGENTS.iter().copied().find(|agent| silt_workspace::agent_key(agent.id()) == key)?;

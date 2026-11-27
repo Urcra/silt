@@ -206,4 +206,4 @@ Beside each project's store, Silt keeps one person-wide store of the same shape,
 - A memory can move between a project and everywhere either way.
 
 ### Decided
-[ADR 0135](../adr/0135-agents-memory-follows-the-person.md): personal only; one store all agents share, which the person can turn off; synced as a family of its own; Copilot's GitHub memory written only when turned on; a person-wide store beside the projects', where Claude Code's `user`-kind memories move as they're written.
+[ADR 0137](../adr/0137-agents-memory-follows-the-person.md): personal only; one store all agents share, which the person can turn off; synced as a family of its own; Copilot's GitHub memory written only when turned on; a person-wide store beside the projects', where Claude Code's `user`-kind memories move as they're written.

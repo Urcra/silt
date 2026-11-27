@@ -428,7 +428,7 @@ pub trait Agent: Send + Sync {
     /// it would pick another folder by itself: in a managed checkout, the
     /// one it picks in the checkout's clone, which every thread of the
     /// project shares, rather than the checkout's own, which none reads after
-    /// the thread (ADR 0135). `env` reads the run's variables.
+    /// the thread (ADR 0137). `env` reads the run's variables.
     fn memory(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>, _cwd: &Path) -> Option<PathBuf> {
         None
     }

@@ -46,7 +46,7 @@ pub struct Start {
     /// session opens (ADR 0056).
     pub sign_in_first: Option<String>,
     /// Where Claude Code keeps what it remembers of the project, when not
-    /// where it would by itself (ADR 0135).
+    /// where it would by itself (ADR 0137).
     pub memory: Option<PathBuf>,
 }
 
