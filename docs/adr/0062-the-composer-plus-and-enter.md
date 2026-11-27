@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-11-10
 - Amends: [ADR 0044](0044-the-standard-agent-workspace.md) (what's in the box), [ADR 0061](0061-dictation-on-this-machine.md) (how a take shows, Send when I stop talking), [ADR 0059](0059-chats-without-a-project.md) (New chat's start button, which goes as New thread's does)
+- Amended by: [ADR 0137](0137-enter-steers-mid-turn.md): ⏎ steers an agent that takes a prompt mid-turn, and the button beside + queues
 - Amended by: [ADR 0063](0063-the-composer-grows-and-keeps-its-draft.md): The composer: stacked to start, in line in a thread, grows with its text, keeps its draft
 
 ## Context
