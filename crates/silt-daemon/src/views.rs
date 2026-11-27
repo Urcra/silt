@@ -134,7 +134,9 @@ impl Core {
     }
 
     pub(crate) fn summaries(&self, include: impl Fn(ThreadId) -> bool) -> Vec<ThreadSummary> {
-        let records: Vec<&ThreadRecord> = self.thread_records().values().filter(|record| include(record.id)).collect();
+        // A person's memory is a thread only to sync it (ADR 0137).
+        let records: Vec<&ThreadRecord> =
+            self.thread_records().values().filter(|record| include(record.id) && !silt_types::is_memory(&record.repo)).collect();
         let logged = self.logged_summaries(&records);
         let checked_out: HashSet<ThreadId> = self.checkouts.values().map(|checkout| checkout.record.thread).collect();
         let mrs = self.mr_list(None).unwrap_or_default();
@@ -643,6 +645,24 @@ impl Core {
     /// it keeps to itself (ADR 0032). Without a server answering, it
     /// searches this machine alone.
     pub(crate) async fn search(&self, query: &str, limit: u32, filters: &SearchFilters) -> Result<Vec<SearchResult>, CoreError> {
+        let mut found = self.search_every_thread(query, limit, filters).await?;
+        // A person's memory is a thread only to sync it (ADR 0137).
+        found.retain(|hit| {
+            let repo = hit.repo.clone().or_else(|| {
+                let thread = self.find_thread(&hit.thread).ok()?;
+                self.threads.get(&thread).map(|record| record.repo.clone())
+            });
+            !repo.as_deref().is_some_and(silt_types::is_memory)
+        });
+        Ok(found)
+    }
+
+    async fn search_every_thread(
+        &self,
+        query: &str,
+        limit: u32,
+        filters: &SearchFilters,
+    ) -> Result<Vec<SearchResult>, CoreError> {
         let remotes = self.asked_remotes().unwrap_or_default();
         if remotes.is_empty() && !filters.is_empty() {
             return self.filtered_here(query, limit, filters).await;

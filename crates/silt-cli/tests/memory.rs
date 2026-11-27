@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Write;
 use std::process::Stdio;
 
-use common::{Machine, Server, origin, thread_of};
+use common::{Machine, Server, eventually, origin, thread_of};
 use serde_json::{Value, json};
 
 /// Sends `calls` to `silt mcp` for the machine's thread, as an agent other
@@ -99,4 +99,59 @@ fn agents_read_and_add_to_the_memory_they_share() {
     );
     assert!(!replies[0]["result"]["instructions"].as_str().unwrap_or_default().contains("# Memory"));
     assert!(!names(&replies[1]).iter().any(|name| name.starts_with("silt_memory")), "{:?}", names(&replies[1]));
+}
+
+/// Claude Code's memory folder of a machine's clone, which agents share.
+fn shared_folder(machine: &Machine) -> std::path::PathBuf {
+    let slug: String =
+        machine.repo.to_string_lossy().chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' }).collect();
+    machine.claude_dir.join("projects").join(slug).join("memory")
+}
+
+#[test]
+fn a_projects_memory_follows_its_person_to_their_other_machines() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let origin = origin(root.path());
+    let server = Server::start(&root.path().join("server"));
+    let laptop = Machine::new(root.path(), "laptop", &origin, &server);
+    let desktop = Machine::new(root.path(), "desktop", &origin, &server);
+    laptop.silt(&["claude"]);
+    let on_laptop = shared_folder(&laptop);
+    fs::create_dir_all(&on_laptop).expect("dir");
+    fs::write(on_laptop.join("MEMORY.md"), "- [Gate](project-gate.md) — CI runs it\n").expect("write");
+    fs::write(on_laptop.join("project-gate.md"), "---\nname: Gate\nmetadata:\n  type: project\n---\n\nCI runs the gate.\n")
+        .expect("write");
+    laptop.web("GET", "/api/memory", None);
+
+    desktop.silt(&["claude"]);
+    desktop.web("GET", "/api/memory", None);
+    let on_desktop = shared_folder(&desktop);
+    assert!(
+        eventually(|| fs::read_to_string(on_desktop.join("project-gate.md")).is_ok_and(|text| text.contains("CI runs the gate."))),
+        "the laptop's memory reaches the desktop\nlaptop:\n{}\ndesktop:\n{}",
+        laptop.daemon_log(),
+        desktop.daemon_log()
+    );
+
+    fs::write(on_desktop.join("feedback-tests.md"), "---\nname: Tests\nmetadata:\n  type: feedback\n---\n\nA real store.\n")
+        .expect("write");
+    assert!(
+        eventually(|| on_laptop.join("feedback-tests.md").exists()),
+        "and the desktop's comes back\nlaptop:\n{}\ndesktop:\n{}",
+        laptop.daemon_log(),
+        desktop.daemon_log()
+    );
+    assert!(on_desktop.join(".git").is_dir(), "the desktop's folder is the memory thread's checkout");
+    for machine in [&laptop, &desktop] {
+        assert!(!machine.stdout(&["log"]).contains("silt:memory"), "a memory is no thread to list");
+    }
+
+    // Someone else working on the same project gets none of it.
+    let other = Machine::new_for(root.path(), "theirs", "someone", &origin, &server);
+    other.silt(&["claude"]);
+    other.web("GET", "/api/memory", None);
+    let on_theirs = shared_folder(&other);
+    assert!(eventually(|| on_theirs.join(".git").is_dir()), "their own memory gets a thread of its own\n{}", other.daemon_log());
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    assert!(!on_theirs.join("project-gate.md").exists() && !on_theirs.join("feedback-tests.md").exists());
 }

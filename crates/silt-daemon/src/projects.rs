@@ -32,7 +32,7 @@ impl Core {
                 }
             }
             let mut projects = merged(listed, local);
-            projects.retain(|project| !silt_types::is_chat(&project.repo));
+            projects.retain(|project| !silt_types::is_personal(&project.repo));
             for project in &mut projects {
                 let clone = project.clone.as_ref().map(|path| path.to_string_lossy().replace('\\', "/"));
                 let resolved = workspaces.resolve(&project.repo, clone.as_deref(), chosen.get(&project.repo));

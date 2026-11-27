@@ -32,3 +32,51 @@ pub const CHATS: &str = "silt:chats";
 pub fn is_chat(project: &str) -> bool {
     project == CHATS
 }
+
+/// The projects of a person's memory (ADR 0137): `silt:memory` for what
+/// holds in every project, and `silt:memory/<project>` for a project's.
+pub const MEMORY: &str = "silt:memory";
+
+/// The project of the memory of `project`, or of what holds everywhere.
+pub fn memory_project(project: Option<&str>) -> String {
+    match project {
+        Some(project) => format!("{MEMORY}/{project}"),
+        None => MEMORY.to_owned(),
+    }
+}
+
+/// Whose memory a memory project holds: `Some(None)` for everywhere's,
+/// `Some(Some(project))` for a project's, `None` when it isn't one.
+pub fn remembered(project: &str) -> Option<Option<&str>> {
+    if project == MEMORY {
+        return Some(None);
+    }
+    project.strip_prefix(MEMORY)?.strip_prefix('/').filter(|rest| !rest.is_empty()).map(Some)
+}
+
+/// Whether `project` holds a person's memory.
+pub fn is_memory(project: &str) -> bool {
+    remembered(project).is_some()
+}
+
+/// Whether `project`'s threads are the person's own, in no org: chats,
+/// until shared, and memory, always.
+pub fn is_personal(project: &str) -> bool {
+    is_chat(project) || is_memory(project)
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    #[test]
+    fn memory_projects_name_whose_memory_they_hold() {
+        assert_eq!(memory_project(Some("github.com/acme/silt")), "silt:memory/github.com/acme/silt");
+        assert_eq!(remembered("silt:memory/github.com/acme/silt"), Some(Some("github.com/acme/silt")));
+        assert_eq!(remembered(MEMORY), Some(None));
+        for other in ["silt:memoryx", "silt:memory/", "silt:chats", "github.com/acme/silt"] {
+            assert_eq!(remembered(other), None, "{other}");
+        }
+        assert!(is_personal(CHATS) && is_personal(MEMORY) && !is_personal("github.com/acme/silt"));
+    }
+}

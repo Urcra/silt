@@ -7,7 +7,7 @@ User-visible changes, newest first. The format follows [Keep a Changelog](https:
 Silt has no releases yet; this section collects what changes until the first one. The git history has everything before this file began.
 
 ### What Silt does so far
-Protocol version 25.
+Protocol version 26.
 - **Recording** Claude Code, Codex, Qudiks, Gemini CLI, Antigravity CLI, OpenCode and GitHub Copilot CLI sessions, run through `silt <agent>`, with or without a daemon, and importing the sessions already on disk.
 - **Handoff, forks and merge requests** between machines and people, through a server you host, or kept on one machine; several servers per machine.
 - **History and search** across compaction, the history graph, forking from and reverting to a turn, and commits linked to turns.
@@ -15,6 +15,7 @@ Protocol version 25.
 - **Agents from the web UI** over ACP, agents asking other agents, artifacts, themes, workspaces with their own rules, Silt's sandbox on Linux, plugins, and local models.
 
 ### Added
+- **Your memory follows you to your other machines (ADR 0137). The sync protocol goes to 26: update every machine and the server together.** Each store of memory, a project's and the memory everywhere, is a private thread of a reserved project, `silt:memory/<project>` or `silt:memory`, whose checkout is the store's folder. A memory written on one machine lands in the same folder on your others, merged as text when two change it, and with its history kept. The server never places a memory project in an org or shares its threads, and no list, search or graph shows them.
 - What agents remembered before Silt joins the shared memory (ADR 0137). While agents share memory, Gemini CLI's private memory of a project is brought into the shared one, and its folders are linked to it, so Gemini CLI reads and writes what every agent does; turned off, its own folder is its own again. The facts Gemini CLI 0.43 and older saved under `## Gemini Added Memories` in `~/.gemini/GEMINI.md` are brought into the memory everywhere, once, and the file is left as it was.
 - **Also save to Copilot Memory** in a project's Settings › Memory (ADR 0137), off by default. On, for a project on GitHub, the daemon sends the project's memory to Copilot Memory with `copilot memories import`, at once and every few minutes after: only what changed since it was last sent, never what's about you, and nothing while offline. The row says when it was last sent, what's waiting, and why a send failed.
 - Agents share memory (ADR 0137). Every agent but Claude Code is told, through Silt's MCP server, the index of the project's memory and of the memory everywhere, and gets `silt_memory_search`, `silt_memory_read` and `silt_memory_write` to read and add to them; what it learns about you goes everywhere. Claude Code reads and writes the project's memory natively. **Share memory between agents** in Settings › Memory turns it off: each agent then keeps its own, and Silt moves and tells nothing.

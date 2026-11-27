@@ -38,8 +38,10 @@ pub mod view;
 /// name (ADR 0114). 23: the person's devices by name in the listing, and
 /// the machine holding each thread in its summary (ADR 0115). 24: blobs
 /// uploaded in chunks and read by range, videos, and images' previews
-/// (ADR 0121).
-pub const PROTOCOL: u32 = 25;
+/// (ADR 0121). 26: a person's memory, threads of the reserved projects
+/// `silt:memory` and `silt:memory/<project>`, kept private and out of every
+/// org (ADR 0137).
+pub const PROTOCOL: u32 = 26;
 pub const PROTOCOL_HEADER: &str = "silt-protocol";
 pub const GENERATION_HEADER: &str = "silt-generation";
 

@@ -294,8 +294,8 @@ pub(crate) async fn change(
             let policy = serde_json::to_string(&policy).map_err(|error| bad_request(error.to_string()))?;
             sqlx::query!("UPDATE orgs SET policy = ? WHERE id = ?", policy, org_id).execute(db).await?;
         }
-        OrgChange::MoveProject { repo, .. } | OrgChange::ProjectSettings { repo, .. } if silt_types::is_chat(&repo) => {
-            return Err(bad_request("chats belong to no org and have no settings of a project"));
+        OrgChange::MoveProject { repo, .. } | OrgChange::ProjectSettings { repo, .. } if silt_types::is_personal(&repo) => {
+            return Err(bad_request("chats and memory belong to no org and have no settings of a project"));
         }
         OrgChange::MoveProject { repo, org } => {
             let target = org_id(db, &org).await?;
