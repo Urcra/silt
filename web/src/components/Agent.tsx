@@ -1106,6 +1106,7 @@ export function AgentDock({
         waiting={status?.state === 'awaiting_input' || status?.state === 'awaiting_permission'}
         onCycle={cycle}
         onFiles={attachable ? attach : undefined}
+        onRefused={setError}
         attach={ATTACH}
         commands={(live ? status.commands : undefined) ?? seen?.commands}
         voice={!hosted()}

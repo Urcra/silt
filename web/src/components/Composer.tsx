@@ -10,6 +10,8 @@ import {
 } from 'react'
 import type { AgentCommand } from '../api'
 import { filesFrom } from '../attachments'
+import { draggingFileManagerFiles, fileManagerFiles, localFiles } from '../desktop'
+import { message } from '../query'
 import { matching, typedCommand } from '../slashCommands'
 import { Icon, Menu, type MenuItem, cx } from '../ui'
 import { DICTATION_KEYS, hasVoiceNote, insertWords, showKeyHint, taking, useDictation } from '../voice'
@@ -262,6 +264,7 @@ export function ComposerBox({
   waiting = false,
   onCycle,
   onFiles,
+  onRefused,
   commands = [],
   voice = false,
   suggestion,
@@ -302,6 +305,8 @@ export function ComposerBox({
   onCycle?: () => void
   /** Files pasted, dropped or attached through +; without it, the box takes none. */
   onFiles?: (files: File[], pasted: boolean) => void
+  /** Why files pasted from a file manager couldn't all be attached. */
+  onRefused?: (why: string) => void
   /** The agent's commands, offered as `/` starts the text. */
   commands?: AgentCommand[]
   /** Offers dictation, where this machine can do it. */
@@ -389,7 +394,24 @@ export function ComposerBox({
     event.preventDefault()
     return true
   }
+  /** Files from a file manager, which the desktop app hands over (ADR 0140). */
+  const fromFileManager = (data: DataTransfer, way: 'pasted' | 'dropped') => {
+    if (!onFiles || !fileManagerFiles(data)) return false
+    localFiles(way).then(
+      ({ files, refused }) => {
+        // Named as they are on disk, unlike a screenshot.
+        if (files.length > 0) onFiles(files, false)
+        if (refused) onRefused?.(refused)
+      },
+      (failure: unknown) => onRefused?.(message(failure)),
+    )
+    return true
+  }
   const paste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (fromFileManager(event.clipboardData, 'pasted')) {
+      event.preventDefault()
+      return
+    }
     const files = filesFrom(event.clipboardData)
     if (!onFiles || files.length === 0) return
     // An image copied from a web page brings its address as text too, which still pastes.
@@ -397,12 +419,17 @@ export function ComposerBox({
     onFiles(files, true)
   }
   const dragOver = (event: DragEvent<HTMLDivElement>) => {
-    if (!onFiles || !event.dataTransfer.types.includes('Files')) return
+    const files = event.dataTransfer.types.includes('Files') || draggingFileManagerFiles(event.dataTransfer)
+    if (!onFiles || !files) return
     event.preventDefault()
     setDragging(true)
   }
   const drop = (event: DragEvent<HTMLDivElement>) => {
     setDragging(false)
+    if (fromFileManager(event.dataTransfer, 'dropped')) {
+      event.preventDefault()
+      return
+    }
     const files = filesFrom(event.dataTransfer)
     if (!onFiles || files.length === 0) return
     event.preventDefault()

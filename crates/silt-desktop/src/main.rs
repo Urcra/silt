@@ -12,6 +12,7 @@
 mod backends;
 mod daemon;
 mod elsewhere;
+mod local_files;
 mod machines;
 #[cfg(target_os = "linux")]
 mod microphone;
@@ -36,6 +37,7 @@ use tauri::{AppHandle, Manager, Theme, Url, WebviewUrl, WebviewWindow, WebviewWi
 use crate::backends::{Backend, Target};
 use crate::daemon::{Answer, DesktopError};
 use crate::elsewhere::{List, Listing, View};
+use crate::local_files::{Ask, Handed, LocalFiles, Way};
 use crate::machines::Edit;
 
 const MAIN: &str = "main";
@@ -78,6 +80,8 @@ struct State {
     uis: Mutex<HashMap<String, Url>>,
     /// Asks the gathering to look again now, not at its next turn.
     poke: AtomicBool,
+    /// The files pasted or dropped from a file manager, as offered to the page (ADR 0140).
+    local_files: Arc<LocalFiles>,
 }
 
 impl State {
@@ -236,8 +240,9 @@ fn main() {
         listings: Mutex::default(),
         uis: Mutex::default(),
         poke: AtomicBool::new(false),
+        local_files: Arc::default(),
     });
-    let (linked, closing) = (state.clone(), state.clone());
+    let (linked, closing, serving) = (state.clone(), state.clone(), state.local_files.clone());
     tauri::Builder::default()
         // A second launch, a `silt://` link among them, shows the window
         // that's already open.
@@ -248,6 +253,10 @@ fn main() {
             show(app);
         }))
         .plugin(tauri_plugin_deep_link::init())
+        .register_asynchronous_uri_scheme_protocol(local_files::SCHEME, move |_, request, responder| {
+            let (files, uri) = (serving.clone(), request.uri().to_string());
+            std::thread::spawn(move || responder.respond(files.respond(&uri, Instant::now())));
+        })
         .setup(move |app| {
             let _ = state.app.set(app.handle().clone());
             let dir = app.path().app_data_dir().ok();
@@ -373,7 +382,12 @@ fn desktop_script(state: &State) -> String {
     format!(
         "window.__siltBackends = {}; window.__siltDesktop = {};",
         state.list(),
-        serde_json::json!({ "commit": env!("SILT_BUILD_COMMIT"), "key": state.key, "view": view })
+        serde_json::json!({
+            "commit": env!("SILT_BUILD_COMMIT"),
+            "key": state.key,
+            "view": view,
+            "localFiles": cfg!(target_os = "linux"),
+        })
     )
 }
 
@@ -396,7 +410,8 @@ fn window_title(channel: &str) -> String {
 
 fn open_window(app: &AppHandle, state: Arc<State>, silts: Arc<Silts>, dir: Option<PathBuf>) -> tauri::Result<WebviewWindow> {
     let started = AtomicBool::new(false);
-    let (navigating, loading, listening) = (state.clone(), state.clone(), state.clone());
+    let (navigating, loading, listening, watched) = (state.clone(), state.clone(), state.clone(), state.local_files.clone());
+    let asked = app.clone();
     let relaunching = app.clone();
     let theme_file = dir.as_ref().map(|dir| dir.join(theme::LAST_THEME));
     let last_theme = theme_file.as_deref().and_then(theme::last);
@@ -409,7 +424,10 @@ fn open_window(app: &AppHandle, state: Arc<State>, silts: Arc<Silts>, dir: Optio
         .inner_size(1440.0, 900.0)
         .min_inner_size(390.0, 600.0)
         .initialization_script(desktop_script(&state))
-        .initialization_script(theme::WindowTheme::script(last_theme.as_ref()));
+        .initialization_script(theme::WindowTheme::script(last_theme.as_ref()))
+        // Tauri's own handler takes files dropped on the window, and the page
+        // would never hear of them.
+        .disable_drag_drop_handler();
     if let Some(last) = last_theme {
         builder = builder.theme(Some(window_theme(&last))).background_color(window_color(&last));
     }
@@ -425,6 +443,13 @@ fn open_window(app: &AppHandle, state: Arc<State>, silts: Arc<Silts>, dir: Optio
                 *navigating.target.lock().expect("lock") = wanted;
                 let state = navigating.clone();
                 std::thread::spawn(move || state.tell());
+                return false;
+            }
+            // And for the files pasted or dropped from a file manager (ADR 0140).
+            if let Some(ask) = local_files::ask_of(to) {
+                if navigating.keyed(to) {
+                    answer_ask(&asked, &navigating, ask);
+                }
                 return false;
             }
             // And how threads are listed and marked (ADR 0136), from any machine's page.
@@ -521,10 +546,43 @@ fn open_window(app: &AppHandle, state: Arc<State>, silts: Arc<Silts>, dir: Optio
         .build()?;
     #[cfg(target_os = "linux")]
     microphone::enable(&window)?;
+    #[cfg(target_os = "linux")]
+    local_files::native::watch(&window, watched)?;
+    #[cfg(not(target_os = "linux"))]
+    drop(watched);
     if let Some(level) = last_zoom {
         window.set_zoom(level.factor())?;
     }
     Ok(window)
+}
+
+/// Answers the page's ask for the files pasted or dropped, but only just
+/// after the window's own paste keys or a drop on it (ADR 0140).
+fn answer_ask(app: &AppHandle, state: &State, ask: Ask) {
+    let now = Instant::now();
+    let refuse = |why: &str| tell_page(app, &Handed::refusing(why).script(ask.request));
+    let (told, files) = (app.clone(), state.local_files.clone());
+    // Looking at the files could wait on a slow disk, which GTK's thread mustn't.
+    let hand = move |uris: Vec<String>| {
+        std::thread::spawn(move || tell_page(&told, &files.offer(ask.way, &uris, Instant::now(), new_key).script(ask.request)));
+    };
+    match ask.way {
+        Way::Dropped => match state.local_files.take_drop(now) {
+            Some(uris) => hand(uris),
+            None => refuse("Drop files on the window to attach them"),
+        },
+        Way::Pasted if !state.local_files.may_answer_paste(now) => refuse("Paste copied files with Ctrl+V or Shift+Insert"),
+        #[cfg(target_os = "linux")]
+        Way::Pasted => local_files::native::clipboard(app, hand),
+        #[cfg(not(target_os = "linux"))]
+        Way::Pasted => refuse("Pasting copied files isn't supported here yet"),
+    }
+}
+
+fn tell_page(app: &AppHandle, script: &str) {
+    if let Some(window) = app.get_webview_window(MAIN) {
+        let _ = window.eval(script);
+    }
 }
 
 /// Does what a link from the page asked of the machines. A machine the

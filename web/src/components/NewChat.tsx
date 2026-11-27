@@ -166,6 +166,7 @@ export function NewChat() {
             }}
             placeholder="Ask anything: which part to buy, how something works, a quick script. It works in a folder of its own."
             onFiles={attach}
+            onRefused={setError}
             commands={seen?.commands}
             below={<AttachedFiles files={attached} onRemove={remove} />}
             tools={

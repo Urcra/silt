@@ -90,8 +90,11 @@ declare global {
     /** Set by the desktop app's window: where it can show Silt from, sent again as that changes. */
     __siltBackends?: Backend[]
     __siltBackend?: string
-    /** Set by the desktop app's window: the commit it was built from (ADR 0100), the key its machines links carry, and how threads are listed (ADR 0136). */
-    __siltDesktop?: { commit?: string; key?: string; view?: MachinesView }
+    /**
+     * Set by the desktop app's window: the commit it was built from (ADR 0100), the key its machines links carry, how
+     * threads are listed (ADR 0136), and whether it hands over files pasted or dropped from a file manager (ADR 0140).
+     */
+    __siltDesktop?: { commit?: string; key?: string; view?: MachinesView; localFiles?: boolean }
     /** Set by the desktop app's window: the threads of every other connected machine (ADR 0136). */
     __siltThreads?: Listing[]
   }
@@ -358,4 +361,78 @@ export function tellDesktopZoom(percent: number) {
   if (!inDesktop() || percent === toldZoom) return
   toldZoom = percent
   tellWindow(zoomLink(percent))
+}
+
+/** The files a paste or a drop brought from the desktop app, and why any it couldn't. */
+export interface HandedFiles {
+  files: File[]
+  refused: string | null
+}
+
+interface LocalFilesAnswer {
+  request: number
+  files: { url: string; name: string; size: number; mime: string }[]
+  refused: string | null
+}
+
+/**
+ * Whether a paste or a drop is of files from a file manager, which the desktop app has to hand over (ADR 0140).
+ * WebKitGTK gives the page their `text/uri-list` with its `file:` addresses taken out, and no files; a link from a
+ * browser keeps its address, and goes in as text.
+ */
+export function fileManagerFiles(data: DataTransfer): boolean {
+  if (!window.__siltDesktop?.localFiles || data.files.length > 0 || !data.types.includes('text/uri-list')) return false
+  return data
+    .getData('text/uri-list')
+    .split(/\r?\n/)
+    .filter((line) => line !== '' && !line.startsWith('#'))
+    .every((line) => line.startsWith('file:'))
+}
+
+/**
+ * Whether what's dragged over the page may be files from a file manager. Until the drop the page can't read the
+ * addresses, but WebKitGTK leaves a file's path out of the text, which a dragged link keeps.
+ */
+export function draggingFileManagerFiles(data: DataTransfer): boolean {
+  return !!window.__siltDesktop?.localFiles && data.types.includes('text/uri-list') && !data.types.includes('text/plain')
+}
+
+let asked = 0
+
+/** The link that asks the desktop app's window for the files just pasted or dropped, answered only just after its own paste keys or a drop on it. */
+export function localFilesLink(way: 'pasted' | 'dropped', request: number, key = window.__siltDesktop?.key): string {
+  return `silt://files/${way}?${new URLSearchParams({ request: String(request), key: key ?? '' })}`
+}
+
+/** Asks the desktop app for the files from a file manager just pasted or dropped, and fetches each from where it serves them. */
+export function localFiles(
+  way: 'pasted' | 'dropped',
+  tell: (link: string) => void = tellWindow,
+  wait = 10_000,
+): Promise<HandedFiles> {
+  const request = ++asked
+  return new Promise<LocalFilesAnswer>((resolve, reject) => {
+    const heard = (event: Event) => {
+      const answer = (event as CustomEvent<LocalFilesAnswer>).detail
+      if (answer.request !== request) return
+      clearTimeout(timer)
+      window.removeEventListener('silt-local-files', heard)
+      resolve(answer)
+    }
+    const timer = setTimeout(() => {
+      window.removeEventListener('silt-local-files', heard)
+      reject(new Error(`The desktop app didn’t hand over the files ${way}`))
+    }, wait)
+    window.addEventListener('silt-local-files', heard)
+    tell(localFilesLink(way, request))
+  }).then(async (answer) => {
+    const files = await Promise.all(
+      answer.files.map(async (file) => {
+        const response = await fetch(file.url)
+        if (!response.ok) throw new Error(`${file.name} couldn’t be read (${response.status})`)
+        return new File([await response.arrayBuffer()], file.name, { type: file.mime })
+      }),
+    )
+    return { files, refused: answer.refused }
+  })
 }
