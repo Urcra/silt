@@ -543,6 +543,18 @@ impl Run<'_> {
         let native = self.agent.native();
         let skills = agent_conventions::discover_skills(self.checkout, home.as_deref());
         let rules = agent_conventions::discover_rules(self.checkout, self.cwd, home.as_deref());
+        let lookup = |name: &str| {
+            held.env.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.clone()).or_else(|| env::var(name).ok())
+        };
+        if let Some(home) = home.as_deref() {
+            match self.agent.gather_memory(home, &lookup, self.cwd) {
+                Ok(gathered) if gathered.is_empty() => {}
+                Ok(gathered) => {
+                    eprintln!("silt: brought {} memories of earlier threads into this project's memory", gathered.len())
+                }
+                Err(error) => eprintln!("silt: couldn't bring earlier threads' memories into this project's: {error}"),
+            }
+        }
         let plan = LaunchPlan {
             start,
             cwd: self.cwd.to_owned(),
@@ -570,17 +582,7 @@ impl Run<'_> {
             args: args.to_vec(),
             locks: held.locks.clone(),
             env: held.env.clone(),
-            memory: home.as_deref().and_then(|home| {
-                let lookup = |name: &str| {
-                    held.env
-                        .iter()
-                        .rev()
-                        .find(|(key, _)| key == name)
-                        .map(|(_, value)| value.clone())
-                        .or_else(|| env::var(name).ok())
-                };
-                self.agent.memory(home, &lookup, self.cwd)
-            }),
+            memory: home.as_deref().and_then(|home| self.agent.memory(home, &lookup, self.cwd)),
         };
         let launch = self.agent.launch(&plan).or_raise(|| CliError(format!("cannot prepare {}", self.agent.display_name())))?;
         let mut command = match reach {

@@ -41,6 +41,7 @@ Protocol version 25.
 - Artifacts' libraries and fonts load through Silt by default, on each machine and on the server, so a viewer's browser contacts no CDN, Google Fonts included. A page naming a library without an exact version loads it only with the switch off. Turn it off in Settings › Network, or with `artifact_proxy = false` in `server.toml`. The switch moved there from Appearance.
 
 ### Fixed
+- What Claude Code remembered in a managed checkout before it kept its clone's memory is brought into the clone's memory the next time a thread starts in the project, once. A memory the clone already holds differently is kept beside it, named after its thread, and the old folders are left as they were.
 - A thread whose agent showed many images, such as renders its subagents looked at, no longer holds the daemon for minutes when opened. Each image was read by reading the whole thread again, several seconds apiece, and a prompt sent meanwhile waited behind them all, so the thread looked stuck.
 - Claude Code in a managed checkout keeps what it remembers in its clone's memory, which every thread of the project shares, as a `--here` thread and a plain `claude` in the clone do. Each thread had a memory of its own, empty at its start and read by no thread after it (ADR 0137). What threads remembered before is still in `~/.claude/projects/<clone>--silt-checkouts-<thread>/memory/`.
 - What Silt sends over the network said artifacts' libraries came through Silt when by default they didn't, and left out the release check a stable or nightly build makes to GitHub.

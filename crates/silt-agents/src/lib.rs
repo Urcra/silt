@@ -433,6 +433,12 @@ pub trait Agent: Send + Sync {
     fn memory(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>, _cwd: &Path) -> Option<PathBuf> {
         None
     }
+    /// Brings what threads remembered in folders of their own into the one
+    /// [`Agent::memory`] gives the project at `cwd`, once, before a run there.
+    /// Gives the memories brought in. `env` reads the run's variables.
+    fn gather_memory(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>, _cwd: &Path) -> std::io::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
     /// Where it keeps what it remembers of the project whose clone is
     /// `project`, or, without one, what it remembers everywhere (ADR 0137).
     /// `env` reads the run's variables.
