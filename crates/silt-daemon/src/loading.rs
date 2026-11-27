@@ -34,6 +34,12 @@ impl Core {
             Event::Request(Request::Hook { .. } | Request::Scoped { .. } | Request::Shutdown | Request::Ping, _) => {
                 return Some(event);
             }
+            // They read no family, and the app shows nothing until `OpenWeb`
+            // answers: a daemon killed with the machine, as Windows does,
+            // starts with stale digests that take a cold store seconds.
+            Event::Request(Request::OpenWeb { .. } | Request::AgentHomes | Request::DaemonBuild, _) => {
+                return Some(event);
+            }
             // Views across families would load every family without a digest
             // and hold them all; they wait for the digests instead.
             Event::Request(..) if !self.stale_digests.is_empty() => {

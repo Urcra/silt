@@ -676,4 +676,18 @@ mod tests {
         let (reply, _answer) = oneshot::channel();
         assert!(core.unless_loading(Event::Request(Request::Show { thread: THREAD.to_string() }, reply)).is_some());
     }
+
+    #[tokio::test]
+    async fn the_web_ui_is_found_while_stale_digests_are_taken() {
+        let (data, _repo, store) = store_with_thread().await;
+        let (events, _inbox) = mpsc::unbounded_channel();
+        let mut core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
+        assert!(!core.stale_digests.is_empty(), "a family stored without the daemon has no digest yet");
+        let (reply, _answer) = oneshot::channel();
+        assert!(core.unless_loading(Event::Request(Request::Threads, reply)).is_none(), "a view across families waits");
+        for request in [Request::OpenWeb { cwd: None, once: false }, Request::AgentHomes, Request::DaemonBuild] {
+            let (reply, _answer) = oneshot::channel();
+            assert!(core.unless_loading(Event::Request(request, reply)).is_some(), "what reads no family doesn't");
+        }
+    }
 }
