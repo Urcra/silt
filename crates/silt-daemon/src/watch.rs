@@ -337,6 +337,9 @@ mod tests {
     fn rescanning_a_checkout_reports_nothing() {
         let (dir, other) = (tempfile::tempdir().expect("tempdir"), tempfile::tempdir().expect("tempdir"));
         std::fs::write(dir.path().join("a.txt"), "a").expect("write");
+        // The first read after a write moves its access time, which macOS
+        // reports as a change; a rescan's reads, like these after, don't.
+        std::fs::read(dir.path().join("a.txt")).expect("reads");
         let watchers = Watchers::new();
         let (sender, receiver) = std::sync::mpsc::channel();
         let _watched = watchers
@@ -350,8 +353,8 @@ mod tests {
                 let _ = other_sender.send(paths);
             })
             .expect("watches");
-        // FSEvents can still report the write from before the watch began.
-        while receiver.recv_timeout(DEBOUNCE * 2).is_ok() {}
+        // FSEvents can still report what happened before the watch began.
+        while receiver.recv_timeout(DEBOUNCE * 5).is_ok() {}
         for entry in std::fs::read_dir(dir.path()).expect("lists") {
             std::fs::read(entry.expect("entry").path()).expect("reads");
         }
