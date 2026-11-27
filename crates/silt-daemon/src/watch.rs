@@ -355,13 +355,16 @@ mod tests {
             .expect("watches");
         // FSEvents can still report what happened before the watch began.
         while receiver.recv_timeout(DEBOUNCE * 5).is_ok() {}
+        while other_receiver.try_recv().is_ok() {}
         for entry in std::fs::read_dir(dir.path()).expect("lists") {
             std::fs::read(entry.expect("entry").path()).expect("reads");
         }
         assert!(receiver.recv_timeout(DEBOUNCE * 5).is_err(), "reading files is not a change");
         std::fs::write(dir.path().join("a.txt"), "b").expect("write");
         assert!(receiver.recv_timeout(Duration::from_secs(5)).is_ok(), "writing is");
-        assert!(other_receiver.try_recv().is_err(), "the other checkout heard nothing");
+        // FSEvents may still ask every watch to rescan its own root.
+        let heard: Vec<PathBuf> = other_receiver.try_iter().flatten().collect();
+        assert!(!heard.iter().any(|path| path.starts_with(dir.path())), "the other checkout heard nothing: {heard:?}");
         drop(watched_other);
         std::fs::write(other.path().join("b.txt"), "b").expect("write");
         assert!(other_receiver.recv_timeout(DEBOUNCE * 5).is_err(), "a checkout no longer watched hears nothing");
