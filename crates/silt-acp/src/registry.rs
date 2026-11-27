@@ -1,5 +1,6 @@
-//! The agents Silt can start (ADR 0005): the public ACP registry, cached for
-//! a day with a bundled snapshot to fall back on, plus the user's own.
+//! The agents Silt can start (ADR 0005): those of the registry bundled with
+//! Silt, at the versions Silt checked them at (ADR 0140), then those only
+//! the public ACP registry lists, marked unverified, plus the user's own.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -10,6 +11,8 @@ use serde_json::Value;
 use sha2::Digest;
 
 pub const REGISTRY_URL: &str = "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
+/// The agents Silt checked, at the versions it checked: a newer version in
+/// the public registry waits until it's checked and this file updated.
 const SNAPSHOT: &str = include_str!("../registry-snapshot.json");
 const CACHE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -41,6 +44,10 @@ pub struct AgentInfo {
     /// Programs that, found on `PATH`, show the agent is installed here.
     #[serde(skip)]
     pub clis: Vec<String>,
+    /// Only the public registry lists it: Silt hasn't checked it, at any
+    /// version (ADR 0140).
+    #[serde(default)]
+    pub unverified: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -163,6 +170,7 @@ fn forks_of(agents: &[AgentInfo]) -> Vec<AgentInfo> {
                 description: fork.description.to_owned(),
                 distribution: of.distribution.clone(),
                 clis: vec![fork.cli.to_owned()],
+                unverified: of.unverified,
             })
         })
         .collect()
@@ -242,6 +250,7 @@ pub fn parse(text: &str) -> Vec<AgentInfo> {
             name: entry.name,
             description: entry.description,
             distribution: entry.distribution.for_this_machine(),
+            unverified: false,
         })
         .filter(|agent| agent.distribution != Distribution::Unavailable)
         .collect();
@@ -249,13 +258,27 @@ pub fn parse(text: &str) -> Vec<AgentInfo> {
     agents
 }
 
-/// The registry as cached in `data_dir`, or the bundled snapshot.
+/// The registry's agents: each Silt checked, at the version it checked,
+/// whatever the public registry cached in `data_dir` says of it now; then
+/// those only the public registry lists, marked unverified (ADR 0140).
 pub fn cached(data_dir: &Path) -> Vec<AgentInfo> {
-    let from_cache = std::fs::read_to_string(data_dir.join("acp-registry.json")).map(|text| parse(&text)).unwrap_or_default();
-    if from_cache.is_empty() { parse(SNAPSHOT) } else { from_cache }
+    let public = std::fs::read_to_string(data_dir.join("acp-registry.json")).map(|text| parse(&text)).unwrap_or_default();
+    pinned(parse(SNAPSHOT), public)
 }
 
-/// Downloads the registry into the cache when it is older than a day.
+fn pinned(checked: Vec<AgentInfo>, public: Vec<AgentInfo>) -> Vec<AgentInfo> {
+    let mut agents = checked;
+    let unchecked: Vec<AgentInfo> = public
+        .into_iter()
+        .filter(|agent| !agents.iter().any(|known| known.id == agent.id))
+        .map(|agent| AgentInfo { unverified: true, ..agent })
+        .collect();
+    agents.extend(unchecked);
+    agents
+}
+
+/// Downloads the public registry into the cache when it is older than a
+/// day, for the agents Silt hasn't checked.
 pub async fn refresh(data_dir: PathBuf) {
     let cache = data_dir.join("acp-registry.json");
     let fresh = std::fs::metadata(&cache)
@@ -411,6 +434,7 @@ impl Custom {
         });
         AgentInfo {
             clis: Vec::new(),
+            unverified: false,
             name: self.name.unwrap_or_else(|| self.id.clone()),
             id: self.id,
             description: self.description,
@@ -442,6 +466,7 @@ pub fn local_agent(silt: &Path) -> AgentInfo {
             env: Vec::new(),
         },
         clis: Vec::new(),
+        unverified: false,
     }
 }
 
@@ -667,6 +692,7 @@ mod tests {
                 sha256: sha256.map(str::to_owned),
             },
             clis: Vec::new(),
+            unverified: false,
         };
         for (id, cmd) in [("../x", "agent"), ("ok", "../../bin/sh"), ("ok", "/bin/sh")] {
             let refused = command(&agent(id, cmd, Some("00")), dir.path()).await;
@@ -702,6 +728,31 @@ mod tests {
                 env: vec![("A".into(), "1".into())]
             }
         );
+    }
+
+    #[test]
+    fn checked_agents_keep_their_version_and_the_rest_are_unverified() {
+        let checked = parse(
+            r#"{"agents": [{"id": "claude-acp", "name": "Claude Agent", "distribution": {"npx": {"package": "adapter@0.109.0"}}}]}"#,
+        );
+        let public = parse(
+            r#"{"agents": [
+                {"id": "claude-acp", "name": "Claude Agent", "distribution": {"npx": {"package": "adapter@0.113.0"}}},
+                {"id": "newcomer", "name": "Newcomer", "distribution": {"npx": {"package": "newcomer@1.0.0"}}}
+            ]}"#,
+        );
+        let agents = pinned(checked, public);
+        assert_eq!(agents.len(), 2, "{agents:?}");
+        let claude = &agents[0];
+        assert!(!claude.unverified);
+        assert_eq!(
+            claude.distribution,
+            Distribution::Command { program: "npx".into(), args: vec!["-y".into(), "adapter@0.109.0".into()], env: Vec::new() },
+            "the version Silt checked, not the public registry's newer one"
+        );
+        assert_eq!((agents[1].id.as_str(), agents[1].unverified), ("newcomer", true));
+        let offline = pinned(parse(SNAPSHOT), Vec::new());
+        assert!(offline.iter().all(|agent| !agent.unverified) && !offline.is_empty());
     }
 
     #[test]

@@ -145,3 +145,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0137](0137-agents-memory-follows-the-person.md) | Agents' memory follows the person, across agents and machines | accepted |
 | [0138](0138-enter-steers-mid-turn.md) | ⏎ steers mid-turn | accepted |
 | [0139](0139-macos-and-windows-ci-advisory-at-first.md) | macOS and Windows CI, advisory at first | accepted |
+| [0140](0140-agents-run-at-the-versions-silt-checked.md) | Agents run at the versions Silt checked | accepted |

@@ -590,10 +590,16 @@ impl Core {
                     if silt_workspace::agent_key(&agent.id).as_str() == "claude" {
                         offer_local_models(&mut settings, &self.models.installed_now());
                     }
+                    // Only the public registry lists it, at a version Silt hasn't checked (ADR 0140).
+                    let description = if agent.unverified {
+                        format!("Not checked by Silt yet. {}", agent.description).trim_end().to_owned()
+                    } else {
+                        agent.description
+                    };
                     AgentChoice {
                         id: agent.id,
                         name: agent.name,
-                        description: agent.description,
+                        description,
                         modes,
                         settings,
                         takes_images: takes.map(|takes| takes.images),

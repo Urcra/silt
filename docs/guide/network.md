@@ -32,7 +32,7 @@ When the message box opens for Claude Code, Codex or GitHub Copilot, the web UI 
 The sign-in goes only to the provider it belongs to, and the answer stays on this machine. Nothing is asked for an agent you aren't signed in to. **Plan usage** in Settings › Network turns it off.
 
 ## The agent registry
-The list of agents Silt can start from the web UI comes from the ACP registry, fetched from `cdn.agentclientprotocol.com` at most once a day. A copy built into Silt stands in when it can't be reached, and always when **Agent registry** is off in Settings › Network.
+The agents Silt can start from the web UI, and the version each runs at, come from a copy of the ACP registry built into Silt: the agents Silt checked, at the versions it checked. The public registry, fetched from `cdn.agentclientprotocol.com` at most once a day, adds only the agents that copy doesn't have, marked **Not checked by Silt yet**; a newer version of an agent Silt checked waits until Silt checks it. With **Agent registry** off in Settings › Network, only the built-in copy is used.
 
 ## Artifacts' libraries and fonts
 An agent's page can load libraries and fonts from a few CDNs: `cdnjs.cloudflare.com`, `cdn.jsdelivr.net`, `unpkg.com`, `cdn.tailwindcss.com`, `code.jquery.com`, and Google Fonts (`fonts.googleapis.com` and `fonts.gstatic.com`).
