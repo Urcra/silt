@@ -227,6 +227,7 @@ impl Request {
             | Self::SetNetworkSettings { .. }
             | Self::SetMemory { .. }
             | Self::ForgetMemory { .. }
+            | Self::MoveMemory { .. }
             | Self::PageAssets { .. }
             | Self::PageConnectors { .. }
             | Self::SetPageConnectors { .. }

@@ -7,12 +7,20 @@ import { keys, message } from '../query'
 import { agentName } from '../rules'
 import { SETTINGS_HEADING } from '../settingsContext'
 import { ago } from '../time'
-import { Button, EmptyState, Icon, Skeleton, Tag, Textarea, cx, toast, type Tone } from '../ui'
+import { Button, EmptyState, Icon, Select, Skeleton, Tag, Textarea, cx, toast, type Tone } from '../ui'
 import { AgentMark } from './AgentMark'
 import { Markdown } from './Markdown'
 
 /** Where Settings › Memory shows: everywhere's, or a project's by its clone. */
 const EVERYWHERE = 'everywhere'
+
+/** Whose the memory everywhere is: Silt's own, which agents read in every project. */
+const SILT = 'silt'
+
+/** What an agent, or Silt, is called. */
+function who(agent: string): string {
+  return agent === SILT ? 'Silt' : agentName(agent)
+}
 
 const INTRO =
   "What your agents write down to remember in later sessions: about you, everywhere, and about each project. Silt reads it from each agent's own folders on this machine."
@@ -74,7 +82,7 @@ function Chevron() {
 function Marks({ agents }: { agents: string[] }) {
   if (agents.length === 0) return null
   return (
-    <span className="flex items-center gap-1.5 text-fg-2" title={`Written by ${agents.map(agentName).join(', ')}`}>
+    <span className="flex items-center gap-1.5 text-fg-2" title={`Written by ${agents.map(who).join(', ')}`}>
       {agents.map((agent) => (
         <AgentMark key={agent} agent={agent} className="h-3.5 w-3.5" />
       ))}
@@ -309,7 +317,7 @@ function PlaceBody({ view, clone, heading }: { view: MemoryView; clone: string |
         >
           <Icon name="alert" className="mt-0.5 shrink-0" />
           <span>
-            Couldn't read {agentName(store.agent)}'s <code className="font-mono text-xs">{store.path}</code>: {store.error}
+            Couldn't read {who(store.agent)}'s <code className="font-mono text-xs">{store.path}</code>: {store.error}
           </span>
         </div>
       ))}
@@ -441,6 +449,14 @@ function useChange(clone: string | null) {
           return false
         },
       ),
+    move: (store: MemoryStoreView, entry: MemoryEntryView, to: { clone: string; name: string } | null) =>
+      api.moveMemory({ clone, store: store.path, file: entry.file, to: to?.clone ?? null }).then(
+        () => {
+          refresh()
+          toast(to ? `Moved ${entry.name} to ${to.name}` : `${entry.name} is remembered everywhere now`, 'ok')
+        },
+        (failure: unknown) => toast(message(failure), 'danger'),
+      ),
     forget: (store: MemoryStoreView, entry: MemoryEntryView) =>
       api.forgetMemory({ clone, store: store.path, file: entry.file }).then(
         () => {
@@ -468,7 +484,9 @@ function MemoryRow({
   toggle: () => void
 }) {
   const now = useNow()
-  const { save, forget } = useChange(clone)
+  const { save, move, forget } = useChange(clone)
+  const overview = useQuery({ queryKey: keys.memory, queryFn: api.memory, enabled: open && clone === null })
+  const [moving, setMoving] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
   const [forgetting, setForgetting] = useState(false)
   const when = entry.modified_ms ? ago(entry.modified_ms, now) : ''
@@ -510,7 +528,7 @@ function MemoryRow({
             <dd className="min-w-0 text-fg-1">
               <span className="inline-flex flex-wrap items-center gap-1.5">
                 <AgentMark agent={store.agent} className="h-3 w-3" />
-                {agentName(store.agent)}
+                {who(store.agent)}
                 {entry.thread && (
                   <>
                     {' in '}
@@ -537,6 +555,39 @@ function MemoryRow({
               <Button icon="edit" onClick={() => setEditing(entry.text)}>
                 Edit
               </Button>
+              {clone !== null && store.kind === 'memory' && (
+                <Button onClick={() => void move(store, entry, null)}>Use everywhere</Button>
+              )}
+              {clone === null && store.agent === SILT && !moving && (
+                <Button onClick={() => setMoving(true)}>Move to a project</Button>
+              )}
+              {moving && (
+                <>
+                  <label className="sr-only" htmlFor={`move-${entry.file}`}>
+                    Project to move it to
+                  </label>
+                  <Select
+                    id={`move-${entry.file}`}
+                    defaultValue=""
+                    onChange={(event) => {
+                      const project = overview.data?.projects.find((candidate) => candidate.clone === event.target.value)
+                      if (project) void move(store, entry, { clone: project.clone, name: project.name })
+                    }}
+                  >
+                    <option value="" disabled>
+                      Choose a project
+                    </option>
+                    {overview.data?.projects.map((project) => (
+                      <option key={project.clone} value={project.clone}>
+                        {project.name}
+                      </option>
+                    ))}
+                  </Select>
+                  <Button variant="ghost" onClick={() => setMoving(false)}>
+                    Cancel
+                  </Button>
+                </>
+              )}
               {forgetting ? (
                 <>
                   <span className="text-xs text-fg-2">Forget it for every agent that reads this folder?</span>
@@ -626,7 +677,7 @@ function FileRow({ store, clone }: { store: MemoryStoreView; clone: string | nul
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="font-mono text-sm break-all text-fg-1">{store.path}</span>
           <span className="text-xs text-fg-2">
-            {agentName(store.agent)}: {fileNote(store)}
+            {who(store.agent)}: {fileNote(store)}
           </span>
         </span>
         <Icon name={open ? 'chevronDown' : 'chevronRight'} className="mt-1 h-3.5 w-3.5 shrink-0 text-fg-2" />

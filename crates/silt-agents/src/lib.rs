@@ -211,6 +211,28 @@ pub struct LaunchPlan {
     pub memory: Option<PathBuf>,
 }
 
+/// The root an agent keys a project by for the folder `cwd`: a managed
+/// checkout's clone, a worktree's main working tree, else the nearest
+/// folder with a `.git`. `None` outside a repository.
+pub fn project_root(cwd: &Path) -> Option<PathBuf> {
+    if let Some(clone) = managed_clone(cwd) {
+        return Some(clone);
+    }
+    let dot_git = cwd.ancestors().map(|dir| dir.join(".git")).find(|path| path.exists())?;
+    let root = dot_git.parent()?.to_path_buf();
+    let Ok(pointer) = std::fs::read_to_string(&dot_git) else { return Some(root) };
+    // A worktree's `.git` names `<common>/worktrees/<id>`.
+    let git_dir = PathBuf::from(pointer.trim().strip_prefix("gitdir:").unwrap_or_default().trim());
+    let git_dir = if git_dir.is_absolute() { git_dir } else { root.join(git_dir) };
+    match git_dir.parent() {
+        Some(worktrees) if worktrees.file_name().is_some_and(|name| name == "worktrees") => {
+            let common = worktrees.parent()?;
+            Some(if common.file_name().is_some_and(|name| name == ".git") { common.parent()?.to_path_buf() } else { root })
+        }
+        _ => Some(root),
+    }
+}
+
 /// The clone a managed checkout at or above `cwd` was made from: its git dir
 /// is `<clone>/.git/silt/clones/<id>.git`, as `silt_git` makes it. `None` for
 /// any other folder, a clone or a worktree included.
@@ -438,6 +460,30 @@ pub trait Agent: Send + Sync {
     /// Gives the memories brought in. `env` reads the run's variables.
     fn gather_memory(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>, _cwd: &Path) -> std::io::Result<Vec<String>> {
         Ok(Vec::new())
+    }
+    /// Moves what it filed about the person under the project at `cwd`,
+    /// memories of kind `user`, to the store `everywhere`, which every
+    /// project reads (ADR 0137). Gives the memories moved.
+    fn move_person_memory(
+        &self,
+        home: &Path,
+        env: &dyn Fn(&str) -> Option<String>,
+        cwd: &Path,
+        everywhere: &Path,
+    ) -> std::io::Result<Vec<String>> {
+        let Some(root) = project_root(cwd) else { return Ok(Vec::new()) };
+        let mut moved = Vec::new();
+        for store in self.memory_stores(home, env, Some(&root)) {
+            if store.kind == memory::Kind::Memory {
+                moved.extend(memory::move_kind(&store.path, "user", everywhere)?);
+            }
+        }
+        Ok(moved)
+    }
+    /// It's given the index of what holds in every project, as its own
+    /// memory has no place for it.
+    fn reads_everywhere(&self) -> bool {
+        false
     }
     /// Where it keeps what it remembers of the project whose clone is
     /// `project`, or, without one, what it remembers everywhere (ADR 0137).

@@ -11,6 +11,11 @@ use crate::conventions::{parse_frontmatter, split_frontmatter};
 /// The file indexing a folder of memories, a line a memory.
 pub const INDEX: &str = "MEMORY.md";
 
+/// Silt's own store of what holds in every project, in its data folder.
+pub fn everywhere_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("memory").join("everywhere")
+}
+
 /// Whose a store is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
@@ -222,33 +227,104 @@ pub fn merge_into(from: &Path, into: &Path, tag: &str) -> io::Result<Merged> {
         fs::create_dir_all(into)?;
     }
     let mut index = fs::read_to_string(into.join(INDEX)).unwrap_or_default();
-    for entry in entries {
-        let name = match fs::read_to_string(into.join(&entry.file)) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => entry.file.clone(),
-            Err(error) => return Err(error),
-            Ok(held) if held == entry.text => continue,
-            Ok(_) => {
-                let stem = entry.file.strip_suffix(".md").unwrap_or(&entry.file);
-                let tag: String = tag.chars().filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-').collect();
-                format!("{stem}-{tag}.md")
-            }
-        };
-        if !is_entry_file(&name) || into.join(&name).exists() {
-            continue;
+    for entry in &entries {
+        if let Added::Copied(name) = add_to(into, entry, &mut index, tag)? {
+            merged.copied.push(name);
         }
-        write_atomically(&into.join(&name), entry.text.as_bytes())?;
-        if !index.is_empty() && !index.ends_with('\n') {
-            index.push('\n');
-        }
-        let hook = if entry.description.is_empty() { String::new() } else { format!(" — {}", entry.description) };
-        index.push_str(&format!("- [{}]({name}){hook}\n", entry.name));
-        merged.copied.push(name);
     }
     if !merged.copied.is_empty() {
         write_atomically(&into.join(INDEX), index.as_bytes())?;
     }
     fs::write(from.join(MERGED_MARK), format!("merged into {}\n", into.display()))?;
     Ok(merged)
+}
+
+/// What [`add_to`] did with a memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Added {
+    /// Copied under this name.
+    Copied(String),
+    /// The target held it the same already.
+    Held(String),
+    /// No free name for it.
+    Skipped,
+}
+
+/// Copies `entry` into the folder `into`, adding its line to `index`: under
+/// its own name, or `<name>-<tag>.md` when the target holds that name
+/// differently.
+fn add_to(into: &Path, entry: &Entry, index: &mut String, tag: &str) -> io::Result<Added> {
+    let name = match fs::read_to_string(into.join(&entry.file)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => entry.file.clone(),
+        Err(error) => return Err(error),
+        Ok(held) if held == entry.text => return Ok(Added::Held(entry.file.clone())),
+        Ok(_) => {
+            let stem = entry.file.strip_suffix(".md").unwrap_or(&entry.file);
+            let tag: String = tag.chars().filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-').collect();
+            format!("{stem}-{tag}.md")
+        }
+    };
+    if !is_entry_file(&name) || into.join(&name).exists() {
+        return Ok(Added::Skipped);
+    }
+    fs::create_dir_all(into)?;
+    write_atomically(&into.join(&name), entry.text.as_bytes())?;
+    if !index.is_empty() && !index.ends_with('\n') {
+        index.push('\n');
+    }
+    let hook = if entry.description.is_empty() { String::new() } else { format!(" — {}", entry.description) };
+    index.push_str(&format!("- [{}]({name}){hook}\n", entry.name));
+    Ok(Added::Copied(name))
+}
+
+/// Moves the memory `file` from the folder `from` to `into`, with its index
+/// line, and gives its name there.
+pub fn move_entry(from: &Path, file: &str, into: &Path) -> io::Result<String> {
+    let entry = read_indexed(from)?
+        .into_iter()
+        .find(|entry| entry.file == file)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("no memory {file}")))?;
+    let mut index = fs::read_to_string(into.join(INDEX)).unwrap_or_default();
+    let name = match add_to(into, &entry, &mut index, "moved")? {
+        Added::Copied(name) => {
+            write_atomically(&into.join(INDEX), index.as_bytes())?;
+            name
+        }
+        Added::Held(name) => name,
+        Added::Skipped => return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{file} is there already"))),
+    };
+    forget_entry(from, file)?;
+    Ok(name)
+}
+
+/// Moves the memories of `kind` from the folder `from` to `into`, such as
+/// what an agent filed under a project about the person.
+pub fn move_kind(from: &Path, kind: &str, into: &Path) -> io::Result<Vec<String>> {
+    let mut moved = Vec::new();
+    for entry in read_indexed(from)?.into_iter().filter(|entry| entry.kind.as_deref() == Some(kind)) {
+        moved.push(move_entry(from, &entry.file, into)?);
+    }
+    Ok(moved)
+}
+
+/// What an agent is told of the memories in `dir`, which hold in every
+/// project: where they are and their index. `None` when there are none.
+pub fn everywhere_prompt(dir: &Path) -> Option<String> {
+    let entries = read_indexed(dir).ok()?;
+    if entries.is_empty() {
+        return None;
+    }
+    let mut prompt = format!(
+        "# Memory everywhere\n\nWhat you and the person's other agents learned about them, which holds in every project. \
+Silt keeps it in `{}`: read a memory's file there when it's relevant. \
+To remember something new about the person, save it to your own memory as you would, of type `user`; Silt moves it here.\n\n",
+        dir.display()
+    );
+    for entry in entries {
+        let hook = if entry.description.is_empty() { String::new() } else { format!(" — {}", entry.description) };
+        prompt.push_str(&format!("- [{}]({}){hook}\n", entry.name, entry.file));
+    }
+    Some(prompt)
 }
 
 /// `index` without the lines that point at `file`.
@@ -364,6 +440,34 @@ mod tests {
         assert!(from.join("new.md").exists(), "the thread's folder is left as it was");
         assert_eq!(merge_into(&from, &into, "t1").unwrap(), Merged::default(), "once");
         assert_eq!(merge_into(&root.path().join("missing"), &into, "t2").unwrap(), Merged::default());
+    }
+
+    #[test]
+    fn memories_about_the_person_move_with_their_lines() {
+        let root = tempfile::tempdir().unwrap();
+        let (project, everywhere) = (root.path().join("project"), root.path().join("everywhere"));
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join(INDEX), "- [Rust](user-rust.md) — senior\n- [Gate](project-gate.md) — CI\n").unwrap();
+        fs::write(
+            project.join("user-rust.md"),
+            "---\nname: Rust\ndescription: senior\nmetadata:\n  type: user\n---\nCodes in Rust.\n",
+        )
+        .unwrap();
+        fs::write(project.join("project-gate.md"), "---\nname: Gate\nmetadata:\n  type: project\n---\nCI.\n").unwrap();
+
+        assert_eq!(move_kind(&project, "user", &everywhere).unwrap(), ["user-rust.md"]);
+        assert!(!project.join("user-rust.md").exists());
+        assert_eq!(fs::read_to_string(project.join(INDEX)).unwrap(), "- [Gate](project-gate.md) — CI\n");
+        assert_eq!(fs::read_to_string(everywhere.join(INDEX)).unwrap(), "- [Rust](user-rust.md) — senior\n");
+        assert!(move_kind(&project, "user", &everywhere).unwrap().is_empty());
+
+        let prompt = everywhere_prompt(&everywhere).unwrap();
+        assert!(prompt.contains(&everywhere.display().to_string()));
+        assert!(prompt.contains("- [Rust](user-rust.md) — senior"));
+        assert_eq!(everywhere_prompt(&root.path().join("none")), None);
+
+        assert_eq!(move_entry(&everywhere, "user-rust.md", &project).unwrap(), "user-rust.md");
+        assert!(project.join("user-rust.md").exists() && !everywhere.join("user-rust.md").exists());
     }
 
     #[test]

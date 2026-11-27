@@ -274,3 +274,32 @@ test('Settings › Memory shows what Claude Code remembers of a project, and edi
   expect(existsSync(join(folder, 'feedback-tests.md'))).toBe(false)
   expect(readFileSync(join(folder, 'MEMORY.md'), 'utf8')).toBe('- [Release day](project-release.md) — Thursdays\n')
 })
+
+test('a memory moves from a project to everywhere and back', async ({ page }) => {
+  const { url, work } = fixture()
+  const clone = join(work, 'repo')
+  const folder = join(work, 'claude', 'projects', clone.replace(/[^A-Za-z0-9]/g, '-'), 'memory')
+  mkdirSync(folder, { recursive: true })
+  writeFileSync(join(folder, 'MEMORY.md'), '- [Writes British English](user-british.md) — colour, behaviour\n')
+  writeFileSync(
+    join(folder, 'user-british.md'),
+    '---\nname: Writes British English\ndescription: colour, behaviour\nmetadata:\n  type: feedback\n---\n\nColour, not color.\n',
+  )
+
+  await page.goto(url)
+  await page.goto(`${new URL(url).origin}/settings/memory?memory=${encodeURIComponent(clone)}`)
+  const place = page.getByRole('region', { name: 'Memory of repo' })
+  await place.getByRole('button', { name: /Writes British English/ }).click()
+  await place.getByRole('button', { name: 'Use everywhere' }).click()
+  await expect(place.getByText('Writes British English')).toHaveCount(0)
+  expect(existsSync(join(folder, 'user-british.md'))).toBe(false)
+
+  await page.goto(`${new URL(url).origin}/settings/memory?memory=everywhere`)
+  const everywhere = page.getByRole('region', { name: 'Memory of everywhere' })
+  await everywhere.getByRole('button', { name: /Writes British English/ }).click()
+  await expect(everywhere.getByText('Colour, not color.')).toBeVisible()
+  await everywhere.getByRole('button', { name: 'Move to a project' }).click()
+  await everywhere.getByLabel('Project to move it to').selectOption({ label: 'repo' })
+  await expect(everywhere.getByText('Writes British English')).toHaveCount(0)
+  expect(readFileSync(join(folder, 'user-british.md'), 'utf8')).toContain('Colour, not color.')
+})

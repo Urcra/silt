@@ -267,6 +267,10 @@ impl Agent for ClaudeCode {
         Some(dir.join("projects").join(project_slug(&clone)).join("memory"))
     }
 
+    fn reads_everywhere(&self) -> bool {
+        true
+    }
+
     fn gather_memory(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>, cwd: &Path) -> io::Result<Vec<String>> {
         // Before Silt kept a project's memory in its clone's folder, each
         // managed checkout under `<clone>/.silt/checkouts/<id>` had its own.
@@ -951,6 +955,24 @@ mod tests {
         assert!(!shared.join("x.md").exists());
         assert!(ClaudeCode.gather_memory(Path::new("/home/u"), &env, &checkout).unwrap().is_empty(), "once");
         assert!(ClaudeCode.gather_memory(Path::new("/home/u"), &env, &clone).unwrap().is_empty(), "not from the clone itself");
+    }
+
+    #[test]
+    fn what_claude_learns_about_the_person_moves_everywhere() {
+        let (dir, clone, checkout, worktree) = checkouts();
+        assert_eq!(crate::project_root(&checkout.join("src")), Some(clone.clone()));
+        assert_eq!(crate::project_root(&worktree), Some(clone.clone()), "a worktree is its clone's");
+        let config = dir.path().join("config");
+        let config_dir = config.to_string_lossy().into_owned();
+        let env = |name: &str| (name == "CLAUDE_CONFIG_DIR").then(|| config_dir.clone());
+        let shared = ClaudeCode.memory(Path::new("/home/u"), &env, &checkout).unwrap();
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(shared.join("MEMORY.md"), "- [Rust](user-rust.md) — senior\n").unwrap();
+        fs::write(shared.join("user-rust.md"), "---\nname: Rust\nmetadata:\n  type: user\n---\nRust.\n").unwrap();
+        let everywhere = dir.path().join("silt/memory/everywhere");
+        let moved = ClaudeCode.move_person_memory(Path::new("/home/u"), &env, &checkout, &everywhere).unwrap();
+        assert_eq!(moved, ["user-rust.md"]);
+        assert!(everywhere.join("user-rust.md").exists() && !shared.join("user-rust.md").exists());
     }
 
     #[test]

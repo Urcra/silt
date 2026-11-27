@@ -546,7 +546,13 @@ impl Run<'_> {
         let lookup = |name: &str| {
             held.env.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.clone()).or_else(|| env::var(name).ok())
         };
+        let everywhere = silt_agents::memory::everywhere_dir(&paths::data_dir());
+        // Made now, as the sandbox shows it only where it exists.
+        let _ = fs::create_dir_all(&everywhere);
         if let Some(home) = home.as_deref() {
+            if let Err(error) = self.agent.move_person_memory(home, &lookup, self.cwd, &everywhere) {
+                eprintln!("silt: couldn't move what the agent learnt about you to your memory everywhere: {error}");
+            }
             match self.agent.gather_memory(home, &lookup, self.cwd) {
                 Ok(gathered) if gathered.is_empty() => {}
                 Ok(gathered) => {
@@ -573,7 +579,15 @@ impl Run<'_> {
             },
             hook_command: format!("{} hook", silt_agents::shell_quote(&exe.to_string_lossy())),
             hook_program: exe.clone(),
-            instructions: agent_conventions::session_instructions(&rules, &skills, native, self.checkout),
+            instructions: {
+                let given = agent_conventions::session_instructions(&rules, &skills, native, self.checkout);
+                let everywhere =
+                    self.agent.reads_everywhere().then(|| silt_agents::memory::everywhere_prompt(&everywhere)).flatten();
+                match (given, everywhere) {
+                    (Some(given), Some(everywhere)) => Some(format!("{given}\n\n{everywhere}")),
+                    (given, everywhere) => given.or(everywhere),
+                }
+            },
             skills: agent_conventions::skills_to_give(&skills, native, self.checkout)
                 .into_iter()
                 .map(|skill| skill.dir.clone())
@@ -620,7 +634,10 @@ impl Run<'_> {
                     scratch: &scratch,
                     reach,
                     token: &held.token,
-                    read_only: silt_daemon::sandbox::program_paths(&launch.program, &env),
+                    read_only: silt_daemon::sandbox::program_paths(&launch.program, &env)
+                        .into_iter()
+                        .chain([silt_agents::memory::everywhere_dir(&paths::data_dir())])
+                        .collect(),
                     gateway_credentials: None,
                     relayed,
                     env: inherited,

@@ -1097,6 +1097,9 @@ impl Core {
             Request::ForgetMemory { clone, store, file } => {
                 to_response(self.forget_memory(clone.as_deref(), &store, &file).map(|()| "forgotten"))
             }
+            Request::MoveMemory { clone, store, file, to } => {
+                to_response(self.move_memory(clone.as_deref(), &store, &file, to.as_deref()))
+            }
             Request::NetworkSettings => to_response(crate::network::view(&self.data_dir)),
             Request::SetNetworkSettings { settings } => {
                 to_response(crate::network::save(&self.data_dir, settings).map(|()| "saved"))
