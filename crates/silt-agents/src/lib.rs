@@ -211,6 +211,18 @@ pub struct LaunchPlan {
     pub memory: Option<PathBuf>,
 }
 
+/// The project's memory every agent shares while they share memory (ADR
+/// 0137): Claude Code's folder for the project at `cwd`, which Silt keeps
+/// every thread of the project in.
+pub fn shared_memory(home: &Path, env: &dyn Fn(&str) -> Option<String>, cwd: &Path) -> Option<PathBuf> {
+    let root = project_root(cwd)?;
+    claude::ClaudeCode
+        .memory_stores(home, env, Some(&root))
+        .into_iter()
+        .find(|store| store.kind == memory::Kind::Memory)
+        .map(|store| store.path)
+}
+
 /// The root an agent keys a project by for the folder `cwd`: a managed
 /// checkout's clone, a worktree's main working tree, else the nearest
 /// folder with a `.git`. `None` outside a repository.
@@ -458,7 +470,27 @@ pub trait Agent: Send + Sync {
     /// Brings what threads remembered in folders of their own into the one
     /// [`Agent::memory`] gives the project at `cwd`, once, before a run there.
     /// Gives the memories brought in. `env` reads the run's variables.
-    fn gather_memory(&self, _home: &Path, _env: &dyn Fn(&str) -> Option<String>, _cwd: &Path) -> std::io::Result<Vec<String>> {
+    /// `shared` is the folder every agent shares for the project while
+    /// agents share memory (ADR 0137), which its own may be linked to.
+    fn gather_memory(
+        &self,
+        _home: &Path,
+        _env: &dyn Fn(&str) -> Option<String>,
+        _cwd: &Path,
+        _shared: Option<&Path>,
+    ) -> std::io::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+    /// Brings what it remembered about the person outside its memory, such
+    /// as Gemini CLI's added lines in `GEMINI.md`, into `everywhere`, once:
+    /// `brought` keeps what was. Gives the memories brought in.
+    fn bring_in_everywhere(
+        &self,
+        _home: &Path,
+        _env: &dyn Fn(&str) -> Option<String>,
+        _everywhere: &Path,
+        _brought: &Path,
+    ) -> std::io::Result<Vec<String>> {
         Ok(Vec::new())
     }
     /// Moves what it filed about the person under the project at `cwd`,

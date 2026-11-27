@@ -271,7 +271,15 @@ impl Agent for ClaudeCode {
         true
     }
 
-    fn gather_memory(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>, cwd: &Path) -> io::Result<Vec<String>> {
+    fn gather_memory(
+        &self,
+        home: &Path,
+        env: &dyn Fn(&str) -> Option<String>,
+        cwd: &Path,
+        _shared: Option<&Path>,
+    ) -> io::Result<Vec<String>> {
+        // Its project folder is the one every agent shares, so it gathers
+        // into that whether or not they do.
         // Before Silt kept a project's memory in its clone's folder, each
         // managed checkout under `<clone>/.silt/checkouts/<id>` had its own.
         let (Some(clone), Some(into)) = (crate::managed_clone(cwd), self.memory(home, env, cwd)) else { return Ok(Vec::new()) };
@@ -949,12 +957,15 @@ mod tests {
         fs::create_dir_all(&other).unwrap();
         fs::write(other.join("x.md"), "not this project's").unwrap();
 
-        assert_eq!(ClaudeCode.gather_memory(Path::new("/home/u"), &env, &checkout).unwrap(), ["user-rust.md"]);
+        assert_eq!(ClaudeCode.gather_memory(Path::new("/home/u"), &env, &checkout, None).unwrap(), ["user-rust.md"]);
         let shared = ClaudeCode.memory(Path::new("/home/u"), &env, &checkout).unwrap();
         assert_eq!(fs::read_to_string(shared.join("user-rust.md")).unwrap(), "Codes in Rust.");
         assert!(!shared.join("x.md").exists());
-        assert!(ClaudeCode.gather_memory(Path::new("/home/u"), &env, &checkout).unwrap().is_empty(), "once");
-        assert!(ClaudeCode.gather_memory(Path::new("/home/u"), &env, &clone).unwrap().is_empty(), "not from the clone itself");
+        assert!(ClaudeCode.gather_memory(Path::new("/home/u"), &env, &checkout, None).unwrap().is_empty(), "once");
+        assert!(
+            ClaudeCode.gather_memory(Path::new("/home/u"), &env, &clone, None).unwrap().is_empty(),
+            "not from the clone itself"
+        );
     }
 
     #[test]

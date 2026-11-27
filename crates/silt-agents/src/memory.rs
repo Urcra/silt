@@ -430,6 +430,38 @@ pub fn write_new(dir: &Path, file: Option<&str>, name: &str, description: &str, 
     Ok(file)
 }
 
+/// The file in Silt's data folder keeping what agents' older memories
+/// were brought in already.
+pub fn brought_file(data_dir: &Path) -> PathBuf {
+    data_dir.join("memory").join("brought.json")
+}
+
+/// Brings `facts` about the person into `everywhere` as memories of kind
+/// `user`, each once: `brought` keeps a hash of each brought in. Gives the
+/// memories written.
+pub fn bring_in_lines(facts: &[String], everywhere: &Path, brought: &Path) -> io::Result<Vec<String>> {
+    use sha2::Digest;
+    let mut seen: std::collections::BTreeSet<String> =
+        fs::read_to_string(brought).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    let mut written = Vec::new();
+    for fact in facts {
+        let hash: String = sha2::Sha256::digest(fact.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
+        if seen.contains(&hash) {
+            continue;
+        }
+        let name: String = fact.split_whitespace().take(8).collect::<Vec<_>>().join(" ");
+        written.push(write_new(everywhere, None, &name, fact, "user", fact)?);
+        seen.insert(hash);
+    }
+    if !written.is_empty() {
+        if let Some(dir) = brought.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        write_atomically(brought, serde_json::to_string(&seen).map_err(io::Error::other)?.as_bytes())?;
+    }
+    Ok(written)
+}
+
 /// What an agent whose own memory isn't the shared one is told (ADR
 /// 0137): the indexes of the project's memory and the memory everywhere,
 /// and the tools to read and add to them. `None` when both are empty.
