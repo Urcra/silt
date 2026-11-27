@@ -198,6 +198,59 @@ pub fn forget_entry(dir: &Path, file: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// What [`merge_into`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Merged {
+    /// Memories copied over, by their name in the target.
+    pub copied: Vec<String>,
+}
+
+/// The file in a merged-from folder saying it was, so it's merged once.
+pub const MERGED_MARK: &str = ".silt-merged";
+
+/// Copies the memories of the folder `from` into `into`, with their index
+/// lines, once: the folder is marked as merged, and left otherwise as it
+/// was. A memory the target holds the same is skipped; one it holds
+/// differently under the same name is kept beside it, named after `tag`.
+pub fn merge_into(from: &Path, into: &Path, tag: &str) -> io::Result<Merged> {
+    let mut merged = Merged::default();
+    if from.join(MERGED_MARK).exists() || !from.is_dir() {
+        return Ok(merged);
+    }
+    let entries = read_indexed(from)?;
+    if !entries.is_empty() {
+        fs::create_dir_all(into)?;
+    }
+    let mut index = fs::read_to_string(into.join(INDEX)).unwrap_or_default();
+    for entry in entries {
+        let name = match fs::read_to_string(into.join(&entry.file)) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => entry.file.clone(),
+            Err(error) => return Err(error),
+            Ok(held) if held == entry.text => continue,
+            Ok(_) => {
+                let stem = entry.file.strip_suffix(".md").unwrap_or(&entry.file);
+                let tag: String = tag.chars().filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-').collect();
+                format!("{stem}-{tag}.md")
+            }
+        };
+        if !is_entry_file(&name) || into.join(&name).exists() {
+            continue;
+        }
+        write_atomically(&into.join(&name), entry.text.as_bytes())?;
+        if !index.is_empty() && !index.ends_with('\n') {
+            index.push('\n');
+        }
+        let hook = if entry.description.is_empty() { String::new() } else { format!(" — {}", entry.description) };
+        index.push_str(&format!("- [{}]({name}){hook}\n", entry.name));
+        merged.copied.push(name);
+    }
+    if !merged.copied.is_empty() {
+        write_atomically(&into.join(INDEX), index.as_bytes())?;
+    }
+    fs::write(from.join(MERGED_MARK), format!("merged into {}\n", into.display()))?;
+    Ok(merged)
+}
+
 /// `index` without the lines that point at `file`.
 pub fn without_line_for(index: &str, file: &str) -> String {
     let mut kept = String::with_capacity(index.len());
@@ -283,6 +336,34 @@ mod tests {
         assert_eq!(fs::read_to_string(dir.path().join(INDEX)).unwrap(), "# Memory\n- [B](b.md) — two\n");
         write_entry(dir.path(), "b.md", "changed").unwrap();
         assert_eq!(fs::read_to_string(dir.path().join("b.md")).unwrap(), "changed");
+    }
+
+    #[test]
+    fn a_threads_memory_is_merged_once_keeping_both_of_a_name() {
+        let root = tempfile::tempdir().unwrap();
+        let (from, into) = (root.path().join("thread"), root.path().join("clone"));
+        fs::create_dir_all(&from).unwrap();
+        fs::create_dir_all(&into).unwrap();
+        fs::write(from.join(INDEX), "- [Same](same.md) — kept\n- [New](new.md) — learnt\n- [Clash](clash.md) — changed\n")
+            .unwrap();
+        for (file, text) in [("same.md", "same"), ("new.md", "new"), ("clash.md", "theirs")] {
+            fs::write(from.join(file), text).unwrap();
+        }
+        fs::write(into.join(INDEX), "- [Same](same.md) — kept\n- [Clash](clash.md) — mine").unwrap();
+        fs::write(into.join("same.md"), "same").unwrap();
+        fs::write(into.join("clash.md"), "mine").unwrap();
+
+        let merged = merge_into(&from, &into, "t1").unwrap();
+        assert_eq!(merged.copied, ["new.md", "clash-t1.md"]);
+        assert_eq!(fs::read_to_string(into.join("clash.md")).unwrap(), "mine");
+        assert_eq!(fs::read_to_string(into.join("clash-t1.md")).unwrap(), "theirs");
+        assert_eq!(
+            fs::read_to_string(into.join(INDEX)).unwrap(),
+            "- [Same](same.md) — kept\n- [Clash](clash.md) — mine\n- [New](new.md) — learnt\n- [Clash](clash-t1.md) — changed\n"
+        );
+        assert!(from.join("new.md").exists(), "the thread's folder is left as it was");
+        assert_eq!(merge_into(&from, &into, "t1").unwrap(), Merged::default(), "once");
+        assert_eq!(merge_into(&root.path().join("missing"), &into, "t2").unwrap(), Merged::default());
     }
 
     #[test]

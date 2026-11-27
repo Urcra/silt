@@ -267,6 +267,22 @@ impl Agent for ClaudeCode {
         Some(dir.join("projects").join(project_slug(&clone)).join("memory"))
     }
 
+    fn gather_memory(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>, cwd: &Path) -> io::Result<Vec<String>> {
+        // Before Silt kept a project's memory in its clone's folder, each
+        // managed checkout under `<clone>/.silt/checkouts/<id>` had its own.
+        let (Some(clone), Some(into)) = (crate::managed_clone(cwd), self.memory(home, env, cwd)) else { return Ok(Vec::new()) };
+        let Some(projects) = into.parent().and_then(Path::parent) else { return Ok(Vec::new()) };
+        let prefix = format!("{}--silt-checkouts-", project_slug(&clone));
+        let mut gathered = Vec::new();
+        let Ok(folders) = fs::read_dir(projects) else { return Ok(gathered) };
+        for folder in folders.flatten() {
+            let name = folder.file_name().to_string_lossy().into_owned();
+            let Some(thread) = name.strip_prefix(&prefix) else { continue };
+            gathered.extend(crate::memory::merge_into(&folder.path().join("memory"), &into, thread)?.copied);
+        }
+        Ok(gathered)
+    }
+
     fn memory_stores(&self, home: &Path, env: &dyn Fn(&str) -> Option<String>, project: Option<&Path>) -> Vec<Store> {
         let Some(dir) = self.homes(home, env).into_iter().find(|dir| dir.extension().is_none()) else { return Vec::new() };
         match project {
@@ -913,6 +929,28 @@ mod tests {
         // Claude Code finds the clone's own folder by itself in these.
         assert_eq!(ClaudeCode.memory(Path::new("/home/u"), &env, &clone), None);
         assert_eq!(ClaudeCode.memory(Path::new("/home/u"), &env, &worktree), None);
+    }
+
+    #[test]
+    fn a_thread_brings_back_what_earlier_threads_remembered() {
+        let (dir, clone, checkout, _) = checkouts();
+        let config = dir.path().join("config");
+        let config_dir = config.to_string_lossy().into_owned();
+        let env = |name: &str| (name == "CLAUDE_CONFIG_DIR").then(|| config_dir.clone());
+        let old = config.join("projects").join(format!("{}--silt-checkouts-t0", project_slug(&clone))).join("memory");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("MEMORY.md"), "- [Rust](user-rust.md) — senior\n").unwrap();
+        fs::write(old.join("user-rust.md"), "Codes in Rust.").unwrap();
+        let other = config.join("projects").join("-elsewhere--silt-checkouts-t9").join("memory");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("x.md"), "not this project's").unwrap();
+
+        assert_eq!(ClaudeCode.gather_memory(Path::new("/home/u"), &env, &checkout).unwrap(), ["user-rust.md"]);
+        let shared = ClaudeCode.memory(Path::new("/home/u"), &env, &checkout).unwrap();
+        assert_eq!(fs::read_to_string(shared.join("user-rust.md")).unwrap(), "Codes in Rust.");
+        assert!(!shared.join("x.md").exists());
+        assert!(ClaudeCode.gather_memory(Path::new("/home/u"), &env, &checkout).unwrap().is_empty(), "once");
+        assert!(ClaudeCode.gather_memory(Path::new("/home/u"), &env, &clone).unwrap().is_empty(), "not from the clone itself");
     }
 
     #[test]

@@ -3102,12 +3102,17 @@ pub(crate) struct AcpSandbox {
 }
 
 /// Where the agent `id` keeps what it remembers of the project at `cwd`,
-/// when not where it would by itself (ADR 0137).
+/// when not where it would by itself (ADR 0137), after bringing in what
+/// earlier threads remembered in folders of their own.
 fn memory_folder(id: &str, env: &[(String, String)], cwd: &Path) -> Option<PathBuf> {
     let key = silt_workspace::agent_key(id);
     let agent = silt_agents::AGENTS.iter().copied().find(|agent| silt_workspace::agent_key(agent.id()) == key)?;
     let lookup = |name: &str| env.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.clone());
-    agent.memory(&silt_os::home_dir()?, &lookup, cwd)
+    let home = silt_os::home_dir()?;
+    if let Err(error) = agent.gather_memory(&home, &lookup, cwd) {
+        tracing::warn!(%error, "couldn't bring earlier threads' memories into the project's");
+    }
+    agent.memory(&home, &lookup, cwd)
 }
 
 pub(crate) fn spawn_agent(
