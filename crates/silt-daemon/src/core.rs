@@ -3079,6 +3079,9 @@ impl Core {
         let Ok(identity) = repo.project() else {
             return;
         };
+        if silt_types::is_memory(&identity) {
+            return;
+        }
         if self.clones.get(&identity).map(PathBuf::as_path) == Some(repo.root()) {
             return;
         }
@@ -3099,7 +3102,10 @@ impl Core {
             .threads
             .values()
             .filter(|thread| {
-                !thread.repo.is_empty() && !silt_types::is_chat(&thread.repo) && !self.clones.contains_key(&thread.repo)
+                !thread.repo.is_empty()
+                    && !silt_types::is_chat(&thread.repo)
+                    && !silt_types::is_memory(&thread.repo)
+                    && !self.clones.contains_key(&thread.repo)
             })
             .filter(|thread| thread.repo_root.join(".git").is_dir())
             .map(|thread| (thread.created_ms, thread.repo.clone(), thread.repo_root.clone()))
