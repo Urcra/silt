@@ -239,3 +239,19 @@ fn a_chat_is_its_own_repository_with_the_same_first_commit_everywhere() {
     assert!(promoted.project().expect("project").ends_with("/2026-11-03-which-sensor-1a2b3c"), "a project of its folder");
     assert_eq!(promoted.head_commit().expect("head"), Some(root));
 }
+
+#[test]
+fn a_memory_folder_is_a_repository_of_its_memory_project_keeping_its_files() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let folder = dir.path().join("memory");
+    fs::create_dir_all(&folder).expect("dir");
+    fs::write(folder.join("MEMORY.md"), "- [Gate](gate.md)\n").expect("write");
+    let repo = Repo::init_memory(&folder, "silt:memory/github.com/acme/silt").expect("inits");
+    assert_eq!(repo.project().expect("project"), "silt:memory/github.com/acme/silt");
+    assert_eq!(repo.memory_project().as_deref(), Some("silt:memory/github.com/acme/silt"));
+    assert!(!repo.is_chat());
+    assert!(folder.join("MEMORY.md").exists(), "its files are left");
+    let chat = Repo::init_chat(&dir.path().join("chat")).expect("inits");
+    assert_eq!(repo.head_commit().expect("head"), chat.head_commit().expect("head"), "the same first commit everywhere");
+    assert!(Repo::init_memory(&dir.path().join("other"), "github.com/acme/silt").is_err());
+}

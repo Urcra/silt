@@ -128,6 +128,16 @@ impl Core {
     /// only for a repository without a remote, which no other machine can
     /// clone from, unless its project was given a home (ADR 0053).
     pub(crate) fn new_home_in(&self, clone: &silt_git::Repo, project: &str) -> Result<Option<Home>, CoreError> {
+        // A project's memory goes where the project does, and the memory
+        // everywhere where chats do (ADR 0137).
+        match silt_types::remembered(project) {
+            Some(Some(remembered)) => return Ok(self.new_home(remembered)),
+            Some(None) => {
+                let workspace = self.workspaces().default_workspace().clone();
+                return Ok(self.workspace_home(&workspace));
+            }
+            None => {}
+        }
         // A chat follows its person to its workspace's server, as every
         // machine can make its folder (ADR 0059, ADR 0065).
         if silt_types::is_chat(project) {

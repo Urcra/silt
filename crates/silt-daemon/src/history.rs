@@ -716,7 +716,13 @@ impl Core {
             },
             None => None,
         };
-        let families: Vec<FamilyId> = self.families.keys().copied().collect();
+        // A person's memory is a family only to sync it (ADR 0137).
+        let families: Vec<FamilyId> = self
+            .families
+            .keys()
+            .copied()
+            .filter(|family| !self.threads.values().any(|record| record.family == *family && silt_types::is_memory(&record.repo)))
+            .collect();
         for family_id in families {
             if query.family.as_ref().is_some_and(|wanted| *wanted != family_id.to_string())
                 || thread_family.is_some_and(|wanted| wanted != family_id)

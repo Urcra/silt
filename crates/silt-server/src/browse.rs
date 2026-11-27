@@ -206,6 +206,8 @@ impl Readable {
         .await?;
         let rows: Vec<Row> = rows
             .into_iter()
+            // A person's memory is a thread only to sync it (ADR 0137).
+            .filter(|row| !silt_types::is_memory(&row.repo))
             .map(|row| Row {
                 id: ThreadId(id_from(&row.id)),
                 family: FamilyId(id_from(&row.family_id)),
