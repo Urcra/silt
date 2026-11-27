@@ -151,6 +151,9 @@ impl Request {
             | Self::MrGuide { .. }
             | Self::PublishArtifact { .. }
             | Self::SaveEditedVersion { .. } => SendPrompts,
+            // What a sandbox hands over, Docker's root included, is this machine's to give.
+            Self::AgentSandbox { .. } => Machine,
+            Self::AcpStart { options, .. } if options.sandbox.is_some() => Machine,
             Self::AcpStart { .. }
             | Self::AcpStop { .. }
             | Self::AcpStopTask { .. }

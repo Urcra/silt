@@ -1768,7 +1768,12 @@ agent: AgentStatus | null,
 /**
  * Which permission requests the daemon answers by itself.
  */
-preset: Preset, };
+preset: Preset, 
+/**
+ * The thread's own choice of Silt's sandbox for its next start; its
+ * workspace's rules when unset (ADR 0140).
+ */
+sandbox: SandboxChoice | null, };
 
 export type Mine = { pinned: boolean, snoozed_until: number | null, 
 /**
@@ -2063,7 +2068,13 @@ copy_to: string | null,
  * The workspace a new chat is in, by id; the default when unset
  * (ADR 0065).
  */
-workspace: string | null, };
+workspace: string | null, 
+/**
+ * The thread's own choice of Silt's sandbox, kept for its later runs;
+ * what it chose before, else its workspace's rules, when unset
+ * (ADR 0140).
+ */
+sandbox: SandboxChoice | null, };
 
 export type ChatSettings = { 
 /**
@@ -2374,6 +2385,8 @@ paths: { [key in string]: boolean }, gpu: boolean, docker: boolean, ssh_agent: b
  * The agent's own sandbox may run inside Silt's.
  */
 nested: boolean, };
+
+export type SandboxChoice = { on: boolean, network: Network, devices: Devices, gpu: boolean, docker: boolean, ssh_agent: boolean, };
 
 export type OrgPolicy = { org: string, server: string, policy: Policy, };
 

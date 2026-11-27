@@ -1,6 +1,6 @@
 # Silt's sandbox: what it protects, and what it doesn't
 
-Silt's sandbox runs an agent, with everything it starts, in a world of its own on your machine. It sees the thread's checkout and the tools it builds with, and little else. A workspace turns it on with `silt workspace policy Work --silt-sandbox on`, and [Workspaces](workspaces.md#silt-s-sandbox) says what each of its rules hands over. This page says what it's for, how it works, and where it stops.
+Silt's sandbox runs an agent, with everything it starts, in a world of its own on your machine. It sees the thread's checkout and the tools it builds with, and little else. A workspace turns it on with `silt workspace policy Work --silt-sandbox on`, a single thread with the shield before the agent's mark in its composer, and [Workspaces](workspaces.md#silt-s-sandbox) says what each of its rules hands over. This page says what it's for, how it works, and where it stops.
 
 ## What it's for
 The sandbox is meant for an agent that is eager rather than hostile. An agent can try very hard to get its task done. It's debugging a bug that only shows in production, so it goes looking for the production database's password in your shell's variables, your `~/.aws`, your `~/.pgpass` or your SSH keys. Or it decides the fix needs a change on a server it can reach over your VPN, or it pushes a branch with your forge token. None of this is malice, and an agent asked to "find out why it fails" may still do it.

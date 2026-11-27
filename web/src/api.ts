@@ -69,6 +69,7 @@ import type {
   PlaceAnchors,
   PresenceReply,
   Preset,
+  SandboxChoice,
   Project,
   PromptAttachment,
   Queued,
@@ -713,6 +714,8 @@ export const api = {
   stopAgent: (id: string) => request<string>('POST', `${thread(id)}/agent/stop`),
   steer: (id: string, text: string) => request<string>('POST', `${thread(id)}/agent/steer`, { text }),
   setPreset: (id: string, preset: Preset) => request<string>('POST', `${thread(id)}/agent/preset`, { preset }),
+  /** The thread's own choice of Silt's sandbox from its agent's next start, or null for its workspace's (ADR 0140). */
+  setSandbox: (id: string, sandbox: SandboxChoice | null) => request<string>('POST', `${thread(id)}/agent/sandbox`, { sandbox }),
   queue: (id: string) => request<Queued[]>('GET', `${thread(id)}/queue`),
   enqueue: (id: string, text: string) => request<number>('POST', `${thread(id)}/queue`, { text }),
   editQueued: (id: string, item: number, text: string) => request<string>('PUT', `${thread(id)}/queue/${item}`, { text }),

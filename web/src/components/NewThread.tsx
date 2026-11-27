@@ -10,6 +10,7 @@ import {
   type FoundFolder,
   type Preset,
   type Project,
+  type SandboxChoice,
   type ThreadSummary,
   type WorkspaceView,
 } from '../api'
@@ -27,6 +28,7 @@ import { ago } from '../time'
 import { Button, Icon, Input, Kbd, Popover, Skeleton, Tabs, cx, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
 import { AgentChip, PermissionChip } from './AgentPickers'
+import { SandboxChip } from './SandboxChip'
 import { ATTACH, useAttachments } from '../attachments'
 import { NEW_THREAD_DRAFT, useDraft } from '../drafts'
 import { useHeldSend } from '../heldSend'
@@ -746,6 +748,9 @@ export function NewThread() {
   // The project's workspace, whose rules grey out what the daemon would refuse (ADR 0065).
   const workspacesQuery = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
   const workspace = workspaceOf(workspacesQuery.data, repo, defaults?.workspace)
+  // The new thread's own choice of Silt's sandbox, for the workspace it was made in (ADR 0140).
+  const [sandboxFor, setSandboxFor] = useState<{ workspace: string; choice: SandboxChoice | null }>()
+  const sandbox = sandboxFor && sandboxFor.workspace === workspace?.workspace.id ? sandboxFor.choice : null
   const allowed = (id: string | undefined | null) => (id && !agentRefused(workspace, id) ? id : undefined)
   const agent =
     allowed(chosenAgent) ??
@@ -860,6 +865,7 @@ export function NewThread() {
           prompt: prompt.trim() ? prompt : null,
           plan: false,
           attachments: attached,
+          sandbox,
         },
       )
       .then(
@@ -958,6 +964,13 @@ export function NewThread() {
             tools={
               chosenWhere !== 'cloud' && (
                 <>
+                  {agents.length > 0 && (
+                    <SandboxChip
+                      workspace={workspace}
+                      choice={sandbox}
+                      onChoice={(choice) => workspace && setSandboxFor({ workspace: workspace.workspace.id, choice })}
+                    />
+                  )}
                   {agents.length > 0 && !agent && workspace ? (
                     <span className="px-2 text-xs text-warn-fg">
                       No agent installed here is allowed in {workspace.workspace.name}

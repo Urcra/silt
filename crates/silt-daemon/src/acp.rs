@@ -685,7 +685,11 @@ impl Core {
             (None, false) => Some(Preset::default()),
         });
         let on_local_model = options.settings.iter().any(|(id, value)| id == "model" && silt_llm::local_model(value).is_some());
-        let (allowed, reach) = self.check_acp_start(&workspace, &info, asked, chosen, options.mode.as_deref(), on_local_model)?;
+        let sandbox = options.sandbox.or_else(|| {
+            thread.and_then(|selector| self.find_thread(selector).ok()).and_then(|thread| self.sandbox_choice(thread))
+        });
+        let (allowed, reach) =
+            self.check_acp_start(&workspace, &info, asked, chosen, options.mode.as_deref(), on_local_model, sandbox)?;
         if allowed != asked {
             options.preset = allowed;
         }
@@ -754,6 +758,10 @@ impl Core {
         });
         if let Some(preset) = options.preset {
             self.keep_choice(thread, |record| record.preset = preset.as_str().to_owned()).await?;
+        }
+        if let Some(sandbox) = options.sandbox {
+            let json = serde_json::to_string(&sandbox).map_err(|error| CoreError::Invalid(error.to_string()))?;
+            self.keep_choice(thread, |record| record.sandbox = Some(json)).await?;
         }
         if let Some(mode) = options.mode.clone() {
             // The preset follows the mode chosen, as it does once the agent runs (ADR 0048).
@@ -1314,6 +1322,7 @@ impl Core {
             preset: stored.map_or_else(|| "ask_before_commands".to_owned(), |stored| stored.preset.clone()),
             mode: stored.and_then(|stored| stored.mode.clone()),
             settings: stored.map(|stored| stored.settings.clone()).unwrap_or_default(),
+            sandbox: stored.and_then(|stored| stored.sandbox.clone()),
             updated_ms: crate::core::now_ms(),
         };
         let unchanged = stored
@@ -1462,6 +1471,23 @@ impl Core {
         Ok("set")
     }
 
+    /// Keeps the thread's own choice of Silt's sandbox for its agent's next
+    /// start, or forgets it so the workspace's rules apply again (ADR 0140).
+    /// A running agent keeps the sandbox it started in.
+    pub(crate) async fn set_sandbox(
+        &mut self,
+        thread: ThreadId,
+        sandbox: Option<silt_workspace::SandboxChoice>,
+    ) -> Result<&'static str, CoreError> {
+        let json = sandbox
+            .map(|sandbox| serde_json::to_string(&sandbox))
+            .transpose()
+            .map_err(|error| CoreError::Invalid(error.to_string()))?;
+        self.keep_choice(thread, |record| record.sandbox = json).await?;
+        self.announce_agent(thread);
+        Ok("set")
+    }
+
     /// Switches the running agent to `mode` and keeps it for the thread's
     /// later runs.
     pub(crate) async fn set_mode(&mut self, thread: ThreadId, mode: &str) -> Result<&'static str, CoreError> {
@@ -1548,6 +1574,7 @@ impl Core {
             preset: Preset::default().as_str().to_owned(),
             mode: None,
             settings: std::collections::BTreeMap::new(),
+            sandbox: None,
             updated_ms: 0,
         });
         choose(&mut record);
@@ -3553,6 +3580,7 @@ mod tests {
             preset: "ask_before_commands".into(),
             mode: None,
             settings: Default::default(),
+            sandbox: None,
             updated_ms: 1,
         };
         store.put_agent_run(thread, &run("working")).await.expect("saves");

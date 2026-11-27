@@ -1307,6 +1307,13 @@ pub enum Request {
         thread: String,
         preset: Preset,
     },
+    /// Chooses whether the thread's agent runs in Silt's sandbox and what
+    /// it reaches, from its next start; `None` follows its workspace again
+    /// (ADR 0140).
+    AgentSandbox {
+        thread: String,
+        sandbox: Option<silt_workspace::SandboxChoice>,
+    },
     /// Interrupts the agent's turn to tell it `text`.
     AcpSteer {
         thread: String,
@@ -2422,6 +2429,10 @@ pub struct LiveState {
     pub agent: Option<AgentStatus>,
     /// Which permission requests the daemon answers by itself.
     pub preset: Preset,
+    /// The thread's own choice of Silt's sandbox for its next start; its
+    /// workspace's rules when unset (ADR 0140).
+    #[serde(default)]
+    pub sandbox: Option<silt_workspace::SandboxChoice>,
 }
 
 pub use silt_workspace::Preset;
@@ -2568,6 +2579,10 @@ pub struct StartOptions {
     /// The workspace a new chat is in, by id; the default when unset
     /// (ADR 0065).
     pub workspace: Option<String>,
+    /// The thread's own choice of Silt's sandbox, kept for its later runs;
+    /// what it chose before, else its workspace's rules, when unset
+    /// (ADR 0140).
+    pub sandbox: Option<silt_workspace::SandboxChoice>,
 }
 
 /// What an asked agent is to do (ADR 0120).
@@ -3289,6 +3304,7 @@ mod tests {
             silt_workspace::Devices::decl(&config),
             silt_workspace::Extra::decl(&config),
             silt_workspace::Reach::decl(&config),
+            silt_workspace::SandboxChoice::decl(&config),
             silt_workspace::OrgPolicy::decl(&config),
             silt_workspace::Why::decl(&config),
             silt_workspace::WorkspaceId::decl(&config),

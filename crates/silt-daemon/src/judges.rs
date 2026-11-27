@@ -227,7 +227,10 @@ impl Core {
     /// the thread or its workspace choose, else the thread's own agent where
     /// that one isn't allowed or isn't here.
     async fn judge_for(&mut self, thread: ThreadId) -> Result<(JudgeStart, String), CoreError> {
-        let workspace = self.start_workspace(Some(&thread.to_string()), None, None)?;
+        let workspace = crate::workspaces::choosing(
+            &self.start_workspace(Some(&thread.to_string()), None, None)?,
+            self.sandbox_choice(thread),
+        );
         let chosen = self.judges.of(thread).cloned();
         let judge = self.rules(&workspace).judge(chosen.as_ref(), workspace.defaults.auto_judge.as_ref());
         let run = self.acp.get(&thread).ok_or_else(|| CoreError::Invalid("the agent isn't running".into()))?;

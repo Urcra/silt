@@ -34,8 +34,10 @@ import { formatKeys, useActions, useShortcut } from '../shortcuts'
 import { Button, Dot, Icon, Input, Kbd, Spinner, buttonClass, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
 import { AgentChip, PermissionChip } from './AgentPickers'
+import { SandboxChip } from './SandboxChip'
 import { JudgeRow } from './AutoJudge'
 import { isModel } from '../agentSettings'
+import { useSandboxChoice } from '../sandbox'
 import { agentRefused, modeRefused, presetRefused, workspaceOf } from '../rules'
 import { ATTACH, useAttachments } from '../attachments'
 import { AttachedFiles } from './Attachments'
@@ -764,6 +766,7 @@ export function AgentDock({
     if (live && chosen !== status.agent_id) act(api.stopAgent(thread).then(() => api.startAgent(chosen, { thread }, { preset })))
   }
   const turning = working(status)
+  const sandbox = useSandboxChoice(thread)
   useActions([
     ...(live ? [{ id: 'stop', label: `Stop ${status.agent}`, run: () => act(api.stopAgent(thread)) }] : []),
     ...(turning ? [{ id: 'cancel', label: 'Cancel the turn', run: () => act(api.cancelTurn(thread)) }] : []),
@@ -972,8 +975,24 @@ export function AgentDock({
   const runningId = (live && (status.agent_id || status.agent)) || ''
   const tools = (
     <>
-      {/* The same row as New thread's: which agent, the permissions with its own modes, then its model and settings
-          (ADR 0118). Another agent here takes the thread over. */}
+      {/* The same row as New thread's: Silt's sandbox (ADR 0140), which agent, the permissions with its own modes, then
+          its model and settings (ADR 0118). Another agent here takes the thread over. */}
+      {!elsewhere && (live || agents.length > 0) && (
+        <SandboxChip
+          workspace={workspace}
+          choice={sandbox.choice}
+          onChoice={sandbox.set}
+          running={
+            live
+              ? {
+                  name: status.agent,
+                  reach: status.sandbox ?? null,
+                  onRestart: () => act(api.stopAgent(thread).then(() => api.startAgent(runningId, { thread }, { preset }))),
+                }
+              : null
+          }
+        />
+      )}
       {live ? (
         <AgentChip
           value={runningId}

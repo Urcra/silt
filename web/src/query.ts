@@ -42,6 +42,7 @@ export const keys = {
   approvals: (thread: string) => ['approvals', thread] as const,
   allApprovals: ['approvals'] as const,
   access: (thread: string) => ['approvals', 'access', thread] as const,
+  sandboxChoice: (thread: string) => ['sandbox-choice', thread] as const,
   plugins: ['plugins'] as const,
   // Apart from `plugins`, so a change to one doesn't ask every repository again.
   pluginUpdates: ['pluginUpdates'] as const,

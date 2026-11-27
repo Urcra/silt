@@ -98,8 +98,8 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0090](0090-agents-aware-of-each-other.md) | Agents in one project know about each other | accepted |
 | [0091](0091-a-faster-gate-and-a-pass-that-stands.md) | A faster gate, and a pass that stands | accepted; amended by 0131 |
 | [0092](0092-local-models.md) | Local models, run by Silt, and workspaces that stay on the machine | accepted |
-| [0093](0093-silt-sandboxes-the-agents-it-starts.md) | Silt sandboxes the agents it starts, and production is reached through plugins | accepted; amended by 0094, 0102, 0103, 0104, 0106, 0135 |
-| [0094](0094-silt-s-sandbox-is-its-own-rule.md) | Silt's sandbox is a workspace rule of its own | accepted |
+| [0093](0093-silt-sandboxes-the-agents-it-starts.md) | Silt sandboxes the agents it starts, and production is reached through plugins | accepted; amended by 0094, 0102, 0103, 0104, 0106, 0135, 0140 |
+| [0094](0094-silt-s-sandbox-is-its-own-rule.md) | Silt's sandbox is a workspace rule of its own | accepted; amended by 0140 |
 | [0095](0095-an-agent-s-plan-usage-in-the-composer.md) | An agent's plan usage in the composer | accepted |
 | [0096](0096-design-systems-made-in-a-thread-or-a-chat.md) | Design systems made in a thread's own words, or in a chat | accepted |
 | [0097](0097-wasm-bindings-from-xtask.md) | The browser replica's bindings come from xtask | accepted |
@@ -145,3 +145,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0137](0137-agents-memory-follows-the-person.md) | Agents' memory follows the person, across agents and machines | accepted |
 | [0138](0138-enter-steers-mid-turn.md) | ⏎ steers mid-turn | accepted |
 | [0139](0139-macos-and-windows-ci-advisory-at-first.md) | macOS and Windows CI, advisory at first | accepted |
+| [0140](0140-a-thread-chooses-silts-sandbox-in-the-composer.md) | A thread chooses Silt's sandbox in the composer | accepted |

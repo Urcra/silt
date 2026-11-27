@@ -1,5 +1,15 @@
-import { useQuery } from '@tanstack/react-query'
-import { api, type Backend, type Devices, type Extra, type Network, type Policy, type Reach } from './api'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  api,
+  type Backend,
+  type Devices,
+  type Extra,
+  type Network,
+  type Policy,
+  type Reach,
+  type SandboxChoice,
+  type WorkspaceView,
+} from './api'
 import { keys } from './query'
 import { hosted } from './served'
 
@@ -87,6 +97,63 @@ export function reachOf(policy: Policy): Reach {
     ssh_agent: Boolean(policy.ssh_agent) && allowed('ssh_agent'),
     nested: !policy.no_nested,
   }
+}
+
+/** The choice a workspace's own rules make, which a thread starts from, as `SandboxChoice::of` works it out (ADR 0140). */
+export function choiceOf(policy: Policy): SandboxChoice {
+  return {
+    on: Boolean(policy.silt_sandbox),
+    network: policy.network ?? 'full',
+    devices: policy.devices ?? 'none',
+    gpu: Boolean(policy.gpu),
+    docker: Boolean(policy.docker),
+    ssh_agent: Boolean(policy.ssh_agent),
+  }
+}
+
+export function sameChoice(one: SandboxChoice, other: SandboxChoice): boolean {
+  return (
+    one.on === other.on &&
+    one.network === other.network &&
+    one.devices === other.devices &&
+    one.gpu === other.gpu &&
+    one.docker === other.docker &&
+    one.ssh_agent === other.ssh_agent
+  )
+}
+
+function lowest<T extends string>(order: T[], one: T, cap: T | null | undefined): T {
+  return cap && order.indexOf(cap) < order.indexOf(one) ? cap : one
+}
+
+/**
+ * The rules a run starts under with a thread's choice in place of its workspace's, its org's policy still holding it,
+ * as `SandboxChoice::over` then `Policy::stricter` work it out.
+ */
+export function chosenPolicy(view: WorkspaceView, choice: SandboxChoice): Policy {
+  const org = view.org_policy?.policy
+  return {
+    ...view.effective,
+    silt_sandbox: choice.on || Boolean(org?.silt_sandbox),
+    network: lowest(NETWORK_ORDER, choice.network, org?.network),
+    devices: lowest(DEVICE_ORDER, choice.devices, org?.devices),
+    gpu: choice.gpu || Boolean(org?.gpu),
+    docker: choice.docker || Boolean(org?.docker),
+    ssh_agent: choice.ssh_agent || Boolean(org?.ssh_agent),
+  }
+}
+
+/** The thread's own choice of Silt's sandbox, null where it follows its workspace, and setting it (ADR 0140). */
+export function useSandboxChoice(thread: string) {
+  const queries = useQueryClient()
+  const query = useQuery({
+    queryKey: keys.sandboxChoice(thread),
+    queryFn: () => api.live(thread).then((live) => live.sandbox ?? null),
+    enabled: !hosted(),
+  })
+  const set = (choice: SandboxChoice | null) =>
+    api.setSandbox(thread, choice).then(() => queries.setQueryData(keys.sandboxChoice(thread), choice))
+  return { choice: query.data ?? null, loading: query.isPending, set }
 }
 
 /** How many plugin calls wait for the person, for Needs you's empty state. */

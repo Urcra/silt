@@ -550,7 +550,12 @@ async fn live(
             "stoppable": [],
         })
     });
-    Ok(Json(json!({ "deltas": 0, "agent": agent, "preset": preset.unwrap_or_else(|| "ask_before_commands".into()) })))
+    Ok(Json(json!({
+        "deltas": 0,
+        "agent": agent,
+        "preset": preset.unwrap_or_else(|| "ask_before_commands".into()),
+        "sandbox": null,
+    })))
 }
 
 #[derive(Deserialize)]

@@ -98,6 +98,9 @@ pub struct AgentRunRecord {
     pub mode: Option<String>,
     /// The settings it runs with, such as its model, by each one's id.
     pub settings: std::collections::BTreeMap<String, String>,
+    /// The thread's own choice of Silt's sandbox, as JSON; its workspace's
+    /// when unset (ADR 0140).
+    pub sandbox: Option<String>,
     pub updated_ms: i64,
 }
 
@@ -1490,9 +1493,10 @@ impl Store {
     }
 
     pub async fn agent_runs(&self) -> Result<HashMap<ThreadId, AgentRunRecord>, StoreError> {
-        let rows = sqlx::query!("SELECT thread_id, agent, state, error, preset, mode, settings, updated_ms FROM agent_runs")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query!("SELECT thread_id, agent, state, error, preset, mode, settings, sandbox, updated_ms FROM agent_runs")
+                .fetch_all(&self.pool)
+                .await?;
         rows.into_iter()
             .map(|row| {
                 let record = AgentRunRecord {
@@ -1503,6 +1507,7 @@ impl Store {
                     mode: row.mode,
                     settings: serde_json::from_str(&row.settings)
                         .map_err(|_| StoreError::Corrupt { what: "an agent run's settings" })?,
+                    sandbox: row.sandbox,
                     updated_ms: row.updated_ms,
                 };
                 Ok((ThreadId(id_from(&row.thread_id)?), record))
@@ -1514,9 +1519,11 @@ impl Store {
         let thread = id_bytes(thread.0);
         let settings = serde_json::to_string(&run.settings).unwrap_or_else(|_| "{}".to_owned());
         sqlx::query!(
-            "INSERT INTO agent_runs (thread_id, agent, state, error, preset, mode, settings, updated_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO agent_runs (thread_id, agent, state, error, preset, mode, settings, sandbox, updated_ms)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (thread_id) DO UPDATE SET agent = excluded.agent, state = excluded.state, error = excluded.error,
-                 preset = excluded.preset, mode = excluded.mode, settings = excluded.settings, updated_ms = excluded.updated_ms",
+                 preset = excluded.preset, mode = excluded.mode, settings = excluded.settings, sandbox = excluded.sandbox,
+                 updated_ms = excluded.updated_ms",
             thread,
             run.agent,
             run.state,
@@ -1524,6 +1531,7 @@ impl Store {
             run.preset,
             run.mode,
             settings,
+            run.sandbox,
             run.updated_ms,
         )
         .execute(&self.pool)
