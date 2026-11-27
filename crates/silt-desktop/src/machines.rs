@@ -754,7 +754,8 @@ mod tests {
         for option in ["BatchMode=yes", "ForwardAgent=no", "ForwardX11=no", "ClearAllForwardings=yes", "ControlMaster=auto"] {
             assert!(shared.windows(2).any(|pair| pair == ["-o", option]), "{option} in {shared:?}");
         }
-        assert!(shared.windows(2).any(|pair| pair == ["-o", "ControlPath=/data/ssh/%C"]));
+        let control = format!("ControlPath={}", Path::new("/data/ssh").join("%C").display());
+        assert!(shared.windows(2).any(|pair| pair == ["-o", control.as_str()]));
         assert_eq!(shared[shared.len() - 3..], ["--", "me@vps.example.com", "true"]);
         let ported = run_on(&Machine { port: Some(2222), ..vps() }, None, "true");
         let ported = args(&ported);

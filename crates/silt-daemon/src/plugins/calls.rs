@@ -1019,7 +1019,7 @@ mod tests {
     async fn an_agent_asks_for_a_folder_and_the_workspaces_rules_answer_first() {
         let data = tempfile::tempdir().expect("temp dir");
         let mine = tempfile::tempdir().expect("temp dir");
-        let root = std::fs::canonicalize(mine.path()).expect("real");
+        let root = silt_os::canonicalize(mine.path()).expect("real");
         let (lib, secret, other) = (root.join("lib"), root.join("secret"), root.join("other"));
         for dir in [&lib, &secret, &other] {
             std::fs::create_dir_all(dir).expect("made");
@@ -1147,14 +1147,16 @@ mod tests {
     async fn github_pushes_exactly_the_approved_commit_from_its_own_mirror() {
         let data = tempfile::tempdir().expect("temp dir");
         let remotes = tempfile::tempdir().expect("temp dir");
-        let remotes = std::fs::canonicalize(remotes.path()).expect("real");
+        let remotes = silt_os::canonicalize(remotes.path()).expect("real");
         let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
         let port = github_stand_in(sent.clone()).await;
         std::fs::create_dir_all(data.path().join("plugins")).expect("made");
+        // `file:///C:/…` on Windows.
+        let remotes_url =
+            format!("file://{}{}", if cfg!(windows) { "/" } else { "" }, remotes.display().to_string().replace('\\', "/"));
         std::fs::write(
             data.path().join("plugins/redirect.json"),
-            json!({"https://api.github.com": format!("http://127.0.0.1:{port}"), "https://github.com": format!("file://{}", remotes.display())})
-                .to_string(),
+            json!({"https://api.github.com": format!("http://127.0.0.1:{port}"), "https://github.com": remotes_url}).to_string(),
         )
         .expect("written");
         crate::credentials::save(

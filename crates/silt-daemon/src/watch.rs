@@ -350,7 +350,8 @@ mod tests {
                 let _ = other_sender.send(paths);
             })
             .expect("watches");
-        std::thread::sleep(Duration::from_millis(200));
+        // FSEvents can still report the write from before the watch began.
+        while receiver.recv_timeout(DEBOUNCE * 2).is_ok() {}
         for entry in std::fs::read_dir(dir.path()).expect("lists") {
             std::fs::read(entry.expect("entry").path()).expect("reads");
         }

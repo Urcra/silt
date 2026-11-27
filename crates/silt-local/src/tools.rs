@@ -640,7 +640,8 @@ mod tests {
         };
         let fine = ran("echo hello").await;
         assert_eq!((fine.text.trim(), fine.failed), ("hello", false));
-        let failed = ran("echo oops >&2; exit 3").await;
+        // The command line is cmd's on Windows.
+        let failed = ran(if cfg!(windows) { "echo oops 1>&2 & exit 3" } else { "echo oops >&2; exit 3" }).await;
         assert!(failed.failed && failed.text.contains("oops") && failed.text.contains("(exit code 3)"), "{failed:?}");
     }
 }

@@ -13,11 +13,15 @@ use serde_json::{Value, json};
 const IPHONE: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1";
 
 /// Two free ports in a row: the listener's and the certificate's page's.
+/// macOS lets a listener on 0.0.0.0 share a port with another process's on
+/// 127.0.0.1, which then answers what curl sends there, so both must be free.
 fn free_ports() -> u16 {
+    let free = |port: u16| {
+        std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() && std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
+    };
     loop {
-        let listener = std::net::TcpListener::bind("0.0.0.0:0").expect("binds");
-        let port = listener.local_addr().expect("address").port();
-        if port < u16::MAX && std::net::TcpListener::bind(("0.0.0.0", port + 1)).is_ok() {
+        let port = std::net::TcpListener::bind("0.0.0.0:0").expect("binds").local_addr().expect("address").port();
+        if port < u16::MAX && free(port) && free(port + 1) {
             return port;
         }
     }

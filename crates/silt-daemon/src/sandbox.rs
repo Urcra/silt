@@ -936,7 +936,11 @@ mod tests {
         std::fs::create_dir_all(claude.path().join("projects/-elsewhere")).unwrap();
         std::fs::write(claude.path().join(".claude.json"), r#"{"mcpServers":{}}"#).unwrap();
         let claude_dir = claude.path().to_string_lossy().into_owned();
-        let reach = Reach::of(&silt_workspace::Policy::default());
+        // Bubblewrap's layout on every system: Seatbelt's has a test of its own.
+        let reach = Reach::of(&silt_workspace::Policy {
+            backend: Some(silt_workspace::Backend::Bubblewrap),
+            ..silt_workspace::Policy::default()
+        });
         let run = Run {
             data_dir: data.path(),
             thread: "t1",
@@ -1125,6 +1129,7 @@ mod tests {
         let reach = Reach::of(&silt_workspace::Policy {
             network: Some(Network::Gateway),
             ports: [5432].into(),
+            backend: Some(silt_workspace::Backend::Bubblewrap),
             ..silt_workspace::Policy::default()
         });
         let scratch = data.path().join("runs/y");
@@ -1190,7 +1195,11 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let reach = Reach::of(&silt_workspace::Policy { network: Some(Network::Gateway), ..silt_workspace::Policy::default() });
+        let reach = Reach::of(&silt_workspace::Policy {
+            network: Some(Network::Gateway),
+            backend: Some(silt_workspace::Backend::Bubblewrap),
+            ..silt_workspace::Policy::default()
+        });
         let scratch = data.path().join("runs/z");
         let run = Run {
             data_dir: data.path(),
