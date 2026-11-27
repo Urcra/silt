@@ -24,6 +24,7 @@ import type {
   NetworkSettings,
   NetworkView,
   MemoryOverview,
+  MemorySettings,
   MemoryView,
   ChatSettings,
   CloudLaunch,
@@ -630,6 +631,8 @@ export const api = {
   importTheme: (text: string) => request<ThemeSaved>('POST', '/api/themes/import', { text }),
   duplicateTheme: (from: string) => request<ThemeSaved>('POST', '/api/themes/duplicate', { from }),
   memory: () => request<MemoryOverview>('GET', '/api/memory'),
+  memorySettings: () => request<MemorySettings>('GET', '/api/memory/settings'),
+  setMemorySettings: (settings: MemorySettings) => request<string>('PUT', '/api/memory/settings', settings),
   /** What's remembered in the project whose clone is `clone`, or everywhere without one. */
   memoryOf: (clone: string | null) =>
     request<MemoryView>('GET', `/api/memory/store${clone ? `?clone=${encodeURIComponent(clone)}` : ''}`),

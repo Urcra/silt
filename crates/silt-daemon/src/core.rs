@@ -1100,6 +1100,14 @@ impl Core {
             Request::MoveMemory { clone, store, file, to } => {
                 to_response(self.move_memory(clone.as_deref(), &store, &file, to.as_deref()))
             }
+            Request::MemorySettings => {
+                Response::ok(crate::protocol::MemorySettings { share: silt_agents::memory::sharing(&self.data_dir) })
+            }
+            Request::SetMemorySettings { settings } => to_response(
+                silt_agents::memory::set_sharing(&self.data_dir, settings.share)
+                    .map(|()| "saved")
+                    .map_err(|error| CoreError::Invalid(format!("couldn't save memory.json: {error}"))),
+            ),
             Request::NetworkSettings => to_response(crate::network::view(&self.data_dir)),
             Request::SetNetworkSettings { settings } => {
                 to_response(crate::network::save(&self.data_dir, settings).map(|()| "saved"))

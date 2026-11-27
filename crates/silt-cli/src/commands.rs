@@ -549,8 +549,9 @@ impl Run<'_> {
         let everywhere = silt_agents::memory::everywhere_dir(&paths::data_dir());
         // Made now, as the sandbox shows it only where it exists.
         let _ = fs::create_dir_all(&everywhere);
+        let sharing = silt_agents::memory::sharing(&paths::data_dir());
         if let Some(home) = home.as_deref() {
-            if let Err(error) = self.agent.move_person_memory(home, &lookup, self.cwd, &everywhere) {
+            if let Err(error) = sharing.then(|| self.agent.move_person_memory(home, &lookup, self.cwd, &everywhere)).transpose() {
                 eprintln!("silt: couldn't move what the agent learnt about you to your memory everywhere: {error}");
             }
             match self.agent.gather_memory(home, &lookup, self.cwd) {
@@ -581,8 +582,9 @@ impl Run<'_> {
             hook_program: exe.clone(),
             instructions: {
                 let given = agent_conventions::session_instructions(&rules, &skills, native, self.checkout);
-                let everywhere =
-                    self.agent.reads_everywhere().then(|| silt_agents::memory::everywhere_prompt(&everywhere)).flatten();
+                let everywhere = (sharing && self.agent.reads_everywhere())
+                    .then(|| silt_agents::memory::everywhere_prompt(&everywhere))
+                    .flatten();
                 match (given, everywhere) {
                     (Some(given), Some(everywhere)) => Some(format!("{given}\n\n{everywhere}")),
                     (given, everywhere) => given.or(everywhere),

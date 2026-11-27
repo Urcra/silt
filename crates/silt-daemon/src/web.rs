@@ -290,6 +290,7 @@ fn api_routes() -> Router<Web> {
         .route("/api/memory", get(memory_overview))
         .route("/api/memory/store", get(memory_of).put(set_memory).delete(forget_memory))
         .route("/api/memory/move", post(move_memory))
+        .route("/api/memory/settings", get(memory_settings).put(set_memory_settings))
         .route("/api/themes", get(themes))
         .route("/api/themes/detail", get(theme_detail))
         .route("/api/themes/css", get(theme_css))
@@ -1273,6 +1274,14 @@ struct MemoryMove {
     /// The project to move it to; without one, everywhere.
     #[serde(default)]
     to: Option<PathBuf>,
+}
+
+async fn memory_settings(State(web): State<Web>) -> HttpResponse {
+    ask(&web, Request::MemorySettings).await
+}
+
+async fn set_memory_settings(State(web): State<Web>, Json(settings): Json<crate::protocol::MemorySettings>) -> HttpResponse {
+    ask(&web, Request::SetMemorySettings { settings }).await
 }
 
 async fn move_memory(State(web): State<Web>, Json(moved): Json<MemoryMove>) -> HttpResponse {

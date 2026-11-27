@@ -303,3 +303,18 @@ test('a memory moves from a project to everywhere and back', async ({ page }) =>
   await expect(everywhere.getByText('Writes British English')).toHaveCount(0)
   expect(readFileSync(join(folder, 'user-british.md'), 'utf8')).toContain('Colour, not color.')
 })
+
+test('sharing memory between agents turns off and on', async ({ page }) => {
+  const { url, siltHome } = fixture()
+  await page.goto(url)
+  await page.goto(`${new URL(url).origin}/settings/memory`)
+  const share = page.getByRole('switch', { name: 'Share memory between agents' })
+  await expect(share).toBeChecked()
+  await share.click()
+  await expect(share).not.toBeChecked()
+  expect(JSON.parse(readFileSync(join(siltHome, 'memory.json'), 'utf8'))).toEqual({ share: false })
+  await expect(page.getByText('Each agent keeps its own memory, as it does without Silt.', { exact: false })).toBeVisible()
+  await share.click()
+  await expect(share).toBeChecked()
+  expect(JSON.parse(readFileSync(join(siltHome, 'memory.json'), 'utf8'))).toEqual({ share: true })
+})

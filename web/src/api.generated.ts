@@ -1280,6 +1280,8 @@ plan_usage: boolean,
  */
 agent_registry: boolean, };
 
+export type MemorySettings = { share: boolean, };
+
 export type MemoryOverview = { everywhere: MemoryCount, projects: Array<MemoryProject>, };
 
 export type MemoryCount = { 

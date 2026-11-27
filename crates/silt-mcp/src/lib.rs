@@ -43,6 +43,12 @@ pub trait Backend {
     fn extra(&mut self) -> Vec<Value> {
         Vec::new()
     }
+
+    /// What the agent is told beside the tools' instructions, such as what
+    /// it shares in memory with the person's other agents (ADR 0137).
+    fn more_instructions(&mut self) -> Option<String> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -492,7 +498,10 @@ fn respond(line: &str, backend: &mut impl Backend) -> Option<Value> {
             "protocolVersion": protocol_version(params.get("protocolVersion").and_then(Value::as_str)),
             "capabilities": {"tools": {}, "prompts": {}},
             "serverInfo": {"name": "silt", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": instructions(backend.shows())
+            "instructions": match backend.more_instructions() {
+                Some(more) => format!("{}\n\n{more}", instructions(backend.shows())),
+                None => instructions(backend.shows()),
+            }
         }),
         "ping" => json!({}),
         "tools/list" => {

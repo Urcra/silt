@@ -631,6 +631,11 @@ pub enum Request {
         #[serde(default)]
         to: Option<PathBuf>,
     },
+    /// Whether agents share memory (ADR 0137).
+    MemorySettings,
+    SetMemorySettings {
+        settings: MemorySettings,
+    },
     /// What this machine connects to on its own (ADR 0134).
     NetworkSettings,
     SetNetworkSettings {
@@ -1559,6 +1564,14 @@ impl Default for NetworkSettings {
     fn default() -> Self {
         Self { offline: false, update_checks: true, plan_usage: true, agent_registry: true }
     }
+}
+
+/// Whether every agent in a project reads and adds to one memory, and the
+/// memory everywhere, or each keeps its own (ADR 0137).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct MemorySettings {
+    pub share: bool,
 }
 
 /// Settings › Memory: what agents remember everywhere and in each
@@ -3127,6 +3140,7 @@ mod tests {
             DesignSource::decl(&config),
             ArtifactSettings::decl(&config),
             NetworkSettings::decl(&config),
+            MemorySettings::decl(&config),
             MemoryOverview::decl(&config),
             MemoryCount::decl(&config),
             MemoryProject::decl(&config),

@@ -96,6 +96,9 @@ impl Core {
     /// project this turn to the memory everywhere (ADR 0137). Memory is
     /// the agent's own, so a failure is logged rather than failing capture.
     pub(crate) fn move_person_memory(&self, session_id: &str, cwd: &Path) {
+        if !memory::sharing(&self.data_dir) {
+            return;
+        }
         let Some(session) = self.session(session_id) else { return };
         let (Some(home), Some(thread)) = (silt_os::home_dir(), self.threads.get(&session.record.thread)) else { return };
         let workspace_env = match silt_agents::project_root(cwd) {
