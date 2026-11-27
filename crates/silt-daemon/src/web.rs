@@ -289,6 +289,7 @@ fn api_routes() -> Router<Web> {
         .route("/api/network-settings", get(network_settings).put(set_network_settings))
         .route("/api/memory", get(memory_overview))
         .route("/api/memory/store", get(memory_of).put(set_memory).delete(forget_memory))
+        .route("/api/memory/move", post(move_memory))
         .route("/api/themes", get(themes))
         .route("/api/themes/detail", get(theme_detail))
         .route("/api/themes/css", get(theme_css))
@@ -1261,6 +1262,21 @@ async fn forget_memory(State(web): State<Web>, Json(change): Json<MemoryChange>)
         return Failed { status: StatusCode::BAD_REQUEST, message: "name the memory to forget".into() }.into_response();
     };
     ask(&web, Request::ForgetMemory { clone: change.clone, store: change.store, file }).await
+}
+
+#[derive(Deserialize)]
+struct MemoryMove {
+    #[serde(default)]
+    clone: Option<PathBuf>,
+    store: String,
+    file: String,
+    /// The project to move it to; without one, everywhere.
+    #[serde(default)]
+    to: Option<PathBuf>,
+}
+
+async fn move_memory(State(web): State<Web>, Json(moved): Json<MemoryMove>) -> HttpResponse {
+    ask(&web, Request::MoveMemory { clone: moved.clone, store: moved.store, file: moved.file, to: moved.to }).await
 }
 
 async fn network_settings(State(web): State<Web>) -> HttpResponse {

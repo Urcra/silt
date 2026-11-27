@@ -621,6 +621,16 @@ pub enum Request {
         store: String,
         file: String,
     },
+    /// Moves the memory `file` from the store shown as `store` there to the
+    /// memory everywhere, or, given `to`, to that project's.
+    MoveMemory {
+        #[serde(default)]
+        clone: Option<PathBuf>,
+        store: String,
+        file: String,
+        #[serde(default)]
+        to: Option<PathBuf>,
+    },
     /// What this machine connects to on its own (ADR 0134).
     NetworkSettings,
     SetNetworkSettings {

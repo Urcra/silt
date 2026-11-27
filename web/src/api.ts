@@ -637,6 +637,9 @@ export const api = {
     request<string>('PUT', '/api/memory/store', change),
   forgetMemory: (change: { clone: string | null; store: string; file: string }) =>
     request<string>('DELETE', '/api/memory/store', change),
+  /** Moves a memory to the memory everywhere, or to the project whose clone is `to`. */
+  moveMemory: (change: { clone: string | null; store: string; file: string; to: string | null }) =>
+    request<string>('POST', '/api/memory/move', change),
   networkSettings: () => request<NetworkView>('GET', '/api/network-settings'),
   setNetworkSettings: (settings: NetworkSettings) => request<string>('PUT', '/api/network-settings', settings),
   artifactSettings: () => request<ArtifactSettings>('GET', '/api/artifact-settings'),

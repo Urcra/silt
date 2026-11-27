@@ -48,6 +48,9 @@ pub struct Start {
     /// Where Claude Code keeps what it remembers of the project, when not
     /// where it would by itself (ADR 0137).
     pub memory: Option<PathBuf>,
+    /// What Claude Code is told beside its own prompt, such as the memory
+    /// everywhere's index.
+    pub instructions: Option<String>,
 }
 
 impl Start {
@@ -609,6 +612,7 @@ mod tests {
             load: None,
             sign_in_first: None,
             memory: None,
+            instructions: None,
         }
     }
 
