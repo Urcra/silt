@@ -25,6 +25,11 @@ const BUDGET_MB: u64 = 1024;
 /// take one first: replaying fewer when it's loaded again costs little.
 const SNAPSHOT_ON_UNLOAD: usize = 50;
 
+/// How often the digests of the families held whose logs grew are kept, so
+/// a daemon ended without `Shutdown`, as Windows ends it at every shutdown
+/// and logoff, starts with at most this much of them stale.
+const KEEP_DIGESTS_EVERY: Duration = Duration::from_secs(3 * 60);
+
 /// How often files' states no snapshot names are looked for.
 const SWEEP_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
@@ -33,11 +38,12 @@ const SWEEP_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// still read it.
 const SWEEP_GRACE: Duration = Duration::from_secs(60 * 60);
 
-/// When the daemon last let go of what was unused, when it next sweeps, and
-/// how much the families it holds may take.
+/// When the daemon last let go of what was unused, when it next keeps the
+/// digests and sweeps, and how much the families it holds may take.
 #[derive(Debug)]
 pub(crate) struct Kept {
     released: Instant,
+    digests_at: Instant,
     sweep_at: Instant,
     pub(crate) budget: u64,
 }
@@ -48,11 +54,20 @@ impl Default for Kept {
     /// start writes are kept that long anyway.
     fn default() -> Self {
         let now = Instant::now();
-        Self { released: now, sweep_at: now + SWEEP_GRACE, budget: budget() }
+        Self { released: now, digests_at: now + KEEP_DIGESTS_EVERY, sweep_at: now + SWEEP_GRACE, budget: budget() }
     }
 }
 
 impl Kept {
+    /// Whether to keep the digests at `now`, setting when to next if so.
+    fn digests_due(&mut self, now: Instant) -> bool {
+        if now < self.digests_at {
+            return false;
+        }
+        self.digests_at = now + KEEP_DIGESTS_EVERY;
+        true
+    }
+
     /// Whether to sweep at `now`, setting when to sweep next if so.
     fn sweep_due(&mut self, now: Instant) -> bool {
         if now < self.sweep_at {
@@ -99,6 +114,9 @@ impl Core {
                 }
             }
             silt_os::return_freed_memory();
+        }
+        if self.resident && self.kept.digests_due(Instant::now()) {
+            self.keep_digests().await;
         }
         if self.resident && self.kept.sweep_due(Instant::now()) {
             self.sweep_file_states().await;
@@ -170,9 +188,10 @@ impl Core {
         }
     }
 
-    /// Keeps the digests of the families held whose logs grew, as the daemon
-    /// stops, so the next start finds them up to date. Snapshots wait for the
-    /// next load, which replays what came since: stopping stays quick.
+    /// Keeps the digests of the families held whose logs grew, now and then
+    /// and as the daemon stops, so the next start finds them up to date.
+    /// Snapshots wait for the next load, which replays what came since:
+    /// stopping stays quick.
     pub(crate) async fn keep_digests(&mut self) {
         let positions = self.store.positions().await.unwrap_or_default();
         for family in self.families.loaded_ids() {
@@ -314,6 +333,16 @@ mod tests {
         assert!(kept.sweep_due(start + SWEEP_GRACE + Duration::from_secs(1)));
         assert!(!kept.sweep_due(start + SWEEP_GRACE + Duration::from_secs(2)), "not again at once");
         assert!(kept.sweep_due(start + SWEEP_GRACE + SWEEP_EVERY + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn digests_are_kept_every_few_minutes_from_start() {
+        let mut kept = Kept::default();
+        let start = Instant::now();
+        assert!(!kept.digests_due(start), "not as the daemon starts");
+        assert!(kept.digests_due(start + KEEP_DIGESTS_EVERY + Duration::from_secs(1)));
+        assert!(!kept.digests_due(start + KEEP_DIGESTS_EVERY + Duration::from_secs(2)), "not again at once");
+        assert!(kept.digests_due(start + 2 * KEEP_DIGESTS_EVERY + Duration::from_secs(1)));
     }
 
     const THREAD: ThreadId = ThreadId(7);
@@ -689,5 +718,30 @@ mod tests {
             let (reply, _answer) = oneshot::channel();
             assert!(core.unless_loading(Event::Request(request, reply)).is_some(), "what reads no family doesn't");
         }
+    }
+
+    #[tokio::test]
+    async fn a_daemon_ended_without_shutdown_starts_with_the_digests_it_kept_meanwhile() {
+        let (data, _repo, store) = store_with_thread().await;
+        let (mut core, _inbox) = loaded_core(store.clone(), data.path()).await;
+        let held = core.families.get_mut(&FAMILY).expect("loads");
+        let renamed = Op::Conv(ConvOp::Title("renamed while held".into()));
+        let delta = held.delta(ActorId(3), THREAD, Author::User, 9, held.thread_head(THREAD), renamed);
+        store.append_deltas(FAMILY, std::slice::from_ref(&delta)).await.expect("appends");
+        core.catch_up_with_store().await.expect("catches up");
+        assert!(core.digested(FAMILY).is_none(), "the family grew");
+        core.kept.digests_at = Instant::now();
+        core.tick().await;
+        assert!(core.families.is_loaded(&FAMILY), "still held when the daemon ends");
+        drop(core);
+        let (events, _inbox) = mpsc::unbounded_channel();
+        let core = Core::load(store, ActorId(1), data.path(), events).await.expect("loads");
+        assert!(!core.stale_digests.contains(&FAMILY), "its digest was kept while the daemon ran");
+        let title = core
+            .thread_summaries()
+            .into_iter()
+            .find(|summary| summary.id == THREAD.to_string())
+            .and_then(|summary| summary.title);
+        assert_eq!(title.as_deref(), Some("renamed while held"));
     }
 }
