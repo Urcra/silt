@@ -32,18 +32,37 @@ fn opencode(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, AgentError> {
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    let result = command.output();
-    let stdout = fs::read(output.path());
-    let result = result?;
-    if result.status.success() {
-        Ok(stdout?)
-    } else {
-        Err(AgentError::OpenCode {
-            command: args.first().unwrap_or(&"").to_string(),
-            stderr: String::from_utf8_lossy(&result.stderr).trim().to_owned(),
-        })
-    }
+    silt_os::own_group_std(&mut command);
+    let failed = |stderr: String| AgentError::OpenCode { command: args.first().unwrap_or(&"").to_string(), stderr };
+    let mut child = command.spawn()?;
+    let mut stderr = child.stderr.take();
+    let read_stderr = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(pipe) = stderr.as_mut() {
+            let _ = io::Read::read_to_end(pipe, &mut bytes);
+        }
+        String::from_utf8_lossy(&bytes).trim().to_owned()
+    });
+    let deadline = std::time::Instant::now() + OPENCODE_WAIT;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            silt_os::kill_tree(child.id());
+            let _ = child.wait();
+            return Err(failed(format!("gave up after {}s", OPENCODE_WAIT.as_secs())));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let stderr = read_stderr.join().unwrap_or_default();
+    if status.success() { Ok(fs::read(output.path())?) } else { Err(failed(stderr)) }
 }
+
+/// How long one `opencode` call may take. It starts its whole runtime each
+/// time, a few seconds, and may hang offline; whoever waits on it, such as
+/// a stopping daemon, mustn't wait forever.
+const OPENCODE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The records of an export that are worth keeping: the session, every
 /// message, and the parts that are finished.
