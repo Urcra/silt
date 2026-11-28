@@ -97,7 +97,12 @@ impl Core {
     pub(crate) fn live_state(&self, selector: &str) -> Result<LiveState, CoreError> {
         let thread = self.find_thread(selector)?;
         let family = self.threads[&thread].family;
-        Ok(LiveState { deltas: self.local_log_len(family), agent: self.shown_status(thread), preset: self.shown_preset(thread) })
+        Ok(LiveState {
+            deltas: self.local_log_len(family),
+            agent: self.shown_status(thread),
+            preset: self.shown_preset(thread),
+            sandbox: self.sandbox_choice(thread),
+        })
     }
 }
 

@@ -315,6 +315,7 @@ fn api_routes() -> Router<Web> {
         .route("/api/threads/{id}/agent/stop", post(agent_stop))
         .route("/api/threads/{id}/agent/steer", post(agent_steer))
         .route("/api/threads/{id}/agent/preset", post(agent_preset))
+        .route("/api/threads/{id}/agent/sandbox", post(agent_sandbox))
         .route("/api/threads/{id}/agent/mode", post(agent_mode))
         .route("/api/threads/{id}/agent/setting", post(agent_setting))
         .route("/api/threads/{id}/queue", get(queue).post(queue_add))
@@ -2316,6 +2317,15 @@ struct PresetBody {
 
 async fn agent_preset(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<PresetBody>) -> HttpResponse {
     ask(&web, Request::AgentPreset { thread, preset: body.preset }).await
+}
+
+#[derive(Deserialize)]
+struct SandboxBody {
+    sandbox: Option<silt_workspace::SandboxChoice>,
+}
+
+async fn agent_sandbox(State(web): State<Web>, Path(thread): Path<String>, Json(body): Json<SandboxBody>) -> HttpResponse {
+    ask(&web, Request::AgentSandbox { thread, sandbox: body.sandbox }).await
 }
 
 #[derive(Deserialize)]

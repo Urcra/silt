@@ -286,6 +286,53 @@ impl Reach {
     }
 }
 
+/// A thread's own choice of Silt's sandbox, in place of its workspace's
+/// (ADR 0140): whether its agent runs in it, and what it reaches. The
+/// lists (hosts, ranges, ports, folders, device nodes) stay the
+/// workspace's, and an org's policy holds it as it holds the workspace's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SandboxChoice {
+    pub on: bool,
+    #[serde(default)]
+    pub network: Network,
+    #[serde(default)]
+    pub devices: Devices,
+    #[serde(default)]
+    pub gpu: bool,
+    #[serde(default)]
+    pub docker: bool,
+    #[serde(default)]
+    pub ssh_agent: bool,
+}
+
+impl SandboxChoice {
+    /// The choice a workspace's own rules make, which a thread starts from.
+    pub fn of(policy: &Policy) -> Self {
+        Self {
+            on: policy.silt_sandbox,
+            network: policy.network.unwrap_or_default(),
+            devices: policy.devices.unwrap_or_default(),
+            gpu: policy.gpu,
+            docker: policy.docker,
+            ssh_agent: policy.ssh_agent,
+        }
+    }
+
+    /// The workspace's own rules with this choice in place of theirs.
+    pub fn over(&self, policy: &Policy) -> Policy {
+        Policy {
+            silt_sandbox: self.on,
+            network: Some(self.network),
+            devices: Some(self.devices),
+            gpu: self.gpu,
+            docker: self.docker,
+            ssh_agent: self.ssh_agent,
+            ..policy.clone()
+        }
+    }
+}
+
 /// The lower of two caps, either unset meaning none.
 pub(crate) fn lower<T: Ord + Copy>(one: Option<T>, other: Option<T>) -> Option<T> {
     match (one, other) {
@@ -338,6 +385,41 @@ mod tests {
         assert_eq!(Reach::of(&policy).device_nodes, ["/dev/ttyUSB0"]);
         let capped = policy.stricter(&Policy { devices: Some(Devices::None), ..Policy::default() });
         assert_eq!(Reach::of(&capped).devices, Devices::None);
+    }
+
+    #[test]
+    fn a_threads_choice_replaces_the_workspaces_and_the_org_still_holds_it() {
+        let workspace = Policy {
+            silt_sandbox: true,
+            network: Some(Network::Gateway),
+            ports: BTreeSet::from([5432]),
+            max_preset: Some(crate::Preset::AskBeforeCommands),
+            ..Policy::default()
+        };
+        assert_eq!(
+            SandboxChoice::of(&workspace),
+            SandboxChoice { on: true, network: Network::Gateway, ..SandboxChoice::default() }
+        );
+
+        let off = SandboxChoice { on: false, ..SandboxChoice::of(&workspace) }.over(&workspace);
+        assert!(!off.silt_sandbox, "the person's own rule is a default a thread can leave");
+        assert_eq!(off.max_preset, workspace.max_preset, "the other rules stay");
+
+        let wide = SandboxChoice { on: true, network: Network::Host, docker: true, ..SandboxChoice::default() };
+        let reach = Reach::of(&wide.over(&workspace));
+        assert_eq!((reach.network, reach.docker, reach.ports.as_slice()), (Network::Host, true, &[5432][..]));
+
+        let org = Policy {
+            silt_sandbox: true,
+            network: Some(Network::Gateway),
+            refuse: BTreeSet::from([Extra::Docker]),
+            ..Policy::default()
+        };
+        let held = SandboxChoice { on: false, ..wide }.over(&workspace).stricter(&org);
+        assert!(held.silt_sandbox, "an org's requirement can't be left");
+        let reach = Reach::of(&held);
+        assert_eq!(reach.network, Network::Gateway, "nor its cap");
+        assert!(!reach.docker, "nor what it refuses");
     }
 
     #[test]

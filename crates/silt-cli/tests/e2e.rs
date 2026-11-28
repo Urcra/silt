@@ -2974,6 +2974,67 @@ fn a_sandboxed_agent_asks_for_a_folder_and_is_restarted_with_it() {
     settled_history(&api, &thread, &format!("Done: {peek}: nothing there"));
 }
 
+/// A thread chooses Silt's sandbox for itself from the composer (ADR
+/// 0140): its agent runs sandboxed in a workspace that doesn't ask for it,
+/// the choice is kept for its later runs, and once forgotten the next run
+/// follows the workspace again.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_thread_chooses_silts_sandbox_for_itself() {
+    if silt_daemon::sandbox::unavailable(silt_workspace::Backend::Bubblewrap).is_some() {
+        eprintln!("skipped: this machine can't make Silt's sandbox");
+        return;
+    }
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    fs::write(
+        env.silt_home.join("agents.json"),
+        serde_json::json!([{"id": "v1", "name": "Fake v1", "command": fake}]).to_string(),
+    )
+    .expect("write agents.json");
+    let choice =
+        serde_json::json!({"on": true, "network": "none", "devices": "none", "gpu": false, "docker": false, "ssh_agent": false});
+    let started = api.ok(
+        "POST",
+        "/api/agents/start",
+        Some(serde_json::json!({"clone": env.repo, "agent": "v1", "prompt": "Hello", "sandbox": choice})),
+    );
+    let thread = started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("thread").to_owned());
+    settled_history(&api, &thread, "Done: Hello");
+    // Started again, the fake is primed with the conversation, which its answer repeats before the prompt.
+    let answered = |prompt: &str| {
+        eventually(|| {
+            let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+            let history = api.ok("GET", &format!("/api/threads/{thread}/history?whole=true"), None);
+            let last = history["entries"].as_array().and_then(|entries| {
+                entries.iter().rev().find(|entry| entry["kind"] == "assistant").and_then(|entry| entry["text"].as_str())
+            });
+            live["agent"]["state"] == "idle" && last.is_some_and(|text| text.ends_with(prompt))
+        })
+    };
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["sandbox"]["network"], "none", "Default doesn't sandbox, the thread does: {live}");
+    assert_eq!(live["sandbox"], choice, "kept for its next start: {live}");
+
+    api.ok("POST", &format!("/api/threads/{thread}/agent/stop"), None);
+    let stopped = || api.ok("GET", &format!("/api/threads/{thread}/live"), None)["agent"]["state"] == "stopped";
+    assert!(eventually(stopped), "the agent stops");
+    api.ok("POST", "/api/agents/start", Some(serde_json::json!({"thread": thread, "agent": "v1", "prompt": "Again"})));
+    assert!(answered("Again"), "it answers again");
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert_eq!(live["agent"]["sandbox"]["network"], "none", "a restart keeps it: {live}");
+
+    api.ok("POST", &format!("/api/threads/{thread}/agent/stop"), None);
+    let stopped = || api.ok("GET", &format!("/api/threads/{thread}/live"), None)["agent"]["state"] == "stopped";
+    assert!(eventually(stopped), "the agent stops");
+    api.ok("POST", &format!("/api/threads/{thread}/agent/sandbox"), Some(serde_json::json!({"sandbox": null})));
+    api.ok("POST", "/api/agents/start", Some(serde_json::json!({"thread": thread, "agent": "v1", "prompt": "Once more"})));
+    assert!(answered("Once more"), "it answers once more");
+    let live = api.ok("GET", &format!("/api/threads/{thread}/live"), None);
+    assert!(live["sandbox"].is_null() && live["agent"]["sandbox"].is_null(), "back to Default's rules: {live}");
+}
+
 /// The same from a terminal: `silt claude` stops the agent once the turn
 /// that was granted a folder ends, and starts it again in a sandbox with
 /// the folder, resuming its session (ADR 0102).

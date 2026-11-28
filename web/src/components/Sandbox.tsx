@@ -17,7 +17,19 @@ import {
 } from '../api'
 import { keys, message } from '../query'
 import { workspaceOf } from '../rules'
-import { BACKENDS, DEVICE_ORDER, DEVICES, HANDS_OVER, NETWORK_ORDER, NETWORKS, PLANNED_BACKENDS, reachOf } from '../sandbox'
+import {
+  BACKENDS,
+  DEVICE_ORDER,
+  DEVICES,
+  HANDS_OVER,
+  NETWORK_ORDER,
+  NETWORKS,
+  PLANNED_BACKENDS,
+  choiceOf,
+  chosenPolicy,
+  reachOf,
+  useSandboxChoice,
+} from '../sandbox'
 import { useNow } from '../now'
 import { hosted } from '../served'
 import { useShortcut } from '../shortcuts'
@@ -808,8 +820,10 @@ export function AccessPanel({
   }
   const live = agent && agent.state !== 'stopped' ? agent : null
   const view = summary ? workspaceOf(workspaces.data, summary.repo, summary.workspace) : undefined
-  // With nothing running, what the workspace's rules give the next run, when they sandbox it.
-  const next = !live && view?.effective.silt_sandbox ? reachOf(view.effective) : null
+  // With nothing running, what the thread's choice or its workspace's rules give the next run, when they sandbox it.
+  const chosen = useSandboxChoice(thread).choice
+  const upcoming = view ? chosenPolicy(view, chosen ?? choiceOf(view.workspace.policy)) : null
+  const next = !live && upcoming?.silt_sandbox ? reachOf(upcoming) : null
   const reach = live?.sandbox ?? next
   const grants = (access.data?.grants ?? []).filter((grant) => grant.active)
   return (
@@ -835,7 +849,9 @@ export function AccessPanel({
           <p className="text-xs text-fg-2">
             {live
               ? "Not in Silt's sandbox."
-              : `No agent runs here now. ${view?.workspace.name ?? 'Its workspace'} doesn't run its agents in Silt's sandbox, so they run as you.`}
+              : chosen
+                ? "No agent runs here now. This thread runs its agents outside Silt's sandbox, so they run as you."
+                : `No agent runs here now. ${view?.workspace.name ?? 'Its workspace'} doesn't run its agents in Silt's sandbox, so they run as you.`}
           </p>
         )}
       </section>

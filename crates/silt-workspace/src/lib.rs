@@ -22,7 +22,7 @@ pub use policy::{
     agent_key, check_move,
 };
 pub use preset::Preset;
-pub use reach::{Backend, Devices, Extra, Network, Reach};
+pub use reach::{Backend, Devices, Extra, Network, Reach, SandboxChoice};
 pub use sandbox::{
     ALWAYS_BLOCKED, Cidr, ExtraDir, ExtraRepo, Mount, MountKind, PathDir, Relay, RunPaths, SandboxPlan, expand_home, plan,
     subtract,

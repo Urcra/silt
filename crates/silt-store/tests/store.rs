@@ -290,12 +290,14 @@ async fn a_thread_s_agent_run_is_kept_and_replaced() {
         preset: "ask_before_commands".into(),
         mode: Some("auto".into()),
         settings: [("model".to_owned(), "gpt-6.2-sol".to_owned())].into(),
+        sandbox: None,
         updated_ms: 5,
     };
     store.put_agent_run(THREAD, &run).await.expect("saves");
     run.state = "error".into();
     run.settings.insert("effort".into(), "high".into());
     run.error = Some("it crashed".into());
+    run.sandbox = Some(r#"{"on":true,"network":"gateway"}"#.into());
     store.put_agent_run(THREAD, &run).await.expect("replaces");
     drop(store);
     let store = Store::open(dir.path()).await.expect("reopens");

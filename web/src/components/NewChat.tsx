@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import { checkedBySilt, nextPermission, ownModes, presetForOwnMode, startSettings, startingValue } from '../agentState'
-import { type AgentSetting, api, type Preset } from '../api'
+import { type AgentSetting, api, type Preset, type SandboxChoice } from '../api'
 import { agentRefused, modeRefused, presetRefused, within } from '../rules'
 import { useWorkspace } from '../workspace'
 import { ATTACH, useAttachments } from '../attachments'
@@ -16,6 +16,7 @@ import { Skeleton, toast } from '../ui'
 import { AgentSettings } from './AgentSettings'
 import { AttachedFiles } from './Attachments'
 import { AgentChip, PermissionChip } from './AgentPickers'
+import { SandboxChip } from './SandboxChip'
 import { UsageRing } from './UsageRing'
 import { ComposerBox } from './Composer'
 import { WorkspaceLine } from './NewThread'
@@ -53,6 +54,9 @@ export function NewChat() {
   const workspacesQuery = useQuery({ queryKey: keys.workspaces, queryFn: api.workspaces, enabled: !hosted() })
   const workspaceId = shownWorkspace.kind === 'workspace' ? shownWorkspace.id : workspacesQuery.data?.default
   const workspace = workspacesQuery.data?.workspaces?.find((view) => view.workspace.id === workspaceId)
+  // The chat's own choice of Silt's sandbox, for the workspace it's in (ADR 0140).
+  const [sandboxFor, setSandboxFor] = useState<{ workspace: string; choice: SandboxChoice | null }>()
+  const sandbox = sandboxFor && sandboxFor.workspace === workspace?.workspace.id ? sandboxFor.choice : null
   const agent =
     (chosenAgent && !agentRefused(workspace, chosenAgent) ? chosenAgent : undefined) ??
     agents.find((candidate) => !agentRefused(workspace, candidate.id))?.id ??
@@ -106,6 +110,7 @@ export function NewChat() {
           preset,
           prompt: prompt.trim() ? prompt : null,
           attachments: attached,
+          sandbox,
         },
       )
       .then(
@@ -170,6 +175,14 @@ export function NewChat() {
             below={<AttachedFiles files={attached} onRemove={remove} />}
             tools={
               <>
+                {agents.length > 0 && (
+                  <SandboxChip
+                    scope="chat"
+                    workspace={workspace}
+                    choice={sandbox}
+                    onChoice={(choice) => workspace && setSandboxFor({ workspace: workspace.workspace.id, choice })}
+                  />
+                )}
                 {agents.length > 0 ? (
                   <AgentChip
                     value={agent}

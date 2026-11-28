@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 
 use silt_types::FamilyId;
 use silt_workspace::{
-    InvalidWorkspaces, MatchRule, OrgPolicy, Policy, Rules, ServerBinding, Source, Why, Workspace, WorkspaceId, Workspaces,
+    InvalidWorkspaces, MatchRule, OrgPolicy, Policy, Rules, SandboxChoice, ServerBinding, Source, Why, Workspace, WorkspaceId,
+    Workspaces,
 };
 
 use crate::core::{Core, CoreError};
@@ -568,9 +569,16 @@ impl Core {
         }
     }
 
+    /// The thread's own choice of Silt's sandbox, if it made one (ADR 0140).
+    pub(crate) fn sandbox_choice(&self, thread: silt_types::ThreadId) -> Option<SandboxChoice> {
+        sandbox_choice_of(self.agent_runs.get(&thread))
+    }
+
     /// Whether the web UI may start `agent` in `workspace` with `preset`
-    /// and `mode` (ADR 0065). A preset nobody chose that the rules don't
+    /// and `mode` (ADR 0065), in Silt's sandbox as `sandbox` chooses, else as
+    /// the workspace's rules do. A preset nobody chose that the rules don't
     /// allow comes down to the most they do.
+    #[expect(clippy::too_many_arguments, reason = "each is one thing the start asks for")]
     pub(crate) fn check_acp_start(
         &self,
         workspace: &Workspace,
@@ -579,7 +587,9 @@ impl Core {
         chosen: bool,
         mode: Option<&str>,
         on_local_model: bool,
+        sandbox: Option<SandboxChoice>,
     ) -> Result<(Option<Preset>, Option<silt_workspace::Reach>), CoreError> {
+        let workspace = &choosing(workspace, sandbox);
         let rules = self.rules(workspace);
         let policy = rules.effective();
         let refused = |refusal: silt_workspace::Refusal| CoreError::Invalid(refusal.to_string());
@@ -632,6 +642,21 @@ impl Core {
         let workspace = self.family_workspace(family);
         check(&self.rules(&workspace)).map_err(|refusal| CoreError::Invalid(refusal.to_string()))
     }
+}
+
+/// `workspace` with a thread's own choice of Silt's sandbox in place of its
+/// rules' (ADR 0140); its org's policy still holds it.
+pub(crate) fn choosing(workspace: &Workspace, choice: Option<SandboxChoice>) -> Workspace {
+    match choice {
+        Some(choice) => Workspace { policy: choice.over(&workspace.policy), ..workspace.clone() },
+        None => workspace.clone(),
+    }
+}
+
+/// The sandbox choice a thread's stored run keeps, if any; one that no
+/// longer reads is left for the workspace's.
+pub(crate) fn sandbox_choice_of(run: Option<&silt_store::AgentRunRecord>) -> Option<SandboxChoice> {
+    serde_json::from_str(run?.sandbox.as_deref()?).ok()
 }
 
 /// The folders other workspaces own, which an isolated workspace's sandbox
@@ -766,6 +791,11 @@ pub async fn run_rules(
                 None => all.default_workspace().clone(),
             },
         });
+    let choice = match &record {
+        Some(record) => sandbox_choice_of(store.agent_runs().await?.get(&record.id)),
+        None => None,
+    };
+    let workspace = choosing(&workspace, choice);
     let org = match &workspace.server {
         Some(ServerBinding { url, org: Some(org) }) => {
             let fetched = store.org_policies().await?.into_iter().find(|(server, name, _)| server == url && name == org);
@@ -851,7 +881,7 @@ impl Core {
             (Some(selector), _) => {
                 let thread = self.find_thread(selector)?;
                 let record = self.threads.get(&thread).ok_or_else(|| CoreError::Invalid("no such thread".into()))?;
-                (thread, self.family_workspace(record.family), record.repo.clone())
+                (thread, choosing(&self.family_workspace(record.family), self.sandbox_choice(thread)), record.repo.clone())
             }
             (None, Some(cwd)) => {
                 let repo = silt_git::Repo::discover(cwd)?;
