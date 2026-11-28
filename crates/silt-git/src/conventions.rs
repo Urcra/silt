@@ -99,7 +99,7 @@ fn seed(from: &Path, target: &Path) -> io::Result<bool> {
         fs::create_dir_all(target)?;
         return Ok(false);
     }
-    let status = Command::new("cp").args(["-a", "--reflink=auto"]).arg(from).arg(target).stdin(Stdio::null()).status()?;
+    let status = Command::new("cp").args(silt_os::COPY_TREE).arg(from).arg(target).stdin(Stdio::null()).status()?;
     if status.success() {
         Ok(true)
     } else {
