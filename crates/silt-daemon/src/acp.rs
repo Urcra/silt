@@ -1929,6 +1929,9 @@ impl Core {
                 run.subagents.clear();
                 run.state = AgentState::Stopped;
                 run.handle = None;
+                if let Some(sign_in) = run.sign_in.as_mut() {
+                    sign_in.agent_exited(&run.info.name, run.error.as_deref());
+                }
                 let why = run.error.clone().unwrap_or_else(|| "its agent stopped".to_owned());
                 self.close_agent_session(thread).await?;
                 self.ask_ended_early(thread, why).await;

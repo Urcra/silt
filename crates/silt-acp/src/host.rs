@@ -328,6 +328,8 @@ pub enum HostError {
     Exited(std::process::ExitStatus),
     #[error("could not wait for the agent")]
     Wait(#[source] std::io::Error),
+    #[error("the agent didn't start within {} seconds; check that this machine is online", .0.as_secs())]
+    NotStarted(std::time::Duration),
 }
 
 #[derive(Debug, Clone)]
@@ -457,15 +459,44 @@ fn end_tree(group: u32) {
 
 /// Starts the agent; events arrive on `events` until [`Event::Exited`].
 pub fn start(start: Start, events: mpsc::UnboundedSender<Event>) -> AgentHandle {
+    let wait = if start.sign_in_first.is_some() { SIGN_IN_WAIT } else { START_WAIT };
+    start_within(start, events, wait)
+}
+
+/// How long an agent may take to open its session, or to ask for a sign-in.
+/// Offline, `npx` and some agents wait on the network with no end, and the
+/// thread would show it starting forever. Generous, as `npx` may first
+/// download the agent.
+const START_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// [`START_WAIT`] for an agent asked to sign in first, which waits on the
+/// person signing in in a browser.
+const SIGN_IN_WAIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+fn start_within(start: Start, events: mpsc::UnboundedSender<Event>, wait: std::time::Duration) -> AgentHandle {
     let (commands, receiver) = mpsc::unbounded_channel();
     let (stop, stopped) = watch::channel(false);
     let pid = Arc::new(std::sync::OnceLock::new());
     let started = pid.clone();
+    // Everything goes through one channel, so the end comes after what came before it.
+    let (told, mut telling) = mpsc::unbounded_channel();
+    let (opened, opening) = watch::channel(false);
     tokio::spawn(async move {
-        if let Err(error) = run(start, events.clone(), receiver, stopped, started).await {
-            let _ = events.send(Event::Failed(Arc::new(error)));
+        while let Some(event) = telling.recv().await {
+            if matches!(event, Event::Ready { .. } | Event::SignIn(_)) {
+                opened.send_replace(true);
+            }
+            let exited = matches!(event, Event::Exited);
+            if events.send(event).is_err() || exited {
+                break;
+            }
         }
-        let _ = events.send(Event::Exited);
+    });
+    tokio::spawn(async move {
+        if let Err(error) = run(start, told.clone(), receiver, stopped, started, opening, wait).await {
+            let _ = told.send(Event::Failed(Arc::new(error)));
+        }
+        let _ = told.send(Event::Exited);
     });
     AgentHandle { commands, stop: Arc::new(stop), pid }
 }
@@ -538,6 +569,8 @@ async fn run(
     commands: mpsc::UnboundedReceiver<Command>,
     mut stopped: watch::Receiver<bool>,
     pid: Arc<std::sync::OnceLock<u32>>,
+    mut opened: watch::Receiver<bool>,
+    wait: std::time::Duration,
 ) -> Result<(), HostError> {
     let mut command = tokio::process::Command::new(program(&start));
     // Its own process group, so stopping it stops what it started too,
@@ -587,6 +620,11 @@ async fn run(
             Err(error) => Err(HostError::Wait(error)),
         },
         _ = stopped.wait_for(|stopped| *stopped) => Ok(()),
+        () = async {
+            if tokio::time::timeout(wait, opened.wait_for(|opened| *opened)).await.is_ok() {
+                std::future::pending::<()>().await;
+            }
+        } => Err(HostError::NotStarted(wait)),
     };
     if let Some(group) = group {
         let _ = tokio::task::spawn_blocking(move || end_tree(group)).await;
@@ -634,6 +672,25 @@ mod tests {
                 "tools": ["*"],
             })
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_agent_that_never_opens_its_session_is_given_up_on() {
+        let never = Start {
+            program: "sleep".into(),
+            args: vec!["600".into()],
+            env: Vec::new(),
+            cwd: std::env::temp_dir(),
+            mcp: None,
+            ..start()
+        };
+        let (events, mut received) = mpsc::unbounded_channel();
+        let _handle = start_within(never, events, std::time::Duration::from_millis(300));
+        let failed = tokio::time::timeout(std::time::Duration::from_secs(10), received.recv()).await.expect("in time");
+        assert!(matches!(failed, Some(Event::Failed(error)) if matches!(*error, HostError::NotStarted(_))));
+        let exited = tokio::time::timeout(std::time::Duration::from_secs(10), received.recv()).await.expect("in time");
+        assert!(matches!(exited, Some(Event::Exited)));
     }
 
     #[test]

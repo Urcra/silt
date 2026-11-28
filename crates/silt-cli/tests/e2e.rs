@@ -706,6 +706,49 @@ fn an_agent_whose_sign_in_expired_is_signed_in_from_the_web_ui_and_goes_on() {
     }
 }
 
+/// An agent that signs in by itself and can't, as Antigravity's can't open
+/// a browser on a machine without a display, offers its sign-in again with
+/// why it failed, rather than showing it signing in forever; and the
+/// daemon goes on answering, for this thread and others.
+#[test]
+fn an_agent_that_fails_to_sign_in_by_itself_offers_it_again() {
+    let env = Env::new();
+    let api = Api::open(&env);
+    let fake = env.fake.with_file_name(format!("silt-fake-agent{}", std::env::consts::EXE_SUFFIX));
+    let markers = tempfile::tempdir().expect("temp dir");
+    let agents = serde_json::json!([
+        {"id": "browser", "name": "Fake browser", "command": fake,
+         "env": {"FAKE_ACP_SIGN_IN": markers.path().join("browser"), "FAKE_ACP_SIGN_IN_BY_AGENT": "1"}},
+        {"id": "fine", "name": "Fake fine", "command": fake}
+    ]);
+    fs::write(env.silt_home.join("agents.json"), agents.to_string()).expect("write agents.json");
+    let start = |agent: &str| {
+        let started =
+            api.ok("POST", "/api/agents/start", Some(serde_json::json!({"clone": env.repo, "agent": agent, "prompt": "hello"})));
+        started.as_str().map(str::to_owned).unwrap_or_else(|| started["thread"].as_str().expect("the thread").to_owned())
+    };
+    let thread = start("browser");
+    let live = || api.ok("GET", &format!("/api/threads/{thread}/live"), None)["agent"].clone();
+    let mut seen = serde_json::Value::Null;
+    let asked = eventually(|| {
+        seen = live();
+        seen["sign_in"]["methods"][0]["by_agent"] == true
+    });
+    assert!(asked, "the agent asks for a sign-in it runs itself: {seen}");
+
+    api.ok("POST", &format!("/api/threads/{thread}/agent/sign-in"), Some(serde_json::json!({"method": "oauth"})));
+    let offered_again = eventually(|| {
+        seen = live();
+        seen["sign_in"]["running"].is_null()
+            && seen["sign_in"]["failed"].as_str().is_some_and(|failed| failed.contains("No browser is available"))
+    });
+    assert!(offered_again, "a sign-in the agent couldn't make is offered again, saying why: {seen}");
+    assert_eq!(seen["sign_in"]["methods"][0]["id"], "oauth", "{seen}");
+
+    let other = start("fine");
+    settled_history(&api, &other, "Done: hello");
+}
+
 /// A project started from nothing (ADR 0053): a folder made for it with an
 /// empty repository, named by its folder and kept on this machine, whose
 /// threads move to its remote's project once it has one.

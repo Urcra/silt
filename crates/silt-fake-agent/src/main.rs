@@ -29,7 +29,9 @@
 //! and a prompt over v2, as Claude's adapter does. Its one sign-in method
 //! runs it again with `--fake-login`, which prints a link, asks for the code
 //! from it, as Claude's sign-in does, and makes the file when given `good`;
-//! given anything else, it says so and waits, as Claude's does.
+//! given anything else, it says so and waits, as Claude's does. With
+//! `FAKE_ACP_SIGN_IN_BY_AGENT` too, it lists only a sign-in it runs itself,
+//! which fails as Antigravity's does with no browser to open.
 
 mod mcp;
 mod steering;
@@ -42,13 +44,13 @@ use std::sync::{Arc, Mutex};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema::{
-    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, CreateElicitationRequest, EmbeddedResourceResource,
-    Implementation, InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
-    NewSessionResponse, PermissionOption, PermissionOptionKind, PromptCapabilities, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
-    SessionId, SessionMode, SessionModeState, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionConfigOptionResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason, TextContent, ToolCall,
-    ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
+    AgentCapabilities, AuthenticateRequest, CancelNotification, ContentBlock, ContentChunk, CreateElicitationRequest,
+    EmbeddedResourceResource, Implementation, InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+    NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, PromptCapabilities, PromptRequest,
+    PromptResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionConfigOption, SessionConfigOptionValue,
+    SessionConfigSelectOption, SessionId, SessionMode, SessionModeState, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason,
+    TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind, Usage, UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, Result, Stdio};
 
@@ -117,6 +119,9 @@ pub(crate) fn signed_in() -> bool {
 pub(crate) fn sign_in_methods(id: &str) -> serde_json::Value {
     if std::env::var_os("FAKE_ACP_SIGN_IN").is_none() {
         return serde_json::json!([]);
+    }
+    if std::env::var_os("FAKE_ACP_SIGN_IN_BY_AGENT").is_some() {
+        return serde_json::json!([{id: "oauth", "name": "Fake browser", "description": "Sign in in a browser"}]);
     }
     serde_json::json!([{id: "fake-login", "name": "Fake account", "description": "Sign in to the fake service",
                         "type": "terminal", "args": ["--fake-login"]}])
@@ -208,6 +213,15 @@ async fn agent() -> Result<()> {
                     .auth_methods(serde_json::from_value(methods).map_err(agent_client_protocol::Error::into_internal_error)?);
                 response.meta = steering::meta().and_then(|meta| meta.as_object().cloned());
                 responder.respond(response)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            // As Antigravity's `agy acp` does with no display to open a browser on.
+            async move |_request: AuthenticateRequest, responder, _connection| {
+                responder.respond_with_error(
+                    agent_client_protocol::Error::internal_error().data("No browser is available here (no graphical display)"),
+                )
             },
             agent_client_protocol::on_receive_request!(),
         )

@@ -249,7 +249,15 @@ pub fn daemon_run() -> Result<(), Exn<CliError>> {
     std::thread::Builder::new()
         .name("silt-daemon".into())
         .stack_size(DAEMON_STACK)
-        .spawn(move || runtime.block_on(silt_daemon::run(&paths::data_dir(), &paths::socket_path())))
+        .spawn(move || {
+            let ran = runtime.block_on(silt_daemon::run(&paths::data_dir(), &paths::socket_path()));
+            // The daemon's lock is held until the process exits, and dropping
+            // the runtime would wait on every blocking task still running, such
+            // as an agent's CLI listing its sessions offline: `silt daemon stop`
+            // would wait on them too, and no daemon could start meanwhile.
+            runtime.shutdown_timeout(SHUTDOWN_GRACE);
+            ran
+        })
         .or_raise(|| CliError("cannot start the Silt daemon's thread".into()))?
         .join()
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
@@ -257,6 +265,9 @@ pub fn daemon_run() -> Result<(), Exn<CliError>> {
 }
 
 const DAEMON_STACK: usize = 8 << 20;
+
+/// How long a stopping daemon waits on the blocking work it left running.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 pub fn daemon_stop() -> Result<(), Exn<CliError>> {
     if !is_running() && silt_daemon::holds_lock(&paths::data_dir()) {

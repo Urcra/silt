@@ -71,6 +71,20 @@ impl SignIn {
     pub(super) fn by_agent(&self) -> bool {
         self.running.as_ref().is_some_and(|running| running.login.is_none())
     }
+
+    /// The agent exited, `why` if it said: a sign-in it ran itself ended
+    /// with it, as when it can't open a browser, and the ways to sign in
+    /// are offered again rather than waiting on it forever.
+    pub(super) fn agent_exited(&mut self, name: &str, why: Option<&str>) {
+        if !self.by_agent() {
+            return;
+        }
+        self.running = None;
+        self.failed = Some(match why {
+            Some(why) => format!("{name} didn't sign in: {why}"),
+            None => format!("{name} stopped before it signed in"),
+        });
+    }
 }
 
 /// The program a terminal method runs: the agent's own command with the
@@ -183,6 +197,7 @@ impl Core {
         let token = self.next_token;
         if chosen.how == SignInHow::Agent {
             let run = self.acp.get_mut(&thread).expect("checked above");
+            run.error = None;
             let sign_in = run.sign_in.as_mut().expect("checked above");
             sign_in.failed = None;
             sign_in.running = Some(Running {
