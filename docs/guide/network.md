@@ -24,10 +24,11 @@ A machine talks to the servers you sign in to, and only those. A thread syncs wi
 **Check for updates** in Settings › Network turns all of them off, as does `SILT_UPDATE_CHECK=never` in the daemon's environment. A debug build never checks.
 
 ## Plan usage
-When the message box opens for Claude Code, Codex or GitHub Copilot, the web UI shows how much of your plan is left. To find out, the daemon reads that agent's own sign-in on this machine and asks the agent's provider directly. For Copilot that's a GitHub token from `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`, or the sign-in GitHub's Copilot editors keep. It asks:
+When the message box opens for Claude Code, Codex, GitHub Copilot or Antigravity, the web UI shows how much of your plan is left. To find out, the daemon reads that agent's own sign-in on this machine and asks the agent's provider directly (or for Antigravity, asks `agy` itself through its `statusLine` hook). For Copilot that's a GitHub token from `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`, or the sign-in GitHub's Copilot editors keep. It asks:
 - `api.anthropic.com` for Claude Code;
 - `chatgpt.com` for Codex;
-- `api.github.com` for Copilot.
+- `api.github.com` for Copilot;
+- `agy` itself for Antigravity.
 
 The sign-in goes only to the provider it belongs to, and the answer stays on this machine. Nothing is asked for an agent you aren't signed in to. **Plan usage** in Settings › Network turns it off.
 

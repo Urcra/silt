@@ -7,8 +7,9 @@
 
 use std::env;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode, Stdio};
 
 use serde_json::{Value, json};
 use silt_fake_agent::{Failed, Step, Utc, append, cwd, env_dir, env_or, exit, expect_words, io, main_rs, read, write};
@@ -18,15 +19,19 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Step {
-    let (mut gemini, mut resume, mut prompt) = (None, None, None);
+    let (mut gemini, mut resume, mut prompt, mut settings) = (None, None, None, None);
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--gemini_dir" => gemini = args.next().map(PathBuf::from),
             "--conversation" => resume = args.next(),
             "--prompt-interactive" => prompt = args.next(),
+            "--settings" => settings = args.next(),
             _ => {}
         }
+    }
+    if let (Some(settings), Ok(payload)) = (settings, env::var("FAKE_AGY_USAGE")) {
+        return emit_statusline(&settings, &payload);
     }
     let gemini = gemini.ok_or_else(|| Failed(2, "no --gemini_dir".into()))?;
     if !read(&gemini.join("config/mcp_config.json")).contains("\"silt\"") {
@@ -131,4 +136,29 @@ fn turn(transcript: &Path, cwd: &Path, said: &str, added: &str) -> Step {
         &json!({"step_index": first + 3, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": time,
             "input_tokens": 10, "output_tokens": 5, "content": "Antigravity says done."}),
     )
+}
+
+/// Runs the `statusLine.command` configured in `--settings` with `payload` on
+/// stdin, as `agy` does while starting its TUI.
+fn emit_statusline(settings: &str, payload: &str) -> Step {
+    if let Ok(counter) = env::var("FAKE_AGY_USAGE_COUNT") {
+        append(Path::new(&counter), "1\n")?;
+    }
+    let parsed: Value = serde_json::from_str(settings).map_err(|error| Failed(4, error.to_string()))?;
+    let command = parsed
+        .pointer("/statusLine/command")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Failed(5, "no statusLine.command in --settings".into()))?;
+    #[cfg(unix)]
+    let mut child = Command::new("sh").args(["-c", command]).stdin(Stdio::piped()).spawn().map_err(io)?;
+    #[cfg(windows)]
+    let mut child = Command::new("cmd").args(["/C", command]).stdin(Stdio::piped()).spawn().map_err(io)?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(payload.as_bytes()).map_err(io)?;
+    }
+    let status = child.wait().map_err(io)?;
+    if !status.success() {
+        return Err(Failed(6, format!("statusLine command exited with {status}")));
+    }
+    Ok(())
 }
