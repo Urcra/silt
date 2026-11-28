@@ -20,8 +20,8 @@ const ROWS: Row[] = [
   {
     key: 'plan_usage',
     label: 'Plan usage',
-    text: "Shows how much of your plan is left in the message box. Silt asks each agent's own provider with the sign-in that agent keeps on this machine, and the answer stays here.",
-    hosts: 'api.anthropic.com · chatgpt.com · api.github.com',
+    text: "Shows how much of your plan is left in the message box. Silt asks each agent's own provider with the sign-in that agent keeps on this machine, or for Antigravity asks agy itself, and the answer stays here.",
+    hosts: 'api.anthropic.com · chatgpt.com · api.github.com · agy',
   },
   {
     key: 'agent_registry',
