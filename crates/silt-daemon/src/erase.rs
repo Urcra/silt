@@ -312,11 +312,13 @@ mod tests {
 
     #[test]
     fn only_plain_paths_strictly_inside_a_root_are_erased() {
-        let roots = [PathBuf::from("/home/me/.claude")];
-        assert!(inside(std::path::Path::new("/home/me/.claude/projects/x/s.jsonl"), &roots));
-        assert!(!inside(std::path::Path::new("/home/me/.claude"), &roots), "never the root itself");
-        assert!(!inside(std::path::Path::new("/home/me/.claude/../../me"), &roots), "nothing climbing out");
-        assert!(!inside(std::path::Path::new("/home/me/notes"), &roots));
+        let home = PathBuf::from(if cfg!(windows) { r"C:\Users\me" } else { "/home/me" });
+        let root = home.join(".claude");
+        let roots = [root.clone()];
+        assert!(inside(&root.join("projects/x/s.jsonl"), &roots));
+        assert!(!inside(&root, &roots), "never the root itself");
+        assert!(!inside(&root.join("../../me"), &roots), "nothing climbing out");
+        assert!(!inside(&home.join("notes"), &roots));
         assert!(!inside(std::path::Path::new("relative/.claude/x"), &roots));
     }
 }

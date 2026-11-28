@@ -318,7 +318,7 @@ fn with_folder_rules(mut decision: Decision, effects: &[Effect], policy: Option<
             };
         }
         let Some(policy) = policy else { continue };
-        let resolve = |root: &str| std::fs::canonicalize(silt_workspace::expand_home(root, home.as_deref())).ok();
+        let resolve = |root: &str| silt_os::canonicalize(&silt_workspace::expand_home(root, home.as_deref())).ok();
         let verdict = policy.folder_verdict(Path::new(path), *writable, resolve);
         let rule = match verdict.answer {
             FolderAnswer::Allow => Rule::Allow,
