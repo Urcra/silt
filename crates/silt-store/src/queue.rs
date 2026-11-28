@@ -22,10 +22,8 @@ pub struct QueuedFile {
 }
 
 fn files_json(files: &[QueuedFile]) -> String {
-    serde_json::Value::Array(
-        files.iter().map(|file| serde_json::json!({"name": file.name, "mime": file.mime})).collect(),
-    )
-    .to_string()
+    serde_json::Value::Array(files.iter().map(|file| serde_json::json!({"name": file.name, "mime": file.mime})).collect())
+        .to_string()
 }
 
 /// The files a row names; a row this build can't read names none.
@@ -35,9 +33,7 @@ fn files_of(json: &str) -> Vec<QueuedFile> {
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|file| {
-            Some(QueuedFile { name: file["name"].as_str()?.to_owned(), mime: file["mime"].as_str()?.to_owned() })
-        })
+        .filter_map(|file| Some(QueuedFile { name: file["name"].as_str()?.to_owned(), mime: file["mime"].as_str()?.to_owned() }))
         .collect()
 }
 
