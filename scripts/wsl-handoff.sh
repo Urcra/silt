@@ -76,7 +76,7 @@ git clone -q --bare "$root/seed" "$root/origin.git"
 
 "$silt" server run --listen "127.0.0.1:$port" --data "$(windows_path "$root/server")" 2>"$root/server.log" &
 server_pid=$!
-eventually 'grep -q "listening on" "$root/server.log"'
+eventually 'grep -q "listening on" "$root/server.log"' || { cat "$root/server.log" >&2; exit 1; }
 pair() { "$silt" server pair --user owner --data "$(windows_path "$root/server")"; }
 
 # The Windows machine, in a home of its own whose git keeps LF.

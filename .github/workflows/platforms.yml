@@ -72,7 +72,7 @@ jobs:
       - name: Tests
         if: ${{ !cancelled() }}
         run: |
-          cargo nextest run --locked --workspace --exclude silt-cli --no-fail-fast
+          cargo nextest run --locked --profile platforms --workspace --exclude silt-cli
           cargo test --locked --workspace --doc
       # Several machines on a real server, each with its own SILT_HOME, and
       # the agent CLIs' stand-ins.
@@ -81,7 +81,7 @@ jobs:
         timeout-minutes: 60
         run: |
           cargo build --locked -p silt-fake-agent
-          cargo nextest run --locked -p silt-cli --no-fail-fast
+          cargo nextest run --locked --profile platforms -p silt-cli
       - name: Desktop app
         if: ${{ !cancelled() }}
         working-directory: crates/silt-desktop
