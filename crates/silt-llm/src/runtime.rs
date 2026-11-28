@@ -298,7 +298,8 @@ mod tests {
                 File::create(&archive).expect("create"),
                 flate2::Compression::fast(),
             ));
-            for (path, mode) in [("build/bin/llama-server", 0o755), ("build/bin/libllama.so", 0o644)] {
+            let server = format!("build/bin/{PROGRAM}{}", std::env::consts::EXE_SUFFIX);
+            for (path, mode) in [(server.as_str(), 0o755), ("build/bin/libllama.so", 0o644)] {
                 let mut header = tar::Header::new_gnu();
                 header.set_size(4);
                 header.set_mode(mode);
@@ -310,7 +311,8 @@ mod tests {
         let into = dir.path().join("out");
         fs::create_dir_all(&into).expect("mkdir");
         unpack_tar(&archive, &into).expect("unpacks");
-        assert_eq!(find_program(&into, MOST_DEPTH), Some(into.join("build/bin/llama-server")));
+        let server = into.join("build").join("bin").join(format!("{PROGRAM}{}", std::env::consts::EXE_SUFFIX));
+        assert_eq!(find_program(&into, MOST_DEPTH), Some(server));
         assert!(into.join("build/bin/libllama.so").is_file(), "its libraries come along");
     }
 }

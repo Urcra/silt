@@ -212,7 +212,9 @@ impl RunPaths {
         let homes = self.homes();
         let data = self.data();
         for named in [dir.path.as_path(), real] {
-            if !named.is_absolute() {
+            // A sandbox's paths are Unix ones, which a Windows build of this
+            // calls rooted but not absolute.
+            if !named.has_root() {
                 return Some(format!("{shown} isn't a full path"));
             }
             if ["/proc", "/sys", "/dev"].iter().any(|system| named.starts_with(system)) {
@@ -344,7 +346,7 @@ pub fn plan(paths: &RunPaths, reach: &Reach) -> SandboxPlan {
     let data = paths.data();
     let private: Vec<&Path> = homes.iter().chain(&data).copied().collect();
     let refused =
-        |dir: &Path| !dir.is_absolute() || dir.starts_with("/proc") || private.iter().any(|private| private.starts_with(dir));
+        |dir: &Path| !dir.has_root() || dir.starts_with("/proc") || private.iter().any(|private| private.starts_with(dir));
     // A link's target is shown under the link's name, out of reach of the
     // credentials hidden below by their own names.
     let secret = |dir: &Path| {
