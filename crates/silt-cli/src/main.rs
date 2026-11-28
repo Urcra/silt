@@ -932,7 +932,14 @@ struct Continue {
 pub struct CliError(pub String);
 
 fn main() -> std::process::ExitCode {
-    match run() {
+    // Windows gives a main thread 1 MiB, which a debug build's commands
+    // outgrow, as futures run with `block_on` live on the caller's stack.
+    let main = std::thread::Builder::new().name("silt".into()).stack_size(MAIN_STACK).spawn(run);
+    let outcome = match main {
+        Ok(main) => main.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+        Err(error) => Err(commands::fail(format!("cannot start Silt's thread: {error}"))),
+    };
+    match outcome {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("silt: {}", render::safe(&explain(&error)));
@@ -940,6 +947,8 @@ fn main() -> std::process::ExitCode {
         }
     }
 }
+
+const MAIN_STACK: usize = 8 << 20;
 
 /// The error and what caused it, outermost first, as one line for people:
 /// no source locations, which are for Silt's developers.

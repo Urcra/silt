@@ -101,6 +101,10 @@ pub fn link(target: &Path, link: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(target, link)
 }
 
+pub fn unlink(link: &Path) -> io::Result<()> {
+    fs::remove_file(link)
+}
+
 pub fn is_root() -> bool {
     rustix::process::geteuid().is_root()
 }

@@ -412,6 +412,11 @@ async fn serve_as(
         };
         let written = write_response(&mut write, &response).await;
         if shutdown {
+            // Windows drops what a pipe still holds once its server closes it,
+            // so the daemon exits only after the client read the answer and left.
+            if written.is_ok() {
+                let _ = lines.next_line().await;
+            }
             let _ = answered.send(());
         }
         if let Err(error) = written {

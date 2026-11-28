@@ -9,6 +9,26 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+/// The process serving the daemon's socket or pipe that `silt daemon
+/// status` names, from its output.
+pub fn daemon_serving(status: &str) -> u32 {
+    let socket = status.trim().strip_prefix("running (").and_then(|rest| rest.strip_suffix(')')).expect("the daemon runs");
+    serving(Path::new(socket))
+}
+
+#[cfg(unix)]
+fn serving(socket: &Path) -> u32 {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_io().build().expect("a runtime");
+    let peer = runtime.block_on(tokio::net::UnixStream::connect(socket)).expect("connects to the daemon");
+    let pid = peer.peer_cred().expect("its credentials").pid().expect("its pid");
+    u32::try_from(pid).expect("a pid")
+}
+
+#[cfg(windows)]
+fn serving(pipe: &Path) -> u32 {
+    silt_os::pipe::server_pid(pipe).expect("the pipe's server")
+}
+
 /// The stand-in for an agent CLI, `silt-fake-<agent>`, built beside `silt`
 /// by `cargo build` or `cargo test` of the workspace.
 pub fn fake_agent(agent: &str) -> PathBuf {
