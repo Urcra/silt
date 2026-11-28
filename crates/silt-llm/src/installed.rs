@@ -232,7 +232,8 @@ impl Models {
 
     /// Adds a GGUF file the person has, where it is.
     pub async fn add_file(&self, path: &Path) -> Result<Installed, LlmError> {
-        let path = fs::canonicalize(path).await.map_err(LlmError::Disk)?;
+        // As the person writes it: on Windows `C:\…`, not `\\?\C:\…`.
+        let path = silt_os::canonicalize(path).map_err(LlmError::Disk)?;
         let not_a_model = || LlmError::NotAModel(path.clone());
         let name =
             path.file_name().and_then(|name| name.to_str()).filter(|name| name.ends_with(".gguf")).ok_or_else(not_a_model)?;
@@ -323,7 +324,7 @@ mod tests {
         assert_eq!(model.id.as_str(), "tiny-llama-q4");
         assert_eq!(model.name, "Tiny Llama");
         assert_eq!(model.context, 4096, "no more than the model knows");
-        assert_eq!(models.weights(&model), std::fs::canonicalize(&file).expect("canonical"));
+        assert_eq!(models.weights(&model), silt_os::canonicalize(&file).expect("canonical"));
         assert_eq!(models.list().await, std::slice::from_ref(&model));
         assert!(models.remove(&model.id).await.expect("removed"));
         assert!(file.exists(), "the person's file stays");

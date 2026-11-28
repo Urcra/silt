@@ -49,31 +49,9 @@ fn finished(child: Child) -> Output {
     output
 }
 
-/// The machine's daemon process, found by its command line and `SILT_HOME`.
-#[cfg(unix)]
+/// The machine's daemon process: the one serving its socket or pipe.
 fn daemon_pid(machine: &Machine) -> u32 {
-    let home = format!("SILT_HOME={}", machine.silt_home.display());
-    fs::read_dir("/proc")
-        .expect("lists processes")
-        .flatten()
-        .find_map(|entry| {
-            let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
-            let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
-            let args: Vec<&[u8]> = cmdline.split(|byte| *byte == 0).collect();
-            let daemon = args.windows(2).any(|pair| pair == [b"daemon".as_slice(), b"run".as_slice()]);
-            let environ = fs::read(entry.path().join("environ")).ok()?;
-            let ours = environ.split(|byte| *byte == 0).any(|variable| variable == home.as_bytes());
-            (daemon && ours).then_some(pid)
-        })
-        .expect("the daemon runs")
-}
-
-/// The machine's daemon process: the one serving its pipe.
-#[cfg(windows)]
-fn daemon_pid(machine: &Machine) -> u32 {
-    let status = machine.stdout(&["daemon", "status"]);
-    let pipe = status.trim().strip_prefix("running (").and_then(|rest| rest.strip_suffix(')')).expect("the daemon runs");
-    silt_os::pipe::server_pid(Path::new(pipe)).expect("the pipe's server")
+    common::daemon_serving(&machine.stdout(&["daemon", "status"]))
 }
 
 fn kill_daemon(machine: &Machine) {
