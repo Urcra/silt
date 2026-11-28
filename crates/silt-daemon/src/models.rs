@@ -56,7 +56,8 @@ impl Wanted {
     fn id(&self) -> Result<ModelId, LlmError> {
         match self {
             Self::Remote(remote) => ModelId::for_file(&remote.file),
-            Self::File(path) => ModelId::for_file(&path.to_string_lossy()),
+            // By its name, as it's installed under: a Windows path's `\` isn't `/`.
+            Self::File(path) => ModelId::for_file(&path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()),
         }
     }
 }

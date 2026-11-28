@@ -379,9 +379,12 @@ pub async fn main() -> Result<()> {
                         say(&worker, &session, json!({"sessionUpdate": "terminal_update", "terminalId": "bg-1", "exitStatus": {}}))?;
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "running"}))?;
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        if cancelled.load(Ordering::SeqCst) {
-                            return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "cancelled"}));
+                        // Long enough for a busy machine's Silt to stop it.
+                        for _ in 0..40 {
+                            if cancelled.load(Ordering::SeqCst) {
+                                return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "cancelled"}));
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                         }
                         say(&worker, &session, json!({"sessionUpdate": "agent_message_chunk", "messageId": "later-bg", "content": {"type": "text", "text": "The background command printed BG."}}))?;
                         return say(&worker, &session, json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}));

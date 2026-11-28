@@ -374,6 +374,12 @@ pub fn link(target: &Path, link: &Path) -> io::Result<()> {
     }
 }
 
+pub fn unlink(link: &Path) -> io::Result<()> {
+    use std::os::windows::fs::FileTypeExt as _;
+    // A link to a folder, junctions too, goes as a folder does.
+    if fs::symlink_metadata(link)?.file_type().is_symlink_dir() { fs::remove_dir(link) } else { fs::remove_file(link) }
+}
+
 pub fn is_root() -> bool {
     false
 }

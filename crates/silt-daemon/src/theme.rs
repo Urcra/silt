@@ -511,7 +511,7 @@ mod tests {
 
         folder_theme(data.path());
         let copy = duplicate(data.path(), "harbour").expect("copied");
-        assert!(copy.file.ends_with("harbour-mine/theme.json"), "{}", copy.file);
+        assert!(std::path::Path::new(&copy.file).ends_with("harbour-mine/theme.json"), "{}", copy.file);
         assert!(themes_dir(data.path()).join("harbour-mine/fonts/sans.woff2").is_file());
         assert!(font(data.path(), "harbour-mine", "sans.woff2").is_some());
     }

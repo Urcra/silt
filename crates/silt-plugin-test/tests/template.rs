@@ -31,7 +31,8 @@ pub(crate) fn template() -> &'static str {
         for line in text.lines() {
             let line = match line.split_once(" = {") {
                 Some((name, _)) if line.contains(git) => {
-                    format!("{name} = {{ path = \"{}\" }}", repo.join("crates").join(name.trim()).display())
+                    // A literal string: Windows' backslashes aren't escapes.
+                    format!("{name} = {{ path = '{}' }}", repo.join("crates").join(name.trim()).display())
                 }
                 _ => line.to_owned(),
             };

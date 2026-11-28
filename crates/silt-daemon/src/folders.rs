@@ -142,7 +142,7 @@ pub fn still_allowed(
                 return false;
             }
             policy.is_none_or(|policy| {
-                let resolve = |root: &str| std::fs::canonicalize(silt_workspace::expand_home(root, home.as_deref())).ok();
+                let resolve = |root: &str| silt_os::canonicalize(&silt_workspace::expand_home(root, home.as_deref())).ok();
                 policy.folder_verdict(Path::new(path), *writable, resolve).answer != silt_workspace::FolderAnswer::Never
             })
         })
@@ -263,7 +263,7 @@ mod tests {
     fn a_grant_the_rules_now_refuse_is_dropped_at_the_next_start() {
         let data = tempfile::tempdir().unwrap();
         let mine = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(mine.path()).unwrap();
+        let root = silt_os::canonicalize(mine.path()).unwrap();
         let (kept, refused) = (root.join("kept"), root.join("refused"));
         std::fs::create_dir_all(&kept).unwrap();
         std::fs::create_dir_all(&refused).unwrap();

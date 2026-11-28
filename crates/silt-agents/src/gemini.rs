@@ -759,7 +759,7 @@ fn link_memory(project: &Path, target: &Path) -> io::Result<Vec<String>> {
             if fs::canonicalize(&own).ok() == fs::canonicalize(target).ok() {
                 return Ok(gathered);
             }
-            fs::remove_file(&own)?;
+            silt_os::unlink(&own)?;
         }
         Ok(_) => {
             let tag = project.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
@@ -783,7 +783,7 @@ fn unlink_memory(project: &Path) -> io::Result<()> {
     if !fs::symlink_metadata(&own).is_ok_and(|meta| meta.file_type().is_symlink()) {
         return Ok(());
     }
-    fs::remove_file(&own)?;
+    silt_os::unlink(&own)?;
     let kept = project.join("memory-before-silt");
     if kept.is_dir() { fs::rename(kept, own) } else { fs::create_dir_all(own) }
 }

@@ -757,7 +757,9 @@ impl Core {
             .find(|candidate| candidate.id == id)
             .ok_or_else(|| CoreError::Invalid(format!("no workspace {workspace}")))?;
         for (path, writable) in folders {
-            *found.policy.paths.entry(path.clone()).or_insert(false) |= *writable;
+            // A workspace names its folders `/`-separated, and leaves out one that isn't.
+            let path = if cfg!(windows) { path.replace('\\', "/") } else { path.clone() };
+            *found.policy.paths.entry(path).or_insert(false) |= *writable;
         }
         self.set_workspaces(all)
     }
@@ -1019,7 +1021,7 @@ mod tests {
     async fn an_agent_asks_for_a_folder_and_the_workspaces_rules_answer_first() {
         let data = tempfile::tempdir().expect("temp dir");
         let mine = tempfile::tempdir().expect("temp dir");
-        let root = std::fs::canonicalize(mine.path()).expect("real");
+        let root = silt_os::canonicalize(mine.path()).expect("real");
         let (lib, secret, other) = (root.join("lib"), root.join("secret"), root.join("other"));
         for dir in [&lib, &secret, &other] {
             std::fs::create_dir_all(dir).expect("made");
@@ -1071,7 +1073,9 @@ mod tests {
         assert!(matches!(outcome(waiting.await.expect("answers")), Outcome::Done { .. }));
         let saved = core.workspaces();
         let work = saved.workspaces.iter().find(|workspace| workspace.id.as_str() == "work").expect("work");
-        assert_eq!(work.policy.paths.get(other.to_string_lossy().as_ref()), Some(&true));
+        let slashed =
+            if cfg!(windows) { other.to_string_lossy().replace('\\', "/") } else { other.to_string_lossy().into_owned() };
+        assert_eq!(work.policy.paths.get(&slashed), Some(&true));
         assert!(
             crate::folders::granted(data.path(), &thread, Some("a later run"), 1).contains_key(other.to_string_lossy().as_ref())
         );
@@ -1147,14 +1151,16 @@ mod tests {
     async fn github_pushes_exactly_the_approved_commit_from_its_own_mirror() {
         let data = tempfile::tempdir().expect("temp dir");
         let remotes = tempfile::tempdir().expect("temp dir");
-        let remotes = std::fs::canonicalize(remotes.path()).expect("real");
+        let remotes = silt_os::canonicalize(remotes.path()).expect("real");
         let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
         let port = github_stand_in(sent.clone()).await;
         std::fs::create_dir_all(data.path().join("plugins")).expect("made");
+        // `file:///C:/…` on Windows.
+        let remotes_url =
+            format!("file://{}{}", if cfg!(windows) { "/" } else { "" }, remotes.display().to_string().replace('\\', "/"));
         std::fs::write(
             data.path().join("plugins/redirect.json"),
-            json!({"https://api.github.com": format!("http://127.0.0.1:{port}"), "https://github.com": format!("file://{}", remotes.display())})
-                .to_string(),
+            json!({"https://api.github.com": format!("http://127.0.0.1:{port}"), "https://github.com": remotes_url}).to_string(),
         )
         .expect("written");
         crate::credentials::save(
@@ -1222,6 +1228,9 @@ mod tests {
         let push = json!({"repo": "acme/api", "path": "/silt/work/api", "branch": "ada/fix"});
         let waiting = github(&mut core, "github_push", push.clone()).await;
         let pending = core.approvals_view(None, false).await.expect("approvals");
+        if pending.is_empty() {
+            panic!("the push asked nothing: {:?}", outcome(waiting.await.expect("answers")));
+        }
         assert_eq!(pending.len(), 1);
         let card = pending[0].card.as_ref().expect("a card");
         assert_eq!(card.title, "Push ada/fix to acme/api");
