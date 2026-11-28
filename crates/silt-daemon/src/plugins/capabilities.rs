@@ -159,8 +159,8 @@ impl DaemonCapabilities {
             _ => (self.checkout.as_ref(), path),
         };
         let root = root.ok_or_else(|| "this thread has nothing there on this machine".to_owned())?;
-        let root = std::fs::canonicalize(root).map_err(|error| error.to_string())?;
-        let full = std::fs::canonicalize(root.join(rest)).map_err(|error| format!("{path}: {error}"))?;
+        let root = silt_os::canonicalize(root).map_err(|error| error.to_string())?;
+        let full = silt_os::canonicalize(&root.join(rest)).map_err(|error| format!("{path}: {error}"))?;
         if full.starts_with(&root) { Ok(full) } else { Err(format!("{path} leads out of the thread")) }
     }
 }

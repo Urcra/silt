@@ -79,7 +79,8 @@ fn lists_branches_and_finds_the_commit_a_name_means() {
     assert_eq!(repo.commit_of("--all").expect("resolves"), None);
 }
 
-#[cfg(unix)]
+// macOS' file systems refuse names that aren't UTF-8.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn files_whose_names_are_not_utf8_are_left_out() {
     use std::os::unix::ffi::OsStrExt as _;

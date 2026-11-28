@@ -259,20 +259,8 @@ impl Setup {
 
     /// The daemon process of this setup's data dir.
     fn daemon_pid(&self) -> u32 {
-        let home = format!("SILT_HOME={}", self.home.join("silt").display());
-        fs::read_dir("/proc")
-            .expect("lists processes")
-            .flatten()
-            .find_map(|entry| {
-                let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
-                let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
-                let args: Vec<&[u8]> = cmdline.split(|byte| *byte == 0).collect();
-                let daemon = args.windows(2).any(|pair| pair == [b"daemon".as_slice(), b"run".as_slice()]);
-                let environ = fs::read(entry.path().join("environ")).ok()?;
-                let ours = environ.split(|byte| *byte == 0).any(|variable| variable == home.as_bytes());
-                (daemon && ours).then_some(pid)
-            })
-            .expect("the daemon runs")
+        let status = self.run(&["daemon", "status"], &[]);
+        common::daemon_serving(&String::from_utf8_lossy(&status.stdout))
     }
 
     fn live(&self, thread: &str) -> serde_json::Value {

@@ -3259,8 +3259,10 @@ mod tests {
     #[test]
     fn claude_in_a_managed_checkout_keeps_its_clones_memory() {
         let dir = tempfile::tempdir().unwrap();
-        let clone = dir.path().join("clone");
-        std::fs::create_dir_all(&clone).unwrap();
+        std::fs::create_dir_all(dir.path().join("clone")).unwrap();
+        // As git names it, which managed checkouts are found under: not
+        // macOS' `/var` for `/private/var`, nor a Windows short name.
+        let clone = silt_os::canonicalize(&dir.path().join("clone")).unwrap();
         for args in [&["init", "-q", "-b", "main"][..], &["commit", "-q", "--allow-empty", "-m", "init"]] {
             let ran = std::process::Command::new("git")
                 .arg("-C")

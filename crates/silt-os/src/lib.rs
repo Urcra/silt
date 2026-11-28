@@ -277,10 +277,19 @@ pub fn resume(pid: u32) -> io::Result<()> {
     imp::resume(pid)
 }
 
+/// `cp`'s flags for copying a tree with its links, modes and times, sharing
+/// blocks where the file system can. macOS' BSD `cp` has no `--reflink`.
+pub const COPY_TREE: &[&str] = if cfg!(target_os = "macos") { &["-a"] } else { &["-a", "--reflink=auto"] };
+
 /// Makes `link` point at `target`. Where Windows refuses a symlink without
 /// Developer Mode, a directory gets a junction and a file a copy.
 pub fn link(target: &Path, link: &Path) -> io::Result<()> {
     imp::link(target, link)
+}
+
+/// Removes a link [`link`] made, leaving what it points at.
+pub fn unlink(link: &Path) -> io::Result<()> {
+    imp::unlink(link)
 }
 
 /// The user's home: `$HOME`, else on Windows `%USERPROFILE%`, where the
