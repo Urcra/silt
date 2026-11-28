@@ -5,6 +5,7 @@
 - Amends: [ADR 0020](0020-next-generation-web-ui.md) ("native apps are not planned", for the desktop)
 - Amended by: [ADR 0045](0045-windows-natively-and-in-wsl.md): Windows, natively and in WSL
 - Amended by: [ADR 0108](0108-machines-over-ssh.md): Machines over SSH
+- Amended by: [ADR 0140](0140-the-desktop-app-hands-over-files-from-a-file-manager.md): files from a file manager
 
 ## Context
 The web UI is a browser tab on a port that `silt open` prints. M21 makes Silt something you open: a Tauri 2 app around the same UI, Linux first. ADR 0018 still holds: recording never depends on a window, or on the daemon.

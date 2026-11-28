@@ -46,7 +46,7 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0038](0038-cloud-sessions.md) | Recording Claude Code cloud sessions | proposed |
 | [0039](0039-the-web-ui-as-designed.md) | The web UI as designed | accepted; amended by 0054, 0044, 0098 |
 | [0040](0040-cloud-sessions-from-the-web-ui.md) | Starting and steering Claude Code cloud sessions from the web UI | proposed |
-| [0041](0041-the-desktop-app.md) | The desktop app | accepted; amended by 0045, 0108 |
+| [0041](0041-the-desktop-app.md) | The desktop app | accepted; amended by 0045, 0108, 0140 |
 | [0042](0042-git-and-forge-interop.md) | Git notes, the forge bridge and the Agent SDK session store | accepted |
 | [0043](0043-history-from-day-one.md) | Your history from day one: release binaries, importing old sessions, sending them | accepted |
 | [0044](0044-the-standard-agent-workspace.md) | The standard agent workspace: open on the composer, one shell for every screen | accepted; amended by 0054, 0048, 0049, 0053, 0059, 0062, 0067, 0114, 0115, 0135 |
@@ -145,3 +145,4 @@ To add one, copy [0000-template.md](0000-template.md) to the next free number, a
 | [0137](0137-agents-memory-follows-the-person.md) | Agents' memory follows the person, across agents and machines | accepted |
 | [0138](0138-enter-steers-mid-turn.md) | ⏎ steers mid-turn | accepted |
 | [0139](0139-macos-and-windows-ci-advisory-at-first.md) | macOS and Windows CI, advisory at first | accepted |
+| [0140](0140-the-desktop-app-hands-over-files-from-a-file-manager.md) | The desktop app hands over files from a file manager | accepted |

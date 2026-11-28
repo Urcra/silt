@@ -952,6 +952,7 @@ export function NewThread() {
                 : 'Describe the task. You can also start the agent and prompt it later.'
             }
             onFiles={chosenWhere === 'cloud' ? undefined : attach}
+            onRefused={setError}
             commands={chosenWhere === 'cloud' ? undefined : seen?.commands}
             voice={!hosted()}
             below={chosenWhere !== 'cloud' && <AttachedFiles files={attached} onRemove={remove} />}
