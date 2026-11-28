@@ -105,6 +105,19 @@ fn each_agent_s_plan_usage_is_read_with_its_own_sign_in() {
     fs::write(day.join("rollout-2025-01-01T00-00-00-0199a213-81c0-7800-8aa1-bbab2a035a53.jsonl"), format!("{event}\n"))
         .expect("rollout");
     // The daemon starts with the stand-ins and GitHub's token in its environment.
+    let fake_agy = common::fake_agent("agy").to_string_lossy().into_owned();
+    let agy_count = root.path().join("agy-usage-count");
+    let agy_count_str = agy_count.to_string_lossy().into_owned();
+    let agy_payload = json!({
+        "product": "antigravity",
+        "plan_tier": "Google AI Pro",
+        "quota": {
+            "gemini-5h": {"remaining_fraction": 0.9, "reset_time": "2099-01-01T14:00:00Z", "reset_in_seconds": 3600},
+            "gemini-weekly": {"remaining_fraction": 0.8, "reset_time": "2099-01-06T07:00:00Z", "reset_in_seconds": 86400},
+            "3p-5h": {"remaining_fraction": 1.0, "reset_time": "1970-01-01T00:00:00Z", "reset_in_seconds": 0},
+        },
+    })
+    .to_string();
     laptop.run(&["daemon", "stop"]);
     laptop.silt_with(
         &["open", "--no-browser"],
@@ -113,6 +126,9 @@ fn each_agent_s_plan_usage_is_read_with_its_own_sign_in() {
             ("SILT_CODEX_USAGE_URL", &format!("{provider}/codex")),
             ("SILT_COPILOT_USAGE_URL", &format!("{provider}/copilot")),
             ("COPILOT_GITHUB_TOKEN", "gho_copilot"),
+            ("SILT_ANTIGRAVITY_USAGE_COMMAND", &fake_agy),
+            ("FAKE_AGY_USAGE", &agy_payload),
+            ("FAKE_AGY_USAGE_COUNT", &agy_count_str),
         ],
     );
 
@@ -145,6 +161,30 @@ fn each_agent_s_plan_usage_is_read_with_its_own_sign_in() {
         copilot["limits"],
         json!([{"name": "Premium requests", "used_percent": 25.0, "resets_at_ms": 4_073_587_200_000_i64}])
     );
+
+    let agy = laptop.web("GET", "/api/agents/antigravity-acp/usage", None);
+    assert_eq!(agy["agent"], "Antigravity");
+    assert_eq!(agy["plan"], "Google AI Pro");
+    assert_eq!(agy["page"], "https://antigravity.google/docs/plans");
+    let agy_limits: Vec<(&str, f64, bool)> = agy["limits"]
+        .as_array()
+        .expect("limits")
+        .iter()
+        .map(|limit| {
+            (
+                limit["name"].as_str().expect("name"),
+                limit["used_percent"].as_f64().expect("percent").round(),
+                limit["resets_at_ms"].is_i64(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        agy_limits,
+        [("Gemini · 5-hour", 10.0, true), ("Gemini · Weekly", 20.0, true), ("Claude & GPT · 5-hour", 0.0, false)]
+    );
+    // Subsequent asks come from the daemon cache rather than spawning agy again.
+    assert_eq!(laptop.web("GET", "/api/agents/antigravity-cli/usage", None), agy);
+    assert_eq!(fs::read_to_string(&agy_count).expect("count").lines().count(), 1);
 
     let (status, refused): (String, String) = laptop.web_answer("GET", "/api/agents/gemini-cli/usage", None);
     assert_ne!(status, "200");

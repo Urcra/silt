@@ -1,7 +1,8 @@
 //! How much of its plan an agent has used: Claude Code's 5-hour and weekly
-//! limits, Codex's, and Copilot's monthly premium requests. Each is read
-//! the way the agent's own CLI reads it, with the sign-in that CLI keeps,
-//! and never refreshes that sign-in, which the CLI owns (ADR 0095).
+//! limits, Codex's, Copilot's monthly premium requests, and Antigravity's
+//! rolling and weekly buckets. Each is read the way the agent's own CLI reads
+//! it, without refreshing a sign-in or reading Antigravity's OAuth tokens
+//! directly (ADR 0095).
 //!
 //! Sans-I/O: [`Provider::ask`] says what to fetch, [`Provider::read`] reads
 //! the answer; the daemon fetches.
@@ -21,6 +22,7 @@ pub enum Provider {
     Claude,
     Codex,
     Copilot,
+    Antigravity,
 }
 
 /// One request to make, with the sign-in it carries.
@@ -70,6 +72,7 @@ impl Provider {
             "claude" => Some(Self::Claude),
             "codex" => Some(Self::Codex),
             "copilot" => Some(Self::Copilot),
+            "agy" => Some(Self::Antigravity),
             _ => None,
         }
     }
@@ -79,6 +82,7 @@ impl Provider {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
             Self::Copilot => "Copilot",
+            Self::Antigravity => "Antigravity",
         }
     }
 
@@ -88,6 +92,7 @@ impl Provider {
             Self::Claude => "https://claude.ai/settings/usage",
             Self::Codex => "https://chatgpt.com/codex/settings/usage",
             Self::Copilot => "https://github.com/settings/copilot/features",
+            Self::Antigravity => "https://antigravity.google/docs/plans",
         }
     }
 
@@ -97,6 +102,7 @@ impl Provider {
             Self::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
             Self::Codex => ("CODEX_HOME", ".codex"),
             Self::Copilot => ("COPILOT_HOME", ".copilot"),
+            Self::Antigravity => ("GEMINI_CLI_HOME", ".gemini"),
         }
     }
 
@@ -127,17 +133,25 @@ impl Provider {
                     ],
                 })
             }
+            Self::Antigravity => Err(if antigravity_api_key(home) {
+                UsageError::ApiKey(self.agent())
+            } else {
+                UsageError::Unreadable(self.agent())
+            }),
         }
     }
 
-    /// Reads the answer to [`Provider::ask`]. `home` gives the plan's name
-    /// where the answer doesn't.
+    /// Reads the answer to [`Provider::ask`] (or `agy`'s `statusLine` JSON for
+    /// [`Provider::Antigravity`]). `home` gives the plan's name where the
+    /// answer doesn't.
     pub fn read(self, home: &Path, body: &str, now_ms: i64) -> Result<PlanUsage, UsageError> {
-        let value: Value = serde_json::from_str(body).map_err(|_| UsageError::Unreadable(self.agent()))?;
+        let value: Value =
+            serde_json::from_str(body.trim_start_matches('\u{feff}')).map_err(|_| UsageError::Unreadable(self.agent()))?;
         let usage = match self {
             Self::Claude => claude_usage(&value, claude_plan(home)),
             Self::Codex => codex_usage(&value, now_ms),
             Self::Copilot => copilot_usage(&value),
+            Self::Antigravity => antigravity_usage(&value, now_ms),
         };
         usage.ok_or(UsageError::Unreadable(self.agent()))
     }
@@ -147,7 +161,7 @@ impl Provider {
     pub fn recorded(self, home: &Path, now_ms: i64) -> Option<PlanUsage> {
         match self {
             Self::Codex => codex_recorded(home, now_ms),
-            Self::Claude | Self::Copilot => None,
+            Self::Claude | Self::Copilot | Self::Antigravity => None,
         }
     }
 }
@@ -406,6 +420,124 @@ fn copilot_usage(value: &Value) -> Option<PlanUsage> {
     Some(PlanUsage { plan, limits })
 }
 
+/// How far along `agy`'s `statusLine` payload is during startup: quota arrives
+/// first, then `plan_tier` shortly after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AntigravitySnapshot {
+    Pending,
+    QuotaOnly,
+    Complete,
+}
+
+/// Checks whether a `statusLine` JSON payload from `agy` already carries quota
+/// and plan tier.
+pub fn antigravity_snapshot(body: &str) -> AntigravitySnapshot {
+    let Ok(value) = serde_json::from_str::<Value>(body.trim_start_matches('\u{feff}')) else {
+        return AntigravitySnapshot::Pending;
+    };
+    let has_quota = value.get("quota").and_then(Value::as_object).is_some_and(|quota| !quota.is_empty());
+    if !has_quota {
+        return AntigravitySnapshot::Pending;
+    }
+    let has_plan = value.get("plan_tier").and_then(Value::as_str).is_some_and(|tier| !tier.trim().is_empty());
+    if has_plan { AntigravitySnapshot::Complete } else { AntigravitySnapshot::QuotaOnly }
+}
+
+/// Whether Antigravity is configured to use a Gemini API key rather than a
+/// Google account plan.
+pub fn antigravity_api_key(home: &Path) -> bool {
+    read_json(&home.join("antigravity-cli/settings.json"))
+        .and_then(|settings| settings.get("modelProvider")?.as_str().map(|provider| provider == "gemini"))
+        .unwrap_or(false)
+}
+
+/// Shell command for `agy`'s `statusLine` setting that atomically saves the
+/// JSON payload piped on stdin into `output`.
+pub fn antigravity_statusline_command(output: &Path) -> String {
+    let path = output.to_string_lossy();
+    #[cfg(unix)]
+    {
+        let prefix = output.with_extension("").to_string_lossy().into_owned();
+        format!("tmp={}.$$.tmp; cat > \"$tmp\" && mv \"$tmp\" {}", crate::shell_quote(&prefix), crate::shell_quote(&path))
+    }
+    #[cfg(windows)]
+    {
+        let prefix = output.with_extension("").to_string_lossy().into_owned();
+        format!(
+            "powershell -NoProfile -NonInteractive -Command \"$t = {} + '.' + $PID + '.tmp'; [Console]::In.ReadToEnd() | Set-Content -LiteralPath $t -Encoding utf8; Move-Item -Force -LiteralPath $t -Destination {}\"",
+            crate::powershell_quote(&prefix),
+            crate::powershell_quote(&path),
+        )
+    }
+}
+
+/// `--settings` JSON instructing `agy` to emit its `statusLine` payload to
+/// `output` for this session only (never saved to `settings.json`).
+pub fn antigravity_settings(output: &Path) -> String {
+    serde_json::json!({
+        "statusLine": {
+            "type": "command",
+            "command": antigravity_statusline_command(output),
+            "enabled": true,
+        }
+    })
+    .to_string()
+}
+
+const ANTIGRAVITY_BUCKETS: [(&str, &str); 4] = [
+    ("gemini-5h", "Gemini · 5-hour"),
+    ("gemini-weekly", "Gemini · Weekly"),
+    ("3p-5h", "Claude & GPT · 5-hour"),
+    ("3p-weekly", "Claude & GPT · Weekly"),
+];
+
+fn antigravity_bucket_name(key: &str) -> String {
+    if let Some((_, name)) = ANTIGRAVITY_BUCKETS.iter().find(|(id, _)| *id == key) {
+        return (*name).to_owned();
+    }
+    if let Some(group) = key.strip_suffix("-5h") {
+        return format!("{} · 5-hour", title(group));
+    }
+    if let Some(group) = key.strip_suffix("-weekly") {
+        return format!("{} · Weekly", title(group));
+    }
+    title(key)
+}
+
+fn antigravity_usage(value: &Value, now_ms: i64) -> Option<PlanUsage> {
+    let quota = value.get("quota")?.as_object()?;
+    if quota.is_empty() {
+        return None;
+    }
+    let read_bucket = |key: &str, bucket: &Value| {
+        let remaining = bucket.get("remaining_fraction")?.as_f64()?;
+        let used = ((1.0 - remaining) * 100.0).clamp(0.0, 100.0);
+        // Unused buckets report the Unix epoch (`1970-01-01T00:00:00Z`) and 0 seconds.
+        let reset = bucket.get("reset_time").and_then(Value::as_str).and_then(parse_time).filter(|at| *at > 0).or_else(|| {
+            bucket.get("reset_in_seconds").and_then(Value::as_i64).filter(|secs| *secs > 0).map(|secs| now_ms + secs * 1000)
+        });
+        let (used_percent, resets_at_ms) = current(used, reset, now_ms);
+        Some(UsageLimit { name: antigravity_bucket_name(key), used_percent, resets_at_ms })
+    };
+    let mut limits = Vec::new();
+    for (key, _) in ANTIGRAVITY_BUCKETS {
+        if let Some(bucket) = quota.get(key)
+            && let Some(limit) = read_bucket(key, bucket)
+        {
+            limits.push(limit);
+        }
+    }
+    let mut extra: Vec<&String> = quota.keys().filter(|key| !ANTIGRAVITY_BUCKETS.iter().any(|(known, _)| known == key)).collect();
+    extra.sort();
+    for key in extra {
+        if let Some(limit) = read_bucket(key, &quota[key]) {
+            limits.push(limit);
+        }
+    }
+    let plan = value.get("plan_tier").and_then(Value::as_str).map(str::trim).filter(|tier| !tier.is_empty()).map(str::to_owned);
+    (!limits.is_empty()).then_some(PlanUsage { plan, limits })
+}
+
 fn title(word: &str) -> String {
     let mut chars = word.chars();
     chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
@@ -588,5 +720,51 @@ mod tests {
         assert_eq!(github_token(&|name| (name == "GH_TOKEN").then(|| "gho_env".to_owned()), &dirs).as_deref(), Some("gho_env"));
         assert_eq!(github_token(&|_| None, &dirs).as_deref(), Some("gho_apps"));
         assert_eq!(github_token(&|_| None, &[]), None);
+    }
+
+    #[test]
+    fn antigravity_reads_statusline_quota_buckets_and_plan_tier() {
+        // As `agy` 1.5.18 pipes to its `statusLine` command.
+        let body = r#"{"product":"antigravity","plan_tier":"Google AI Pro","quota":{
+            "3p-5h":{"remaining_fraction":1,"reset_time":"1970-01-01T00:00:00Z","reset_in_seconds":0},
+            "3p-weekly":{"remaining_fraction":0.75,"reset_time":"2025-11-24T12:00:00Z","reset_in_seconds":604800},
+            "gemini-5h":{"remaining_fraction":0.9,"reset_time":"2025-11-17T16:00:00Z","reset_in_seconds":14400},
+            "gemini-weekly":{"remaining_fraction":0.8,"reset_time":"2025-11-17T10:00:00Z","reset_in_seconds":0},
+            "flash-5h":{"remaining_fraction":0.5,"reset_time":"1970-01-01T00:00:00Z","reset_in_seconds":1800}
+        }}"#;
+        assert_eq!(antigravity_snapshot(body), AntigravitySnapshot::Complete);
+        assert_eq!(antigravity_snapshot(r#"{"quota":{"gemini-5h":{"remaining_fraction":1}}}"#), AntigravitySnapshot::QuotaOnly);
+        assert_eq!(antigravity_snapshot(r#"{"agent_state":"authenticating"}"#), AntigravitySnapshot::Pending);
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let usage = Provider::Antigravity.read(home.path(), body, NOW).expect("read");
+        assert_eq!(usage.plan.as_deref(), Some("Google AI Pro"));
+        assert_eq!(
+            usage
+                .limits
+                .iter()
+                .map(|limit| (limit.name.as_str(), limit.used_percent.round(), limit.resets_at_ms))
+                .collect::<Vec<_>>(),
+            [
+                ("Gemini · 5-hour", 10.0, Some(NOW + 4 * 3_600_000)),
+                // Its reset time passed before NOW.
+                ("Gemini · Weekly", 0.0, None),
+                // Unused bucket reports epoch zero, so no reset time is shown.
+                ("Claude & GPT · 5-hour", 0.0, None),
+                ("Claude & GPT · Weekly", 25.0, parse_time("2025-11-24T12:00:00Z")),
+                // Unknown future bucket falls back cleanly and uses reset_in_seconds when reset_time is epoch zero.
+                ("Flash · 5-hour", 50.0, Some(NOW + 1_800_000)),
+            ]
+        );
+    }
+
+    #[test]
+    fn antigravity_recognises_gemini_api_key_mode() {
+        let home = tempfile::tempdir().expect("tempdir");
+        assert!(!antigravity_api_key(home.path()));
+        fs::create_dir_all(home.path().join("antigravity-cli")).expect("dir");
+        fs::write(home.path().join("antigravity-cli/settings.json"), r#"{"modelProvider":"gemini"}"#).expect("write");
+        assert!(antigravity_api_key(home.path()));
+        assert_eq!(Provider::Antigravity.ask(home.path(), None, NOW), Err(UsageError::ApiKey("Antigravity")));
     }
 }

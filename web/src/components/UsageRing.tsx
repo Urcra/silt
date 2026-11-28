@@ -9,7 +9,7 @@ import { Popover, cx } from '../ui'
 import { GHOST_CHIP } from './ChipSelect'
 
 /** Agents whose plan usage Silt reads, by `agentKey`; others aren't asked. */
-const READ = ['claude', 'codex', 'copilot']
+const READ = ['claude', 'codex', 'copilot', 'agy']
 
 /** How full a limit is, as a colour: ok, then a warning from 75 %, then danger from 90 %. */
 function tone(percent: number): string {

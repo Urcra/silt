@@ -60,6 +60,7 @@ mdns-sd = "0.22.0"
 qrcode = { version = "0.15.0", default-features = false, features = ["svg"] }
 web-push-native = "0.5.0"
 sha2 = "0.11.1"
+tempfile = "3.27.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "net", "sync", "time", "macros", "fs", "io-util", "process"] }
 tracing = "0.1.44"
@@ -73,5 +74,4 @@ silt-access = { path = "../silt-access", features = ["ts"] }
 silt-plugin = { path = "../silt-plugin", features = ["ts"] }
 silt-workspace = { path = "../silt-workspace", features = ["ts"] }
 silt-update = { path = "../silt-update", features = ["ts"] }
-tempfile = "3.27.0"
 ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }

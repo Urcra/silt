@@ -66,3 +66,25 @@ test('an agent with no plan limits to read shows nothing, and others are never a
   expect(usage).not.toHaveBeenCalled()
   expect(screen.queryByRole('button')).toBeNull()
 })
+
+test('antigravity asks for plan usage and shows its quota buckets', async () => {
+  const usage = vi.spyOn(api, 'usage').mockResolvedValue({
+    agent: 'Antigravity',
+    plan: 'Google AI Pro',
+    limits: [
+      { name: 'Gemini · 5-hour', used_percent: 10, resets_at_ms: MORNING + 3_600_000 },
+      { name: 'Gemini · Weekly', used_percent: 20, resets_at_ms: null },
+    ],
+    page: 'https://antigravity.google/docs/plans',
+    unavailable: null,
+    recorded: false,
+    read_ms: 0,
+  })
+  shown('antigravity-acp', 'def')
+  const ring = await screen.findByRole('button', { name: 'plan usage: 20% of the fullest limit used' })
+  expect(usage).toHaveBeenCalledWith('antigravity-acp', 'def')
+  fireEvent.click(ring)
+  expect(screen.getByText('Plan usage limits · Google AI Pro')).toBeInTheDocument()
+  expect(screen.getByRole('meter', { name: 'Gemini · 5-hour' })).toHaveAttribute('aria-valuenow', '10')
+  expect(screen.getByRole('meter', { name: 'Gemini · Weekly' })).toHaveAttribute('aria-valuenow', '20')
+})
