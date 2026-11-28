@@ -1307,10 +1307,12 @@ pub enum Request {
         thread: String,
         preset: Preset,
     },
-    /// Interrupts the agent's turn to tell it `text`.
+    /// Interrupts the agent's turn to tell it `text`, with files.
     AcpSteer {
         thread: String,
         text: String,
+        #[serde(default)]
+        attachments: Vec<PromptAttachment>,
     },
     /// The prompts waiting for the thread's agent, next first.
     Queue {
@@ -2817,6 +2819,8 @@ pub struct Queued {
     pub author: String,
     pub text: String,
     pub created_ms: i64,
+    /// The names of the files it goes with.
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

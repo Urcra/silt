@@ -1936,7 +1936,11 @@ data: string,
  */
 upload: string | null, };
 
-export type Queued = { id: number, author: string, text: string, created_ms: number, };
+export type Queued = { id: number, author: string, text: string, created_ms: number, 
+/**
+ * The names of the files it goes with.
+ */
+files: Array<string>, };
 
 export type ReplyView = { id: string, by: string, time_ms: number, text: string, };
 

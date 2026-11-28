@@ -264,9 +264,9 @@ fn titles(count: usize) -> Vec<silt_log::Delta> {
 async fn a_queue_keeps_its_order_through_edits_moves_and_takes() {
     let (_dir, store) = store_with_thread().await;
     let texts = |queue: Vec<silt_store::QueuedPrompt>| queue.into_iter().map(|queued| queued.text).collect::<Vec<_>>();
-    let first = store.enqueue(THREAD, "ada", "first", 1, false).await.expect("adds");
-    let second = store.enqueue(THREAD, "ada", "second", 2, false).await.expect("adds");
-    store.enqueue(THREAD, "bob", "urgent", 3, true).await.expect("adds at the front");
+    let first = store.enqueue(THREAD, "ada", "first", &[], 1, false).await.expect("adds");
+    let second = store.enqueue(THREAD, "ada", "second", &[], 2, false).await.expect("adds");
+    store.enqueue(THREAD, "bob", "urgent", &[], 3, true).await.expect("adds at the front");
     assert_eq!(texts(store.queue(THREAD).await.expect("reads")), ["urgent", "first", "second"]);
 
     assert!(store.edit_queued(THREAD, first, "first, edited").await.expect("edits"));
@@ -277,6 +277,24 @@ async fn a_queue_keeps_its_order_through_edits_moves_and_takes() {
     assert!(store.take_queued(THREAD, second).await.expect("takes").is_none(), "taken once");
     assert!(!store.edit_queued(THREAD, second, "too late").await.expect("edits"), "a sent prompt can't change");
     assert_eq!(texts(store.queue(THREAD).await.expect("reads")), ["urgent", "first, edited"]);
+}
+
+#[tokio::test]
+async fn a_queued_prompt_keeps_its_files_in_order() {
+    let (_dir, store) = store_with_thread().await;
+    let files = [
+        silt_store::QueuedFile { name: "shot.png".into(), mime: "image/png".into() },
+        silt_store::QueuedFile { name: "notes.txt".into(), mime: "text/plain".into() },
+    ];
+    let id = store.enqueue(THREAD, "ada", "look at these", &files, 1, false).await.expect("adds");
+    store.enqueue(THREAD, "ada", "and then this", &[], 2, false).await.expect("adds");
+    let queue = store.queue(THREAD).await.expect("reads");
+    assert_eq!(queue[0].files, files);
+    assert!(queue[1].files.is_empty());
+    assert!(store.edit_queued(THREAD, id, "look at these, edited").await.expect("edits"));
+    assert_eq!(store.queued_ids().await.expect("reads").len(), 2);
+    let taken = store.take_next(THREAD).await.expect("takes").expect("one");
+    assert_eq!((taken.text.as_str(), taken.files.as_slice()), ("look at these, edited", files.as_slice()), "an edit keeps them");
 }
 
 #[tokio::test]

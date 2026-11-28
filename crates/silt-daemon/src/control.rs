@@ -280,7 +280,7 @@ impl Core {
         Ok(match command.command {
             RemoteCommand::Prompt { text, plan } => Request::AcpPrompt { thread, text, plan, attachments: Vec::new() },
             RemoteCommand::Queue { text } => Request::QueueAdd { thread, text },
-            RemoteCommand::Steer { text } => Request::AcpSteer { thread, text },
+            RemoteCommand::Steer { text } => Request::AcpSteer { thread, text, attachments: Vec::new() },
             RemoteCommand::Answer { id, option } => Request::AcpAnswer { thread, id, option },
             RemoteCommand::Reply { id, answers } => Request::AcpReply { thread, id, answers },
             RemoteCommand::Cancel => Request::AcpCancel { thread },
@@ -537,7 +537,15 @@ impl Core {
                 }
                 (thread, RemoteCommand::Prompt { text: text.clone(), plan: *plan })
             }
-            Request::AcpSteer { thread, text } => (thread, RemoteCommand::Steer { text: text.clone() }),
+            Request::AcpSteer { thread, text, attachments } => {
+                if !attachments.is_empty() {
+                    let thread = self.find_thread(thread).ok()?;
+                    return self
+                        .elsewhere_of(thread)
+                        .map(|_| Elsewhere::Refuse("attach files from the machine running the agent"));
+                }
+                (thread, RemoteCommand::Steer { text: text.clone() })
+            }
             Request::AcpStopTask { thread, .. } => {
                 let thread = self.find_thread(thread).ok()?;
                 return self.elsewhere_of(thread).map(|_| Elsewhere::Refuse("stop it from the machine running the agent"));

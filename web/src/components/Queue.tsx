@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api, type Queued } from '../api'
 import { keys, message } from '../query'
-import { Button, IconButton, Input, toast } from '../ui'
+import { Button, Icon, IconButton, Input, toast } from '../ui'
 
 function QueuedItem({ thread, item, index, count }: { thread: string; item: Queued; index: number; count: number }) {
   const [editing, setEditing] = useState<string | null>(null)
@@ -38,6 +38,16 @@ function QueuedItem({ thread, item, index, count }: { thread: string; item: Queu
       <button className="min-w-0 flex-1 truncate py-1 text-left" title="edit" onClick={() => setEditing(item.text)}>
         {item.text}
       </button>
+      {item.files.length > 0 && (
+        <span
+          className="flex shrink-0 items-center gap-0.5 font-mono text-2xs text-fg-2"
+          title={`with ${item.files.join(', ')}`}
+          aria-label={`${item.files.length} attached ${item.files.length === 1 ? 'file' : 'files'}`}
+        >
+          <Icon name="attach" className="h-3 w-3" />
+          {item.files.length}
+        </span>
+      )}
       <IconButton
         icon="chevronDown"
         label={`move "${item.text}" up`}
