@@ -3,6 +3,7 @@
 - Status: accepted. Scope reduced by ADR 0006/0007: ACP is now used only for agents started from the web UI (M8), while native CLI adapters are primary.
 - Date: 2026-10-20
 - Amended by: [ADR 0134](0134-no-telemetry-and-an-offline-switch.md): the registry fetch can be turned off, and is off offline
+- Amended by: [ADR 0140](0140-agents-run-at-the-versions-silt-checked.md): an agent Silt checked runs at the version it checked, and agents only the public registry lists are marked unverified
 
 ## Context
 The plan hard-coded an agent list (Claude, Codex, Gemini). The Agent Client Protocol project publishes a registry at `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`. That registry lists 42 agents, each with `distribution` set to `npx {package, args}` or to per-platform `binary {archive, cmd, args, sha256}`. The Claude adapter is `@agentclientprotocol/claude-agent-acp`.
